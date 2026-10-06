@@ -11312,23 +11312,26 @@ class Window(QtWidgets.QMainWindow):
         )
         job_id_layout.addWidget(self.job_id_input, stretch=1)
 
-        # --- live progress monitor -----------------------------------------
-        self._build_progress_monitor(run_on_cluster_layout)
-
-        # Display area for job information
-        job_display_label = QtWidgets.QLabel("Job Information:")
-        run_on_cluster_layout.addWidget(job_display_label)
-
-        self.job_info_display = QtWidgets.QTextEdit()
-        self.job_info_display.setReadOnly(True)
-        self.job_info_display.setMaximumHeight(200)
-        run_on_cluster_layout.addWidget(self.job_info_display)
+        run_on_cluster_layout.addStretch(1)
 
         run_locally_tab = QtWidgets.QWidget()
         run_locally_layout = QtWidgets.QVBoxLayout(run_locally_tab)
         self.run_tabs.addTab(run_locally_tab, "Run locally")
-        self.run_tabs.setTabEnabled(1, False)  # in development
-        self.run_tabs.setTabToolTip(1, "Not Implemented yet")
+        self.run_tabs.setTabToolTip(
+            1,
+            "Run the workflow on this machine, in the GUI's Python "
+            "environment. Progress and run information appear below.",
+        )
+        local_info = QtWidgets.QLabel(
+            "Runs the generated start_workflow.py on this machine, with "
+            f"the GUI's Python environment:\n{sys.executable}\n"
+            "Output is logged to local_run.log in the results folder; "
+            "live progress and run information are shown below (shared "
+            "with cluster runs)."
+        )
+        local_info.setWordWrap(True)
+        local_info.setStyleSheet("color: #666;")
+        run_locally_layout.addWidget(local_info)
         local_buttons = QtWidgets.QHBoxLayout()
         self.local_buttons_widget = QtWidgets.QWidget()
         self.local_buttons_widget.setLayout(local_buttons)
@@ -11336,6 +11339,45 @@ class Window(QtWidgets.QMainWindow):
         start_locally_button = QtWidgets.QPushButton("Start Workflow locally")
         local_buttons.addWidget(start_locally_button)
         start_locally_button.clicked.connect(self.start_locally)
+        stop_local_button = QtWidgets.QPushButton("Stop after current module")
+        stop_local_button.setToolTip(
+            "Request a graceful stop: the local workflow finishes the "
+            "current module, saves its state, and exits cleanly at the "
+            "next module boundary. The run can be continued later with "
+            "'Continue previous run (resume)'."
+        )
+        local_buttons.addWidget(stop_local_button)
+        stop_local_button.clicked.connect(self.on_stop_local_run)
+        kill_local_button = QtWidgets.QPushButton("Kill local run")
+        kill_local_button.setToolTip(
+            "Terminate the local workflow process immediately (the current "
+            "module's results are lost; saved checkpoints remain usable "
+            "for a resume)."
+        )
+        local_buttons.addWidget(kill_local_button)
+        kill_local_button.clicked.connect(self.on_kill_local_run)
+        show_log_button = QtWidgets.QPushButton("Show log tail")
+        show_log_button.setToolTip(
+            "Append the last lines of local_run.log to the run "
+            "information below."
+        )
+        local_buttons.addWidget(show_log_button)
+        show_log_button.clicked.connect(self.on_show_local_log)
+        run_locally_layout.addStretch(1)
+
+        # Live progress and run information are shared between the cluster
+        # and local run modes (the monitor already fuses both sources), so
+        # they live below the run sub-tabs rather than inside one of them.
+        shared_run_widget = QtWidgets.QWidget()
+        shared_run_layout = QtWidgets.QVBoxLayout(shared_run_widget)
+        shared_run_layout.setContentsMargins(0, 0, 0, 0)
+        self._build_progress_monitor(shared_run_layout)
+        shared_run_layout.addWidget(QtWidgets.QLabel("Run information:"))
+        self.job_info_display = QtWidgets.QTextEdit()
+        self.job_info_display.setReadOnly(True)
+        self.job_info_display.setMaximumHeight(200)
+        shared_run_layout.addWidget(self.job_info_display)
+        run_layout.addWidget(shared_run_widget, 3, 0, 1, 4)
 
         # Results tab: browse a run folder, (re)generate its HTML report
         # from the saved state, and view/open it -- no Confluence needed.
@@ -17400,6 +17442,16 @@ class Window(QtWidgets.QMainWindow):
         launches it with the current interpreter in the results folder and
         points the live monitor at the local ``progress.json``.
         """
+        # one local run at a time: a second process would race the first on
+        # the same result folder and progress tree
+        proc = getattr(self, "_local_process", None)
+        if proc is not None and proc.poll() is None:
+            self.job_info_display.append(
+                f"A local run is already active (PID {proc.pid}); "
+                "stop or kill it first."
+            )
+            return
+
         results_folder = self.results_folder_display.text().strip()
         for q in ('"', "'"):
             if results_folder[:1] == q and results_folder[-1:] == q:
@@ -17424,6 +17476,13 @@ class Window(QtWidgets.QMainWindow):
         # clear any stale abort flag from a previous run in this folder
         pwprogress.clear_abort(results_folder)
         log_path = os.path.join(results_folder, "local_run.log")
+        # release the previous run's log handle before reusing the file
+        old_logfile = getattr(self, "_local_logfile", None)
+        if old_logfile is not None:
+            try:
+                old_logfile.close()
+            except OSError:
+                pass
         try:
             self._local_logfile = open(log_path, "w")
             self._local_process = subprocess.Popen(
@@ -17445,6 +17504,58 @@ class Window(QtWidgets.QMainWindow):
         # local run -> poll the local progress.json tree, not the cluster
         self._monitor_local_folder = results_folder
         self._start_monitor()
+
+    def on_stop_local_run(self):
+        """Request a graceful stop of the local run (abort flag only).
+
+        The workflow finishes the current module, saves its state and exits
+        cleanly at the next module boundary; the run can then be continued
+        with the resume option.
+        """
+        folder = getattr(self, "_monitor_local_folder", None)
+        if not folder:
+            self.job_info_display.append("No local run to stop.")
+            return
+        pwprogress.request_abort(folder)
+        self.job_info_display.append(
+            "Abort requested; the local run stops cleanly after the "
+            "current module."
+        )
+
+    def on_kill_local_run(self):
+        """Terminate the local workflow subprocess immediately."""
+        proc = getattr(self, "_local_process", None)
+        if proc is None or proc.poll() is not None:
+            self.job_info_display.append("No running local process to kill.")
+            return
+        # drop the abort flag too, so any worker the script spawned also
+        # stops instead of orphaning
+        folder = getattr(self, "_monitor_local_folder", None)
+        if folder:
+            pwprogress.request_abort(folder)
+        proc.terminate()
+        self.job_info_display.append(f"Terminated local run (PID {proc.pid}).")
+
+    def on_show_local_log(self):
+        """Append the tail of the local run's log to the run information."""
+        folder = getattr(self, "_monitor_local_folder", None)
+        if not folder:
+            folder = self.results_folder_display.text().strip()
+            for q in ('"', "'"):
+                if folder[:1] == q and folder[-1:] == q:
+                    folder = folder[1:-1]
+        if not folder:
+            self.job_info_display.append("No results folder set.")
+            return
+        log_path = os.path.join(folder, "local_run.log")
+        try:
+            with open(log_path, "r", errors="replace") as f:
+                lines = f.readlines()
+        except OSError as e:
+            self.job_info_display.append(f"Could not read {log_path}: {e}")
+            return
+        tail = "".join(lines[-40:]).rstrip() or "(log is empty)"
+        self.job_info_display.append(f"--- tail of {log_path} ---\n{tail}")
 
     def on_cancel_job(self):
         """Cancel the current run (graceful abort, then hard cancel).

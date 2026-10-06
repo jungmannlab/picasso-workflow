@@ -12,6 +12,16 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Added
 
+- **"Run locally" tab enabled and implemented.** The previously disabled
+  ("in development") tab in the Run section is now functional: it starts the
+  generated `start_workflow.py` on the local machine (in the GUI's Python
+  environment, logging to `local_run.log` in the results folder) and adds
+  *Stop after current module* (graceful abort via the abort flag, resumable),
+  *Kill local run*, and *Show log tail* controls. The live progress monitor
+  and the run-information display are now shared between the cluster and
+  local run modes — they moved from inside the cluster tab to below the run
+  sub-tabs. Starting a second local run while one is active is refused.
+
 - **Stepwise (module-by-module) workflow development.** A workflow can now be
   run only up to a chosen module — locally or on the cluster — to set its
   parameters, inspect the results, and then step on. New GUI controls

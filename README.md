@@ -293,6 +293,17 @@ directly at `localize`, which needs the movie and identifications) is
 rejected automatically and the run falls back to an earlier checkpoint or
 to scratch.
 
+### Running locally
+
+Besides the SLURM cluster, a workflow can run directly on the local
+machine: the *Run locally* tab in the GUI's Run section starts the same
+generated `start_workflow.py` with the GUI's Python environment, logging
+to `local_run.log` in the results folder. The live progress monitor and
+the run information display (below the run sub-tabs) serve both run
+modes. *Stop after current module* requests a graceful stop at the next
+module boundary — the run stays resumable — while *Kill local run*
+terminates the process immediately.
+
 ### Stepwise (module-by-module) development runs
 
 When developing a new workflow, parameters are usually dialed in one
