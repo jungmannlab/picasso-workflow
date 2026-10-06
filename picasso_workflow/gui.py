@@ -16523,6 +16523,9 @@ class Window(QtWidgets.QMainWindow):
         )
         self._monitor_busy = False
         self._local_process = None
+        # wall time of this session's local launch; used to scope progress
+        # states to the current run (None = no launch this session)
+        self._local_run_started_dt = None
 
         box = QtWidgets.QGroupBox("Live progress")
         box_layout = QtWidgets.QVBoxLayout(box)
@@ -16717,6 +16720,10 @@ class Window(QtWidgets.QMainWindow):
                 states = pwprogress.read_all_progress(
                     self._monitor_local_folder
                 )
+                # the folder accumulates progress files across runs; scope
+                # to the run launched this session (stale states from an
+                # earlier run otherwise show as e.g. "running" forever)
+                states = self._scope_states_to_local_launch(states)
             else:
                 comm = getattr(self, "slurm_communicator", None)
                 if job_id and comm is not None:
@@ -16785,6 +16792,50 @@ class Window(QtWidgets.QMainWindow):
 
         return [s for s in states if _belongs(s)]
 
+    def _scope_states_to_local_launch(self, states):
+        """Keep only progress states written by this session's local run.
+
+        The results folder accumulates progress files across runs. States
+        whose last update predates this session's local launch belong to an
+        earlier run and are dropped. Without a launch this session (e.g.
+        inspecting a folder with 'Refresh now'), all states pass.
+
+        Parameters
+        ----------
+        states : list of dict
+            The progress states read from the folder tree.
+
+        Returns
+        -------
+        list of dict
+        """
+        from datetime import datetime, timedelta
+
+        started = getattr(self, "_local_run_started_dt", None)
+        if started is None:
+            return states
+        cutoff = started - timedelta(seconds=5)
+        kept = []
+        for s in states or []:
+            stamp = s.get("updated") or s.get("started")
+            try:
+                if datetime.fromisoformat(stamp) >= cutoff:
+                    kept.append(s)
+            except (TypeError, ValueError):
+                # unparsable timestamp: keep rather than hide
+                kept.append(s)
+        return kept
+
+    # progress-state colors for the local-run chip (palette as _SLURM_COLORS)
+    _LOCAL_STATE_COLORS = {
+        "pending": "#9e9e9e",
+        "running": "#1976d2",
+        "done": "#2e7d32",
+        "failed": "#c62828",
+        "aborted": "#f9a825",
+        "paused": "#1565c0",
+    }
+
     # dataset-state precedence for merging per-rank aggregation views
     _DATASET_STATE_RANK = {
         "pending": 0,
@@ -16849,18 +16900,22 @@ class Window(QtWidgets.QMainWindow):
             return
         if self._monitor_local_folder:
             top = self._top_state(states)
-            if top and top.get("state") in (
+            terminal = top is not None and top.get("state") in (
                 "done",
                 "failed",
                 "aborted",
                 "paused",
-            ):
-                # local process finished (no SLURM authority to consult)
-                if (
-                    self._local_process is None
-                    or self._local_process.poll() is not None
-                ):
-                    self._stop_monitor()
+            )
+            proc = self._local_process
+            proc_done = proc is None or proc.poll() is not None
+            # also stop when the launched process died without leaving any
+            # current-run progress behind (it crashed before the workflow
+            # started); otherwise the monitor would poll forever
+            died_without_states = (
+                proc is not None and proc.poll() is not None and not states
+            )
+            if (terminal and proc_done) or died_without_states:
+                self._stop_monitor()
 
     def _update_monitor_display(self, slurm, states):
         """Render the fused SLURM + multi-stage progress into the widgets."""
@@ -16915,8 +16970,29 @@ class Window(QtWidgets.QMainWindow):
                 f"background-color: {color};"
             )
         elif self._monitor_local_folder:
+            # fuse like the SLURM chip: the subprocess exit status is the
+            # authority on whether the run is alive; progress.json on where
+            # it got. A dead process with no terminal progress state means
+            # the run died outside module execution (e.g. at startup).
             run_state = (top or {}).get("state", "-")
-            self.monitor_state_label.setText(f"Local run: {run_state}")
+            proc = self._local_process
+            rc = proc.poll() if proc is not None else None
+            terminal = run_state in ("done", "failed", "aborted", "paused")
+            if proc is not None and rc is not None and not terminal:
+                if rc == 0:
+                    text = "Local run: finished"
+                    color = "#2e7d32"  # green
+                else:
+                    text = f"Local run: failed (exit {rc})"
+                    color = "#c62828"  # red
+            else:
+                text = f"Local run: {run_state}"
+                color = self._LOCAL_STATE_COLORS.get(run_state, "#616161")
+            self.monitor_state_label.setText(text)
+            self.monitor_state_label.setStyleSheet(
+                "padding: 2px 8px; border-radius: 4px; color: white; "
+                f"background-color: {color};"
+            )
         else:
             self.monitor_state_label.setText("Job state: -")
 
@@ -17628,7 +17704,11 @@ class Window(QtWidgets.QMainWindow):
             f"Started local workflow (PID {self._local_process.pid}).\n"
             f"Logging to {log_path}"
         )
-        # local run -> poll the local progress.json tree, not the cluster
+        # local run -> poll the local progress.json tree, not the cluster;
+        # the launch time scopes the polled states to this run
+        from datetime import datetime
+
+        self._local_run_started_dt = datetime.now()
         self._monitor_local_folder = results_folder
         self._start_monitor()
 
@@ -17662,6 +17742,9 @@ class Window(QtWidgets.QMainWindow):
             pwprogress.request_abort(folder)
         proc.terminate()
         self.job_info_display.append(f"Terminated local run (PID {proc.pid}).")
+        # termination is asynchronous; refresh the badge once it had time
+        # to exit
+        QtCore.QTimer.singleShot(1500, self._refresh_monitor)
 
     def on_show_local_log(self):
         """Append the tail of the local run's log to the run information."""

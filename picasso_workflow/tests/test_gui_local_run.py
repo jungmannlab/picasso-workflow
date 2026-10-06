@@ -94,3 +94,75 @@ def test_start_locally_refuses_second_run(window):
     window._local_process = FakeProc()
     window.start_locally()
     assert "already active (PID 4242)" in window.job_info_display.toPlainText()
+
+
+# ---------------------------------------------------------------------------
+# local-run monitoring: stale-state scoping and process-exit fusion
+# ---------------------------------------------------------------------------
+
+
+def _fake_proc(rc):
+    class P:
+        pid = 777
+
+        def poll(self):
+            return rc
+
+    return P()
+
+
+def test_scope_states_passthrough_without_launch(window):
+    window._local_run_started_dt = None
+    states = [{"updated": "2020-01-01T00:00:00"}]
+    assert window._scope_states_to_local_launch(states) == states
+
+
+def test_scope_states_drops_stale(window):
+    from datetime import datetime, timedelta
+
+    window._local_run_started_dt = datetime.now()
+    old = {
+        "updated": (datetime.now() - timedelta(hours=2)).isoformat(
+            timespec="seconds"
+        )
+    }
+    new = {"updated": datetime.now().isoformat(timespec="seconds")}
+    unparsable = {"updated": None}
+    kept = window._scope_states_to_local_launch([old, new, unparsable])
+    assert new in kept
+    assert old not in kept
+    assert unparsable in kept  # unparsable: keep rather than hide
+
+
+def test_dead_process_without_states_shows_failed_badge(window, tmp_path):
+    """A local process that died before writing any progress must show as
+    failed, not stay 'running' forever."""
+    window._monitor_local_folder = str(tmp_path)
+    window._local_process = _fake_proc(1)
+    window._update_monitor_display(None, [])
+    assert "failed (exit 1)" in window.monitor_state_label.text()
+
+
+def test_dead_process_exit0_shows_finished(window, tmp_path):
+    window._monitor_local_folder = str(tmp_path)
+    window._local_process = _fake_proc(0)
+    window._update_monitor_display(None, [])
+    assert "finished" in window.monitor_state_label.text()
+
+
+def test_dead_process_shows_log_tail_in_error_details(window, tmp_path):
+    (tmp_path / "local_run.log").write_text(
+        "ConfluenceInterfaceError: 403 FORBIDDEN\n"
+    )
+    window._monitor_local_folder = str(tmp_path)
+    window._local_process = _fake_proc(1)
+    window._update_monitor_display(None, [])
+    assert "403 FORBIDDEN" in window.error_details_display.toPlainText()
+
+
+def test_monitor_stops_when_process_died_without_states(window, tmp_path):
+    window._monitor_local_folder = str(tmp_path)
+    window._local_process = _fake_proc(1)
+    window.monitor_timer.start()
+    window._maybe_stop_monitor(None, [])
+    assert not window.monitor_timer.isActive()

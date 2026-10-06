@@ -10,6 +10,19 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Local-run monitor no longer shows a stale "running" state.** A local run
+  that died before writing progress (e.g. a Confluence 403 at coordinator
+  startup) used to leave the badge on "running" forever, fed by the previous
+  run's `progress.json` in the same folder. The monitor now scopes progress
+  states to the current session's launch time, fuses the subprocess exit
+  status into the badge like the SLURM chip ("failed (exit N)" red /
+  "finished" green, with per-state colors), stops polling once the process
+  died without current-run states, and shows the `local_run.log` tail in the
+  *Error details* pane for such startup crashes. *Kill local run* now also
+  refreshes the badge after termination.
+
 ### Added
 
 - **Error details in the Run tab.** Failed modules' tracebacks now surface
