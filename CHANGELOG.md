@@ -12,6 +12,17 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Fixed
 
+- **Error-details pane could stay empty for a failed module.** Collecting
+  details could crash silently: a yaml error recorded as a plain string
+  (modules that set `success: False` themselves, or older runs) broke the
+  fallback reader and blanked the whole pane. Collection is now isolated per
+  module (a bad entry shows a note instead of hiding everything), string and
+  message-only error entries are rendered, modules that fail *without*
+  raising get their recorded error attached to their progress entry too, a
+  stale cluster job id left in the Job-ID field no longer filters away a
+  local run's progress states, and monitor errors are logged as warnings
+  instead of silently at debug level.
+
 - **Resume no longer resurrects disabled reporters.** Resuming a run adopted
   the previous run's persisted `reporter_config` wholesale, so switching
   *Document to Confluence* off between runs had no effect: `load()` rebuilt

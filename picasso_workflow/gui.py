@@ -16740,12 +16740,15 @@ class Window(QtWidgets.QMainWindow):
             # The results folder accumulates one subfolder per run, so a poll
             # returns every past run's progress too. Scope to the current job
             # so a still-PENDING resubmission shows nothing rather than the
-            # previous run's (completed) progress.
-            states = self._scope_states_to_current_run(states, job_id)
+            # previous run's (completed) progress. Cluster runs only: local
+            # states carry no job id (a stale id left in the field would
+            # filter them all away); they are scoped by launch time above.
+            if not self._monitor_local_folder:
+                states = self._scope_states_to_current_run(states, job_id)
             self._update_monitor_display(slurm, states)
             self._maybe_stop_monitor(slurm, states)
         except Exception as e:
-            logger.debug(f"monitor refresh error: {e}")
+            logger.warning(f"monitor refresh error: {e}")
         finally:
             self._monitor_busy = False
 
@@ -17057,11 +17060,20 @@ class Window(QtWidgets.QMainWindow):
                         f"[{label}] module {sub.get('i')}: "
                         f"{sub.get('name', '')}"
                     )
-                    err = sub.get("error")
-                    if not err and self._monitor_local_folder:
-                        err = self._local_yaml_error(
-                            report_name, sub.get("i"), sub.get("name")
+                    # isolate per module: one malformed entry (odd yaml,
+                    # unreadable share, ...) must not blank the whole pane
+                    try:
+                        err = sub.get("error")
+                        if not err and self._monitor_local_folder:
+                            err = self._local_yaml_error(
+                                report_name, sub.get("i"), sub.get("name")
+                            )
+                    except Exception as e:
+                        logger.warning(
+                            f"Could not collect error details for "
+                            f"{header}: {e}"
                         )
+                        err = f"(error details could not be collected: {e})"
                     if err:
                         texts.append(f"{header}\n{err}")
                     else:
@@ -17109,15 +17121,20 @@ class Window(QtWidgets.QMainWindow):
             with open(fp) as f:
                 data = yaml.safe_load(f)
             entry = data["results"][f"{module_index:02d}_{module_name}"]
-            err = entry.get("error") or {}
+            err = entry.get("error")
+            # the structured form records a dict; modules that merely set
+            # success=False may leave a plain string (or only a message)
+            if isinstance(err, dict):
+                return err.get("traceback") or (
+                    f"{err.get('type', 'Error')}: {err.get('message', '')}"
+                )
+            if err:
+                return str(err)
+            msg = entry.get("message")
+            return str(msg) if msg else None
         except Exception as e:
             logger.debug(f"Could not read error details from {fp}: {e}")
             return None
-        if not err:
-            return None
-        return err.get("traceback") or (
-            f"{err.get('type', 'Error')}: {err.get('message', '')}"
-        )
 
     def _read_log_tail(self, folder, n_lines=40):
         """The last ``n_lines`` of ``local_run.log`` in ``folder``, or None."""

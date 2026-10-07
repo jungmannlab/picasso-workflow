@@ -2190,7 +2190,17 @@ class WorkflowRunner:
                 self.save(self.result_folder)
                 raise
             else:
-                progress.module_end(i, DONE if success else FAILED)
+                # a module may fail without raising (success=False in its
+                # results); surface its recorded error/message with the
+                # progress entry too, so the monitor can display it
+                err_text = None
+                if not success:
+                    err_text = self._module_failure_text(
+                        f"{i:02d}_{module_name}"
+                    )
+                progress.module_end(
+                    i, DONE if success else FAILED, error=err_text
+                )
 
             self.save(self.result_folder)
             if not success:
@@ -2204,6 +2214,34 @@ class WorkflowRunner:
             else:
                 progress.finish(DONE if success else FAILED)
         return success
+
+    def _module_failure_text(self, key: str) -> str | None:
+        """Best-effort failure description from a module's recorded results.
+
+        Used for modules that fail without raising (``success: False`` in
+        their results): their ``error`` may be the structured dict written
+        by :meth:`_report_module_error`, a plain string set by the module,
+        or absent (then ``message`` is tried).
+
+        Parameters
+        ----------
+        key : str
+            Results key of the module, ``f"{i:02d}_{fun_name}"``.
+
+        Returns
+        -------
+        str or None
+        """
+        res = self.results.get(key) or {}
+        err = res.get("error")
+        if isinstance(err, dict):
+            return err.get("traceback") or (
+                f"{err.get('type', 'Error')}: {err.get('message', '')}"
+            )
+        if err:
+            return str(err)
+        msg = res.get("message")
+        return str(msg) if msg else None
 
     def _ensure_progress(self) -> ProgressManager:
         """Return the run's :class:`ProgressManager`, building it if needed.

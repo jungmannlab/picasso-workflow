@@ -1529,3 +1529,27 @@ def test_resume_adopts_html_reporter(tmp_path):
         )
     assert getattr(wr2, "htmlreporter", None) is not None
     assert getattr(wr2, "confluencereporter", None) is None
+
+
+def test_no_raise_failure_records_error_in_progress(tmp_path):
+    """A module that fails by returning success=False (no exception) gets
+    its recorded error/message attached to the progress entry."""
+    from picasso_workflow import progress as pwprogress
+
+    wr = _stepwise_runner(str(tmp_path))
+
+    def soft_failing_call_module(name, i, parameters):
+        wr.results[f"{i:02d}_{name}"] = {
+            "success": False,
+            "error": "soft failure: bad parameter combination",
+        }
+        return False
+
+    wr.call_module = soft_failing_call_module
+    success = wr.run()
+
+    assert success is False
+    state = pwprogress.read_progress(wr.result_folder)
+    failed = state["modules"][0]
+    assert failed["status"] == "failed"
+    assert "soft failure: bad parameter combination" in failed["error"]

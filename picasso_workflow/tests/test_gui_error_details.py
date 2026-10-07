@@ -110,3 +110,38 @@ def test_log_tail_fallback(window, tmp_path):
     text = window.error_details_display.toPlainText()
     assert "ImportError: nope" in text
     assert "local_run.log" in text
+
+
+def test_yaml_string_error_fallback(window, tmp_path):
+    """A yaml error recorded as a plain string (module-set, or old runs)
+    must be shown, not crash the collection (err.get on a str used to
+    raise and silently blank the whole pane)."""
+    run_dir = tmp_path / "rep_123456-0000"
+    run_dir.mkdir()
+    (run_dir / "WorkflowRunner.yaml").write_text(
+        "results:\n"
+        "  01_identify:\n"
+        "    success: false\n"
+        "    error: something went sideways\n"
+    )
+    window._monitor_local_folder = str(tmp_path)
+    window._update_error_details([_failed_state(error=None)])
+    assert (
+        "something went sideways" in window.error_details_display.toPlainText()
+    )
+
+
+def test_collection_crash_does_not_blank_pane(window, tmp_path, monkeypatch):
+    """If collecting one module's details raises, the pane still shows the
+    failure header plus a note instead of staying empty."""
+    window._monitor_local_folder = str(tmp_path)
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("yaml exploded")
+
+    monkeypatch.setattr(window, "_local_yaml_error", boom)
+    window._update_error_details([_failed_state(error=None)])
+    text = window.error_details_display.toPlainText()
+    assert "identify" in text
+    assert "could not be collected" in text
+    assert "yaml exploded" in text
