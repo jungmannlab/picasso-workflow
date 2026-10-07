@@ -10427,6 +10427,16 @@ class AutoPicasso(
     def _save_locs(self, filename):
         """Save ``self.locs``/``self.info`` to an HDF5 file.
 
+        ``io.save_locs`` writes the *sanitized* table
+        (``lib.ensure_sanity`` drops rows with NaN/inf, e.g. failed GPU
+        fits with NaN localization precision). Adopt that sanitized table
+        as the current dataset, so in-memory and on-disk data stay
+        identical -- like picasso's own save/load boundaries. Otherwise
+        downstream modules see rows the saved file does not have (a NaN
+        ``lpx`` makes render's median blur NaN and crash), and a resumed
+        run (which loads the file) behaves differently from a
+        straight-through one.
+
         Parameters
         ----------
         filename : str
@@ -10439,6 +10449,15 @@ class AutoPicasso(
         """
         t00 = time.time()
 
+        n_before = len(self.locs)
+        self.locs = lib.ensure_sanity(self.locs, self.info)
+        n_dropped = n_before - len(self.locs)
+        if n_dropped:
+            logger.info(
+                f"Sanitized localizations before saving: dropped "
+                f"{n_dropped} of {n_before} rows with NaN/inf or "
+                "out-of-bounds values (picasso lib.ensure_sanity)."
+            )
         io.save_locs(filename, self.locs, self.info)
         # # when the paths get long, the hdf5 library throws an error, so chdir
         # # but apparently, the issue is the length of the filename itself

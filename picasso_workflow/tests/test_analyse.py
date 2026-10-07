@@ -4150,3 +4150,58 @@ def test_recenter_on_com_empty_is_noop():
     centers = [(1.0, 2.0), (3.0, 4.0)]
     out = analyse._recenter_on_com(empty, centers)
     assert out == [[1.0, 2.0], [3.0, 4.0]]
+
+
+class Test_SaveLocsSanity(unittest.TestCase):
+    """_save_locs must keep the in-memory locs identical to the saved file.
+
+    io.save_locs sanitizes (lib.ensure_sanity drops NaN/inf rows, e.g.
+    failed GPU fits with NaN lpx); if the in-memory table keeps those
+    rows, downstream modules see data the file does not have (a NaN lpx
+    makes render's median blur NaN and crash -- seen live), and a
+    resumed run differs from a straight-through one.
+    """
+
+    def setUp(self):
+        import tempfile
+
+        self.results_folder = tempfile.mkdtemp()
+        analysis_config = {
+            "camera_info": {"Pixelsize": 130},
+            "gpufit_installed": False,
+        }
+        from picasso_workflow import analyse
+
+        self.ap = analyse.AutoPicasso(self.results_folder, analysis_config)
+        self.ap.locs = pd.DataFrame(
+            {
+                "frame": np.arange(10, dtype="u4"),
+                "x": np.random.rand(10).astype("f4") * 10,
+                "y": np.random.rand(10).astype("f4") * 10,
+                "photons": np.random.rand(10).astype("f4") * 1000,
+                "lpx": np.random.rand(10).astype("f4") / 10,
+                "lpy": np.random.rand(10).astype("f4") / 10,
+            }
+        )
+        # two bad fits: NaN localization precision
+        self.ap.locs.loc[3, "lpx"] = np.nan
+        self.ap.locs.loc[7, "lpy"] = np.nan
+        self.ap.info = [
+            {"Width": 64, "Height": 32, "Frames": 1000, "Pixelsize": 130}
+        ]
+
+    def tearDown(self):
+        shutil.rmtree(self.results_folder, ignore_errors=True)
+
+    def test_save_locs_adopts_sanitized_table(self):
+        from picasso import io as pio
+
+        fp = os.path.join(self.results_folder, "locs.hdf5")
+        self.ap._save_locs(fp)
+
+        # the NaN rows are gone from memory ...
+        self.assertEqual(8, len(self.ap.locs))
+        self.assertFalse(self.ap.locs[["lpx", "lpy"]].isna().any().any())
+        # ... and memory matches the file exactly
+        saved, _ = pio.load_locs(fp)
+        self.assertEqual(len(saved), len(self.ap.locs))

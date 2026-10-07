@@ -12,6 +12,18 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Fixed
 
+- **In-memory localizations now match every saved locs file.**
+  `io.save_locs` writes the *sanitized* table (`lib.ensure_sanity` drops
+  rows with NaN/inf — e.g. failed GPU fits with NaN localization
+  precision), but the in-memory dataset kept those rows. Downstream
+  modules therefore saw data the saved file did not have: observed live,
+  32 of 14.2M locs with NaN `lpx` made `picasso_render`'s median
+  (convolve) blur NaN and crash, while the checkpoint file was clean — so
+  a resumed run would not even reproduce the failure. `_save_locs` now
+  adopts the sanitized table (logging how many rows were dropped), keeping
+  memory, disk, and resume behavior identical — the same guarantee picasso
+  itself provides at its save/load boundaries.
+
 - **`picasso_frc` no longer OOM-kills the job on large datasets.** FRC bins
   its two half-images at half the NeNA precision, so a full-FOV render on a
   modern sensor at good precision reaches 100k+ px per side — tens of GB per
