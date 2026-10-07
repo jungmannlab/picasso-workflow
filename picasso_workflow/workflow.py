@@ -683,7 +683,11 @@ class AggregationWorkflowRunner:
                     folder, report_name + "_" + candidate
                 )
                 try:
-                    instance = cls.load(runner_folder)
+                    # adopt the caller's reporter choice: the persisted one
+                    # may reference reporters disabled since (see load())
+                    instance = cls.load(
+                        runner_folder, reporter_config=reporter_config
+                    )
                 except FileNotFoundError:
                     logger.debug(f"Could not load runner from {runner_folder}")
                     continue
@@ -1067,7 +1071,8 @@ class AggregationWorkflowRunner:
                         agg_reporter_config["report_name"]
                         + "_"
                         + self.postfix,
-                    )
+                    ),
+                    reporter_config=copy.deepcopy(agg_reporter_config),
                 )
                 wr.adopt_workflow_modules(parameters)
             except Exception:
@@ -1342,7 +1347,10 @@ class AggregationWorkflowRunner:
         if self.continue_workflow:
             try:
                 logger.debug(f"loading WorkflowRunner from {sgl_folders[i]}")
-                wr = WorkflowRunner.load(sgl_folders[i])
+                wr = WorkflowRunner.load(
+                    sgl_folders[i],
+                    reporter_config=copy.deepcopy(sgl_wkfl_reporter_config),
+                )
                 wr.adopt_workflow_modules(parameter_set)
             except Exception:
                 logger.debug("loading did not work. creating from dict.")
@@ -1653,13 +1661,19 @@ class AggregationWorkflowRunner:
             yaml.dump(data, f)
 
     @classmethod
-    def load(cls, dirn: str = ".") -> "AggregationWorkflowRunner":
+    def load(
+        cls, dirn: str = ".", reporter_config: dict | None = None
+    ) -> "AggregationWorkflowRunner":
         """Load an instance from an ``AggregationWorkflowRunner.yaml`` file.
 
         Parameters
         ----------
         dirn : str, optional
             The directory to load from. Default is the current directory.
+        reporter_config : dict, optional
+            The caller's reporter configuration for a continued run: the
+            reporter backends follow it while the persisted run's
+            ``report_name`` is kept (see :meth:`WorkflowRunner.load`).
 
         Returns
         -------
@@ -1670,8 +1684,14 @@ class AggregationWorkflowRunner:
         with open(fp, "r") as f:
             data = yaml.load(f, Loader=yaml.FullLoader)
 
+        persisted_reporter_config = data["reporter_config"]
+        if reporter_config is not None:
+            adopted = copy.deepcopy(reporter_config)
+            adopted["report_name"] = persisted_reporter_config["report_name"]
+        else:
+            adopted = persisted_reporter_config
         instance = cls.config_from_dicts(
-            data["reporter_config"],
+            adopted,
             data["analysis_config"],
             data["aggregation_workflow"],
             data["postfix"],
@@ -1891,7 +1911,11 @@ class WorkflowRunner:
                     folder, base_name + "_" + found_postfix
                 )
                 try:
-                    instance = cls.load(runner_folder)
+                    # adopt the caller's reporter choice: the persisted one
+                    # may reference reporters disabled since (see load())
+                    instance = cls.load(
+                        runner_folder, reporter_config=reporter_config
+                    )
                 except FileNotFoundError:
                     # e.g. the previous run died before its first save():
                     # the folder exists but holds no WorkflowRunner.yaml.
@@ -2267,13 +2291,24 @@ class WorkflowRunner:
             yaml.dump(data, f)
 
     @classmethod
-    def load(cls, dirn: str = ".") -> "WorkflowRunner":
+    def load(
+        cls, dirn: str = ".", reporter_config: dict | None = None
+    ) -> "WorkflowRunner":
         """Load the results from a ``WorkflowRunner.yaml`` file.
 
         Parameters
         ----------
         dirn : str, optional
             The directory to load from. Default is the current directory.
+        reporter_config : dict, optional
+            The caller's reporter configuration for a continued run. When
+            given, the reporter *backends* (Confluence / HTML and their
+            settings) follow this configuration instead of the persisted
+            one, while the loaded run's ``report_name`` (its identity) is
+            kept. This keeps a resume from resurrecting a reporter the
+            caller has since disabled: building a ConfluenceReporter
+            contacts the server, so a stale persisted config can kill the
+            resume (e.g. with a 403) before any module runs.
 
         Returns
         -------
@@ -2285,7 +2320,13 @@ class WorkflowRunner:
             data = yaml.safe_load(f)
         instance = cls()
         instance.results = data["results"]
-        instance.reporter_config = data["reporter_config"]
+        persisted_reporter_config = data["reporter_config"]
+        if reporter_config is not None:
+            adopted = copy.deepcopy(reporter_config)
+            adopted["report_name"] = persisted_reporter_config["report_name"]
+            instance.reporter_config = adopted
+        else:
+            instance.reporter_config = persisted_reporter_config
         instance.analysis_config = data["analysis_config"]
         instance.analysis_config["result_location"] = os.path.join(dirn, "..")
         instance.workflow_modules = data["workflow_modules"]

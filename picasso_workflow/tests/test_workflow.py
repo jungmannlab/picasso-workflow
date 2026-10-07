@@ -1432,3 +1432,100 @@ def test_unexpected_module_error_recorded_in_progress(tmp_path):
 
     state = pwprogress.read_progress(wr.result_folder)
     assert "RuntimeError: unexpected kaboom" in state["modules"][0]["error"]
+
+
+def test_resume_adopts_caller_reporter_config(tmp_path):
+    """Resuming with Confluence documentation switched off must not
+    resurrect the previous run's ConfluenceReporter: its construction
+    contacts the server and can fail (e.g. 403), killing the resume
+    before any module runs. The caller's reporter backends win; the
+    loaded run's report_name (identity) is kept."""
+    with (
+        patch("picasso_workflow.workflow.ConfluenceReporter", MagicMock()),
+        patch("picasso_workflow.workflow.AutoPicasso", MagicMock()),
+        patch(
+            "picasso_workflow.workflow.ParameterCommandExecutor", MagicMock()
+        ),
+    ):
+        wr1 = WorkflowRunner.config_from_dicts(
+            {"report_name": "stalereport", "ConfluenceReporter": {"a": 0}},
+            {"result_location": str(tmp_path)},
+            [("load_dataset_movie", {"b": 3})],
+        )
+        wr1.save(wr1.result_folder)
+
+    class BoomReporter:
+        def __init__(self, *args, **kwargs):
+            raise RuntimeError("403 FORBIDDEN (simulated)")
+
+    with (
+        patch("picasso_workflow.workflow.ConfluenceReporter", BoomReporter),
+        patch("picasso_workflow.workflow.AutoPicasso", MagicMock()),
+        patch(
+            "picasso_workflow.workflow.ParameterCommandExecutor", MagicMock()
+        ),
+    ):
+        wr2 = WorkflowRunner.config_from_dicts(
+            {"report_name": "stalereport"},  # Confluence switched off
+            {"result_location": str(tmp_path)},
+            [("load_dataset_movie", {"b": 3})],
+            continue_previous_runner=True,
+        )
+
+    # the previous run was adopted (same identity), without Confluence
+    assert (
+        wr2.reporter_config["report_name"]
+        == wr1.reporter_config["report_name"]
+    )
+    assert getattr(wr2, "confluencereporter", None) is None
+    assert wr2.reporters == []
+
+
+def test_resume_without_caller_config_keeps_persisted_reporters(tmp_path):
+    """A plain load (no caller reporter config) keeps the persisted
+    reporter configuration, as before."""
+    with (
+        patch("picasso_workflow.workflow.ConfluenceReporter", MagicMock()),
+        patch("picasso_workflow.workflow.AutoPicasso", MagicMock()),
+        patch(
+            "picasso_workflow.workflow.ParameterCommandExecutor", MagicMock()
+        ),
+    ):
+        wr1 = WorkflowRunner.config_from_dicts(
+            {"report_name": "keepreport", "ConfluenceReporter": {"a": 0}},
+            {"result_location": str(tmp_path)},
+            [("load_dataset_movie", {"b": 3})],
+        )
+        wr1.save(wr1.result_folder)
+
+        wr2 = WorkflowRunner.load(wr1.result_folder)
+    assert "ConfluenceReporter" in wr2.reporter_config
+    assert getattr(wr2, "confluencereporter", None) is not None
+
+
+def test_resume_adopts_html_reporter(tmp_path):
+    """Switching documentation to HTML between runs reaches the resumed
+    runner: the HTMLReporter is built even though the persisted config
+    had none."""
+    with (
+        patch("picasso_workflow.workflow.ConfluenceReporter", MagicMock()),
+        patch("picasso_workflow.workflow.AutoPicasso", MagicMock()),
+        patch(
+            "picasso_workflow.workflow.ParameterCommandExecutor", MagicMock()
+        ),
+    ):
+        wr1 = WorkflowRunner.config_from_dicts(
+            {"report_name": "htmlreport", "ConfluenceReporter": {"a": 0}},
+            {"result_location": str(tmp_path)},
+            [("load_dataset_movie", {"b": 3})],
+        )
+        wr1.save(wr1.result_folder)
+
+        wr2 = WorkflowRunner.config_from_dicts(
+            {"report_name": "htmlreport", "HTMLReporter": {}},
+            {"result_location": str(tmp_path)},
+            [("load_dataset_movie", {"b": 3})],
+            continue_previous_runner=True,
+        )
+    assert getattr(wr2, "htmlreporter", None) is not None
+    assert getattr(wr2, "confluencereporter", None) is None

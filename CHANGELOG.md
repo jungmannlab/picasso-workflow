@@ -12,6 +12,16 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Fixed
 
+- **Resume no longer resurrects disabled reporters.** Resuming a run adopted
+  the previous run's persisted `reporter_config` wholesale, so switching
+  *Document to Confluence* off between runs had no effect: `load()` rebuilt
+  the old ConfluenceReporter, whose construction contacts the server and
+  could kill the resume (e.g. 403) before any module ran. On resume the
+  reporter backends now follow the caller's current configuration (the
+  loaded run's `report_name` identity is kept) — in `WorkflowRunner` and
+  `AggregationWorkflowRunner` alike, including the per-dataset and
+  aggregation-stage runners.
+
 - **Local-run monitor no longer shows a stale "running" state.** A local run
   that died before writing progress (e.g. a Confluence 403 at coordinator
   startup) used to leave the badge on "running" forever, fed by the previous
