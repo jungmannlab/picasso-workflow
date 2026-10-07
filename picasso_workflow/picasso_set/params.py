@@ -1382,25 +1382,16 @@ PICASSO_SET_PARAMS: dict[str, tuple[dict, dict]] = {
                 "default": 42,
                 "required": False,
             },
-            "viewport": {
-                "type": "list",
-                "description": (
-                    "Region to run FRC on, as [[y_min, x_min], "
-                    "[y_max, x_max]] in camera pixels (default: the "
-                    "full field of view)"
-                ),
-                "default": None,
-                "required": False,
-            },
             "max_image_px": {
                 "type": "int",
                 "description": (
                     "Memory guard: maximum side length (binned pixels) "
-                    "of the two rendered FRC half-images; a larger "
-                    "viewport is cropped centrally. FRC bins at NeNA/2, "
-                    "so a full FOV at good precision can reach 100k+ px "
-                    "per side (tens of GB -> OOM). Memory scales with "
-                    "the square of this value."
+                    "of the two rendered FRC half-images; the module "
+                    "fails with an informative error instead of being "
+                    "OOM-killed. FRC bins at NeNA/2, so a full FOV at "
+                    "good precision can reach 100k+ px per side (tens "
+                    "of GB). Memory scales with the square of this "
+                    "value."
                 ),
                 "default": 16384,
                 "required": False,

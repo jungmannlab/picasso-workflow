@@ -17,9 +17,10 @@ This file was started after v0.5.6; earlier history is in the git log.
   modern sensor at good precision reaches 100k+ px per side — tens of GB per
   image — and the job is OOM-killed (observed: 14.2M locs, 50 GB job,
   killed in ~90 s; a SIGKILL leaves no Python traceback anywhere). The
-  module now takes a `viewport` parameter (region in camera pixels) and a
-  `max_image_px` memory guard (default 16384): a viewport that would exceed
-  it is cropped centrally, with the crop recorded in the results and logged.
+  module keeps picasso's exact behavior (full-FOV FRC) but adds a
+  `max_image_px` memory guard (default 16384): when the rendered images
+  would exceed it, the module fails fast with an informative `MemoryError`
+  (estimated size/memory, and how to proceed) instead of being killed.
   Additionally, a job that SLURM ended (OOM kill, timeout, cancel) now shows
   the SLURM reason — status, running module, exit code/MaxRSS, and an OOM
   hint — in the *Error details* pane, since no traceback can exist; a local
