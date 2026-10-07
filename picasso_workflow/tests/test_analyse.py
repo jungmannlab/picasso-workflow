@@ -3784,6 +3784,10 @@ class TestAnalyse(unittest.TestCase):
                     for t in self.channel_tags
                 ]
 
+            # the decorator's auto-save now delegates to this shared method
+            # (also used by the stepwise-boundary checkpoint)
+            save_locs_checkpoint = analyse.AutoPicasso.save_locs_checkpoint
+
             @analyse.module_decorator
             def my_method(self, i, parameters, results):
                 return parameters, results

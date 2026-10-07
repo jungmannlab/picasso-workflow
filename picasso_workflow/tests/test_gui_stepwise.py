@@ -119,3 +119,20 @@ def test_stepwise_unsupported_for_investigation(window):
     _populate(window, 2)
     assert not window.stepwise_enable.isEnabled()
     assert not window.stepwise_enable.isChecked()
+
+
+def test_stepwise_target_cleared_when_module_removed(window):
+    """Removing the boundary module (so its (phase, index) no longer names
+    the same module) must clear the stepwise selection, not silently stop
+    after a different module."""
+    _populate(window, 0)  # modules: load_dataset_movie, identify
+    window.stepwise_enable.setChecked(True)
+    window._set_stepwise_target("single", 1)  # 'identify'
+    assert window._stepwise_stop_after() == ("single", 1)
+
+    # drop the last module and rebuild the target combo
+    window.single_workflow_modules = [("load_dataset_movie", {})]
+    window._refresh_stepwise_targets()
+
+    assert not window.stepwise_enable.isChecked()
+    assert window._stepwise_stop_after() is None

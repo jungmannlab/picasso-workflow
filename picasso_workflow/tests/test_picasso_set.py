@@ -1097,7 +1097,9 @@ class TestPicassoSetModules(unittest.TestCase):
     @patch("picasso_workflow.picasso_set.analyse_picks.postprocess.frc")
     def test_picasso_frc(self, mock_frc, mock_nena):
         mock_frc.return_value = self._frc_return()
-        mock_nena.return_value = (None, 0.4)  # bin 0.2 px -> 160 px image
+        # precision proxy = median lpx/lpy; 0.5 px -> bin 0.25 -> 128 px image
+        self.ap.locs["lpx"] = 0.5
+        self.ap.locs["lpy"] = 0.5
         parameters, results = self.ap.picasso_frc(0, {})
         # full-FOV viewport from the metadata (below the memory guard)
         self.assertEqual(((0, 0), (32, 64)), mock_frc.call_args[0][2])
@@ -1105,20 +1107,34 @@ class TestPicassoSetModules(unittest.TestCase):
         self.assertEqual(25.0, results["resolution_nm"])
         self.assertTrue(os.path.isfile(results["fp_fig_frc"]))
         self.assertTrue(os.path.isfile(results["filepath_frc"]))
+        # the guard uses the in-memory precision proxy, not a second NeNA fit
+        mock_nena.assert_not_called()
 
-    @patch("picasso_workflow.picasso_set.analyse_picks.postprocess.nena")
     @patch("picasso_workflow.picasso_set.analyse_picks.postprocess.frc")
-    def test_picasso_frc_memory_guard_raises(self, mock_frc, mock_nena):
+    def test_picasso_frc_memory_guard_raises(self, mock_frc):
         """An FOV whose rendered image would exceed max_image_px fails
         fast with an informative error instead of being OOM-killed (which
         leaves no traceback at all)."""
         mock_frc.return_value = self._frc_return()
-        mock_nena.return_value = (None, 0.4)  # bin 0.2 px
-        # FOV 32x64 squared to 32 -> 160 px image; guard at 100 -> refuse
+        # precision 0.1 px -> bin 0.05 -> min(32,64)/0.05 = 640 px image
+        self.ap.locs["lpx"] = 0.1
+        self.ap.locs["lpy"] = 0.1
         with self.assertRaises(MemoryError) as cm:
             self.ap.picasso_frc(0, {"max_image_px": 100})
         self.assertIn("max_image_px=100", str(cm.exception))
         mock_frc.assert_not_called()
+
+    @patch("picasso_workflow.picasso_set.analyse_picks.postprocess.frc")
+    def test_picasso_frc_nan_precision_skips_guard(self, mock_frc):
+        """All-NaN precision (failed fits) must not silently pass the guard
+        via a NaN comparison; the guard is skipped and FRC still runs."""
+        mock_frc.return_value = self._frc_return()
+        self.ap.locs["lpx"] = np.nan
+        self.ap.locs["lpy"] = np.nan
+        parameters, results = self.ap.picasso_frc(0, {"max_image_px": 1})
+        # guard could not estimate -> skipped, frc runs (no false pass/raise)
+        mock_frc.assert_called_once()
+        self.assertEqual(25.0, results["resolution_nm"])
 
     @patch(
         "picasso_workflow.picasso_set.analyse_core."

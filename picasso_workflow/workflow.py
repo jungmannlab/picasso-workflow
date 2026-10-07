@@ -1401,11 +1401,23 @@ class AggregationWorkflowRunner:
         """Return the completion-marker path for a single-dataset folder."""
         return os.path.join(folder, "_pwf_single_done.txt")
 
+    def _launch_token(self) -> str:
+        """Token identifying this launch (SLURM job id, else ``local``).
+
+        Shared by :meth:`_claim_dir` and the completion markers so both are
+        scoped to a single launch.
+        """
+        return os.getenv("SLURM_JOB_ID") or "local"
+
     def _write_single_marker(self, folder: str, success: bool) -> None:
         """Drop a completion marker for a finished single dataset.
 
         Lets rank 0 know the dataset is finished and whether it succeeded.
         Written atomically via a rank-specific temp file + ``os.replace``.
+        The marker is stamped with this launch's token (see
+        :meth:`_launch_token`) so a stale marker from a previous run in the
+        same (reused) result folder -- e.g. a stepwise step that paused its
+        datasets -- is not mistaken for this launch's completion.
 
         Parameters
         ----------
@@ -1419,7 +1431,8 @@ class AggregationWorkflowRunner:
             marker = self._single_marker_path(folder)
             tmp = f"{marker}.{self.rank}.tmp"
             with open(tmp, "w") as f:
-                f.write("success" if success else "failed")
+                status = "success" if success else "failed"
+                f.write(f"{status} {self._launch_token()}")
             os.replace(tmp, marker)
         except Exception as e:
             logger.error(
@@ -1427,7 +1440,12 @@ class AggregationWorkflowRunner:
             )
 
     def _read_single_marker(self, folder: str) -> str | None:
-        """Return a single dataset's marker contents, or None if absent.
+        """Return a single dataset's marker status for *this* launch, or None.
+
+        A marker stamped with a different launch token (a stale marker from a
+        previous run in the reused result folder) is treated as absent, so
+        rank 0's barrier waits for this launch's workers instead of adopting
+        the previous run's result.
 
         Parameters
         ----------
@@ -1437,13 +1455,18 @@ class AggregationWorkflowRunner:
         Returns
         -------
         str or None
-            ``"success"`` / ``"failed"`` if the marker exists, else None.
+            ``"success"`` / ``"failed"`` if a marker for this launch exists,
+            else None (absent, stale, or legacy/unstamped).
         """
         try:
             with open(self._single_marker_path(folder)) as f:
-                return f.read().strip()
+                content = f.read().strip()
         except FileNotFoundError:
             return None
+        parts = content.split()
+        if len(parts) == 2 and parts[1] == self._launch_token():
+            return parts[0]
+        return None
 
     def _claim_dir(self) -> str:
         """Per-launch directory of dataset claims for dynamic scheduling.
@@ -1460,8 +1483,9 @@ class AggregationWorkflowRunner:
         str
             The claim directory for this launch.
         """
-        job = os.getenv("SLURM_JOB_ID") or "local"
-        return os.path.join(self.result_folder, "_pwf_claims", str(job))
+        return os.path.join(
+            self.result_folder, "_pwf_claims", self._launch_token()
+        )
 
     def _claim_dataset(self, claim_dir: str, i: int) -> bool:
         """Atomically claim single dataset ``i`` for this rank.
@@ -2165,14 +2189,6 @@ class WorkflowRunner:
                     module_parameters = self.parameter_command_executor.run(
                         module_parameters, curr_rootidx=i
                     )
-                # The boundary module of a stepwise run saves its locs as a
-                # checkpoint, so the next step resumes from here instead of
-                # re-running from the last incidental checkpoint. Injected
-                # into the runtime parameters only; the pristine snapshot is
-                # untouched, so this does not read as a parameter edit on the
-                # next resume.
-                if self.stop_after == i:
-                    module_parameters["save_locs"] = True
                 success = self.call_module(module_name, i, module_parameters)
             except AutoPicassoError as e:
                 success = False
@@ -2200,6 +2216,18 @@ class WorkflowRunner:
                     )
                 progress.module_end(
                     i, DONE if success else FAILED, error=err_text
+                )
+
+            # Stepwise boundary: ensure the boundary module leaves a resume
+            # checkpoint, so the next step continues from here instead of an
+            # earlier incidental checkpoint. Done at the runner level (not via
+            # a module-specific ``save_locs`` parameter, whose meaning differs
+            # per module -- e.g. ``localize`` reads it as a dict). Only when
+            # the module ran this session; a boundary skipped on resume keeps
+            # whatever checkpoint the previous run recorded.
+            if success and self.stop_after == i:
+                self.autopicasso.save_locs_checkpoint(
+                    self.results[f"{i:02d}_{module_name}"]
                 )
 
             self.save(self.result_folder)

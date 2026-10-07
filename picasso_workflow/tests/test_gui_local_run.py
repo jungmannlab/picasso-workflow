@@ -166,3 +166,46 @@ def test_monitor_stops_when_process_died_without_states(window, tmp_path):
     window.monitor_timer.start()
     window._maybe_stop_monitor(None, [])
     assert not window.monitor_timer.isActive()
+
+
+def test_monitor_stops_after_kill_with_running_state(window, tmp_path):
+    """After 'Kill local run' the killed process leaves progress.json
+    non-terminal ('running'); the monitor must still stop polling because
+    the process we launched has exited."""
+    window._monitor_local_folder = str(tmp_path)
+    window._local_process = _fake_proc(-15)  # terminated by signal
+    window.monitor_timer.start()
+    running = [{"kind": "single", "state": "running", "modules": []}]
+    window._maybe_stop_monitor(None, running)
+    assert not window.monitor_timer.isActive()
+
+
+def test_stale_job_id_does_not_flip_live_local_run(window, tmp_path):
+    """A leftover cluster Job-ID must not flip a live local run's monitor
+    back to cluster mode."""
+    (tmp_path / "progress.json").write_text("{}")
+    window.results_folder_display.setText(str(tmp_path))
+    window.job_id_input.setText("123456")  # stale cluster job id
+    window._local_process = _fake_proc(None)  # local run still alive
+    window._monitor_local_folder = str(tmp_path)
+    window._resolve_monitor_target()
+    assert window._monitor_local_folder == str(tmp_path)  # stayed local
+
+
+def test_repoint_resets_launch_state(window, tmp_path):
+    """Pointing the monitor at a different folder (no live run) drops the
+    previous launch's scoping/process so the new folder's runs show."""
+    from datetime import datetime
+
+    other = tmp_path / "other"
+    other.mkdir()
+    (other / "progress.json").write_text("{}")
+    window._monitor_local_folder = str(tmp_path / "old")
+    window._local_run_started_dt = datetime.now()
+    window._local_process = _fake_proc(1)  # dead previous run
+    window.job_id_input.clear()
+    window.results_folder_display.setText(str(other))
+    window._resolve_monitor_target()
+    assert window._monitor_local_folder == str(other)
+    assert window._local_run_started_dt is None
+    assert window._local_process is None

@@ -12,6 +12,32 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Fixed
 
+- **Code-review fixes for the stepwise / local-run / FRC work.** A multi-agent
+  review of this branch surfaced several real bugs, now fixed:
+  - *Stepwise boundary checkpoint:* the boundary module's checkpoint is now
+    written at the runner level (`AutoPicasso.save_locs_checkpoint`, shared
+    with the module decorator) instead of injecting a `save_locs=True` module
+    parameter -- which crashed modules that read `save_locs` as a dict (e.g.
+    `localize`) and clobbered a user-set value.
+  - *Multi-rank stepwise markers:* per-dataset completion markers are now
+    stamped with the launch token, so a paused step's markers are not
+    mistaken for a later step's completion (which made rank 0 aggregate
+    stale, incomplete results).
+  - *Local-run monitor:* a stale cluster Job-ID no longer flips a live local
+    run's monitor to cluster mode; the monitor now stops polling after "Kill
+    local run" (killed process, non-terminal state); re-pointing the monitor
+    at another folder resets the launch-scoped state (no false "failed"
+    badge / empty tree).
+  - *Stepwise target:* editing the module list no longer silently re-aims the
+    boundary at a different module -- the selection is cleared if its module
+    no longer exists.
+  - *Progress:* a fully `paused` run now reads as complete (not 0%) in
+    `overall_fraction`.
+  - *FRC guard:* the memory guard now uses a cheap in-memory precision proxy
+    (median `lpx`/`lpy`) instead of a second full NeNA fit (which `frc` runs
+    internally), and guards against a non-finite estimate so degenerate
+    (all-NaN) precision no longer slips past it.
+
 - **In-memory localizations now match every saved locs file.**
   `io.save_locs` writes the *sanitized* table (`lib.ensure_sanity` drops
   rows with NaN/inf — e.g. failed GPU fits with NaN localization

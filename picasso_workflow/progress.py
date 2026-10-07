@@ -567,8 +567,11 @@ class PicassoProgressProxy:
 def overall_fraction(state: dict) -> float:
     """Compute an overall 0..1 completion fraction from a progress state.
 
-    Completed and skipped modules count as full; a running module counts by
-    its intra-module fraction. Returns 0.0 for an empty/None state.
+    Completed, skipped and paused modules/datasets count as full; a running
+    module counts by its intra-module fraction. ``paused`` is a terminal
+    stepwise-boundary state (the modules before it are complete), so it
+    counts as done -- otherwise a fully-paused run would read as 0%.
+    Returns 0.0 for an empty/None state.
     """
     if not state:
         return 0.0
@@ -578,11 +581,13 @@ def overall_fraction(state: dict) -> float:
         datasets = state.get("datasets") or []
         if not datasets:
             return 0.0
-        done = sum(1 for d in datasets if d.get("state") in (DONE, SKIPPED))
+        done = sum(
+            1 for d in datasets if d.get("state") in (DONE, SKIPPED, PAUSED)
+        )
         return done / len(datasets)
     total = 0.0
     for m in modules:
-        if m.get("status") in (DONE, SKIPPED):
+        if m.get("status") in (DONE, SKIPPED, PAUSED):
             total += 1.0
         elif m.get("status") == RUNNING:
             total += m.get("fraction") or 0.0

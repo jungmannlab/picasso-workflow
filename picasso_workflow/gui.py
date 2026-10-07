@@ -15485,7 +15485,13 @@ class Window(QtWidgets.QMainWindow):
         combo = getattr(self, "stepwise_target", None)
         if combo is None:
             return  # widgets not built yet (early _on_workflow_type_changed)
+        # Identify the previous target by its label (phase + index + module
+        # name), not just (phase, index): inserting/removing/reordering
+        # modules keeps the index but changes which module it names, and we
+        # must not silently re-aim the boundary at a different module.
         previous = combo.currentData()
+        previous_label = combo.currentText()
+        was_enabled = self.stepwise_enable.isChecked()
         combo.blockSignals(True)
         combo.clear()
         type_index = self.workflow_type.currentIndex()
@@ -15499,11 +15505,17 @@ class Window(QtWidgets.QMainWindow):
                 combo.addItem(
                     f"aggregation {i:02d}: {name}", ("aggregation", i)
                 )
-        # restore the previous target if it still exists
+        # restore the previous target only if the same module is still at the
+        # same (phase, index) -- matched on both the data and the label
+        restored = False
         if previous is not None:
             for row in range(combo.count()):
-                if combo.itemData(row) == previous:
+                if (
+                    combo.itemData(row) == previous
+                    and combo.itemText(row) == previous_label
+                ):
                     combo.setCurrentIndex(row)
+                    restored = True
                     break
         combo.blockSignals(False)
         supported = type_index in (0, 1) and combo.count() > 0
@@ -15512,8 +15524,21 @@ class Window(QtWidgets.QMainWindow):
             self.stepwise_enable.setToolTip(
                 "Stepwise runs are not supported for Investigation workflows."
             )
-        if not supported and self.stepwise_enable.isChecked():
+        # Drop the stepwise selection rather than stop after the wrong module:
+        # the previously chosen boundary no longer maps to the same module
+        # (edited/removed/reordered), or the workflow type no longer supports
+        # stepping.
+        if self.stepwise_enable.isChecked() and (
+            not supported
+            or (was_enabled and previous is not None and not restored)
+        ):
             self.stepwise_enable.setChecked(False)
+            if supported:
+                logger.info(
+                    "Stepwise target module no longer exists after the "
+                    "workflow edit; cleared the stepwise boundary -- re-select "
+                    "a module to run up to."
+                )
 
     def _stepwise_stop_after(self):
         """The configured stepwise boundary, or None when not stepping.
@@ -16680,7 +16705,12 @@ class Window(QtWidgets.QMainWindow):
         if not results_folder:
             return
         job_id = self.job_id_input.text().strip()
-        if job_id:
+        proc = self._local_process
+        local_alive = proc is not None and proc.poll() is None
+        # While a local run this session is still alive, keep monitoring it:
+        # a stale cluster Job-ID left in the field must not flip the monitor
+        # back to cluster mode and hide the running local run.
+        if job_id and not local_alive:
             host_cluster = str(self.cluster_host_combo.currentText())
             if host_cluster and host_cluster in CONFIG.get(
                 "SlurmLoginNodes", {}
@@ -16694,7 +16724,18 @@ class Window(QtWidgets.QMainWindow):
                 except Exception as e:
                     logger.debug(f"monitor: could not connect cluster: {e}")
         elif os.path.isdir(results_folder):
-            # no job ID: monitor a local results folder directly
+            # no job ID: monitor a local results folder directly. If this is a
+            # different folder than the one launched this session (e.g. the
+            # user re-pointed the field and hit Refresh now), drop the
+            # launch-scoped state so the inspected folder's own runs show --
+            # otherwise launch-time scoping filters them all out and the dead
+            # previous process paints a false "failed" badge.
+            if (
+                not local_alive
+                and results_folder != self._monitor_local_folder
+            ):
+                self._local_run_started_dt = None
+                self._local_process = None
             self._monitor_local_folder = results_folder
 
     def _refresh_monitor(self):
@@ -16902,23 +16943,27 @@ class Window(QtWidgets.QMainWindow):
             self._stop_monitor()
             return
         if self._monitor_local_folder:
-            top = self._top_state(states)
-            terminal = top is not None and top.get("state") in (
-                "done",
-                "failed",
-                "aborted",
-                "paused",
-            )
             proc = self._local_process
-            proc_done = proc is None or proc.poll() is not None
-            # also stop when the launched process died without leaving any
-            # current-run progress behind (it crashed before the workflow
-            # started); otherwise the monitor would poll forever
-            died_without_states = (
-                proc is not None and proc.poll() is not None and not states
-            )
-            if (terminal and proc_done) or died_without_states:
-                self._stop_monitor()
+            if proc is not None:
+                # A run we launched this session: its process exit is the
+                # authority on completion. Once it has exited, progress.json
+                # is final (written before exit), so stop polling -- even if
+                # the state is non-terminal because the process was killed or
+                # crashed (e.g. OOM) without writing a terminal state.
+                # Otherwise the monitor would poll forever after a kill.
+                if proc.poll() is not None:
+                    self._stop_monitor()
+            else:
+                # Attached to a folder we did not launch (Refresh now): no
+                # process to consult, so rely on the progress state.
+                top = self._top_state(states)
+                if top is not None and top.get("state") in (
+                    "done",
+                    "failed",
+                    "aborted",
+                    "paused",
+                ):
+                    self._stop_monitor()
 
     def _update_monitor_display(self, slurm, states):
         """Render the fused SLURM + multi-stage progress into the widgets."""
@@ -17771,9 +17816,13 @@ class Window(QtWidgets.QMainWindow):
             f"Logging to {log_path}"
         )
         # local run -> poll the local progress.json tree, not the cluster;
-        # the launch time scopes the polled states to this run
+        # the launch time scopes the polled states to this run. Clear any
+        # stale cluster Job-ID so the next refresh does not flip the monitor
+        # back to cluster mode (the live-process guard in
+        # _resolve_monitor_target also covers the running window).
         from datetime import datetime
 
+        self.job_id_input.clear()
         self._local_run_started_dt = datetime.now()
         self._monitor_local_folder = results_folder
         self._start_monitor()
