@@ -145,3 +145,39 @@ def test_collection_crash_does_not_blank_pane(window, tmp_path, monkeypatch):
     assert "identify" in text
     assert "could not be collected" in text
     assert "yaml exploded" in text
+
+
+def test_slurm_kill_reason_shown(window):
+    """A job SLURM ended (e.g. OOM-killed) leaves no Python traceback, so
+    the pane shows the SLURM reason and the module that was running."""
+    window._monitor_local_folder = None
+    slurm = {
+        "success": True,
+        "status": "OUT_OF_MEMORY",
+        "details": {"exit_code": "0:125", "max_rss": "49.9G"},
+    }
+    state = {
+        "kind": "single",
+        "report_name": "rep_123456-0000",
+        "state": "running",
+        "current": 1,
+        "total": 2,
+        "modules": [
+            {"i": 0, "name": "load", "status": "done"},
+            {"i": 1, "name": "picasso_frc", "status": "running"},
+        ],
+    }
+    window._update_error_details([state], slurm)
+    text = window.error_details_display.toPlainText()
+    assert "OUT_OF_MEMORY" in text
+    assert "picasso_frc" in text
+    assert "MaxRSS 49.9G" in text
+    assert "Memory" in text  # the OOM hint
+
+
+def test_slurm_completed_does_not_fill_pane(window):
+    window._monitor_local_folder = None
+    window.error_details_display.clear()
+    slurm = {"success": True, "status": "COMPLETED", "details": {}}
+    window._update_error_details([], slurm)
+    assert window.error_details_display.toPlainText() == ""

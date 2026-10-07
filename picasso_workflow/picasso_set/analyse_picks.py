@@ -25,6 +25,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import yaml
+from loguru import logger
 
 from picasso import __version__ as picassoversion
 from picasso import io, lib, postprocess
@@ -531,14 +532,63 @@ class PicassoSetPicksMixin:
 
             ``random_seed`` : int, default 42
                 Seed for the random split of the localizations.
+            ``viewport`` : list, default the full field of view
+                Region to run FRC on, as
+                ``[[y_min, x_min], [y_max, x_max]]`` in camera pixels.
+            ``max_image_px`` : int, default 16384
+                Memory guard: maximum side length (binned pixels) of the
+                two rendered half-images. FRC bins at half the NeNA
+                precision, so a full modern sensor at good precision can
+                exceed 100k px per side -- tens of GB per image, which
+                gets the job OOM-killed. A viewport larger than this is
+                cropped centrally (recorded in the results as ``note``).
         results : dict
             Module results (see
             :class:`~picasso_workflow.util.AbstractModuleCollection`).
         """
         random_seed = parameters.get("random_seed", 42)
-        height = lib.get_from_metadata(self.info, "Height", raise_error=True)
-        width = lib.get_from_metadata(self.info, "Width", raise_error=True)
-        viewport = ((0, 0), (height, width))
+        max_image_px = parameters.get("max_image_px", 16384)
+        if (viewport := parameters.get("viewport")) is not None:
+            viewport = (
+                (float(viewport[0][0]), float(viewport[0][1])),
+                (float(viewport[1][0]), float(viewport[1][1])),
+            )
+        else:
+            height = lib.get_from_metadata(
+                self.info, "Height", raise_error=True
+            )
+            width = lib.get_from_metadata(self.info, "Width", raise_error=True)
+            viewport = ((0, 0), (height, width))
+        # Estimate the rendered image size the same way postprocess.frc
+        # does (bin size = NeNA / 2; the viewport is squared to its smaller
+        # side) and crop the viewport centrally when it would exceed the
+        # memory guard.
+        lp = postprocess.nena(self.locs, self.info)[1]
+        binsize = lp / 2
+        side = min(
+            viewport[1][0] - viewport[0][0],
+            viewport[1][1] - viewport[0][1],
+        )
+        est_px = side / binsize
+        if est_px > max_image_px:
+            new_side = max_image_px * binsize
+            y_c = (viewport[0][0] + viewport[1][0]) / 2
+            x_c = (viewport[0][1] + viewport[1][1]) / 2
+            viewport = (
+                (y_c - new_side / 2, x_c - new_side / 2),
+                (y_c + new_side / 2, x_c + new_side / 2),
+            )
+            note = (
+                f"FRC images would be ~{est_px:.0f} px wide (bin size = "
+                f"NeNA/2 = {binsize:.4f} camera px); cropped the viewport "
+                f"centrally to {new_side:.1f} camera px to respect "
+                f"max_image_px={max_image_px}. Pass a 'viewport' to choose "
+                "the region, or raise 'max_image_px' (memory scales with "
+                "its square)."
+            )
+            logger.warning(note)
+            results["note"] = note
+        results["viewport"] = [list(viewport[0]), list(viewport[1])]
         frc_result = postprocess.frc(
             self.locs, self.info, viewport, random_seed=random_seed
         )

@@ -1082,23 +1082,56 @@ class TestPicassoSetModules(unittest.TestCase):
         self.assertAlmostEqual(0.4, results["nena_px"])
         self.assertAlmostEqual(52.0, results["nena_nm"])
 
-    @patch("picasso_workflow.picasso_set.analyse_picks.postprocess.frc")
-    def test_picasso_frc(self, mock_frc):
+    @staticmethod
+    def _frc_return():
         freqs = np.linspace(0.001, 0.05, 50)
-        mock_frc.return_value = {
+        return {
             "frequencies": freqs,
             "frc_curve": np.random.rand(50),
             "frc_curve_smooth": np.random.rand(50),
             "resolution": 25.0,
             "images": None,
         }
+
+    @patch("picasso_workflow.picasso_set.analyse_picks.postprocess.nena")
+    @patch("picasso_workflow.picasso_set.analyse_picks.postprocess.frc")
+    def test_picasso_frc(self, mock_frc, mock_nena):
+        mock_frc.return_value = self._frc_return()
+        mock_nena.return_value = (None, 0.4)  # bin 0.2 px -> 160 px image
         parameters, results = self.ap.picasso_frc(0, {})
-        # full-FOV viewport from the metadata
+        # full-FOV viewport from the metadata (below the memory guard)
         self.assertEqual(((0, 0), (32, 64)), mock_frc.call_args[0][2])
         self.assertEqual(42, mock_frc.call_args[1]["random_seed"])
         self.assertEqual(25.0, results["resolution_nm"])
+        self.assertEqual([[0, 0], [32, 64]], results["viewport"])
+        self.assertNotIn("note", results)
         self.assertTrue(os.path.isfile(results["fp_fig_frc"]))
         self.assertTrue(os.path.isfile(results["filepath_frc"]))
+
+    @patch("picasso_workflow.picasso_set.analyse_picks.postprocess.nena")
+    @patch("picasso_workflow.picasso_set.analyse_picks.postprocess.frc")
+    def test_picasso_frc_memory_guard_crops(self, mock_frc, mock_nena):
+        """A viewport whose rendered image would exceed max_image_px is
+        cropped centrally (full-FOV FRC at good precision OOM-kills jobs)."""
+        mock_frc.return_value = self._frc_return()
+        mock_nena.return_value = (None, 0.4)  # bin 0.2 px
+        # FOV 32x64 squared to 32 -> 160 px image; guard at 100 -> 20 px side
+        parameters, results = self.ap.picasso_frc(0, {"max_image_px": 100})
+        viewport = mock_frc.call_args[0][2]
+        self.assertEqual(((6.0, 22.0), (26.0, 42.0)), viewport)
+        self.assertIn("note", results)
+        self.assertIn("max_image_px=100", results["note"])
+
+    @patch("picasso_workflow.picasso_set.analyse_picks.postprocess.nena")
+    @patch("picasso_workflow.picasso_set.analyse_picks.postprocess.frc")
+    def test_picasso_frc_explicit_viewport(self, mock_frc, mock_nena):
+        mock_frc.return_value = self._frc_return()
+        mock_nena.return_value = (None, 0.4)
+        parameters, results = self.ap.picasso_frc(
+            0, {"viewport": [[0, 0], [10, 10]]}
+        )
+        self.assertEqual(((0.0, 0.0), (10.0, 10.0)), mock_frc.call_args[0][2])
+        self.assertNotIn("note", results)
 
     @patch(
         "picasso_workflow.picasso_set.analyse_core."

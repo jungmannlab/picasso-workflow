@@ -17029,9 +17029,9 @@ class Window(QtWidgets.QMainWindow):
         self._apply_tree_expansion(prev_expansion)
 
         # --- error details ---
-        self._update_error_details(states)
+        self._update_error_details(states, slurm)
 
-    def _update_error_details(self, states):
+    def _update_error_details(self, states, slurm=None):
         """Fill the error-details pane with failed modules' tracebacks.
 
         Error text comes from the progress states (recorded by the runner
@@ -17040,7 +17040,9 @@ class Window(QtWidgets.QMainWindow):
         into ``progress.json``) falls back to the traceback recorded in the
         run's ``WorkflowRunner.yaml``, and a run that died without any
         recorded module failure (import error, config error, ...) falls
-        back to the tail of ``local_run.log``.
+        back to the tail of ``local_run.log``. A cluster job that SLURM
+        ended (OOM kill, timeout, cancel) leaves no Python traceback at
+        all, so the SLURM reason is shown instead.
         """
         texts = []
         for s in states or []:
@@ -17078,19 +17080,66 @@ class Window(QtWidgets.QMainWindow):
                         texts.append(f"{header}\n{err}")
                     else:
                         texts.append(f"{header} (no error details recorded)")
+        # a job SLURM ended (OOM kill, timeout, cancel) leaves no Python
+        # traceback anywhere -- the kill is uncatchable -- so show the
+        # SLURM reason with the module that was running
+        if (
+            not texts
+            and slurm
+            and slurm.get("success")
+            and slurm.get("status") in self._SLURM_TERMINAL
+            and slurm.get("status") != "COMPLETED"
+        ):
+            status = slurm.get("status")
+            details = slurm.get("details") or {}
+            msg = f"SLURM ended the job: {status}"
+            where = self._active_stage_module_label(states)
+            if where:
+                msg += f" during {where}"
+            extra = [
+                f"{label} {value}"
+                for label, value in (
+                    ("exit", details.get("exit_code")),
+                    ("MaxRSS", details.get("max_rss")),
+                )
+                if value
+            ]
+            if extra:
+                msg += "  (" + ", ".join(extra) + ")"
+            msg += (
+                "\nA killed job leaves no Python traceback; see the SLURM "
+                "error log in the results folder's logs/ directory."
+            )
+            if status == "OUT_OF_MEMORY":
+                msg += (
+                    "\nHint: increase 'Memory' in the cluster settings, or "
+                    "reduce the module's memory footprint."
+                )
+            texts.append(msg)
         if not texts and self._monitor_local_folder:
             proc = getattr(self, "_local_process", None)
-            died = proc is not None and proc.poll() not in (None, 0)
+            rc = proc.poll() if proc is not None else None
+            died = rc not in (None, 0)
             top_failed = bool(states) and (
                 (self._top_state(states) or {}).get("state") == "failed"
             )
             if died or top_failed:
+                note = ""
+                if rc is not None and rc < 0:
+                    note = (
+                        f"The local run was killed by signal {-rc} "
+                        "(often the operating system's out-of-memory "
+                        "killer).\n"
+                    )
                 tail = self._read_log_tail(self._monitor_local_folder)
                 if tail:
                     texts.append(
-                        "The run failed without a recorded module error; "
+                        note
+                        + "The run failed without a recorded module error; "
                         "tail of local_run.log:\n" + tail
                     )
+                elif note:
+                    texts.append(note.rstrip())
         text = "\n\n".join(texts)
         # only rewrite on change, so the user's scroll position survives
         # the 15 s refreshes

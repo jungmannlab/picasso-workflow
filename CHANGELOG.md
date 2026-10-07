@@ -12,6 +12,20 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Fixed
 
+- **`picasso_frc` no longer OOM-kills the job on large datasets.** FRC bins
+  its two half-images at half the NeNA precision, so a full-FOV render on a
+  modern sensor at good precision reaches 100k+ px per side — tens of GB per
+  image — and the job is OOM-killed (observed: 14.2M locs, 50 GB job,
+  killed in ~90 s; a SIGKILL leaves no Python traceback anywhere). The
+  module now takes a `viewport` parameter (region in camera pixels) and a
+  `max_image_px` memory guard (default 16384): a viewport that would exceed
+  it is cropped centrally, with the crop recorded in the results and logged.
+  Additionally, a job that SLURM ended (OOM kill, timeout, cancel) now shows
+  the SLURM reason — status, running module, exit code/MaxRSS, and an OOM
+  hint — in the *Error details* pane, since no traceback can exist; a local
+  run killed by a signal notes the signal (and the OOM-killer suspicion)
+  there too.
+
 - **Error-details pane could stay empty for a failed module.** Collecting
   details could crash silently: a yaml error recorded as a plain string
   (modules that set `success: False` themselves, or older runs) broke the
