@@ -11416,6 +11416,16 @@ class Window(QtWidgets.QMainWindow):
         self.tabs.addTab(results_tab, "Results")
         self._build_results_tab(results_tab)
 
+        # Render tab: explore a run's saved localizations with the embedded
+        # picasso Render canvas. The embedded render window is created lazily
+        # (on first render), so building this tab is cheap.
+        from picasso_workflow.render_tab import RenderTab
+
+        self.render_tab = RenderTab(self)
+        self.tabs.addTab(self.render_tab, "Render")
+        # refresh the render tab's run list when it is first shown / selected
+        self.tabs.currentChanged.connect(self._on_main_tab_changed)
+
         # select files to process
         # Single Workflow only: choose how input data is provided - an
         # explicit file list, auto-detection from the results folder, or
@@ -13214,6 +13224,15 @@ class Window(QtWidgets.QMainWindow):
     # ------------------------------------------------------------------
     # Results tab: HTML report viewer
     # ------------------------------------------------------------------
+    def _on_main_tab_changed(self, index):
+        """Refresh the Render tab's run list the first time it is shown."""
+        widget = self.tabs.widget(index)
+        if widget is getattr(self, "render_tab", None):
+            try:
+                self.render_tab.refresh()
+            except Exception as e:
+                logger.debug(f"Could not refresh the Render tab: {e}")
+
     def _build_results_tab(self, results_tab):
         """Populate the Results tab with the HTML report viewer.
 

@@ -12,6 +12,19 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Added
 
+- **"Render" tab: explore a run's localizations with picasso Render.** A new
+  tab (right of *Results*) lists the localization files a run saved (one
+  entry per `*.hdf5` under its module folders, discovered by scanning the
+  run folder so it is machine-independent) in a multi-select tree on the
+  left, and embeds the picasso Render canvas on the right. Selecting one or
+  several files renders them (multiple overlay as channels). The embedded
+  window exposes picasso Render's *exploration / adjustment* features
+  (zoom, pan, contrast, colormap, blur, scale bar, per-channel display via
+  the Display settings / Channels buttons) but not its processing features:
+  the embedded window's menu bar (File / Tools / Postprocess) is hidden. The
+  picasso Render window is created lazily on first render, so GUI startup is
+  unaffected.
+
 - **Confluence report link in the Run tab.** When a run documents to
   Confluence, the runner records the report page's URL in `progress.json`
   (`report_url`), and the Run-tab monitor shows it as a clickable link

@@ -307,6 +307,18 @@ appears in the *Error details* pane next to the run information (for
 local and cluster runs; local runs also fall back to the traceback
 recorded in `WorkflowRunner.yaml` and to the `local_run.log` tail).
 
+### Exploring results in the Render tab
+
+The *Render* tab (right of *Results*) embeds the picasso Render canvas to
+explore the localizations a run produced. Pick a run, and the left panel
+lists its saved localization files (every `*.hdf5` under the run's module
+folders); select one — or several, to overlay them as channels — and
+*Render selected* shows them on the right. The embedded canvas offers
+picasso Render's exploration and adjustment features (zoom, pan, contrast,
+colormap, blur method, scale bar, and per-channel display via the *Display
+settings* and *Channels* buttons); its processing features (undrift, pick,
+cluster, …) are intentionally not exposed.
+
 ### Stepwise (module-by-module) development runs
 
 When developing a new workflow, parameters are usually dialed in one
