@@ -157,7 +157,18 @@ class RenderTab(QtWidgets.QWidget):
         )
         self.channels_button.clicked.connect(self._open_channels)
         controls.addWidget(self.channels_button)
+        self.zoom_in_button = QtWidgets.QPushButton("Zoom in")
+        self.zoom_in_button.setToolTip(
+            "Zoom in. In the canvas you can also drag a box to zoom to it, "
+            "right-drag to pan, and Ctrl+scroll to zoom at the cursor."
+        )
+        self.zoom_in_button.clicked.connect(self._zoom_in)
+        controls.addWidget(self.zoom_in_button)
+        self.zoom_out_button = QtWidgets.QPushButton("Zoom out")
+        self.zoom_out_button.clicked.connect(self._zoom_out)
+        controls.addWidget(self.zoom_out_button)
         self.fit_button = QtWidgets.QPushButton("Fit in view")
+        self.fit_button.setToolTip("Reset the zoom to show all localizations.")
         self.fit_button.clicked.connect(self._fit_in_view)
         controls.addWidget(self.fit_button)
         self.clear_button = QtWidgets.QPushButton("Clear")
@@ -172,7 +183,10 @@ class RenderTab(QtWidgets.QWidget):
         self.canvas_layout.setContentsMargins(0, 0, 0, 0)
         self.canvas_placeholder = QtWidgets.QLabel(
             "Select a run and localization file, then 'Render selected' to "
-            "explore it here with picasso Render."
+            "explore it here with picasso Render.\n\n"
+            "Zoom with the Zoom in / Zoom out buttons, by dragging a box in "
+            "the canvas, or with Ctrl+scroll; right-drag to pan; "
+            "'Fit in view' resets the zoom."
         )
         self.canvas_placeholder.setAlignment(
             QtCore.Qt.AlignmentFlag.AlignCenter
@@ -196,6 +210,8 @@ class RenderTab(QtWidgets.QWidget):
         for btn in (
             self.display_button,
             self.channels_button,
+            self.zoom_in_button,
+            self.zoom_out_button,
             self.fit_button,
             self.clear_button,
         ):
@@ -328,6 +344,20 @@ class RenderTab(QtWidgets.QWidget):
         if window is not None:
             window.dataset_dialog.show()
             window.dataset_dialog.raise_()
+
+    def _zoom_in(self) -> None:
+        if self._render_window is not None:
+            try:
+                self._render_window.view.zoom_in()
+            except Exception as e:
+                logger.debug(f"zoom_in failed: {e}")
+
+    def _zoom_out(self) -> None:
+        if self._render_window is not None:
+            try:
+                self._render_window.view.zoom_out()
+            except Exception as e:
+                logger.debug(f"zoom_out failed: {e}")
 
     def _fit_in_view(self) -> None:
         if self._render_window is not None:

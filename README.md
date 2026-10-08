@@ -314,10 +314,12 @@ explore the localizations a run produced. Pick a run, and the left panel
 lists its saved localization files (every `*.hdf5` under the run's module
 folders); select one — or several, to overlay them as channels — and
 *Render selected* shows them on the right. The embedded canvas offers
-picasso Render's exploration and adjustment features (zoom, pan, contrast,
-colormap, blur method, scale bar, and per-channel display via the *Display
-settings* and *Channels* buttons); its processing features (undrift, pick,
-cluster, …) are intentionally not exposed.
+picasso Render's exploration and adjustment features: zoom (the *Zoom in* /
+*Zoom out* / *Fit in view* buttons, dragging a box in the canvas, or
+Ctrl+scroll), pan (right-drag), and contrast, colormap, blur method, scale
+bar and per-channel display via the *Display settings* and *Channels*
+buttons. Its processing features (undrift, pick, cluster, …) are
+intentionally not exposed.
 
 ### Stepwise (module-by-module) development runs
 

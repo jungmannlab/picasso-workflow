@@ -175,4 +175,18 @@ def test_embedded_render_loads_real_locs(qapp, tmp_path):
         time.sleep(0.1)
     assert len(tab._render_window.view.locs) == 1
     assert not tab._render_window.menuBar().isVisible()
+
+    # zoom controls operate on the embedded view: zoom in shrinks the
+    # viewport (shows a smaller region), fit resets it
+    def _area(vp):
+        return (vp[1][0] - vp[0][0]) * (vp[1][1] - vp[0][1])
+
+    view = tab._render_window.view
+    assert tab.zoom_in_button.isEnabled()
+    before = _area(view.viewport)
+    tab._zoom_in()
+    qapp.processEvents()
+    assert _area(view.viewport) < before
+    tab._fit_in_view()
+    qapp.processEvents()
     tab.deleteLater()

@@ -23,7 +23,8 @@ This file was started after v0.5.6; earlier history is in the git log.
   the Display settings / Channels buttons) but not its processing features:
   the embedded window's menu bar (File / Tools / Postprocess) is hidden. The
   picasso Render window is created lazily on first render, so GUI startup is
-  unaffected.
+  unaffected. Explicit *Zoom in* / *Zoom out* / *Fit in view* buttons drive
+  the canvas (dragging a box, right-drag pan and Ctrl+scroll zoom also work).
 
 - **Confluence report link in the Run tab.** When a run documents to
   Confluence, the runner records the report page's URL in `progress.json`
