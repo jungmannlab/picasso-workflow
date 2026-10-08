@@ -565,6 +565,11 @@ class ConfluenceReporter(AbstractModuleCollection):
             logger.debug(f"""Failed to create page {self.report_page_name}.
                 Continuing on the pre-existing page""")
 
+    @property
+    def report_page_url(self):
+        """Browser URL of this report's Confluence page (or None)."""
+        return self.ci.page_url(getattr(self, "report_page_id", None))
+
     def _emit(self, text, postpone_report):
         """Post ``text`` to the report page, or return it when deferred.
 
@@ -5943,6 +5948,28 @@ class ConfluenceInterface:
             self.parent_page_id, _ = self.get_page_properties(
                 parent_page_title
             )
+
+    def page_url(self, page_id):
+        """Return a browser URL for a page id.
+
+        Uses the ``pages/viewpage.action?pageId=`` form, which both
+        Confluence Cloud (``.../wiki/...``) and Server/Data Center resolve
+        (Cloud redirects it to the modern page URL). Built from ``base_url``
+        + ``page_id`` alone, so no extra API round-trip is needed.
+
+        Parameters
+        ----------
+        page_id : str
+            The page id.
+
+        Returns
+        -------
+        str or None
+            The page URL, or None if ``page_id`` is falsy.
+        """
+        if not page_id:
+            return None
+        return f"{self.base_url.rstrip('/')}/pages/viewpage.action?pageId={page_id}"
 
     def connect(self):
         """Connect to confluence (cloud or server) by authentification depending

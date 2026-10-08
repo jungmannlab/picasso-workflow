@@ -11372,6 +11372,15 @@ class Window(QtWidgets.QMainWindow):
         shared_run_layout = QtWidgets.QVBoxLayout(shared_run_widget)
         shared_run_layout.setContentsMargins(0, 0, 0, 0)
         self._build_progress_monitor(shared_run_layout)
+        # Clickable link to the run's Confluence report page (populated by the
+        # monitor from progress.json's report_url; hidden until available).
+        self.confluence_link_label = QtWidgets.QLabel()
+        self.confluence_link_label.setOpenExternalLinks(True)
+        self.confluence_link_label.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextBrowserInteraction
+        )
+        self.confluence_link_label.setVisible(False)
+        shared_run_layout.addWidget(self.confluence_link_label)
         info_row = QtWidgets.QHBoxLayout()
         info_col = QtWidgets.QVBoxLayout()
         info_col.addWidget(QtWidgets.QLabel("Run information:"))
@@ -11406,6 +11415,16 @@ class Window(QtWidgets.QMainWindow):
         QtWidgets.QVBoxLayout(results_tab)
         self.tabs.addTab(results_tab, "Results")
         self._build_results_tab(results_tab)
+
+        # Render tab: explore a run's saved localizations with the embedded
+        # picasso Render canvas. The embedded render window is created lazily
+        # (on first render), so building this tab is cheap.
+        from picasso_workflow.render_tab import RenderTab
+
+        self.render_tab = RenderTab(self)
+        self.tabs.addTab(self.render_tab, "Render")
+        # refresh the render tab's run list when it is first shown / selected
+        self.tabs.currentChanged.connect(self._on_main_tab_changed)
 
         # select files to process
         # Single Workflow only: choose how input data is provided - an
@@ -13205,6 +13224,15 @@ class Window(QtWidgets.QMainWindow):
     # ------------------------------------------------------------------
     # Results tab: HTML report viewer
     # ------------------------------------------------------------------
+    def _on_main_tab_changed(self, index):
+        """Refresh the Render tab's run list the first time it is shown."""
+        widget = self.tabs.widget(index)
+        if widget is getattr(self, "render_tab", None):
+            try:
+                self.render_tab.refresh()
+            except Exception as e:
+                logger.debug(f"Could not refresh the Render tab: {e}")
+
     def _build_results_tab(self, results_tab):
         """Populate the Results tab with the HTML report viewer.
 
@@ -16965,12 +16993,46 @@ class Window(QtWidgets.QMainWindow):
                 ):
                     self._stop_monitor()
 
+    def _update_confluence_link(self, top, states):
+        """Show a clickable link to the run's Confluence report page.
+
+        The URL is recorded in each run's ``progress.json`` (``report_url``)
+        by the runner, so no live Confluence connection is needed. Prefers
+        the top-level (aggregation) page, falling back to the first stage
+        that recorded one. Hidden when the run is not documented to
+        Confluence.
+
+        Parameters
+        ----------
+        top : dict or None
+            The run's top-level progress state.
+        states : list of dict
+            All progress states read this refresh.
+        """
+        url = (top or {}).get("report_url")
+        if not url:
+            url = next(
+                (s.get("report_url") for s in states if s.get("report_url")),
+                None,
+            )
+        if url:
+            self.confluence_link_label.setText(
+                f'Confluence report: <a href="{url}">{url}</a>'
+            )
+            self.confluence_link_label.setVisible(True)
+        else:
+            self.confluence_link_label.clear()
+            self.confluence_link_label.setVisible(False)
+
     def _update_monitor_display(self, slurm, states):
         """Render the fused SLURM + multi-stage progress into the widgets."""
         states = states or []
         agg = self._merged_aggregation_state(states)
         singles = [s for s in states if s.get("kind") != "aggregation"]
         top = self._top_state(states)
+
+        # --- Confluence report link ---
+        self._update_confluence_link(top, states)
 
         # --- SLURM state chip (or local run state) ---
         if slurm and slurm.get("success"):

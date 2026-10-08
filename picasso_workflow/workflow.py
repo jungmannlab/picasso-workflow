@@ -904,6 +904,15 @@ class AggregationWorkflowRunner:
         )
         self.progress.datasets_init(tags)
         self.progress.mark_running()
+        # Link the aggregation overview page for the GUI monitor (best-effort).
+        cfg = (self.reporter_config or {}).get("ConfluenceReporter") or {}
+        if getattr(self, "ci", None) is not None and cfg.get("parent_page_id"):
+            try:
+                self.progress.set_report_url(
+                    self.ci.page_url(cfg["parent_page_id"])
+                )
+            except Exception as e:
+                logger.debug(f"Could not record aggregation report URL: {e}")
 
         # Multi-node parallelism: distribute the single-dataset workflows
         # across the SLURM ranks by dynamic self-scheduling. Each rank walks
@@ -2288,6 +2297,14 @@ class WorkflowRunner:
                 kind="single",
                 report_name=getattr(self, "report_name", None),
             )
+        # Record the Confluence report-page URL so the GUI monitor can link
+        # to it (best-effort; never let a reporter quirk abort the run).
+        reporter = getattr(self, "confluencereporter", None)
+        if reporter is not None:
+            try:
+                self.progress.set_report_url(reporter.report_page_url)
+            except Exception as e:
+                logger.debug(f"Could not record Confluence report URL: {e}")
         # Wire the analysis worker so long picasso calls can report
         # intra-module progress and honour aborts.
         if getattr(self, "autopicasso", None) is not None:

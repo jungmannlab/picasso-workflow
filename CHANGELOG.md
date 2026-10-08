@@ -10,6 +10,33 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ## [Unreleased]
 
+### Added
+
+- **"Render" tab: explore a run's localizations with picasso Render.** A new
+  tab (right of *Results*) lists the localization files a run saved (one
+  entry per `*.hdf5` under its module folders, discovered by scanning the
+  run folder so it is machine-independent) in a multi-select tree on the
+  left, and embeds the picasso Render canvas on the right. Selecting one or
+  several files renders them (multiple overlay as channels). The embedded
+  window exposes picasso Render's *exploration / adjustment* features
+  (zoom, pan, contrast, colormap, blur, scale bar, per-channel display via
+  the Display settings / Channels buttons) but not its processing features:
+  the render window's menus (File / Tools / Postprocess) are not surfaced.
+  The canvas is picasso's `View` widget embedded directly (as in standalone
+  picasso Render), so its mouse/zoom coordinate math and the zoom rubber-band
+  work; the render window is created lazily on first render, so GUI startup
+  is unaffected. Explicit *Zoom in* / *Zoom out* / *Fit in view* buttons
+  drive the canvas (dragging a box, right-drag pan and Ctrl+scroll zoom also
+  work).
+
+- **Confluence report link in the Run tab.** When a run documents to
+  Confluence, the runner records the report page's URL in `progress.json`
+  (`report_url`), and the Run-tab monitor shows it as a clickable link
+  (updated on each poll; the aggregation overview page is preferred for
+  aggregation runs). The URL is built from the base URL + page id
+  (`pages/viewpage.action?pageId=…`, resolving on both Confluence Cloud and
+  Server), so the GUI needs no live Confluence connection to offer the link.
+
 ### Fixed
 
 - **Code-review fixes for the stepwise / local-run / FRC work.** A multi-agent

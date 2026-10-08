@@ -2487,3 +2487,35 @@ def test_pick_origami_report_no_clustering_is_well_formed():
     text = _pick_origami_report(results)
     _assert_well_formed(text)
     assert "p.png" in text
+
+
+class Test_PageUrl(unittest.TestCase):
+    """page_url builds a browser URL from base_url + page id (no network)."""
+
+    def _iface(self, base_url):
+        # bypass __init__/connect: page_url only needs base_url
+        ci = confluence.ConfluenceInterface.__new__(
+            confluence.ConfluenceInterface
+        )
+        ci.base_url = base_url
+        return ci
+
+    def test_cloud_url(self):
+        ci = self._iface("https://miblab.atlassian.net/wiki")
+        self.assertEqual(
+            "https://miblab.atlassian.net/wiki/pages/viewpage.action"
+            "?pageId=12345",
+            ci.page_url("12345"),
+        )
+
+    def test_server_url_trailing_slash(self):
+        ci = self._iface("https://mibwiki.biochem.mpg.de/")
+        self.assertEqual(
+            "https://mibwiki.biochem.mpg.de/pages/viewpage.action?pageId=7",
+            ci.page_url("7"),
+        )
+
+    def test_none_page_id(self):
+        ci = self._iface("https://x/wiki")
+        self.assertIsNone(ci.page_url(None))
+        self.assertIsNone(ci.page_url(""))
