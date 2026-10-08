@@ -174,7 +174,10 @@ def test_embedded_render_loads_real_locs(qapp, tmp_path):
 
         time.sleep(0.1)
     assert len(tab._render_window.view.locs) == 1
-    assert not tab._render_window.menuBar().isVisible()
+    # the View widget itself is embedded (not the wrapping QMainWindow), so
+    # its coordinate math / zoom rubber-band behave as in standalone picasso
+    assert tab._embedded_view is tab._render_window.view
+    assert tab.canvas_layout.indexOf(tab._embedded_view) >= 0
 
     # zoom controls operate on the embedded view: zoom in shrinks the
     # viewport (shows a smaller region), fit resets it

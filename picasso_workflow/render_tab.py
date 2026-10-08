@@ -3,11 +3,12 @@
 
 A left panel lists the localization files a pipeline run saved (one entry
 per ``*.hdf5`` under the run's module folders), selectable singly or in
-multiples. The right panel embeds the picasso Render GUI's canvas and its
-*exploration / adjustment* features (zoom, pan, contrast, colormap, blur,
-scale bar, multichannel display) -- but not its processing features
-(undrift / pick / cluster / link): the embedded window's menu bar is
-hidden, and only the display and channel dialogs are exposed.
+multiples. The right panel embeds the picasso Render GUI's canvas (its
+``View`` widget) and its *exploration / adjustment* features (zoom, pan,
+contrast, colormap, blur, scale bar, multichannel display) -- but not its
+processing features (undrift / pick / cluster / link): only the ``View``
+and the display / channel dialogs are surfaced, not the render window's
+menus.
 
 The embedded picasso Render window is created lazily on first use, so
 importing this module (and building the tab) does not pull picasso's heavy
@@ -87,8 +88,10 @@ class RenderTab(QtWidgets.QWidget):
         """
         super().__init__()
         self.main_window = main_window
-        # the embedded picasso Render window, created lazily on first render
+        # the picasso Render window, created lazily on first render and kept
+        # alive for its dialogs; only its ``view`` widget is embedded.
         self._render_window = None
+        self._embedded_view = None
         self._build_ui()
 
     # -- UI construction ----------------------------------------------------
@@ -274,25 +277,40 @@ class RenderTab(QtWidgets.QWidget):
 
     # -- embedded picasso Render window ------------------------------------
 
-    def _ensure_render_window(self):
-        """Create (once) and return the embedded picasso Render window.
+    def _ensure_render_window(self, fresh: bool = False):
+        """Create and embed the picasso Render canvas; return its window.
 
-        Returns None if the picasso render GUI cannot be imported/created;
-        a message is shown in the canvas area in that case.
+        Embeds picasso's ``View`` widget *itself* (not the wrapping
+        ``QMainWindow``), exactly as it lives in standalone picasso Render,
+        so its mouse / zoom coordinate math and the zoom rubber-band work.
+        The ``Window`` is kept alive -- never shown or added to a layout --
+        only because the ``View`` references it for its (exploration)
+        dialogs; its processing menus are therefore never surfaced.
+
+        Parameters
+        ----------
+        fresh : bool, optional
+            If True, dispose any existing window and build a new (empty) one
+            -- used to replace the displayed localizations with a clean
+            slate. Default is False (reuse the existing window).
+
+        Returns
+        -------
+        picasso Render Window, or None if the render GUI cannot be created
+        (a message is then shown in the canvas area).
         """
-        if self._render_window is not None:
+        if self._render_window is not None and not fresh:
             return self._render_window
         try:
             from picasso.gui import render as picasso_render
 
+            self._teardown_render_window()
             window = picasso_render.Window()
-            # exploration/adjustment only: hide the menu bar so the
-            # processing menus (Tools / Postprocess) are not exposed
-            window.menuBar().setVisible(False)
-            window.setWindowFlags(QtCore.Qt.WindowType.Widget)
+            view = window.view
             self.canvas_placeholder.setVisible(False)
-            self.canvas_layout.addWidget(window)
+            self.canvas_layout.addWidget(view)
             self._render_window = window
+            self._embedded_view = view
             self._set_controls_enabled(True)
         except Exception as e:
             logger.error(f"Could not embed the picasso Render GUI: {e}")
@@ -305,33 +323,41 @@ class RenderTab(QtWidgets.QWidget):
             return None
         return self._render_window
 
+    def _teardown_render_window(self) -> None:
+        """Detach and dispose the currently embedded view and its window."""
+        if self._embedded_view is not None:
+            self.canvas_layout.removeWidget(self._embedded_view)
+            self._embedded_view.setParent(None)
+            self._embedded_view.deleteLater()
+            self._embedded_view = None
+        if self._render_window is not None:
+            self._render_window.deleteLater()
+            self._render_window = None
+
     def render_selected(self, replace: bool = True) -> None:
         """Render the selected file(s) in the embedded canvas.
 
         Parameters
         ----------
         replace : bool, optional
-            If True (default), clear the view first so only the selection is
-            shown; if False, overlay the selection on what is already shown.
+            If True (default), show only the selection (a fresh canvas); if
+            False, overlay the selection on what is already shown.
         """
         paths = self._selected_paths()
         if not paths:
             return
-        window = self._ensure_render_window()
+        window = self._ensure_render_window(fresh=replace)
         if window is None:
             return
-        if replace:
-            # remove_locs() rebuilds the window's view/dialogs in place
-            window.remove_locs()
         try:
             window.view.add_multiple(paths)
         except Exception as e:
             logger.error(f"Could not render localizations: {e}")
 
     def clear_view(self) -> None:
-        """Remove all localizations from the embedded view."""
+        """Remove all localizations (reset to an empty canvas)."""
         if self._render_window is not None:
-            self._render_window.remove_locs()
+            self._ensure_render_window(fresh=True)
 
     def _open_display_settings(self) -> None:
         window = self._ensure_render_window()
