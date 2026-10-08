@@ -346,3 +346,35 @@ def test_tree_expansion_survives_refresh(full_window):
     root = full_window.module_tree.topLevelItem(0)
     assert not root.isExpanded()
     assert not root.child(0).isExpanded()
+
+
+def test_confluence_link_shown_when_report_url_present(full_window):
+    """A run whose progress.json carries report_url shows a clickable link."""
+    s = _single(0, "running", [("a", "running", 0.5)])
+    s["report_url"] = "https://miblab.atlassian.net/wiki/x?pageId=42"
+    full_window._update_monitor_display(None, [s])
+    assert not full_window.confluence_link_label.isHidden()
+    html = full_window.confluence_link_label.text()
+    assert 'href="https://miblab.atlassian.net/wiki/x?pageId=42"' in html
+
+
+def test_confluence_link_hidden_without_report_url(full_window):
+    """No report_url (not documenting to Confluence) -> link hidden."""
+    s = _single(0, "running", [("a", "running", 0.5)])
+    full_window._update_monitor_display(None, [s])
+    assert full_window.confluence_link_label.isHidden()
+
+
+def test_confluence_link_prefers_aggregation_page(full_window):
+    """For an aggregation run the top-level (aggregation) page link wins."""
+    agg = {
+        "kind": "aggregation",
+        "report_name": "agg_240101-1200",
+        "state": "running",
+        "report_url": "https://x/wiki/agg?pageId=1",
+        "datasets": [{"i": 0, "state": "running"}],
+    }
+    s0 = _single(0, "running", [("a", "running", 0.5)])
+    s0["report_url"] = "https://x/wiki/sgl?pageId=2"
+    full_window._update_monitor_display(None, [agg, s0])
+    assert "pageId=1" in full_window.confluence_link_label.text()

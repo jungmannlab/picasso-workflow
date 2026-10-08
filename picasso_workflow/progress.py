@@ -193,6 +193,11 @@ class ProgressManager:
         self._state = {
             "kind": kind,
             "report_name": report_name,
+            # Browser URL of the Confluence report page, when documenting to
+            # Confluence. Recorded here so the GUI monitor (which only reads
+            # progress.json) can offer a clickable link without a live
+            # Confluence connection. None when not reporting to Confluence.
+            "report_url": None,
             # Identity of the submission that wrote this state. A continued run
             # re-adopts an earlier report_name (whose ``_<id>`` token is
             # deliberately dropped, see metaworkflow), so the monitor cannot
@@ -447,6 +452,20 @@ class ProgressManager:
                 d["state"] = state
                 break
         self._state["current"] = i
+        self.emit()
+
+    def set_report_url(self, url: str | None) -> None:
+        """Record the Confluence report-page URL and broadcast it.
+
+        No-op if ``url`` is not a non-empty string (guards against a mock or
+        unresolved value reaching the JSON-serialised state) or is unchanged,
+        so it can be called unconditionally without spurious emits.
+        """
+        if not isinstance(url, str) or not url:
+            return
+        if self._state.get("report_url") == url:
+            return
+        self._state["report_url"] = url
         self.emit()
 
     def mark_running(self) -> None:

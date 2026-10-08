@@ -11372,6 +11372,15 @@ class Window(QtWidgets.QMainWindow):
         shared_run_layout = QtWidgets.QVBoxLayout(shared_run_widget)
         shared_run_layout.setContentsMargins(0, 0, 0, 0)
         self._build_progress_monitor(shared_run_layout)
+        # Clickable link to the run's Confluence report page (populated by the
+        # monitor from progress.json's report_url; hidden until available).
+        self.confluence_link_label = QtWidgets.QLabel()
+        self.confluence_link_label.setOpenExternalLinks(True)
+        self.confluence_link_label.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextBrowserInteraction
+        )
+        self.confluence_link_label.setVisible(False)
+        shared_run_layout.addWidget(self.confluence_link_label)
         info_row = QtWidgets.QHBoxLayout()
         info_col = QtWidgets.QVBoxLayout()
         info_col.addWidget(QtWidgets.QLabel("Run information:"))
@@ -16965,12 +16974,46 @@ class Window(QtWidgets.QMainWindow):
                 ):
                     self._stop_monitor()
 
+    def _update_confluence_link(self, top, states):
+        """Show a clickable link to the run's Confluence report page.
+
+        The URL is recorded in each run's ``progress.json`` (``report_url``)
+        by the runner, so no live Confluence connection is needed. Prefers
+        the top-level (aggregation) page, falling back to the first stage
+        that recorded one. Hidden when the run is not documented to
+        Confluence.
+
+        Parameters
+        ----------
+        top : dict or None
+            The run's top-level progress state.
+        states : list of dict
+            All progress states read this refresh.
+        """
+        url = (top or {}).get("report_url")
+        if not url:
+            url = next(
+                (s.get("report_url") for s in states if s.get("report_url")),
+                None,
+            )
+        if url:
+            self.confluence_link_label.setText(
+                f'Confluence report: <a href="{url}">{url}</a>'
+            )
+            self.confluence_link_label.setVisible(True)
+        else:
+            self.confluence_link_label.clear()
+            self.confluence_link_label.setVisible(False)
+
     def _update_monitor_display(self, slurm, states):
         """Render the fused SLURM + multi-stage progress into the widgets."""
         states = states or []
         agg = self._merged_aggregation_state(states)
         singles = [s for s in states if s.get("kind") != "aggregation"]
         top = self._top_state(states)
+
+        # --- Confluence report link ---
+        self._update_confluence_link(top, states)
 
         # --- SLURM state chip (or local run state) ---
         if slurm and slurm.get("success"):

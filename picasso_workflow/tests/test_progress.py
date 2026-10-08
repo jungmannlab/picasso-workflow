@@ -365,3 +365,30 @@ class TestOverallFractionPaused(unittest.TestCase):
             ]
         }
         self.assertEqual(1.0, p.overall_fraction(state))
+
+
+class TestReportUrl(unittest.TestCase):
+    """set_report_url records a report page URL into the progress state."""
+
+    def setUp(self):
+        self.folder = tempfile.mkdtemp()
+
+    def tearDown(self):
+        shutil.rmtree(self.folder, ignore_errors=True)
+
+    def test_sets_string_url_and_persists(self):
+        pm = p.ProgressManager(self.folder, sinks=None)
+        pm.set_report_url("https://x/wiki/pages/viewpage.action?pageId=1")
+        self.assertEqual(
+            "https://x/wiki/pages/viewpage.action?pageId=1",
+            pm.state["report_url"],
+        )
+        state = p.read_progress(self.folder)
+        self.assertEqual(pm.state["report_url"], state["report_url"])
+
+    def test_ignores_non_string(self):
+        pm = p.ProgressManager(self.folder, sinks=[])
+        pm.set_report_url(None)
+        pm.set_report_url(object())  # non-serializable, must be ignored
+        pm.set_report_url("")
+        self.assertIsNone(pm.state["report_url"])

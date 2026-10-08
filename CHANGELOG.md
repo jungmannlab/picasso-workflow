@@ -10,6 +10,16 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ## [Unreleased]
 
+### Added
+
+- **Confluence report link in the Run tab.** When a run documents to
+  Confluence, the runner records the report page's URL in `progress.json`
+  (`report_url`), and the Run-tab monitor shows it as a clickable link
+  (updated on each poll; the aggregation overview page is preferred for
+  aggregation runs). The URL is built from the base URL + page id
+  (`pages/viewpage.action?pageId=…`, resolving on both Confluence Cloud and
+  Server), so the GUI needs no live Confluence connection to offer the link.
+
 ### Fixed
 
 - **Code-review fixes for the stepwise / local-run / FRC work.** A multi-agent
