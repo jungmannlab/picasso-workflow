@@ -62,6 +62,7 @@ from picasso_workflow.progress import (
     DONE,
     FAILED,
     ABORTED,
+    PAUSED,
 )
 
 
@@ -566,6 +567,12 @@ class AggregationWorkflowRunner:
             self.postfix = datetime.now().strftime("%y%m%d-%H%M")
         self.continue_workflow = False
         self.single_workflow_parallel = False
+        # Stepwise development runs: ``("single", i)`` stops every
+        # single-dataset workflow after module i and skips the aggregation;
+        # ``("aggregation", i)`` runs the single-dataset phase fully and
+        # stops the aggregation workflow after module i. A per-launch
+        # directive, not persisted to AggregationWorkflowRunner.yaml.
+        self.stop_after = None
         self.sgl_workflow_locations = []
         self.cpage_names = []
         self._html_reporting = False
@@ -586,6 +593,7 @@ class AggregationWorkflowRunner:
         single_workflow_parallel: bool = False,
         rank: int | None = None,
         size: int | None = None,
+        stop_after: tuple | None = None,
     ) -> "AggregationWorkflowRunner":
         """Build a configured runner from plain config dicts.
 
@@ -624,6 +632,10 @@ class AggregationWorkflowRunner:
         rank, size : int, optional
             SLURM task identity overriding the environment-derived values, used
             to control how single workflows are distributed across ranks.
+        stop_after : tuple, optional
+            Stepwise development boundary, as ``(phase, index)`` with phase
+            ``"single"`` or ``"aggregation"`` (see the ``stop_after``
+            attribute). Default is None (run everything).
 
         Returns
         -------
@@ -671,13 +683,18 @@ class AggregationWorkflowRunner:
                     folder, report_name + "_" + candidate
                 )
                 try:
-                    instance = cls.load(runner_folder)
+                    # adopt the caller's reporter choice: the persisted one
+                    # may reference reporters disabled since (see load())
+                    instance = cls.load(
+                        runner_folder, reporter_config=reporter_config
+                    )
                 except FileNotFoundError:
                     logger.debug(f"Could not load runner from {runner_folder}")
                     continue
                 # take over the caller's (possibly fixed) parameters;
                 # change detection happens per WorkflowRunner
                 instance._adopt_aggregation_workflow(aggregation_workflow)
+                instance.stop_after = stop_after
                 return instance
 
         # If we have an extracted postfix but aren't continuing, use it
@@ -699,6 +716,7 @@ class AggregationWorkflowRunner:
             instance.rank = rank
         if size is not None:
             instance.size = size
+        instance.stop_after = stop_after
         instance.single_workflow_parallel = single_workflow_parallel
         instance.parameter_tiler = ParameterTiler(instance, sgltilepars)
         instance.all_results = {
@@ -898,6 +916,9 @@ class AggregationWorkflowRunner:
         # result folder; rank 0 then waits for every marker, loads the results
         # produced by other ranks from disk, and runs the aggregation. With a
         # single task (off-cluster) every dataset runs here.
+        # stepwise development boundary, split into phase and module index
+        stop_phase, stop_index = self.stop_after or (None, None)
+
         claim_dir = self._claim_dir()
         if self.size > 1:
             os.makedirs(claim_dir, exist_ok=True)
@@ -940,7 +961,10 @@ class AggregationWorkflowRunner:
                 "leaving aggregation to rank 0."
             )
             rank_ok = all(owned) if owned else True
-            self.progress.finish(DONE if rank_ok else FAILED)
+            if rank_ok and stop_phase == "single":
+                self.progress.finish(PAUSED)
+            else:
+                self.progress.finish(DONE if rank_ok else FAILED)
             return rank_ok
 
         # Rank 0 (or a single-task run): wait for the single datasets handled
@@ -1004,6 +1028,16 @@ class AggregationWorkflowRunner:
             self._report_aggregation_abort(failures, n_sgl)
             raise WorkflowError(msg)
 
+        # Stepwise boundary in the single-dataset phase: every dataset
+        # stopped cleanly at its boundary, so skip the aggregation workflow.
+        if stop_phase == "single":
+            logger.info(
+                "Stepwise boundary in the single-dataset phase reached; "
+                "skipping the aggregation workflow."
+            )
+            self.progress.finish(PAUSED)
+            return None
+
         # Then, run the aggregation workflow
         pce = ParameterCommandExecutor(
             self,
@@ -1037,7 +1071,8 @@ class AggregationWorkflowRunner:
                         agg_reporter_config["report_name"]
                         + "_"
                         + self.postfix,
-                    )
+                    ),
+                    reporter_config=copy.deepcopy(agg_reporter_config),
                 )
                 wr.adopt_workflow_modules(parameters)
             except Exception:
@@ -1056,12 +1091,17 @@ class AggregationWorkflowRunner:
                 parameters,
                 postfix=self.postfix,
             )
+        if stop_phase == "aggregation":
+            wr.stop_after = stop_index
         self.cpage_names.append(wr.reporter_config["report_name"])
         self._agg_report_folder = wr.result_folder
         agg_success = wr.run()
         self.all_results["aggregation"] = wr.results
         self.save(self.result_folder)
-        self.progress.finish(DONE if agg_success else FAILED)
+        if agg_success and wr.paused:
+            self.progress.finish(PAUSED)
+        else:
+            self.progress.finish(DONE if agg_success else FAILED)
 
         # Refresh the HTML overview now that the aggregation report exists.
         self._write_html_overview(sgl_folders, self._agg_report_folder)
@@ -1307,7 +1347,10 @@ class AggregationWorkflowRunner:
         if self.continue_workflow:
             try:
                 logger.debug(f"loading WorkflowRunner from {sgl_folders[i]}")
-                wr = WorkflowRunner.load(sgl_folders[i])
+                wr = WorkflowRunner.load(
+                    sgl_folders[i],
+                    reporter_config=copy.deepcopy(sgl_wkfl_reporter_config),
+                )
                 wr.adopt_workflow_modules(parameter_set)
             except Exception:
                 logger.debug("loading did not work. creating from dict.")
@@ -1325,6 +1368,10 @@ class AggregationWorkflowRunner:
                 parameter_set,
                 postfix=self.postfix,
             )
+        # stepwise development: a "single"-phase boundary applies to every
+        # per-dataset workflow (set here to also cover the loaded-runner path)
+        if self.stop_after is not None and self.stop_after[0] == "single":
+            wr.stop_after = self.stop_after[1]
         self.cpage_names.append(wr.reporter_config["report_name"])
         self.progress.dataset_update(i, RUNNING)
         # Never let an unhandled error escape before the completion marker is
@@ -1337,7 +1384,10 @@ class AggregationWorkflowRunner:
             logger.error(f"Single dataset {i} ({tag}) failed: {e}")
             logger.error(traceback.format_exc())
             success = False
-        self.progress.dataset_update(i, DONE if success else FAILED)
+        if success and wr.paused:
+            self.progress.dataset_update(i, PAUSED)
+        else:
+            self.progress.dataset_update(i, DONE if success else FAILED)
         sgl_dataset_success[i] = success
         self.all_results["single_dataset"][i] = getattr(wr, "results", None)
         if self.rank == 0:
@@ -1351,11 +1401,23 @@ class AggregationWorkflowRunner:
         """Return the completion-marker path for a single-dataset folder."""
         return os.path.join(folder, "_pwf_single_done.txt")
 
+    def _launch_token(self) -> str:
+        """Token identifying this launch (SLURM job id, else ``local``).
+
+        Shared by :meth:`_claim_dir` and the completion markers so both are
+        scoped to a single launch.
+        """
+        return os.getenv("SLURM_JOB_ID") or "local"
+
     def _write_single_marker(self, folder: str, success: bool) -> None:
         """Drop a completion marker for a finished single dataset.
 
         Lets rank 0 know the dataset is finished and whether it succeeded.
         Written atomically via a rank-specific temp file + ``os.replace``.
+        The marker is stamped with this launch's token (see
+        :meth:`_launch_token`) so a stale marker from a previous run in the
+        same (reused) result folder -- e.g. a stepwise step that paused its
+        datasets -- is not mistaken for this launch's completion.
 
         Parameters
         ----------
@@ -1369,7 +1431,8 @@ class AggregationWorkflowRunner:
             marker = self._single_marker_path(folder)
             tmp = f"{marker}.{self.rank}.tmp"
             with open(tmp, "w") as f:
-                f.write("success" if success else "failed")
+                status = "success" if success else "failed"
+                f.write(f"{status} {self._launch_token()}")
             os.replace(tmp, marker)
         except Exception as e:
             logger.error(
@@ -1377,7 +1440,12 @@ class AggregationWorkflowRunner:
             )
 
     def _read_single_marker(self, folder: str) -> str | None:
-        """Return a single dataset's marker contents, or None if absent.
+        """Return a single dataset's marker status for *this* launch, or None.
+
+        A marker stamped with a different launch token (a stale marker from a
+        previous run in the reused result folder) is treated as absent, so
+        rank 0's barrier waits for this launch's workers instead of adopting
+        the previous run's result.
 
         Parameters
         ----------
@@ -1387,13 +1455,18 @@ class AggregationWorkflowRunner:
         Returns
         -------
         str or None
-            ``"success"`` / ``"failed"`` if the marker exists, else None.
+            ``"success"`` / ``"failed"`` if a marker for this launch exists,
+            else None (absent, stale, or legacy/unstamped).
         """
         try:
             with open(self._single_marker_path(folder)) as f:
-                return f.read().strip()
+                content = f.read().strip()
         except FileNotFoundError:
             return None
+        parts = content.split()
+        if len(parts) == 2 and parts[1] == self._launch_token():
+            return parts[0]
+        return None
 
     def _claim_dir(self) -> str:
         """Per-launch directory of dataset claims for dynamic scheduling.
@@ -1410,8 +1483,9 @@ class AggregationWorkflowRunner:
         str
             The claim directory for this launch.
         """
-        job = os.getenv("SLURM_JOB_ID") or "local"
-        return os.path.join(self.result_folder, "_pwf_claims", str(job))
+        return os.path.join(
+            self.result_folder, "_pwf_claims", self._launch_token()
+        )
 
     def _claim_dataset(self, claim_dir: str, i: int) -> bool:
         """Atomically claim single dataset ``i`` for this rank.
@@ -1611,13 +1685,19 @@ class AggregationWorkflowRunner:
             yaml.dump(data, f)
 
     @classmethod
-    def load(cls, dirn: str = ".") -> "AggregationWorkflowRunner":
+    def load(
+        cls, dirn: str = ".", reporter_config: dict | None = None
+    ) -> "AggregationWorkflowRunner":
         """Load an instance from an ``AggregationWorkflowRunner.yaml`` file.
 
         Parameters
         ----------
         dirn : str, optional
             The directory to load from. Default is the current directory.
+        reporter_config : dict, optional
+            The caller's reporter configuration for a continued run: the
+            reporter backends follow it while the persisted run's
+            ``report_name`` is kept (see :meth:`WorkflowRunner.load`).
 
         Returns
         -------
@@ -1628,8 +1708,14 @@ class AggregationWorkflowRunner:
         with open(fp, "r") as f:
             data = yaml.load(f, Loader=yaml.FullLoader)
 
+        persisted_reporter_config = data["reporter_config"]
+        if reporter_config is not None:
+            adopted = copy.deepcopy(reporter_config)
+            adopted["report_name"] = persisted_reporter_config["report_name"]
+        else:
+            adopted = persisted_reporter_config
         instance = cls.config_from_dicts(
-            data["reporter_config"],
+            adopted,
             data["analysis_config"],
             data["aggregation_workflow"],
             data["postfix"],
@@ -1710,6 +1796,33 @@ class AggregationWorkflowRunner:
         self.parameter_tiler = new_tiler
 
 
+def _progress_error_text(e: BaseException) -> str:
+    """Compact "type: message" plus traceback for a progress entry.
+
+    Trimmed to fit :meth:`ProgressManager.module_end`'s 2000-character cap,
+    keeping the traceback *tail* (where the raised error is) when the full
+    text is too long.
+
+    Parameters
+    ----------
+    e : BaseException
+        The exception that failed the module.
+
+    Returns
+    -------
+    str
+    """
+    header = f"{type(e).__name__}: {e}"
+    if e.__traceback__ is not None:
+        tb = "".join(traceback.format_exception(type(e), e, e.__traceback__))
+    else:
+        tb = traceback.format_exc()
+    budget = 2000 - len(header) - 10
+    if budget > 0 and len(tb) > budget:
+        tb = "...\n" + tb[-budget:]
+    return f"{header}\n{tb}"
+
+
 class WorkflowError(Exception):
     """Raised when a workflow cannot complete (e.g. a failed dataset)."""
 
@@ -1760,6 +1873,13 @@ class WorkflowRunner:
         # cooperative in-process stop, complementing the on-disk abort flag.
         self.progress = None
         self._abort_requested = False
+        # Stepwise development runs: stop cleanly after this module index
+        # (None = run to the end). A per-launch directive, not persisted to
+        # WorkflowRunner.yaml; the next step is a resume with a later (or no)
+        # boundary. ``paused`` records that the last run() stopped at the
+        # boundary rather than completing.
+        self.stop_after = None
+        self.paused = False
 
     @classmethod
     def config_from_dicts(
@@ -1769,6 +1889,7 @@ class WorkflowRunner:
         workflow_modules: list[tuple],
         postfix: str | None = None,
         continue_previous_runner: bool = False,
+        stop_after: int | None = None,
     ) -> "WorkflowRunner":
         """Build a configured runner from plain config dicts.
 
@@ -1791,6 +1912,12 @@ class WorkflowRunner:
             Continue a previous analysis that aborted (e.g. at a manual step).
             If no previous analysis exists in that folder, a new one is
             created. Default is False.
+        stop_after : int, optional
+            Stop cleanly after the module with this index (stepwise
+            development runs). The boundary module saves its localizations
+            as a checkpoint, so the next step (a resume with a later
+            boundary) continues from there. Default is None (run to the
+            end).
 
         Returns
         -------
@@ -1808,7 +1935,11 @@ class WorkflowRunner:
                     folder, base_name + "_" + found_postfix
                 )
                 try:
-                    instance = cls.load(runner_folder)
+                    # adopt the caller's reporter choice: the persisted one
+                    # may reference reporters disabled since (see load())
+                    instance = cls.load(
+                        runner_folder, reporter_config=reporter_config
+                    )
                 except FileNotFoundError:
                     # e.g. the previous run died before its first save():
                     # the folder exists but holds no WorkflowRunner.yaml.
@@ -1819,9 +1950,11 @@ class WorkflowRunner:
                     # the previous run's pristine parameters are kept for
                     # change detection on resume
                     instance.adopt_workflow_modules(workflow_modules)
+                    instance.stop_after = stop_after
                     return instance
 
         instance = cls(postfix)
+        instance.stop_after = stop_after
         # set date and time to report name
         report_name = reporter_config["report_name"] + "_" + instance.postfix
         reporter_config["report_name"] = report_name
@@ -1930,12 +2063,15 @@ class WorkflowRunner:
         """Run the analysis of the workflow modules in order.
 
         Already-succeeded modules from a previous run are skipped; execution
-        stops at the first module that fails.
+        stops at the first module that fails. With ``stop_after`` set
+        (stepwise development), execution also stops -- cleanly, with
+        ``paused`` set -- after that module.
 
         Returns
         -------
         bool
-            Whether all modules ran through successfully.
+            Whether all modules run so far succeeded (all of them, or, on a
+            stepwise run, all up to the ``stop_after`` boundary).
         """
         # pre-flight: validate dependencies/scope (warn-only, non-blocking)
         _log_workflow_validation(
@@ -1994,9 +2130,24 @@ class WorkflowRunner:
         # to leave this unbound and fail with UnboundLocalError below,
         # masking the real error.
         success = False
+        self.paused = False
         for i, (module_name, module_parameters) in enumerate(
             self.workflow_modules
         ):
+            # Stepwise development: stop cleanly at the stop-after boundary.
+            # Checked first so modules beyond the boundary are neither run
+            # nor marked skipped, whatever the resume plan says. Reaching
+            # this point means nothing before the boundary failed (a failure
+            # breaks the loop below), so the partial run counts as a success.
+            if self.stop_after is not None and i > self.stop_after:
+                logger.info(
+                    f"Stepwise boundary: stopping before module {i:02d} "
+                    f"({module_name}); modules up to {self.stop_after:02d} "
+                    "are complete."
+                )
+                success = True
+                self.paused = True
+                break
             if i < plan.start_index:
                 logger.debug(f"""Module {i}, {module_name} has been previously
                     analyzed. Skipping.""")
@@ -2039,20 +2190,45 @@ class WorkflowRunner:
                         module_parameters, curr_rootidx=i
                     )
                 success = self.call_module(module_name, i, module_parameters)
-            except AutoPicassoError:
+            except AutoPicassoError as e:
                 success = False
-                progress.module_end(i, FAILED)
-            except Exception:
+                # record the error with the progress entry, so the monitor
+                # (local or over SSH) can show the traceback without access
+                # to WorkflowRunner.yaml or the logs
+                progress.module_end(i, FAILED, error=_progress_error_text(e))
+            except Exception as e:
                 # Any other exception used to escape before save(), so the
                 # failing module never reached WorkflowRunner.yaml. Record
                 # it, then let it propagate as before.
                 success = False
-                progress.module_end(i, FAILED)
+                progress.module_end(i, FAILED, error=_progress_error_text(e))
                 progress.finish(FAILED)
                 self.save(self.result_folder)
                 raise
             else:
-                progress.module_end(i, DONE if success else FAILED)
+                # a module may fail without raising (success=False in its
+                # results); surface its recorded error/message with the
+                # progress entry too, so the monitor can display it
+                err_text = None
+                if not success:
+                    err_text = self._module_failure_text(
+                        f"{i:02d}_{module_name}"
+                    )
+                progress.module_end(
+                    i, DONE if success else FAILED, error=err_text
+                )
+
+            # Stepwise boundary: ensure the boundary module leaves a resume
+            # checkpoint, so the next step continues from here instead of an
+            # earlier incidental checkpoint. Done at the runner level (not via
+            # a module-specific ``save_locs`` parameter, whose meaning differs
+            # per module -- e.g. ``localize`` reads it as a dict). Only when
+            # the module ran this session; a boundary skipped on resume keeps
+            # whatever checkpoint the previous run recorded.
+            if success and self.stop_after == i:
+                self.autopicasso.save_locs_checkpoint(
+                    self.results[f"{i:02d}_{module_name}"]
+                )
 
             self.save(self.result_folder)
             if not success:
@@ -2061,8 +2237,39 @@ class WorkflowRunner:
             success = True
 
         if progress.state["state"] == RUNNING:
-            progress.finish(DONE if success else FAILED)
+            if self.paused:
+                progress.finish(PAUSED)
+            else:
+                progress.finish(DONE if success else FAILED)
         return success
+
+    def _module_failure_text(self, key: str) -> str | None:
+        """Best-effort failure description from a module's recorded results.
+
+        Used for modules that fail without raising (``success: False`` in
+        their results): their ``error`` may be the structured dict written
+        by :meth:`_report_module_error`, a plain string set by the module,
+        or absent (then ``message`` is tried).
+
+        Parameters
+        ----------
+        key : str
+            Results key of the module, ``f"{i:02d}_{fun_name}"``.
+
+        Returns
+        -------
+        str or None
+        """
+        res = self.results.get(key) or {}
+        err = res.get("error")
+        if isinstance(err, dict):
+            return err.get("traceback") or (
+                f"{err.get('type', 'Error')}: {err.get('message', '')}"
+            )
+        if err:
+            return str(err)
+        msg = res.get("message")
+        return str(msg) if msg else None
 
     def _ensure_progress(self) -> ProgressManager:
         """Return the run's :class:`ProgressManager`, building it if needed.
@@ -2150,13 +2357,24 @@ class WorkflowRunner:
             yaml.dump(data, f)
 
     @classmethod
-    def load(cls, dirn: str = ".") -> "WorkflowRunner":
+    def load(
+        cls, dirn: str = ".", reporter_config: dict | None = None
+    ) -> "WorkflowRunner":
         """Load the results from a ``WorkflowRunner.yaml`` file.
 
         Parameters
         ----------
         dirn : str, optional
             The directory to load from. Default is the current directory.
+        reporter_config : dict, optional
+            The caller's reporter configuration for a continued run. When
+            given, the reporter *backends* (Confluence / HTML and their
+            settings) follow this configuration instead of the persisted
+            one, while the loaded run's ``report_name`` (its identity) is
+            kept. This keeps a resume from resurrecting a reporter the
+            caller has since disabled: building a ConfluenceReporter
+            contacts the server, so a stale persisted config can kill the
+            resume (e.g. with a 403) before any module runs.
 
         Returns
         -------
@@ -2168,7 +2386,13 @@ class WorkflowRunner:
             data = yaml.safe_load(f)
         instance = cls()
         instance.results = data["results"]
-        instance.reporter_config = data["reporter_config"]
+        persisted_reporter_config = data["reporter_config"]
+        if reporter_config is not None:
+            adopted = copy.deepcopy(reporter_config)
+            adopted["report_name"] = persisted_reporter_config["report_name"]
+            instance.reporter_config = adopted
+        else:
+            instance.reporter_config = persisted_reporter_config
         instance.analysis_config = data["analysis_config"]
         instance.analysis_config["result_location"] = os.path.join(dirn, "..")
         instance.workflow_modules = data["workflow_modules"]

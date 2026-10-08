@@ -293,6 +293,72 @@ directly at `localize`, which needs the movie and identifications) is
 rejected automatically and the run falls back to an earlier checkpoint or
 to scratch.
 
+### Running locally
+
+Besides the SLURM cluster, a workflow can run directly on the local
+machine: the *Run locally* tab in the GUI's Run section starts the same
+generated `start_workflow.py` with the GUI's Python environment, logging
+to `local_run.log` in the results folder. The live progress monitor and
+the run information display (below the run sub-tabs) serve both run
+modes. *Stop after current module* requests a graceful stop at the next
+module boundary — the run stays resumable — while *Kill local run*
+terminates the process immediately. When a module fails, its traceback
+appears in the *Error details* pane next to the run information (for
+local and cluster runs; local runs also fall back to the traceback
+recorded in `WorkflowRunner.yaml` and to the `local_run.log` tail).
+
+### Stepwise (module-by-module) development runs
+
+When developing a new workflow, parameters are usually dialed in one
+module at a time. Instead of running the whole pipeline (and failing
+somewhere in the middle), run it only **up to a chosen module**, inspect
+the results, adjust parameters, and step on:
+
+1. Build the workflow in the GUI as usual.
+2. Tick **Run only up to module** and pick the target module — or simply
+   right-click a module in the workflow list and choose *Run up to this
+   module locally* / *on cluster*.
+3. Start the workflow (locally or on the cluster). It runs up to the
+   chosen module and stops cleanly; the progress monitor shows the run as
+   **paused** and the remaining modules as pending.
+4. Inspect the module's result folder / report, adjust parameters, pick
+   the next target module and start again.
+
+Each step is a **resumed** run (the resume checkbox is forced on while
+stepping), so the usual resume rules apply: previously succeeded modules
+are skipped, modules whose parameters you changed re-run automatically,
+and the boundary module of every step saves its localizations as a
+checkpoint — the next step continues from there instead of recomputing.
+Because checkpoints are plain `locs.hdf5` files (translated across
+machines via the `Drivepaths` config), steps can alternate freely between
+local and cluster execution — e.g. run the GPU-heavy `localize` step on
+the cluster and iterate on clustering parameters locally.
+
+For aggregation workflows the target module can sit in either phase: a
+boundary in the *single-dataset* phase runs every dataset up to it and
+skips the aggregation; a boundary in the *aggregation* phase runs the
+single-dataset phase fully first. Stepwise runs are not available for
+Investigation workflows.
+
+In scripts, pass `stop_after` directly:
+
+```python
+# single-dataset workflow: stop after module index 2
+coordinator.run_analysis(
+    workflow_modules_sgl,
+    continue_previous_runners=True,
+    stop_after=2,
+)
+
+# aggregation workflow: phase is "single" or "aggregation"
+coordinator.run_analysis(
+    workflow_modules_sgl,
+    workflow_modules_agg,
+    continue_previous_runners=True,
+    stop_after=("single", 2),
+)
+```
+
 ### One-click installers
 
 Three installer scripts handle the full setup (find conda → create

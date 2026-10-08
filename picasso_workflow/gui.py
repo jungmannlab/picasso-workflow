@@ -11312,23 +11312,26 @@ class Window(QtWidgets.QMainWindow):
         )
         job_id_layout.addWidget(self.job_id_input, stretch=1)
 
-        # --- live progress monitor -----------------------------------------
-        self._build_progress_monitor(run_on_cluster_layout)
-
-        # Display area for job information
-        job_display_label = QtWidgets.QLabel("Job Information:")
-        run_on_cluster_layout.addWidget(job_display_label)
-
-        self.job_info_display = QtWidgets.QTextEdit()
-        self.job_info_display.setReadOnly(True)
-        self.job_info_display.setMaximumHeight(200)
-        run_on_cluster_layout.addWidget(self.job_info_display)
+        run_on_cluster_layout.addStretch(1)
 
         run_locally_tab = QtWidgets.QWidget()
         run_locally_layout = QtWidgets.QVBoxLayout(run_locally_tab)
         self.run_tabs.addTab(run_locally_tab, "Run locally")
-        self.run_tabs.setTabEnabled(1, False)  # in development
-        self.run_tabs.setTabToolTip(1, "Not Implemented yet")
+        self.run_tabs.setTabToolTip(
+            1,
+            "Run the workflow on this machine, in the GUI's Python "
+            "environment. Progress and run information appear below.",
+        )
+        local_info = QtWidgets.QLabel(
+            "Runs the generated start_workflow.py on this machine, with "
+            f"the GUI's Python environment:\n{sys.executable}\n"
+            "Output is logged to local_run.log in the results folder; "
+            "live progress and run information are shown below (shared "
+            "with cluster runs)."
+        )
+        local_info.setWordWrap(True)
+        local_info.setStyleSheet("color: #666;")
+        run_locally_layout.addWidget(local_info)
         local_buttons = QtWidgets.QHBoxLayout()
         self.local_buttons_widget = QtWidgets.QWidget()
         self.local_buttons_widget.setLayout(local_buttons)
@@ -11336,6 +11339,66 @@ class Window(QtWidgets.QMainWindow):
         start_locally_button = QtWidgets.QPushButton("Start Workflow locally")
         local_buttons.addWidget(start_locally_button)
         start_locally_button.clicked.connect(self.start_locally)
+        stop_local_button = QtWidgets.QPushButton("Stop after current module")
+        stop_local_button.setToolTip(
+            "Request a graceful stop: the local workflow finishes the "
+            "current module, saves its state, and exits cleanly at the "
+            "next module boundary. The run can be continued later with "
+            "'Continue previous run (resume)'."
+        )
+        local_buttons.addWidget(stop_local_button)
+        stop_local_button.clicked.connect(self.on_stop_local_run)
+        kill_local_button = QtWidgets.QPushButton("Kill local run")
+        kill_local_button.setToolTip(
+            "Terminate the local workflow process immediately (the current "
+            "module's results are lost; saved checkpoints remain usable "
+            "for a resume)."
+        )
+        local_buttons.addWidget(kill_local_button)
+        kill_local_button.clicked.connect(self.on_kill_local_run)
+        show_log_button = QtWidgets.QPushButton("Show log tail")
+        show_log_button.setToolTip(
+            "Append the last lines of local_run.log to the run "
+            "information below."
+        )
+        local_buttons.addWidget(show_log_button)
+        show_log_button.clicked.connect(self.on_show_local_log)
+        run_locally_layout.addStretch(1)
+
+        # Live progress and run information are shared between the cluster
+        # and local run modes (the monitor already fuses both sources), so
+        # they live below the run sub-tabs rather than inside one of them.
+        shared_run_widget = QtWidgets.QWidget()
+        shared_run_layout = QtWidgets.QVBoxLayout(shared_run_widget)
+        shared_run_layout.setContentsMargins(0, 0, 0, 0)
+        self._build_progress_monitor(shared_run_layout)
+        info_row = QtWidgets.QHBoxLayout()
+        info_col = QtWidgets.QVBoxLayout()
+        info_col.addWidget(QtWidgets.QLabel("Run information:"))
+        self.job_info_display = QtWidgets.QTextEdit()
+        self.job_info_display.setReadOnly(True)
+        self.job_info_display.setMaximumHeight(200)
+        info_col.addWidget(self.job_info_display)
+        info_row.addLayout(info_col, 1)
+        # error details: failed modules' tracebacks, filled by the monitor
+        error_col = QtWidgets.QVBoxLayout()
+        error_col.addWidget(QtWidgets.QLabel("Error details:"))
+        self.error_details_display = QtWidgets.QTextEdit()
+        self.error_details_display.setReadOnly(True)
+        self.error_details_display.setMaximumHeight(200)
+        self.error_details_display.setLineWrapMode(
+            QtWidgets.QTextEdit.LineWrapMode.NoWrap
+        )
+        mono = QtGui.QFont("Monospace")
+        mono.setStyleHint(QtGui.QFont.StyleHint.TypeWriter)
+        self.error_details_display.setFont(mono)
+        self.error_details_display.setPlaceholderText(
+            "Tracebacks of failed modules appear here."
+        )
+        error_col.addWidget(self.error_details_display)
+        info_row.addLayout(error_col, 1)
+        shared_run_layout.addLayout(info_row)
+        run_layout.addWidget(shared_run_widget, 3, 0, 1, 4)
 
         # Results tab: browse a run folder, (re)generate its HTML report
         # from the saved state, and view/open it -- no Confluence needed.
@@ -11656,6 +11719,14 @@ class Window(QtWidgets.QMainWindow):
         self.single_workflow_list.currentRowChanged.connect(
             self._on_workflow_selection_changed
         )
+        self.single_workflow_list.setContextMenuPolicy(
+            Qt.ContextMenuPolicy.CustomContextMenu
+        )
+        self.single_workflow_list.customContextMenuRequested.connect(
+            lambda pos: self._show_workflow_context_menu(
+                self.single_workflow_list, "single", pos
+            )
+        )
         single_workflow_layout.addWidget(self.single_workflow_list)
 
         aggregation_workflow_tab = QtWidgets.QWidget()
@@ -11668,6 +11739,14 @@ class Window(QtWidgets.QMainWindow):
         self.aggregation_workflow_list = QtWidgets.QListWidget()
         self.aggregation_workflow_list.currentRowChanged.connect(
             self._on_workflow_selection_changed
+        )
+        self.aggregation_workflow_list.setContextMenuPolicy(
+            Qt.ContextMenuPolicy.CustomContextMenu
+        )
+        self.aggregation_workflow_list.customContextMenuRequested.connect(
+            lambda pos: self._show_workflow_context_menu(
+                self.aggregation_workflow_list, "aggregation", pos
+            )
         )
         aggregation_workflow_layout.addWidget(self.aggregation_workflow_list)
         # Add workflow tabs to the splitter below the current-module editor.
@@ -11736,6 +11815,32 @@ class Window(QtWidgets.QMainWindow):
             "checkpoint, and modules with changed parameters re-run."
         )
         self.addl_options_layout.addWidget(self.continue_previous)
+
+        # Stepwise development: run the workflow only up to a chosen module,
+        # inspect the results, adjust parameters, then step on. Each step is
+        # a normal (local or cluster) launch that resumes the previous one,
+        # so "Continue previous run" is forced on while stepping.
+        self.stepwise_enable = QtWidgets.QCheckBox("Run only up to module:")
+        self.stepwise_enable.setToolTip(
+            "Stepwise workflow development: stop cleanly after the chosen "
+            "module instead of running the whole pipeline. The boundary "
+            "module saves its localizations as a checkpoint; inspect the "
+            "results, adjust parameters, pick a later module and start "
+            "again (locally or on the cluster) to continue from there. "
+            "Modules whose parameters you changed re-run automatically.\n"
+            "Tip: right-click a module in the workflow list to run up to "
+            "it directly."
+        )
+        self.addl_options_layout.addWidget(self.stepwise_enable)
+        self.stepwise_target = QtWidgets.QComboBox()
+        self.stepwise_target.setEnabled(False)
+        self.stepwise_target.setToolTip(
+            "The last module to run in this step. Everything after it stays "
+            "pending until a later step."
+        )
+        self.addl_options_layout.addWidget(self.stepwise_target)
+        self.stepwise_enable.toggled.connect(self._on_stepwise_toggled)
+        self._refresh_stepwise_targets()
 
         # resize the widgets
         # Keep a sensible minimum width, but let the splitters drive height.
@@ -14601,6 +14706,8 @@ class Window(QtWidgets.QMainWindow):
                         pitem.setForeground(QtGui.QColor("gray"))
                         list_widget.addItem(pitem)
         list_widget.blockSignals(was_blocked)
+        # the stepwise target combo mirrors the workflow module lists
+        self._refresh_stepwise_targets()
 
     def _row_node(self, list_widget, row):
         """Return the node descriptor for a list row (or None)."""
@@ -15345,6 +15452,143 @@ class Window(QtWidgets.QMainWindow):
             self.workflow_tabs.setTabEnabled(1, True)  # Aggregation: enabled
             self.workflow_tabs.setTabEnabled(2, True)  # Investigation: enabled
 
+        self._refresh_stepwise_targets()
+
+    def _on_stepwise_toggled(self, checked):
+        """Enable/disable stepwise mode.
+
+        Stepping is a sequence of resumed runs, so "Continue previous run"
+        is forced on (and locked) while stepwise mode is active; its
+        previous state is restored when stepping is switched off.
+        """
+        self.stepwise_target.setEnabled(checked)
+        if checked:
+            self._continue_previous_before_stepwise = (
+                self.continue_previous.isChecked()
+            )
+            self.continue_previous.setChecked(True)
+            self.continue_previous.setEnabled(False)
+        else:
+            self.continue_previous.setEnabled(True)
+            self.continue_previous.setChecked(
+                getattr(self, "_continue_previous_before_stepwise", False)
+            )
+
+    def _refresh_stepwise_targets(self):
+        """Rebuild the stepwise target combo from the current workflows.
+
+        Entries carry ``(phase, index)`` as item data -- phase ``"single"``
+        or ``"aggregation"``, matching the runners' ``stop_after``
+        convention. For Investigation workflows (stepwise not supported)
+        the controls are disabled.
+        """
+        combo = getattr(self, "stepwise_target", None)
+        if combo is None:
+            return  # widgets not built yet (early _on_workflow_type_changed)
+        # Identify the previous target by its label (phase + index + module
+        # name), not just (phase, index): inserting/removing/reordering
+        # modules keeps the index but changes which module it names, and we
+        # must not silently re-aim the boundary at a different module.
+        previous = combo.currentData()
+        previous_label = combo.currentText()
+        was_enabled = self.stepwise_enable.isChecked()
+        combo.blockSignals(True)
+        combo.clear()
+        type_index = self.workflow_type.currentIndex()
+        if type_index == 0:
+            for i, (name, _) in enumerate(self.single_workflow_modules):
+                combo.addItem(f"{i:02d}: {name}", ("single", i))
+        elif type_index == 1:
+            for i, (name, _) in enumerate(self.single_workflow_modules):
+                combo.addItem(f"single {i:02d}: {name}", ("single", i))
+            for i, (name, _) in enumerate(self.aggregation_workflow_modules):
+                combo.addItem(
+                    f"aggregation {i:02d}: {name}", ("aggregation", i)
+                )
+        # restore the previous target only if the same module is still at the
+        # same (phase, index) -- matched on both the data and the label
+        restored = False
+        if previous is not None:
+            for row in range(combo.count()):
+                if (
+                    combo.itemData(row) == previous
+                    and combo.itemText(row) == previous_label
+                ):
+                    combo.setCurrentIndex(row)
+                    restored = True
+                    break
+        combo.blockSignals(False)
+        supported = type_index in (0, 1) and combo.count() > 0
+        self.stepwise_enable.setEnabled(supported)
+        if type_index == 2:
+            self.stepwise_enable.setToolTip(
+                "Stepwise runs are not supported for Investigation workflows."
+            )
+        # Drop the stepwise selection rather than stop after the wrong module:
+        # the previously chosen boundary no longer maps to the same module
+        # (edited/removed/reordered), or the workflow type no longer supports
+        # stepping.
+        if self.stepwise_enable.isChecked() and (
+            not supported
+            or (was_enabled and previous is not None and not restored)
+        ):
+            self.stepwise_enable.setChecked(False)
+            if supported:
+                logger.info(
+                    "Stepwise target module no longer exists after the "
+                    "workflow edit; cleared the stepwise boundary -- re-select "
+                    "a module to run up to."
+                )
+
+    def _stepwise_stop_after(self):
+        """The configured stepwise boundary, or None when not stepping.
+
+        Returns
+        -------
+        tuple or None
+            ``(phase, index)`` with phase ``"single"`` or ``"aggregation"``.
+        """
+        if not getattr(self, "stepwise_enable", None):
+            return None
+        if not self.stepwise_enable.isChecked():
+            return None
+        return self.stepwise_target.currentData()
+
+    def _set_stepwise_target(self, phase, index):
+        """Point the stepwise controls at ``(phase, index)`` and enable them."""
+        self.stepwise_enable.setChecked(True)
+        combo = self.stepwise_target
+        for row in range(combo.count()):
+            if combo.itemData(row) == (phase, index):
+                combo.setCurrentIndex(row)
+                return
+
+    def _show_workflow_context_menu(self, list_widget, phase, pos):
+        """Context menu on a workflow module: run stepwise up to it."""
+        item = list_widget.itemAt(pos)
+        if item is None:
+            return
+        node = item.data(self._WF_NODE_ROLE)
+        if not node or node.get("kind") != "module":
+            return  # branch sub-modules are not stepwise targets
+        if not self.stepwise_enable.isEnabled():
+            return  # stepwise not supported (e.g. Investigation workflows)
+        menu = QtWidgets.QMenu(list_widget)
+        act_local = menu.addAction("Run up to this module locally")
+        act_cluster = menu.addAction("Run up to this module on cluster")
+        menu.addSeparator()
+        menu.addAction("Set as stepwise run target")
+        action = menu.exec(list_widget.mapToGlobal(pos))
+        if action is None:
+            return
+        # every action points the stepwise controls at this module; the run
+        # actions additionally launch ("set as target" only sets it)
+        self._set_stepwise_target(phase, node["top"])
+        if action == act_local:
+            self.start_locally()
+        elif action == act_cluster:
+            self.start_slurm()
+
     # def on_cluster_use_module_state_change(self, state):
     #     if not self.cluster_use_module.isChecked():
     #         QtWidgets.QMessageBox.warning(
@@ -16066,6 +16310,11 @@ class Window(QtWidgets.QMainWindow):
         continue_previous = self.continue_previous.isChecked()
         document_confluence = self.document_confluence_checkbox.isChecked()
         document_html = self.document_html_checkbox.isChecked()
+        # stepwise development boundary; stepping is a sequence of resumed
+        # runs, so it implies continue_previous (the UI enforces this too)
+        stop_after = self._stepwise_stop_after()
+        if stop_after is not None:
+            continue_previous = True
         if workflow_type_index == 0:  # Single Workflow
             # script_lines.extend([
             #     "    # Create single workflow runner",
@@ -16107,9 +16356,14 @@ class Window(QtWidgets.QMainWindow):
                     "    coordinator.run_analysis(",
                     "        workflow_modules_sgl,",
                     f"        continue_previous_runners={continue_previous},",
-                    "    )",
                 ]
             )
+            if stop_after is not None:
+                script_lines.append(
+                    f"        stop_after={stop_after[1]},"
+                    "  # stepwise run boundary"
+                )
+            script_lines.append("    )")
         elif workflow_type_index == 1:  # Aggregation Workflow
             script_lines.extend(
                 [
@@ -16130,9 +16384,14 @@ class Window(QtWidgets.QMainWindow):
                     "        workflow_modules_sgl,",
                     "        workflow_modules_agg,",
                     f"        continue_previous_runners={continue_previous},",
-                    "    )",
                 ]
             )
+            if stop_after is not None:
+                script_lines.append(
+                    f"        stop_after=({stop_after[0]!r}, "
+                    f"{stop_after[1]}),  # stepwise run boundary"
+                )
+            script_lines.append("    )")
         elif workflow_type_index == 2:  # Investigation Workflow
             script_lines.extend(
                 [
@@ -16289,6 +16548,9 @@ class Window(QtWidgets.QMainWindow):
         )
         self._monitor_busy = False
         self._local_process = None
+        # wall time of this session's local launch; used to scope progress
+        # states to the current run (None = no launch this session)
+        self._local_run_started_dt = None
 
         box = QtWidgets.QGroupBox("Live progress")
         box_layout = QtWidgets.QVBoxLayout(box)
@@ -16443,7 +16705,12 @@ class Window(QtWidgets.QMainWindow):
         if not results_folder:
             return
         job_id = self.job_id_input.text().strip()
-        if job_id:
+        proc = self._local_process
+        local_alive = proc is not None and proc.poll() is None
+        # While a local run this session is still alive, keep monitoring it:
+        # a stale cluster Job-ID left in the field must not flip the monitor
+        # back to cluster mode and hide the running local run.
+        if job_id and not local_alive:
             host_cluster = str(self.cluster_host_combo.currentText())
             if host_cluster and host_cluster in CONFIG.get(
                 "SlurmLoginNodes", {}
@@ -16457,7 +16724,18 @@ class Window(QtWidgets.QMainWindow):
                 except Exception as e:
                     logger.debug(f"monitor: could not connect cluster: {e}")
         elif os.path.isdir(results_folder):
-            # no job ID: monitor a local results folder directly
+            # no job ID: monitor a local results folder directly. If this is a
+            # different folder than the one launched this session (e.g. the
+            # user re-pointed the field and hit Refresh now), drop the
+            # launch-scoped state so the inspected folder's own runs show --
+            # otherwise launch-time scoping filters them all out and the dead
+            # previous process paints a false "failed" badge.
+            if (
+                not local_alive
+                and results_folder != self._monitor_local_folder
+            ):
+                self._local_run_started_dt = None
+                self._local_process = None
             self._monitor_local_folder = results_folder
 
     def _refresh_monitor(self):
@@ -16483,6 +16761,10 @@ class Window(QtWidgets.QMainWindow):
                 states = pwprogress.read_all_progress(
                     self._monitor_local_folder
                 )
+                # the folder accumulates progress files across runs; scope
+                # to the run launched this session (stale states from an
+                # earlier run otherwise show as e.g. "running" forever)
+                states = self._scope_states_to_local_launch(states)
             else:
                 comm = getattr(self, "slurm_communicator", None)
                 if job_id and comm is not None:
@@ -16499,12 +16781,15 @@ class Window(QtWidgets.QMainWindow):
             # The results folder accumulates one subfolder per run, so a poll
             # returns every past run's progress too. Scope to the current job
             # so a still-PENDING resubmission shows nothing rather than the
-            # previous run's (completed) progress.
-            states = self._scope_states_to_current_run(states, job_id)
+            # previous run's (completed) progress. Cluster runs only: local
+            # states carry no job id (a stale id left in the field would
+            # filter them all away); they are scoped by launch time above.
+            if not self._monitor_local_folder:
+                states = self._scope_states_to_current_run(states, job_id)
             self._update_monitor_display(slurm, states)
             self._maybe_stop_monitor(slurm, states)
         except Exception as e:
-            logger.debug(f"monitor refresh error: {e}")
+            logger.warning(f"monitor refresh error: {e}")
         finally:
             self._monitor_busy = False
 
@@ -16551,6 +16836,50 @@ class Window(QtWidgets.QMainWindow):
 
         return [s for s in states if _belongs(s)]
 
+    def _scope_states_to_local_launch(self, states):
+        """Keep only progress states written by this session's local run.
+
+        The results folder accumulates progress files across runs. States
+        whose last update predates this session's local launch belong to an
+        earlier run and are dropped. Without a launch this session (e.g.
+        inspecting a folder with 'Refresh now'), all states pass.
+
+        Parameters
+        ----------
+        states : list of dict
+            The progress states read from the folder tree.
+
+        Returns
+        -------
+        list of dict
+        """
+        from datetime import datetime, timedelta
+
+        started = getattr(self, "_local_run_started_dt", None)
+        if started is None:
+            return states
+        cutoff = started - timedelta(seconds=5)
+        kept = []
+        for s in states or []:
+            stamp = s.get("updated") or s.get("started")
+            try:
+                if datetime.fromisoformat(stamp) >= cutoff:
+                    kept.append(s)
+            except (TypeError, ValueError):
+                # unparsable timestamp: keep rather than hide
+                kept.append(s)
+        return kept
+
+    # progress-state colors for the local-run chip (palette as _SLURM_COLORS)
+    _LOCAL_STATE_COLORS = {
+        "pending": "#9e9e9e",
+        "running": "#1976d2",
+        "done": "#2e7d32",
+        "failed": "#c62828",
+        "aborted": "#f9a825",
+        "paused": "#1565c0",
+    }
+
     # dataset-state precedence for merging per-rank aggregation views
     _DATASET_STATE_RANK = {
         "pending": 0,
@@ -16559,6 +16888,7 @@ class Window(QtWidgets.QMainWindow):
         "failed": 2,
         "skipped": 3,
         "done": 3,
+        "paused": 3,
     }
 
     def _merged_aggregation_state(self, states):
@@ -16613,12 +16943,25 @@ class Window(QtWidgets.QMainWindow):
             self._stop_monitor()
             return
         if self._monitor_local_folder:
-            top = self._top_state(states)
-            if top and top.get("state") in ("done", "failed", "aborted"):
-                # local process finished (no SLURM authority to consult)
-                if (
-                    self._local_process is None
-                    or self._local_process.poll() is not None
+            proc = self._local_process
+            if proc is not None:
+                # A run we launched this session: its process exit is the
+                # authority on completion. Once it has exited, progress.json
+                # is final (written before exit), so stop polling -- even if
+                # the state is non-terminal because the process was killed or
+                # crashed (e.g. OOM) without writing a terminal state.
+                # Otherwise the monitor would poll forever after a kill.
+                if proc.poll() is not None:
+                    self._stop_monitor()
+            else:
+                # Attached to a folder we did not launch (Refresh now): no
+                # process to consult, so rely on the progress state.
+                top = self._top_state(states)
+                if top is not None and top.get("state") in (
+                    "done",
+                    "failed",
+                    "aborted",
+                    "paused",
                 ):
                     self._stop_monitor()
 
@@ -16649,6 +16992,14 @@ class Window(QtWidgets.QMainWindow):
                     text += "  (" + ", ".join(extra) + ")"
             elif (
                 status == "COMPLETED"
+                and top is not None
+                and top.get("state") == "paused"
+            ):
+                # intentional partial run: the stepwise boundary was reached
+                text = "Job state: COMPLETED (paused at stepwise boundary)"
+                color = "#1565c0"  # blue
+            elif (
+                status == "COMPLETED"
                 and states
                 and (self._overall_progress(agg, singles, states) < 0.999)
             ):
@@ -16667,8 +17018,29 @@ class Window(QtWidgets.QMainWindow):
                 f"background-color: {color};"
             )
         elif self._monitor_local_folder:
+            # fuse like the SLURM chip: the subprocess exit status is the
+            # authority on whether the run is alive; progress.json on where
+            # it got. A dead process with no terminal progress state means
+            # the run died outside module execution (e.g. at startup).
             run_state = (top or {}).get("state", "-")
-            self.monitor_state_label.setText(f"Local run: {run_state}")
+            proc = self._local_process
+            rc = proc.poll() if proc is not None else None
+            terminal = run_state in ("done", "failed", "aborted", "paused")
+            if proc is not None and rc is not None and not terminal:
+                if rc == 0:
+                    text = "Local run: finished"
+                    color = "#2e7d32"  # green
+                else:
+                    text = f"Local run: failed (exit {rc})"
+                    color = "#c62828"  # red
+            else:
+                text = f"Local run: {run_state}"
+                color = self._LOCAL_STATE_COLORS.get(run_state, "#616161")
+            self.monitor_state_label.setText(text)
+            self.monitor_state_label.setStyleSheet(
+                "padding: 2px 8px; border-radius: 4px; color: white; "
+                f"background-color: {color};"
+            )
         else:
             self.monitor_state_label.setText("Job state: -")
 
@@ -16700,6 +17072,173 @@ class Window(QtWidgets.QMainWindow):
             for s in self._sorted_singles(singles):
                 self.module_tree.addTopLevelItem(self._build_stage_item(s))
         self._apply_tree_expansion(prev_expansion)
+
+        # --- error details ---
+        self._update_error_details(states, slurm)
+
+    def _update_error_details(self, states, slurm=None):
+        """Fill the error-details pane with failed modules' tracebacks.
+
+        Error text comes from the progress states (recorded by the runner
+        for local and cluster runs alike). For local runs, a failed module
+        without a recorded error (runs from before the error was propagated
+        into ``progress.json``) falls back to the traceback recorded in the
+        run's ``WorkflowRunner.yaml``, and a run that died without any
+        recorded module failure (import error, config error, ...) falls
+        back to the tail of ``local_run.log``. A cluster job that SLURM
+        ended (OOM kill, timeout, cancel) leaves no Python traceback at
+        all, so the SLURM reason is shown instead.
+        """
+        texts = []
+        for s in states or []:
+            label = self._stage_label(s)
+            report_name = s.get("report_name") or ""
+            for m in s.get("modules") or []:
+                # include branch sub-modules (nested one level)
+                sub_modules = [
+                    x
+                    for g in m.get("subgroups") or []
+                    for x in g.get("modules") or []
+                ]
+                for sub in [m] + sub_modules:
+                    if sub.get("status") != "failed":
+                        continue
+                    header = (
+                        f"[{label}] module {sub.get('i')}: "
+                        f"{sub.get('name', '')}"
+                    )
+                    # isolate per module: one malformed entry (odd yaml,
+                    # unreadable share, ...) must not blank the whole pane
+                    try:
+                        err = sub.get("error")
+                        if not err and self._monitor_local_folder:
+                            err = self._local_yaml_error(
+                                report_name, sub.get("i"), sub.get("name")
+                            )
+                    except Exception as e:
+                        logger.warning(
+                            f"Could not collect error details for "
+                            f"{header}: {e}"
+                        )
+                        err = f"(error details could not be collected: {e})"
+                    if err:
+                        texts.append(f"{header}\n{err}")
+                    else:
+                        texts.append(f"{header} (no error details recorded)")
+        # a job SLURM ended (OOM kill, timeout, cancel) leaves no Python
+        # traceback anywhere -- the kill is uncatchable -- so show the
+        # SLURM reason with the module that was running
+        if (
+            not texts
+            and slurm
+            and slurm.get("success")
+            and slurm.get("status") in self._SLURM_TERMINAL
+            and slurm.get("status") != "COMPLETED"
+        ):
+            status = slurm.get("status")
+            details = slurm.get("details") or {}
+            msg = f"SLURM ended the job: {status}"
+            where = self._active_stage_module_label(states)
+            if where:
+                msg += f" during {where}"
+            extra = [
+                f"{label} {value}"
+                for label, value in (
+                    ("exit", details.get("exit_code")),
+                    ("MaxRSS", details.get("max_rss")),
+                )
+                if value
+            ]
+            if extra:
+                msg += "  (" + ", ".join(extra) + ")"
+            msg += (
+                "\nA killed job leaves no Python traceback; see the SLURM "
+                "error log in the results folder's logs/ directory."
+            )
+            if status == "OUT_OF_MEMORY":
+                msg += (
+                    "\nHint: increase 'Memory' in the cluster settings, or "
+                    "reduce the module's memory footprint."
+                )
+            texts.append(msg)
+        if not texts and self._monitor_local_folder:
+            proc = getattr(self, "_local_process", None)
+            rc = proc.poll() if proc is not None else None
+            died = rc not in (None, 0)
+            top_failed = bool(states) and (
+                (self._top_state(states) or {}).get("state") == "failed"
+            )
+            if died or top_failed:
+                note = ""
+                if rc is not None and rc < 0:
+                    note = (
+                        f"The local run was killed by signal {-rc} "
+                        "(often the operating system's out-of-memory "
+                        "killer).\n"
+                    )
+                tail = self._read_log_tail(self._monitor_local_folder)
+                if tail:
+                    texts.append(
+                        note
+                        + "The run failed without a recorded module error; "
+                        "tail of local_run.log:\n" + tail
+                    )
+                elif note:
+                    texts.append(note.rstrip())
+        text = "\n\n".join(texts)
+        # only rewrite on change, so the user's scroll position survives
+        # the 15 s refreshes
+        if text != self.error_details_display.toPlainText():
+            self.error_details_display.setPlainText(text)
+
+    def _local_yaml_error(self, report_name, module_index, module_name):
+        """A failed module's recorded error from a local WorkflowRunner.yaml.
+
+        Locates the run folder by its report name under the monitored
+        results folder (nested aggregation singles included) and returns the
+        recorded traceback (or ``type: message``), or None.
+        """
+        if module_index is None or not report_name:
+            return None
+        root = self._monitor_local_folder
+        run_dir = os.path.join(root, report_name)
+        if not os.path.isdir(run_dir):
+            run_dir = None
+            for parent, dirs, _files in os.walk(root):
+                if report_name in dirs:
+                    run_dir = os.path.join(parent, report_name)
+                    break
+        if run_dir is None:
+            return None
+        fp = os.path.join(run_dir, "WorkflowRunner.yaml")
+        try:
+            with open(fp) as f:
+                data = yaml.safe_load(f)
+            entry = data["results"][f"{module_index:02d}_{module_name}"]
+            err = entry.get("error")
+            # the structured form records a dict; modules that merely set
+            # success=False may leave a plain string (or only a message)
+            if isinstance(err, dict):
+                return err.get("traceback") or (
+                    f"{err.get('type', 'Error')}: {err.get('message', '')}"
+                )
+            if err:
+                return str(err)
+            msg = entry.get("message")
+            return str(msg) if msg else None
+        except Exception as e:
+            logger.debug(f"Could not read error details from {fp}: {e}")
+            return None
+
+    def _read_log_tail(self, folder, n_lines=40):
+        """The last ``n_lines`` of ``local_run.log`` in ``folder``, or None."""
+        log_path = os.path.join(folder, "local_run.log")
+        try:
+            with open(log_path, "r", errors="replace") as f:
+                lines = f.readlines()
+        except OSError:
+            return None
+        return "".join(lines[-n_lines:]).rstrip()
 
     # -- tree builders ------------------------------------------------------
 
@@ -16877,7 +17416,9 @@ class Window(QtWidgets.QMainWindow):
         """Build the aggregation root with one child per stage."""
         datasets = agg.get("datasets") or []
         n_done = sum(
-            1 for d in datasets if d.get("state") in ("done", "skipped")
+            1
+            for d in datasets
+            if d.get("state") in ("done", "skipped", "paused")
         )
         root = QtWidgets.QTreeWidgetItem(
             [
@@ -16958,7 +17499,8 @@ class Window(QtWidgets.QMainWindow):
             st = d.get("state")
             if st in ("done", "skipped"):
                 single_sum += 1.0
-            elif st == "running" and d.get("i") in idx_map:
+            elif st in ("running", "paused") and d.get("i") in idx_map:
+                # paused (stepwise) datasets count their partial fraction
                 single_sum += pwprogress.overall_fraction(idx_map[d["i"]])
         agg_stage = next(
             (s for s in singles if pwprogress.is_aggregation_stage(s)), None
@@ -17170,6 +17712,7 @@ class Window(QtWidgets.QMainWindow):
         # Store and display job ID
         if result["success"] and result["job_id"]:
             self.job_id_input.setText(str(result["job_id"]))
+            self.error_details_display.clear()
             self.job_info_display.append(
                 f"Job submitted successfully!\nJob ID: {result['job_id']}"
             )
@@ -17212,6 +17755,16 @@ class Window(QtWidgets.QMainWindow):
         launches it with the current interpreter in the results folder and
         points the live monitor at the local ``progress.json``.
         """
+        # one local run at a time: a second process would race the first on
+        # the same result folder and progress tree
+        proc = getattr(self, "_local_process", None)
+        if proc is not None and proc.poll() is None:
+            self.job_info_display.append(
+                f"A local run is already active (PID {proc.pid}); "
+                "stop or kill it first."
+            )
+            return
+
         results_folder = self.results_folder_display.text().strip()
         for q in ('"', "'"):
             if results_folder[:1] == q and results_folder[-1:] == q:
@@ -17236,6 +17789,13 @@ class Window(QtWidgets.QMainWindow):
         # clear any stale abort flag from a previous run in this folder
         pwprogress.clear_abort(results_folder)
         log_path = os.path.join(results_folder, "local_run.log")
+        # release the previous run's log handle before reusing the file
+        old_logfile = getattr(self, "_local_logfile", None)
+        if old_logfile is not None:
+            try:
+                old_logfile.close()
+            except OSError:
+                pass
         try:
             self._local_logfile = open(log_path, "w")
             self._local_process = subprocess.Popen(
@@ -17250,13 +17810,76 @@ class Window(QtWidgets.QMainWindow):
             logger.error(traceback.format_exc())
             return
 
+        self.error_details_display.clear()
         self.job_info_display.append(
             f"Started local workflow (PID {self._local_process.pid}).\n"
             f"Logging to {log_path}"
         )
-        # local run -> poll the local progress.json tree, not the cluster
+        # local run -> poll the local progress.json tree, not the cluster;
+        # the launch time scopes the polled states to this run. Clear any
+        # stale cluster Job-ID so the next refresh does not flip the monitor
+        # back to cluster mode (the live-process guard in
+        # _resolve_monitor_target also covers the running window).
+        from datetime import datetime
+
+        self.job_id_input.clear()
+        self._local_run_started_dt = datetime.now()
         self._monitor_local_folder = results_folder
         self._start_monitor()
+
+    def on_stop_local_run(self):
+        """Request a graceful stop of the local run (abort flag only).
+
+        The workflow finishes the current module, saves its state and exits
+        cleanly at the next module boundary; the run can then be continued
+        with the resume option.
+        """
+        folder = getattr(self, "_monitor_local_folder", None)
+        if not folder:
+            self.job_info_display.append("No local run to stop.")
+            return
+        pwprogress.request_abort(folder)
+        self.job_info_display.append(
+            "Abort requested; the local run stops cleanly after the "
+            "current module."
+        )
+
+    def on_kill_local_run(self):
+        """Terminate the local workflow subprocess immediately."""
+        proc = getattr(self, "_local_process", None)
+        if proc is None or proc.poll() is not None:
+            self.job_info_display.append("No running local process to kill.")
+            return
+        # drop the abort flag too, so any worker the script spawned also
+        # stops instead of orphaning
+        folder = getattr(self, "_monitor_local_folder", None)
+        if folder:
+            pwprogress.request_abort(folder)
+        proc.terminate()
+        self.job_info_display.append(f"Terminated local run (PID {proc.pid}).")
+        # termination is asynchronous; refresh the badge once it had time
+        # to exit
+        QtCore.QTimer.singleShot(1500, self._refresh_monitor)
+
+    def on_show_local_log(self):
+        """Append the tail of the local run's log to the run information."""
+        folder = getattr(self, "_monitor_local_folder", None)
+        if not folder:
+            folder = self.results_folder_display.text().strip()
+            for q in ('"', "'"):
+                if folder[:1] == q and folder[-1:] == q:
+                    folder = folder[1:-1]
+        if not folder:
+            self.job_info_display.append("No results folder set.")
+            return
+        log_path = os.path.join(folder, "local_run.log")
+        tail = self._read_log_tail(folder)
+        if tail is None:
+            self.job_info_display.append(f"Could not read {log_path}")
+            return
+        self.job_info_display.append(
+            f"--- tail of {log_path} ---\n{tail or '(log is empty)'}"
+        )
 
     def on_cancel_job(self):
         """Cancel the current run (graceful abort, then hard cancel).

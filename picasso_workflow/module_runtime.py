@@ -79,34 +79,14 @@ def module_decorator(method):
         # modules only need to specifically set an error.
         if results.get("success") is None:
             results["success"] = True
-            # save locs if desired
+            # save locs if desired, recording a restore point ("checkpoint")
+            # for resumed runs. A module that already saved its locs and
+            # recorded them as a checkpoint (e.g. the picasso-set modules,
+            # save_single_dataset) is not saved again.
             if parameters.get("save_locs") is True or self.analysis_config.get(
                 "always_save"
             ):
-                # record what was written as a restore point ("checkpoint")
-                # for resumed runs. A module that already saved its locs and
-                # recorded them as a checkpoint (e.g. the picasso-set
-                # modules, save_single_dataset) is not saved again: the
-                # second write would be byte-identical.
-                if (
-                    hasattr(self, "locs")
-                    and self.locs is not None
-                    and results.get("checkpoint", {}).get("single") is None
-                ):
-                    fp = os.path.join(results["folder"], "locs.hdf5")
-                    self._save_locs(fp)
-                    results.setdefault("checkpoint", {})["single"] = {
-                        "filepath": fp
-                    }
-                if (
-                    hasattr(self, "channel_locs")
-                    and self.channel_locs is not None
-                ):
-                    allfps = self._save_datasets_agg(results["folder"])
-                    results.setdefault("checkpoint", {})["channels"] = {
-                        "filepaths": allfps,
-                        "tags": list(self.channel_tags),
-                    }
+                self.save_locs_checkpoint(results)
         results["end time"] = datetime.now().strftime("%y-%m-%d %H:%M:%S")
         td = datetime.strptime(
             results["end time"], "%y-%m-%d %H:%M:%S"

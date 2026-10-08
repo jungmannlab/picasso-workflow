@@ -25,6 +25,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import yaml
+from loguru import logger
 
 from picasso import __version__ as picassoversion
 from picasso import io, lib, postprocess
@@ -531,14 +532,62 @@ class PicassoSetPicksMixin:
 
             ``random_seed`` : int, default 42
                 Seed for the random split of the localizations.
+            ``max_image_px`` : int, default 16384
+                Memory guard: maximum side length (binned pixels) of the
+                two rendered half-images. FRC bins at half the NeNA
+                precision, so a full modern sensor at good precision can
+                exceed 100k px per side -- tens of GB per image, which
+                gets the job OOM-killed without any traceback.
         results : dict
             Module results (see
             :class:`~picasso_workflow.util.AbstractModuleCollection`).
+
+        Raises
+        ------
+        MemoryError
+            If the rendered FRC half-images would exceed ``max_image_px``
+            per side, instead of running into an uncatchable OOM kill.
         """
         random_seed = parameters.get("random_seed", 42)
+        max_image_px = parameters.get("max_image_px", 16384)
         height = lib.get_from_metadata(self.info, "Height", raise_error=True)
         width = lib.get_from_metadata(self.info, "Width", raise_error=True)
         viewport = ((0, 0), (height, width))
+        # Fail fast instead of getting OOM-killed: FRC renders two images
+        # binned at NeNA/2, so a full FOV at good precision can be 100k+ px
+        # per side (tens of GB) and the job is OOM-killed with no traceback.
+        # Estimate the image side from a cheap proxy for the localization
+        # precision -- the median of the per-loc lpx/lpy already in memory --
+        # rather than running the full NeNA fit (postprocess.frc runs NeNA
+        # itself; calling it here too would double that cost on exactly the
+        # large datasets this guard targets). The smaller of the two medians
+        # gives the larger (more conservative) image estimate.
+        lpx = np.nanmedian(self.locs["lpx"].to_numpy())
+        lpy = np.nanmedian(self.locs["lpy"].to_numpy())
+        lp_est = min(lpx, lpy)
+        if not np.isfinite(lp_est) or lp_est <= 0:
+            # degenerate precision (e.g. all-NaN after failed fits): cannot
+            # estimate, so skip the guard and let postprocess.frc surface its
+            # own error rather than silently passing a bad comparison.
+            logger.warning(
+                "picasso_frc: could not estimate the localization precision "
+                f"(median lpx/lpy = {lpx}/{lpy}); skipping the memory guard."
+            )
+        else:
+            binsize = lp_est / 2
+            est_px = min(height, width) / binsize
+            if est_px > max_image_px:
+                est_gb = (est_px**2) * 4 * 2 / 1e9
+                raise MemoryError(
+                    f"FRC would render two ~{est_px:.0f} px wide images "
+                    f"(bin size = NeNA/2 ~= {binsize:.4f} camera px), roughly "
+                    f"{est_gb:.0f} GB before the FFTs -- beyond the "
+                    f"max_image_px={max_image_px} guard, and likely an OOM "
+                    "kill. Reduce the localizations to a region of interest "
+                    "first (e.g. picasso_picked_locs), or raise "
+                    "'max_image_px' together with the job memory (memory "
+                    "scales with its square)."
+                )
         frc_result = postprocess.frc(
             self.locs, self.info, viewport, random_seed=random_seed
         )

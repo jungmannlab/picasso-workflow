@@ -1223,3 +1223,367 @@ def test_wait_reclaims_orphaned_dataset(tmp_path):
         [f0, f1], reclaim=reclaim, poll=0, stale_grace=-1
     )
     assert reclaimed == [1]
+
+
+# ---------------------------------------------------------------------------
+# stepwise development runs (stop_after)
+# ---------------------------------------------------------------------------
+
+
+def _stepwise_runner(result_folder, stop_after=None):
+    """A WorkflowRunner with mocked analysis/reporting for stepwise tests."""
+    with (
+        patch("picasso_workflow.workflow.AutoPicasso", MagicMock),
+        patch("picasso_workflow.workflow.ParameterCommandExecutor", MagicMock),
+    ):
+        wr = WorkflowRunner.config_from_dicts(
+            {"report_name": "stepwise"},
+            {"result_location": result_folder},
+            [
+                ("load_dataset_movie", {"b": 3}),
+                ("identify", {"min_gradient": 1}),
+                ("localize", {"a": 1}),
+            ],
+            stop_after=stop_after,
+        )
+    wr.parameter_command_executor.run.side_effect = (
+        lambda p, curr_rootidx=None: p
+    )
+    # the patched AutoPicasso is constructed as MagicMock(result_folder, ...),
+    # which makes it str-spec'd; replace with a plain mock so the runner-level
+    # boundary checkpoint call (save_locs_checkpoint) resolves
+    wr.autopicasso = MagicMock()
+    return wr
+
+
+def _record_calls(wr):
+    """Replace call_module with a recorder of (name, i, parameters).
+
+    Also populates ``wr.results`` as the real call_module would, so the
+    runner-level stepwise-boundary checkpoint can look up the module entry.
+    """
+    calls = []
+
+    def fake_call_module(name, i, parameters):
+        calls.append((name, i, dict(parameters)))
+        wr.results[f"{i:02d}_{name}"] = {"folder": wr.result_folder}
+        return True
+
+    wr.call_module = fake_call_module
+    return calls
+
+
+def test_stop_after_pauses_run(tmp_path):
+    """A stepwise run stops cleanly after the boundary module: the modules
+    beyond it stay pending, the run counts as a success, and the boundary
+    module gets a runner-level checkpoint for the next step."""
+    from picasso_workflow import progress as pwprogress
+
+    wr = _stepwise_runner(str(tmp_path), stop_after=1)
+    calls = _record_calls(wr)
+
+    success = wr.run()
+
+    assert success is True
+    assert wr.paused is True
+    assert [c[0] for c in calls] == ["load_dataset_movie", "identify"]
+    # no module parameter is mutated: the checkpoint is a runner-level call,
+    # not a save_locs injection (which would crash modules reading it as a
+    # dict, e.g. localize)
+    assert "save_locs" not in calls[0][2]
+    assert "save_locs" not in calls[1][2]
+    # the boundary module (and only it) gets a runner-level checkpoint save
+    wr.autopicasso.save_locs_checkpoint.assert_called_once_with(
+        wr.results["01_identify"]
+    )
+    state = pwprogress.read_progress(wr.result_folder)
+    assert state["state"] == "paused"
+    assert [m["status"] for m in state["modules"]] == [
+        "done",
+        "done",
+        "pending",
+    ]
+
+
+def test_stop_after_last_module_completes(tmp_path):
+    """A boundary at (or past) the last module is simply a full run."""
+    from picasso_workflow import progress as pwprogress
+
+    wr = _stepwise_runner(str(tmp_path), stop_after=2)
+    calls = _record_calls(wr)
+
+    success = wr.run()
+
+    assert success is True
+    assert wr.paused is False
+    assert len(calls) == 3
+    state = pwprogress.read_progress(wr.result_folder)
+    assert state["state"] == "done"
+
+
+def test_no_stop_after_runs_everything(tmp_path):
+    """Without a boundary the runner behaves as before (no pause)."""
+    wr = _stepwise_runner(str(tmp_path))
+    calls = _record_calls(wr)
+
+    assert wr.run() is True
+    assert wr.paused is False
+    assert len(calls) == 3
+
+
+def _agg_stepwise_config(result_folder):
+    return (
+        {"report_name": "aggstep"},
+        {"result_location": result_folder},
+        {
+            "single_dataset_tileparameters": {"#tags": ["ds0"]},
+            "single_dataset_modules": [("load_dataset_movie", {"b": 3})],
+            "aggregation_modules": [("load_datasets_to_aggregate", {})],
+        },
+    )
+
+
+@patch("picasso_workflow.workflow.WorkflowRunner")
+def test_awr_stop_after_single_skips_aggregation(mock_wr, tmp_path):
+    """A "single"-phase boundary reaches every per-dataset runner and the
+    aggregation stage is skipped; the overall state is paused."""
+    from picasso_workflow import progress as pwprogress
+
+    inner = MagicMock()
+    inner.run.return_value = True
+    inner.paused = True
+    inner.results = {}
+    inner.reporter_config = {"report_name": "sgl"}
+    mock_wr.config_from_dicts.return_value = inner
+
+    rc, ac, aw = _agg_stepwise_config(str(tmp_path))
+    awr = AggregationWorkflowRunner.config_from_dicts(
+        rc, ac, aw, stop_after=("single", 0)
+    )
+    result = awr.run()
+
+    assert result is None
+    assert inner.stop_after == 0  # boundary handed to the dataset runner
+    # only the per-dataset runner was built, no aggregation-stage runner
+    assert mock_wr.config_from_dicts.call_count == 1
+    state = pwprogress.read_progress(awr.result_folder)
+    assert state["state"] == "paused"
+
+
+@patch("picasso_workflow.workflow.WorkflowRunner")
+def test_awr_stop_after_aggregation_phase(mock_wr, tmp_path):
+    """An "aggregation"-phase boundary runs the single-dataset phase fully
+    and hands the boundary to the aggregation-stage runner."""
+    from picasso_workflow import progress as pwprogress
+
+    sgl = MagicMock()
+    sgl.run.return_value = True
+    sgl.paused = False
+    sgl.results = {}
+    sgl.reporter_config = {"report_name": "sgl"}
+    agg = MagicMock()
+    agg.run.return_value = True
+    agg.paused = True
+    agg.results = {}
+    agg.reporter_config = {"report_name": "agg"}
+    mock_wr.config_from_dicts.side_effect = [sgl, agg]
+
+    rc, ac, aw = _agg_stepwise_config(str(tmp_path))
+    awr = AggregationWorkflowRunner.config_from_dicts(
+        rc, ac, aw, stop_after=("aggregation", 0)
+    )
+    awr.run()
+
+    assert agg.stop_after == 0
+    assert mock_wr.config_from_dicts.call_count == 2
+    state = pwprogress.read_progress(awr.result_folder)
+    assert state["state"] == "paused"
+
+
+def test_failed_module_records_error_in_progress(tmp_path):
+    """A failing module's traceback is recorded with its progress entry,
+    so the GUI monitor can show it without reading yaml or logs."""
+    from picasso_workflow import progress as pwprogress
+
+    wr = _stepwise_runner(str(tmp_path))
+
+    def failing_call_module(name, i, parameters):
+        if i == 1:
+            raise AutoPicassoError("kaboom in identify")
+        return True
+
+    wr.call_module = failing_call_module
+    success = wr.run()
+
+    assert success is False
+    state = pwprogress.read_progress(wr.result_folder)
+    assert state["state"] == "failed"
+    failed = state["modules"][1]
+    assert failed["status"] == "failed"
+    assert "AutoPicassoError: kaboom in identify" in failed["error"]
+    assert "Traceback" in failed["error"]
+
+
+def test_unexpected_module_error_recorded_in_progress(tmp_path):
+    """A non-AutoPicassoError escapes run() as before, but its traceback
+    still reaches the module's progress entry first."""
+    from picasso_workflow import progress as pwprogress
+
+    wr = _stepwise_runner(str(tmp_path))
+
+    def failing_call_module(name, i, parameters):
+        raise RuntimeError("unexpected kaboom")
+
+    wr.call_module = failing_call_module
+    try:
+        wr.run()
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError("RuntimeError should propagate from run()")
+
+    state = pwprogress.read_progress(wr.result_folder)
+    assert "RuntimeError: unexpected kaboom" in state["modules"][0]["error"]
+
+
+def test_resume_adopts_caller_reporter_config(tmp_path):
+    """Resuming with Confluence documentation switched off must not
+    resurrect the previous run's ConfluenceReporter: its construction
+    contacts the server and can fail (e.g. 403), killing the resume
+    before any module runs. The caller's reporter backends win; the
+    loaded run's report_name (identity) is kept."""
+    with (
+        patch("picasso_workflow.workflow.ConfluenceReporter", MagicMock()),
+        patch("picasso_workflow.workflow.AutoPicasso", MagicMock()),
+        patch(
+            "picasso_workflow.workflow.ParameterCommandExecutor", MagicMock()
+        ),
+    ):
+        wr1 = WorkflowRunner.config_from_dicts(
+            {"report_name": "stalereport", "ConfluenceReporter": {"a": 0}},
+            {"result_location": str(tmp_path)},
+            [("load_dataset_movie", {"b": 3})],
+        )
+        wr1.save(wr1.result_folder)
+
+    class BoomReporter:
+        def __init__(self, *args, **kwargs):
+            raise RuntimeError("403 FORBIDDEN (simulated)")
+
+    with (
+        patch("picasso_workflow.workflow.ConfluenceReporter", BoomReporter),
+        patch("picasso_workflow.workflow.AutoPicasso", MagicMock()),
+        patch(
+            "picasso_workflow.workflow.ParameterCommandExecutor", MagicMock()
+        ),
+    ):
+        wr2 = WorkflowRunner.config_from_dicts(
+            {"report_name": "stalereport"},  # Confluence switched off
+            {"result_location": str(tmp_path)},
+            [("load_dataset_movie", {"b": 3})],
+            continue_previous_runner=True,
+        )
+
+    # the previous run was adopted (same identity), without Confluence
+    assert (
+        wr2.reporter_config["report_name"]
+        == wr1.reporter_config["report_name"]
+    )
+    assert getattr(wr2, "confluencereporter", None) is None
+    assert wr2.reporters == []
+
+
+def test_resume_without_caller_config_keeps_persisted_reporters(tmp_path):
+    """A plain load (no caller reporter config) keeps the persisted
+    reporter configuration, as before."""
+    with (
+        patch("picasso_workflow.workflow.ConfluenceReporter", MagicMock()),
+        patch("picasso_workflow.workflow.AutoPicasso", MagicMock()),
+        patch(
+            "picasso_workflow.workflow.ParameterCommandExecutor", MagicMock()
+        ),
+    ):
+        wr1 = WorkflowRunner.config_from_dicts(
+            {"report_name": "keepreport", "ConfluenceReporter": {"a": 0}},
+            {"result_location": str(tmp_path)},
+            [("load_dataset_movie", {"b": 3})],
+        )
+        wr1.save(wr1.result_folder)
+
+        wr2 = WorkflowRunner.load(wr1.result_folder)
+    assert "ConfluenceReporter" in wr2.reporter_config
+    assert getattr(wr2, "confluencereporter", None) is not None
+
+
+def test_resume_adopts_html_reporter(tmp_path):
+    """Switching documentation to HTML between runs reaches the resumed
+    runner: the HTMLReporter is built even though the persisted config
+    had none."""
+    with (
+        patch("picasso_workflow.workflow.ConfluenceReporter", MagicMock()),
+        patch("picasso_workflow.workflow.AutoPicasso", MagicMock()),
+        patch(
+            "picasso_workflow.workflow.ParameterCommandExecutor", MagicMock()
+        ),
+    ):
+        wr1 = WorkflowRunner.config_from_dicts(
+            {"report_name": "htmlreport", "ConfluenceReporter": {"a": 0}},
+            {"result_location": str(tmp_path)},
+            [("load_dataset_movie", {"b": 3})],
+        )
+        wr1.save(wr1.result_folder)
+
+        wr2 = WorkflowRunner.config_from_dicts(
+            {"report_name": "htmlreport", "HTMLReporter": {}},
+            {"result_location": str(tmp_path)},
+            [("load_dataset_movie", {"b": 3})],
+            continue_previous_runner=True,
+        )
+    assert getattr(wr2, "htmlreporter", None) is not None
+    assert getattr(wr2, "confluencereporter", None) is None
+
+
+def test_no_raise_failure_records_error_in_progress(tmp_path):
+    """A module that fails by returning success=False (no exception) gets
+    its recorded error/message attached to the progress entry."""
+    from picasso_workflow import progress as pwprogress
+
+    wr = _stepwise_runner(str(tmp_path))
+
+    def soft_failing_call_module(name, i, parameters):
+        wr.results[f"{i:02d}_{name}"] = {
+            "success": False,
+            "error": "soft failure: bad parameter combination",
+        }
+        return False
+
+    wr.call_module = soft_failing_call_module
+    success = wr.run()
+
+    assert success is False
+    state = pwprogress.read_progress(wr.result_folder)
+    failed = state["modules"][0]
+    assert failed["status"] == "failed"
+    assert "soft failure: bad parameter combination" in failed["error"]
+
+
+def test_single_marker_ignores_stale_launch_token(tmp_path, monkeypatch):
+    """A completion marker from a previous launch (different SLURM job id)
+    in the reused result folder must read as absent, so rank 0's barrier
+    waits for this launch's workers instead of adopting the stale result."""
+    monkeypatch.setenv("SLURM_JOB_ID", "JOB1")
+    r = _bare_runner(result_folder=str(tmp_path))
+    folder = str(tmp_path / "d0")
+    r._write_single_marker(folder, True)
+    assert r._read_single_marker(folder) == "success"  # same launch
+
+    # a later step reuses the same folder under a new job id
+    monkeypatch.setenv("SLURM_JOB_ID", "JOB2")
+    assert r._read_single_marker(folder) is None  # stale -> treated as absent
+    # and the barrier therefore still considers that dataset pending
+    reclaimed = []
+    r._write_single_marker(folder, True)  # this launch writes its own marker
+    r._wait_for_single_markers(
+        [folder], reclaim=lambda i: reclaimed.append(i), poll=0
+    )
+    assert reclaimed == []  # current-launch marker present -> no reclaim

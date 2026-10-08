@@ -10,7 +10,130 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Code-review fixes for the stepwise / local-run / FRC work.** A multi-agent
+  review of this branch surfaced several real bugs, now fixed:
+  - *Stepwise boundary checkpoint:* the boundary module's checkpoint is now
+    written at the runner level (`AutoPicasso.save_locs_checkpoint`, shared
+    with the module decorator) instead of injecting a `save_locs=True` module
+    parameter -- which crashed modules that read `save_locs` as a dict (e.g.
+    `localize`) and clobbered a user-set value.
+  - *Multi-rank stepwise markers:* per-dataset completion markers are now
+    stamped with the launch token, so a paused step's markers are not
+    mistaken for a later step's completion (which made rank 0 aggregate
+    stale, incomplete results).
+  - *Local-run monitor:* a stale cluster Job-ID no longer flips a live local
+    run's monitor to cluster mode; the monitor now stops polling after "Kill
+    local run" (killed process, non-terminal state); re-pointing the monitor
+    at another folder resets the launch-scoped state (no false "failed"
+    badge / empty tree).
+  - *Stepwise target:* editing the module list no longer silently re-aims the
+    boundary at a different module -- the selection is cleared if its module
+    no longer exists.
+  - *Progress:* a fully `paused` run now reads as complete (not 0%) in
+    `overall_fraction`.
+  - *FRC guard:* the memory guard now uses a cheap in-memory precision proxy
+    (median `lpx`/`lpy`) instead of a second full NeNA fit (which `frc` runs
+    internally), and guards against a non-finite estimate so degenerate
+    (all-NaN) precision no longer slips past it.
+
+- **In-memory localizations now match every saved locs file.**
+  `io.save_locs` writes the *sanitized* table (`lib.ensure_sanity` drops
+  rows with NaN/inf — e.g. failed GPU fits with NaN localization
+  precision), but the in-memory dataset kept those rows. Downstream
+  modules therefore saw data the saved file did not have: observed live,
+  32 of 14.2M locs with NaN `lpx` made `picasso_render`'s median
+  (convolve) blur NaN and crash, while the checkpoint file was clean — so
+  a resumed run would not even reproduce the failure. `_save_locs` now
+  adopts the sanitized table (logging how many rows were dropped), keeping
+  memory, disk, and resume behavior identical — the same guarantee picasso
+  itself provides at its save/load boundaries.
+
+- **`picasso_frc` no longer OOM-kills the job on large datasets.** FRC bins
+  its two half-images at half the NeNA precision, so a full-FOV render on a
+  modern sensor at good precision reaches 100k+ px per side — tens of GB per
+  image — and the job is OOM-killed (observed: 14.2M locs, 50 GB job,
+  killed in ~90 s; a SIGKILL leaves no Python traceback anywhere). The
+  module keeps picasso's exact behavior (full-FOV FRC) but adds a
+  `max_image_px` memory guard (default 16384): when the rendered images
+  would exceed it, the module fails fast with an informative `MemoryError`
+  (estimated size/memory, and how to proceed) instead of being killed.
+  Additionally, a job that SLURM ended (OOM kill, timeout, cancel) now shows
+  the SLURM reason — status, running module, exit code/MaxRSS, and an OOM
+  hint — in the *Error details* pane, since no traceback can exist; a local
+  run killed by a signal notes the signal (and the OOM-killer suspicion)
+  there too.
+
+- **Error-details pane could stay empty for a failed module.** Collecting
+  details could crash silently: a yaml error recorded as a plain string
+  (modules that set `success: False` themselves, or older runs) broke the
+  fallback reader and blanked the whole pane. Collection is now isolated per
+  module (a bad entry shows a note instead of hiding everything), string and
+  message-only error entries are rendered, modules that fail *without*
+  raising get their recorded error attached to their progress entry too, a
+  stale cluster job id left in the Job-ID field no longer filters away a
+  local run's progress states, and monitor errors are logged as warnings
+  instead of silently at debug level.
+
+- **Resume no longer resurrects disabled reporters.** Resuming a run adopted
+  the previous run's persisted `reporter_config` wholesale, so switching
+  *Document to Confluence* off between runs had no effect: `load()` rebuilt
+  the old ConfluenceReporter, whose construction contacts the server and
+  could kill the resume (e.g. 403) before any module ran. On resume the
+  reporter backends now follow the caller's current configuration (the
+  loaded run's `report_name` identity is kept) — in `WorkflowRunner` and
+  `AggregationWorkflowRunner` alike, including the per-dataset and
+  aggregation-stage runners.
+
+- **Local-run monitor no longer shows a stale "running" state.** A local run
+  that died before writing progress (e.g. a Confluence 403 at coordinator
+  startup) used to leave the badge on "running" forever, fed by the previous
+  run's `progress.json` in the same folder. The monitor now scopes progress
+  states to the current session's launch time, fuses the subprocess exit
+  status into the badge like the SLURM chip ("failed (exit N)" red /
+  "finished" green, with per-state colors), stops polling once the process
+  died without current-run states, and shows the `local_run.log` tail in the
+  *Error details* pane for such startup crashes. *Kill local run* now also
+  refreshes the badge after termination.
+
 ### Added
+
+- **Error details in the Run tab.** Failed modules' tracebacks now surface
+  directly in the GUI: a new *Error details* pane (right of *Run
+  information*) is filled by the live monitor. The runner records each
+  module failure's `type: message` + traceback with its `progress.json`
+  entry (capped, traceback tail kept), so this works for local and cluster
+  runs alike; for local runs the pane additionally falls back to the full
+  traceback in the run's `WorkflowRunner.yaml` (covers runs recorded before
+  this change) and, when a run dies without any recorded module failure
+  (e.g. an import error), to the tail of `local_run.log`.
+
+- **"Run locally" tab enabled and implemented.** The previously disabled
+  ("in development") tab in the Run section is now functional: it starts the
+  generated `start_workflow.py` on the local machine (in the GUI's Python
+  environment, logging to `local_run.log` in the results folder) and adds
+  *Stop after current module* (graceful abort via the abort flag, resumable),
+  *Kill local run*, and *Show log tail* controls. The live progress monitor
+  and the run-information display are now shared between the cluster and
+  local run modes — they moved from inside the cluster tab to below the run
+  sub-tabs. Starting a second local run while one is active is refused.
+
+- **Stepwise (module-by-module) workflow development.** A workflow can now be
+  run only up to a chosen module — locally or on the cluster — to set its
+  parameters, inspect the results, and then step on. New GUI controls
+  ("Run only up to module" checkbox + target selector, plus a right-click
+  "Run up to this module locally / on cluster" on the workflow lists) bake a
+  `stop_after` argument into the generated script; the coordinators and
+  runners (`WorkflowRunner.config_from_dicts(stop_after=...)`,
+  `AggregationWorkflowRunner.config_from_dicts(stop_after=("single"|
+  "aggregation", i))`) stop cleanly after the boundary module, which always
+  saves its localizations as a resume checkpoint. Each step is a resumed
+  run, so parameter edits re-run only the affected modules, and steps can
+  alternate between local and cluster execution. The progress monitor shows
+  such runs as a new `paused` state instead of done/failed. Stepwise runs
+  are not available for Investigation workflows. See README "Stepwise
+  (module-by-module) development runs".
 
 - **picasso-set tier 4: format converters (9 modules) + docs.**
   `picasso_csv2hdf` and `picasso_smap2hdf` import ThunderSTORM/SMAP files

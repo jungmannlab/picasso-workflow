@@ -343,3 +343,25 @@ class TestAbortFlag(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestOverallFractionPaused(unittest.TestCase):
+    """A paused (stepwise-boundary) run must not read as 0% progress."""
+
+    def test_paused_modules_count_as_done(self):
+        state = {
+            "modules": [
+                {"status": "done", "fraction": 1.0},
+                {"status": "paused", "fraction": 0.0},
+            ]
+        }
+        self.assertEqual(1.0, p.overall_fraction(state))
+
+    def test_paused_datasets_count_as_done(self):
+        state = {
+            "datasets": [
+                {"i": 0, "state": "paused"},
+                {"i": 1, "state": "paused"},
+            ]
+        }
+        self.assertEqual(1.0, p.overall_fraction(state))

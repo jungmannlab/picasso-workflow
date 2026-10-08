@@ -10427,6 +10427,16 @@ class AutoPicasso(
     def _save_locs(self, filename):
         """Save ``self.locs``/``self.info`` to an HDF5 file.
 
+        ``io.save_locs`` writes the *sanitized* table
+        (``lib.ensure_sanity`` drops rows with NaN/inf, e.g. failed GPU
+        fits with NaN localization precision). Adopt that sanitized table
+        as the current dataset, so in-memory and on-disk data stay
+        identical -- like picasso's own save/load boundaries. Otherwise
+        downstream modules see rows the saved file does not have (a NaN
+        ``lpx`` makes render's median blur NaN and crash), and a resumed
+        run (which loads the file) behaves differently from a
+        straight-through one.
+
         Parameters
         ----------
         filename : str
@@ -10439,6 +10449,15 @@ class AutoPicasso(
         """
         t00 = time.time()
 
+        n_before = len(self.locs)
+        self.locs = lib.ensure_sanity(self.locs, self.info)
+        n_dropped = n_before - len(self.locs)
+        if n_dropped:
+            logger.info(
+                f"Sanitized localizations before saving: dropped "
+                f"{n_dropped} of {n_before} rows with NaN/inf or "
+                "out-of-bounds values (picasso lib.ensure_sanity)."
+            )
         io.save_locs(filename, self.locs, self.info)
         # # when the paths get long, the hdf5 library throws an error, so chdir
         # # but apparently, the issue is the length of the filename itself
@@ -10451,6 +10470,41 @@ class AutoPicasso(
         dt = np.round(time.time() - t00, 2)
         results_save = {"duration": dt}
         return results_save
+
+    def save_locs_checkpoint(self, results):
+        """Save the current locs into ``results["folder"]`` as a checkpoint.
+
+        Writes ``self.locs`` (and/or ``self.channel_locs``) to the module's
+        result folder and records a restore point under
+        ``results["checkpoint"]`` for resumed runs. Idempotent: a module
+        that already recorded a ``single`` checkpoint (e.g. the picasso-set
+        modules, ``save_single_dataset``) is not saved again.
+
+        Shared by :func:`~picasso_workflow.module_runtime.module_decorator`
+        (the ``save_locs``/``always_save`` path) and by the stepwise-boundary
+        checkpoint in :meth:`WorkflowRunner.run`, so both record checkpoints
+        identically without going through a module-specific ``save_locs``
+        parameter (whose meaning differs per module -- e.g. ``localize``
+        reads it as a dict).
+
+        Parameters
+        ----------
+        results : dict
+            The module's results dict; must contain ``folder``.
+        """
+        if (
+            getattr(self, "locs", None) is not None
+            and results.get("checkpoint", {}).get("single") is None
+        ):
+            fp = os.path.join(results["folder"], "locs.hdf5")
+            self._save_locs(fp)
+            results.setdefault("checkpoint", {})["single"] = {"filepath": fp}
+        if getattr(self, "channel_locs", None) is not None:
+            allfps = self._save_datasets_agg(results["folder"])
+            results.setdefault("checkpoint", {})["channels"] = {
+                "filepaths": allfps,
+                "tags": list(self.channel_tags),
+            }
 
     def _save_state_on_error(self, folder):
         """Best-effort dump of the current locs when a module fails.
