@@ -29,6 +29,19 @@ This file was started after v0.5.6; earlier history is in the git log.
   drive the canvas (dragging a box, right-drag pan and Ctrl+scroll zoom also
   work).
 
+- **Render tab: picasso 0.12 icon toolbar (navigation, picking, display).**
+  When the embedded picasso is 0.12+, the Render tab surfaces picasso
+  Render's own actions as an icon toolbar reusing picasso's icon theme:
+  the navigation tools (drag-box **Zoom**, **Pan/Move**, **Measure**),
+  **picking** (the Pick tool, pick-shape/size *Tools settings*, *Clear
+  picks*) and display (*Fit in view*, *Display settings* for
+  contrast/colormap/blur/scale bar, *Channels*, *Info*, *3D view*). These
+  are picasso's real `QAction`s, so they behave and enable-on-load exactly
+  as in standalone Render. File I/O (Open/Save/Export) and the heavier
+  processing (undrift/cluster/link/pick-similar) are intentionally left
+  out. On picasso 0.11 (no icon theme) the previous plain buttons are kept
+  as a fallback.
+
 - **Confluence report link in the Run tab.** When a run documents to
   Confluence, the runner records the report page's URL in `progress.json`
   (`report_url`), and the Run-tab monitor shows it as a clickable link
@@ -38,6 +51,17 @@ This file was started after v0.5.6; earlier history is in the git log.
   Server), so the GUI needs no live Confluence connection to offer the link.
 
 ### Fixed
+
+- **Render tab: forward-compatible with picasso 0.12's threaded renderer.**
+  picasso 0.12 (0.12.0a3) moves localization loading *and* scene rendering
+  onto background `QThread`s (the new `picasso.gui.render_worker`); destroying
+  a running `QThread` aborts the process. The embedded Render tab now stops
+  those threads (`View.stop_load()` / `View.stop_render_worker()`, guarded so
+  it is a no-op on picasso 0.11) before it disposes the embedded view -- on
+  every *Render selected* replace, *Clear*, and (via an `aboutToQuit` hook)
+  on application shutdown -- so replacing/closing the view mid-load no longer
+  risks a crash. The dependency pin is unchanged (`picassosr>=0.11.1`); note
+  that picasso 0.12 itself requires Python >=3.11.
 
 - **Code-review fixes for the stepwise / local-run / FRC work.** A multi-agent
   review of this branch surfaced several real bugs, now fixed:

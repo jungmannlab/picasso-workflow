@@ -124,9 +124,8 @@ def test_main_window_has_render_tab(qapp):
     win.close()
 
 
-def test_embedded_render_loads_real_locs(qapp, tmp_path):
-    """Smoke test: the embedded picasso Render canvas loads a real locs
-    file, with the processing menu bar hidden."""
+def _make_real_locs_run(tmp_path):
+    """A run folder holding one real (picasso-readable) locs file."""
     picasso_io = pytest.importorskip("picasso.io")
     run = tmp_path / "myrun_240101-1200"
     (run / "03_picasso_localize").mkdir(parents=True)
@@ -148,6 +147,13 @@ def test_embedded_render_loads_real_locs(qapp, tmp_path):
     picasso_io.save_locs(
         str(run / "03_picasso_localize" / "locs.hdf5"), locs, info
     )
+    return run
+
+
+def test_embedded_render_loads_real_locs(qapp, tmp_path):
+    """Smoke test: the embedded picasso Render canvas loads a real locs
+    file, with the processing menu bar hidden."""
+    _make_real_locs_run(tmp_path)
 
     tab = RenderTab(_FakeMain(str(tmp_path)))
     tab.refresh()
@@ -192,4 +198,191 @@ def test_embedded_render_loads_real_locs(qapp, tmp_path):
     assert _area(view.viewport) < before
     tab._fit_in_view()
     qapp.processEvents()
+    # stop picasso 0.12's background threads before the window leaks into
+    # interpreter teardown (destroying a running QThread aborts the process)
+    tab._teardown_render_window()
+    tab.deleteLater()
+
+
+def test_teardown_stops_render_worker_threads(qapp, tmp_path):
+    """Replacing the view (or clearing it) must stop picasso 0.12's
+    background loader / render threads before the view is destroyed --
+    destroying a live QThread aborts the process. On picasso 0.11 (no
+    such threads) teardown must still succeed."""
+    _make_real_locs_run(tmp_path)
+
+    tab = RenderTab(_FakeMain(str(tmp_path)))
+    tab.refresh()
+    tab.locs_tree.topLevelItem(0).child(0).setSelected(True)
+
+    import warnings
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        try:
+            tab.render_selected(replace=True)
+        except Exception as e:  # pragma: no cover
+            pytest.skip(f"picasso Render embedding unavailable: {e}")
+    if tab._render_window is None:
+        pytest.skip("picasso Render window could not be embedded")
+
+    view = tab._render_window.view
+    # spy on whichever thread-stopping methods this picasso exposes
+    # (0.11 has stop_load only; 0.12 adds stop_render_worker)
+    calls = []
+    present = [
+        name
+        for name in ("stop_load", "stop_render_worker")
+        if hasattr(view, name)
+    ]
+    for name in present:
+        orig = getattr(view, name)
+
+        def _spy(*a, _n=name, _o=orig, **k):
+            calls.append(_n)
+            return _o(*a, **k)
+
+        setattr(view, name, _spy)
+
+    # a replace-render tears the old window down; it must not raise
+    tab.locs_tree.topLevelItem(0).child(0).setSelected(True)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        tab.render_selected(replace=True)
+    qapp.processEvents()
+
+    # every stop method this picasso exposes was invoked before the old
+    # view was destroyed (prevents the running-QThread process abort)
+    for name in present:
+        assert name in calls
+    # teardown produced a fresh window regardless of picasso version
+    assert tab._render_window is not None
+    # dispose cleanly: no running QThread may outlive the window
+    tab._teardown_render_window()
+    assert tab._render_window is None
+    tab.deleteLater()
+
+
+def _render_a_file(qapp, tmp_path):
+    """Embed a window showing one real locs file; return the tab or skip."""
+    _make_real_locs_run(tmp_path)
+    tab = RenderTab(_FakeMain(str(tmp_path)))
+    tab.refresh()
+    tab.locs_tree.topLevelItem(0).child(0).setSelected(True)
+    import warnings
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        try:
+            tab.render_selected(replace=True)
+        except Exception as e:  # pragma: no cover
+            pytest.skip(f"picasso Render embedding unavailable: {e}")
+    if tab._render_window is None:
+        pytest.skip("picasso Render window could not be embedded")
+    for _ in range(50):
+        qapp.processEvents()
+        if len(getattr(tab._render_window.view, "locs", [])) >= 1:
+            break
+        import time
+
+        time.sleep(0.1)
+    return tab
+
+
+def test_render_toolbar_surfaces_native_exploration_actions(qapp, tmp_path):
+    """On picasso 0.12 the icon toolbar shows picasso's own navigation /
+    picking / display actions (with icons) and hides the equivalent plain
+    buttons; on picasso 0.11 it stays hidden and the buttons remain."""
+    try:
+        from picasso.gui import toolbars  # noqa: F401
+
+        native = True
+    except Exception:
+        native = False
+
+    tab = _render_a_file(qapp, tmp_path)
+
+    if not native:  # picasso 0.11: plain-button fallback, no toolbar
+        assert tab.render_toolbar.isHidden()
+        assert not tab.render_toolbar.actions()
+        assert not tab.display_button.isHidden()
+        assert not tab.fit_button.isHidden()
+        tab._teardown_render_window()
+        tab.deleteLater()
+        return
+
+    # picasso 0.12: the toolbar carries the exploration actions
+    labels = [
+        a.text() for a in tab.render_toolbar.actions() if not a.isSeparator()
+    ]
+    for expected in ("Zoom", "Pick", "Measure", "Move"):
+        assert expected in labels
+    # navigation + picking + display, never file I/O or heavy processing
+    assert not any(
+        "Open" in label or "Save" in label or "similar" in label
+        for label in labels
+    )
+    # icons are real (not null) so the buttons show as icons
+    assert all(
+        not a.icon().isNull()
+        for a in tab.render_toolbar.actions()
+        if not a.isSeparator()
+    )
+    # the native toolbar supersedes the equivalent plain buttons
+    assert not tab.render_toolbar.isHidden()
+    assert tab.display_button.isHidden()
+    assert tab.channels_button.isHidden()
+    assert tab.fit_button.isHidden()
+    # the Pick tool drives picasso's native View mode
+    pick = next(a for a in tab.render_toolbar.actions() if a.text() == "Pick")
+    pick.trigger()
+    qapp.processEvents()
+    assert tab._render_window.view._mode == "Pick"
+
+    # teardown drops the native actions and restores the plain buttons
+    tab._teardown_render_window()
+    assert tab.render_toolbar.isHidden()
+    assert not tab.render_toolbar.actions()
+    assert not tab.display_button.isHidden()
+    assert not tab.fit_button.isHidden()
+    tab.deleteLater()
+
+
+def test_toolbar_build_failure_does_not_break_embed(qapp, tmp_path):
+    """A failure building the icon toolbar (e.g. picasso changes its
+    action API) must not break the embedded view or skip the worker-thread
+    quit hook -- it falls back silently to the plain buttons."""
+    _make_real_locs_run(tmp_path)
+    tab = RenderTab(_FakeMain(str(tmp_path)))
+    tab.refresh()
+    tab.locs_tree.topLevelItem(0).child(0).setSelected(True)
+
+    def boom(_window):
+        raise RuntimeError("picasso toolbar API changed")
+
+    # simulate picasso's action API raising mid-population
+    tab._fill_render_toolbar = boom
+
+    import warnings
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        try:
+            tab.render_selected(replace=True)
+        except Exception as e:  # pragma: no cover
+            pytest.skip(f"picasso Render embedding unavailable: {e}")
+    if tab._render_window is None:
+        pytest.skip("picasso Render window could not be embedded")
+
+    # the view embedded despite the toolbar failure ...
+    assert tab._embedded_view is tab._render_window.view
+    assert tab.canvas_layout.indexOf(tab._embedded_view) >= 0
+    # ... the quit hook that stops the background threads was still wired ...
+    assert tab._quit_hook_connected
+    # ... and it fell back to the plain buttons with no toolbar shown
+    assert tab.render_toolbar.isHidden()
+    assert not tab.render_toolbar.actions()
+    assert not tab.display_button.isHidden()
+    assert not tab.fit_button.isHidden()
+    tab._teardown_render_window()
     tab.deleteLater()
