@@ -215,7 +215,12 @@ class RenderTab(QtWidgets.QWidget):
         self.fit_button.setToolTip("Reset the zoom to show all localizations.")
         self.fit_button.clicked.connect(self._fit_in_view)
         controls.addWidget(self.fit_button)
-        self.clear_button = QtWidgets.QPushButton("Clear")
+        self.clear_button = QtWidgets.QPushButton("Clear view")
+        self.clear_button.setToolTip(
+            "Remove all localizations from the canvas (empties the view). "
+            "This does not clear picks -- use the toolbar's 'Clear picks' "
+            "for that."
+        )
         self.clear_button.clicked.connect(self.clear_view)
         controls.addWidget(self.clear_button)
         controls.addStretch(1)
@@ -525,7 +530,8 @@ class RenderTab(QtWidgets.QWidget):
             logger.error(f"Could not render localizations: {e}")
 
     def clear_view(self) -> None:
-        """Remove all localizations (reset to an empty canvas)."""
+        """Empty the canvas: remove all displayed localizations (and their
+        channels), resetting to a blank view. Picks are not affected."""
         if self._render_window is not None:
             self._ensure_render_window(fresh=True)
 
