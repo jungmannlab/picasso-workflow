@@ -10,6 +10,13 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ## [Unreleased]
 
+### Changed
+
+- Python baseline raised 3.10 → 3.11 (`requires-python`, black
+  `target-version`, CI matrices); `picassosr` floor moved to `>=0.12.0a3`
+  (picasso 0.12 line, requires 3.11) — supersedes the temporary B7 git-pin
+  bridge.
+
 ### Added
 
 - **"Render" tab: explore a run's localizations with picasso Render.** A new
