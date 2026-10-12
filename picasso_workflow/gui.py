@@ -11423,6 +11423,14 @@ class Window(QtWidgets.QMainWindow):
 
         self.render_tab = RenderTab(self)
         self.tabs.addTab(self.render_tab, "Render")
+
+        # Doctor tab: read-only diagnostics (config/.env sources, logfile,
+        # versions, connection settings) plus opt-in Confluence connection
+        # tests. Entirely passive to build; makes no network calls on open.
+        from picasso_workflow.doctor_tab import DoctorTab
+
+        self.doctor_tab = DoctorTab(self)
+        self.tabs.addTab(self.doctor_tab, "Doctor")
         # refresh the render tab's run list when it is first shown / selected
         self.tabs.currentChanged.connect(self._on_main_tab_changed)
 
@@ -13225,13 +13233,18 @@ class Window(QtWidgets.QMainWindow):
     # Results tab: HTML report viewer
     # ------------------------------------------------------------------
     def _on_main_tab_changed(self, index):
-        """Refresh the Render tab's run list the first time it is shown."""
+        """Refresh the Render / Doctor tabs when they are shown."""
         widget = self.tabs.widget(index)
         if widget is getattr(self, "render_tab", None):
             try:
                 self.render_tab.refresh()
             except Exception as e:
                 logger.debug(f"Could not refresh the Render tab: {e}")
+        elif widget is getattr(self, "doctor_tab", None):
+            try:
+                self.doctor_tab.refresh()
+            except Exception as e:
+                logger.debug(f"Could not refresh the Doctor tab: {e}")
 
     def _build_results_tab(self, results_tab):
         """Populate the Results tab with the HTML report viewer.
