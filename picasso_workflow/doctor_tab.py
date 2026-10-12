@@ -59,6 +59,11 @@ _ENV_VARS = [
 # Confluence profiles to summarise / offer a connection test for.
 _PROFILES = ("Confluence", "ConfluenceTest")
 
+# Per-request timeout (seconds) for the connection test. Kept short so a dead
+# or slow host can't hang the worker -- and, since app shutdown joins that
+# worker, the GUI -- for atlassian's long default request timeout (75 s).
+_PROBE_TIMEOUT_S = 10
+
 
 def _env_status(name: str) -> str:
     """Describe an env var for display: its value, or "set"/"not set".
@@ -171,6 +176,13 @@ def probe_confluence(profile: str) -> tuple[str, str]:
         )
     except Exception as e:
         return ("fail", f"Could not connect: {e}")
+
+    # bound each request so an unreachable host can't hang the worker (and,
+    # since shutdown joins it, the GUI) for atlassian's 75 s default timeout
+    try:
+        iface.confluence.timeout = _PROBE_TIMEOUT_S
+    except Exception:  # pragma: no cover - defensive (atlassian internals)
+        pass
 
     title = creds.get("parent_page_title")
     space = creds.get("space_key")

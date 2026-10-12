@@ -122,6 +122,34 @@ def test_probe_confluence_request_failure_is_fail(monkeypatch):
     assert status == "fail" and "401" in msg
 
 
+def test_probe_confluence_bounds_request_timeout(monkeypatch):
+    """The probe sets a short request timeout so a dead host can't hang the
+    worker (and, via the shutdown join, the GUI)."""
+    from picasso_workflow.doctor_tab import _PROBE_TIMEOUT_S
+
+    _patch_creds(monkeypatch)
+    created = []
+
+    class _TimeoutClient:
+        def __init__(self):
+            self.timeout = None
+
+        def get_page_by_title(self, space, title):
+            return {"id": "1", "title": title}
+
+    class _FakeIface:
+        def __init__(self, **kwargs):
+            self.confluence = _TimeoutClient()
+            created.append(self)
+
+    monkeypatch.setattr(
+        "picasso_workflow.confluence.ConfluenceInterface", _FakeIface
+    )
+    status, _ = probe_confluence("Confluence")
+    assert status == "ok"
+    assert created[0].confluence.timeout == _PROBE_TIMEOUT_S
+
+
 # -- the widget ---------------------------------------------------------------
 
 
