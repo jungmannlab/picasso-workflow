@@ -26,7 +26,12 @@ wheels (the same pins that `pip install -e .` already uses).
 - `construct.yaml` — the recipe (channel, base env, per-user install prefix,
   bundled wheel, branding).
 - `post_install.sh` / `post_install.bat` — pip-install the app + create a
-  launcher / Start Menu + Desktop shortcuts.
+  launcher / Start Menu + Desktop shortcuts. Both the install and the launchers
+  set `PYTHONNOUSERSITE=1` so a stray user-site directory
+  (`~/.local/lib/python3.10` / `%APPDATA%\Python`) can never shadow the bundled
+  env — the recurring `~/.local` trap in this stack. On Windows the shortcut
+  runs a small `.vbs` launcher (a `.lnk` can't set an env var) that sets the
+  flag and starts the GUI with no console flash.
 - `wheels/` — the `picasso_workflow` wheel is staged here at build time
   (git-ignored; CI builds it).
 

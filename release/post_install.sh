@@ -10,15 +10,19 @@ PYTHON="$PREFIX/bin/python"
 
 # The bundled wheel is copied flat into $PREFIX (via `extra_files`).
 # --find-links lets pip install it while pulling picassosr + the rest from
-# PyPI wheels.
-"$PYTHON" -m pip install --no-input --no-warn-script-location \
-    --find-links "$PREFIX" picasso_workflow
+# PyPI wheels. PYTHONNOUSERSITE=1 keeps a stray ~/.local/lib/python3.10 from
+# shadowing the bundled env during the install (the documented ~/.local trap).
+PYTHONNOUSERSITE=1 "$PYTHON" -m pip install --no-input \
+    --no-warn-script-location --find-links "$PREFIX" picasso_workflow
 
 # A clickable launcher in the install root. `picasso-workflow-gui` is the
-# console-script entry point created by the pip install above.
+# console-script entry point created by the pip install above. The launcher
+# exports PYTHONNOUSERSITE=1 so the running GUI never picks up ~/.local
+# packages either.
 LAUNCHER="$PREFIX/Launch picasso-workflow.command"
 cat > "$LAUNCHER" <<EOF
 #!/bin/sh
+export PYTHONNOUSERSITE=1
 exec "$PREFIX/bin/picasso-workflow-gui"
 EOF
 chmod +x "$LAUNCHER"
