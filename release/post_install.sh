@@ -8,10 +8,11 @@ set -e
 
 PYTHON="$PREFIX/bin/python"
 
-# The bundled wheel lives in $PREFIX/wheels/ (via `extra_files`). --find-links
-# lets pip install it while pulling picassosr + the rest from PyPI wheels.
+# The bundled wheel is copied flat into $PREFIX (via `extra_files`).
+# --find-links lets pip install it while pulling picassosr + the rest from
+# PyPI wheels.
 "$PYTHON" -m pip install --no-input --no-warn-script-location \
-    --find-links "$PREFIX/wheels" picasso_workflow
+    --find-links "$PREFIX" picasso_workflow
 
 # A clickable launcher in the install root. `picasso-workflow-gui` is the
 # console-script entry point created by the pip install above.

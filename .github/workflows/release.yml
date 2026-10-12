@@ -92,24 +92,31 @@ jobs:
           print("wrote release/picasso-workflow.png", im.size)
           PY
 
-      # Rewrite the placeholder version in construct.yaml from PW_VERSION
-      # (portable across the Windows + macOS runners via the bash shell).
-      - name: Stamp installer version
+      # Rewrite the placeholders in construct.yaml: the version (from
+      # PW_VERSION) and @WHEEL@ (the actual built wheel basename, since
+      # extra_files entries must be files, not globs/dirs). Portable across the
+      # Windows + macOS runners via the bash shell.
+      - name: Stamp installer version and wheel
         shell: bash -el {0}
         run: |
           python - <<'PY'
-          import os, re, pathlib
+          import glob, os, re, pathlib
+          wheels = sorted(glob.glob("release/wheels/*.whl"))
+          if not wheels:
+              raise SystemExit("no wheel found in release/wheels/")
+          wheel = os.path.basename(wheels[-1])
           p = pathlib.Path("release/construct.yaml")
-          p.write_text(
-              re.sub(
-                  r"^version:.*$",
-                  "version: " + os.environ["PW_VERSION"],
-                  p.read_text(),
-                  count=1,
-                  flags=re.M,
-              )
+          text = p.read_text()
+          text = re.sub(
+              r"^version:.*$",
+              "version: " + os.environ["PW_VERSION"],
+              text,
+              count=1,
+              flags=re.M,
           )
-          print("stamped version:", os.environ["PW_VERSION"])
+          text = text.replace("@WHEEL@", wheel)
+          p.write_text(text)
+          print("stamped version:", os.environ["PW_VERSION"], "wheel:", wheel)
           PY
 
       - name: Build installer with constructor

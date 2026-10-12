@@ -58,13 +58,23 @@ installers on Windows and macOS installers on macOS.
 conda install -c conda-forge constructor
 python -m build --wheel --outdir release/wheels .     # stage the app wheel
 export PW_VERSION=$(python -m setuptools_scm)          # or e.g. 0.4.0
+# fill the version + @WHEEL@ placeholders in construct.yaml (CI does this too)
+python - <<'PY'
+import glob, os, re, pathlib
+wheel = os.path.basename(sorted(glob.glob("release/wheels/*.whl"))[-1])
+p = pathlib.Path("release/construct.yaml"); t = p.read_text()
+t = re.sub(r"^version:.*$", "version: " + os.environ["PW_VERSION"], t, 1, re.M)
+p.write_text(t.replace("@WHEEL@", wheel))
+PY
 cd release
 constructor . --output-dir dist
 ```
 
 The finished installer lands in `release/dist/`.
 
-> **Note:** these files have not yet been proven on a real Windows/macOS build —
-> the first CI run on a tag (or `workflow_dispatch` dry run) is the proving
-> ground. The most likely spot to need a tweak is the `pip install` of the
-> PyQt6-WebEngine / numba stack in `post_install`.
+> **What CI does and does not prove.** A green CI run means the **installer was
+> produced**. The `post_install` pip step (which pulls PyQt6-WebEngine / numba /
+> picassosr) only runs when an end user actually **installs** on their machine —
+> it is baked into the installer, not executed during the build. So the real
+> end-to-end proof is running the produced installer on a clean Windows / macOS
+> box; the likeliest spot to need a tweak there is that `pip install`.

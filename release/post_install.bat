@@ -6,9 +6,9 @@ setlocal
 
 set "PYTHON=%PREFIX%\python.exe"
 
-rem Bundled wheel is in %PREFIX%\wheels\ (via `extra_files`). --find-links lets
-rem pip install it while pulling picassosr + the rest from PyPI wheels.
-"%PYTHON%" -m pip install --no-input --no-warn-script-location --find-links "%PREFIX%\wheels" picasso_workflow
+rem Bundled wheel is copied flat into %PREFIX% (via `extra_files`). --find-links
+rem lets pip install it while pulling picassosr + the rest from PyPI wheels.
+"%PYTHON%" -m pip install --no-input --no-warn-script-location --find-links "%PREFIX%" picasso_workflow
 if errorlevel 1 exit /b 1
 
 rem The pip install above creates picasso-workflow-gui.exe in the env Scripts

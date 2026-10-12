@@ -54,11 +54,14 @@ initialize_by_default: false
 register_python: false
 register_python_default: false
 
-# Bundle the pre-built picasso_workflow wheel(s); post_install pip-installs
-# from here with --find-links so picassosr + the rest resolve from PyPI.
-# CI drops the wheel into release/wheels/ before building.
+# Bundle the pre-built picasso_workflow wheel; post_install pip-installs it
+# with --find-links so picassosr + the rest resolve from PyPI. extra_files
+# entries must be FILES (constructor shutil.copy()s each one) and are copied
+# flat into the install-prefix root, so post_install points --find-links at
+# $PREFIX. The @WHEEL@ placeholder is filled with the actual wheel basename at
+# build time (CI builds it into release/wheels/) -- see release.yml.
 extra_files:
-  - wheels/
+  - wheels/@WHEEL@
 
 post_install: post_install.sh      # [osx]
 post_install: post_install.bat     # [win]
