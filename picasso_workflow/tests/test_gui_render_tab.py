@@ -261,3 +261,88 @@ def test_teardown_stops_render_worker_threads(qapp, tmp_path):
     tab._teardown_render_window()
     assert tab._render_window is None
     tab.deleteLater()
+
+
+def _render_a_file(qapp, tmp_path):
+    """Embed a window showing one real locs file; return the tab or skip."""
+    _make_real_locs_run(tmp_path)
+    tab = RenderTab(_FakeMain(str(tmp_path)))
+    tab.refresh()
+    tab.locs_tree.topLevelItem(0).child(0).setSelected(True)
+    import warnings
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        try:
+            tab.render_selected(replace=True)
+        except Exception as e:  # pragma: no cover
+            pytest.skip(f"picasso Render embedding unavailable: {e}")
+    if tab._render_window is None:
+        pytest.skip("picasso Render window could not be embedded")
+    for _ in range(50):
+        qapp.processEvents()
+        if len(getattr(tab._render_window.view, "locs", [])) >= 1:
+            break
+        import time
+
+        time.sleep(0.1)
+    return tab
+
+
+def test_render_toolbar_surfaces_native_exploration_actions(qapp, tmp_path):
+    """On picasso 0.12 the icon toolbar shows picasso's own navigation /
+    picking / display actions (with icons) and hides the equivalent plain
+    buttons; on picasso 0.11 it stays hidden and the buttons remain."""
+    try:
+        from picasso.gui import toolbars  # noqa: F401
+
+        native = True
+    except Exception:
+        native = False
+
+    tab = _render_a_file(qapp, tmp_path)
+
+    if not native:  # picasso 0.11: plain-button fallback, no toolbar
+        assert tab.render_toolbar.isHidden()
+        assert not tab.render_toolbar.actions()
+        assert not tab.display_button.isHidden()
+        assert not tab.fit_button.isHidden()
+        tab._teardown_render_window()
+        tab.deleteLater()
+        return
+
+    # picasso 0.12: the toolbar carries the exploration actions
+    labels = [
+        a.text() for a in tab.render_toolbar.actions() if not a.isSeparator()
+    ]
+    for expected in ("Zoom", "Pick", "Measure", "Move"):
+        assert expected in labels
+    # navigation + picking + display, never file I/O or heavy processing
+    assert not any(
+        "Open" in label or "Save" in label or "similar" in label
+        for label in labels
+    )
+    # icons are real (not null) so the buttons show as icons
+    assert all(
+        not a.icon().isNull()
+        for a in tab.render_toolbar.actions()
+        if not a.isSeparator()
+    )
+    # the native toolbar supersedes the equivalent plain buttons
+    assert not tab.render_toolbar.isHidden()
+    assert tab.display_button.isHidden()
+    assert tab.channels_button.isHidden()
+    assert tab.fit_button.isHidden()
+    # the Pick tool drives picasso's native View mode
+    pick = next(a for a in tab.render_toolbar.actions() if a.text() == "Pick")
+    pick.trigger()
+    qapp.processEvents()
+    assert tab._render_window.view._mode == "Pick"
+
+    # teardown drops the native actions and restores the plain buttons
+    tab._teardown_render_window()
+    assert tab.render_toolbar.isHidden()
+    assert not tab.render_toolbar.actions()
+    assert not tab.display_button.isHidden()
+    assert not tab.fit_button.isHidden()
+    tab.deleteLater()

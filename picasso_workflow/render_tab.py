@@ -4,11 +4,13 @@
 A left panel lists the localization files a pipeline run saved (one entry
 per ``*.hdf5`` under the run's module folders), selectable singly or in
 multiples. The right panel embeds the picasso Render GUI's canvas (its
-``View`` widget) and its *exploration / adjustment* features (zoom, pan,
-contrast, colormap, blur, scale bar, multichannel display) -- but not its
-processing features (undrift / pick / cluster / link): only the ``View``
-and the display / channel dialogs are surfaced, not the render window's
-menus.
+``View`` widget) and its *exploration* features: zoom, pan, contrast,
+colormap, blur, scale bar, multichannel display, measuring and picking.
+On picasso 0.12+ these are offered as an icon toolbar built from picasso
+Render's own actions (``_TOOLBAR_ACTIONS``); on picasso 0.11 (no icon
+theme) a set of plain buttons is used instead. Either way the tab stays
+an explorer -- file I/O (open / save / export) and the heavier processing
+(undrift / cluster / link / pick-similar) are left to standalone Render.
 
 The embedded picasso Render window is created lazily on first use, so
 importing this module (and building the tab) does not pull picasso's heavy
@@ -33,6 +35,33 @@ _SKIP_DIRS = {
     ".ipynb_checkpoints",
     "_pwf_claims",
 }
+
+# The exploration actions surfaced on the embedded icon toolbar (picasso
+# 0.12+), as ``(menu path, picasso icon name)`` pairs; ``None`` is a
+# separator. These are picasso Render's own navigation (zoom / pan /
+# measure), picking (pick tool, pick-shape settings, clear picks) and
+# display (fit, contrast / colormap, channels, info, 3D) actions -- the
+# same QActions the standalone window uses, so they behave identically.
+# File I/O (Open / Save / Export) and processing (Pick similar, undrift,
+# cluster, link, ...) are intentionally left out; the tab stays an
+# explorer. Paths are matched by ``toolbars.menu_actions`` (texts without
+# the "..." / "&"); a path not found is skipped, so the toolbar degrades
+# gracefully if picasso renames an action.
+_TOOLBAR_ACTIONS = [
+    ("Tools > Zoom", "tool-zoom"),
+    ("Tools > Pick", "tool-pick"),
+    ("Tools > Measure", "tool-measure"),
+    ("Tools > Move", "tool-move"),
+    None,
+    ("Tools > Tools settings", "tools-settings"),
+    ("Tools > Clear picks", "clear"),
+    None,
+    ("View > Fit image to window", "fit-view"),
+    ("View > Display settings", "display-settings"),
+    ("View > Files", "files"),
+    ("View > Show info", "info"),
+    ("View > 3D view", "view-3d"),
+]
 
 
 def enumerate_locs_files(run_folder: str) -> list[tuple[str, str]]:
@@ -149,6 +178,16 @@ class RenderTab(QtWidgets.QWidget):
         right = QtWidgets.QWidget()
         right_layout = QtWidgets.QVBoxLayout(right)
         controls = QtWidgets.QHBoxLayout()
+        # picasso 0.12's native exploration actions (navigation, picking,
+        # display) as an icon toolbar; populated lazily once a window is
+        # embedded, and hidden on picasso 0.11 (no icon theme) -- see
+        # ``_populate_render_toolbar``. It supersedes the equivalent plain
+        # buttons below, which stay as the picasso-0.11 fallback.
+        self.render_toolbar = QtWidgets.QToolBar()
+        self.render_toolbar.setMovable(False)
+        self.render_toolbar.setFloatable(False)
+        self.render_toolbar.setVisible(False)
+        controls.addWidget(self.render_toolbar)
         self.display_button = QtWidgets.QPushButton("Display settings")
         self.display_button.setToolTip(
             "Contrast, colormap, blur method, zoom and scale bar "
@@ -314,6 +353,7 @@ class RenderTab(QtWidgets.QWidget):
             self._render_window = window
             self._embedded_view = view
             self._set_controls_enabled(True)
+            self._populate_render_toolbar(window)
             # picasso 0.12 loads and renders on background QThreads;
             # destroying one while it runs aborts the process. The window
             # we keep alive is never shown, so it gets no closeEvent to
@@ -329,6 +369,55 @@ class RenderTab(QtWidgets.QWidget):
             self.canvas_placeholder.setVisible(True)
             return None
         return self._render_window
+
+    def _populate_render_toolbar(self, window) -> None:
+        """Fill the icon toolbar with picasso's native exploration actions.
+
+        Reuses the embedded window's own QActions (navigation, picking,
+        display -- see ``_TOOLBAR_ACTIONS``) and picasso's icon theme, so
+        the buttons look and behave exactly as in standalone Render and
+        enable themselves once localizations are loaded. The equivalent
+        plain buttons (*Display settings* / *Channels* / *Fit in view*)
+        are then hidden. On picasso 0.11 (no ``toolbars`` helper / icon
+        theme) the toolbar stays hidden and those buttons are used.
+
+        Parameters
+        ----------
+        window : picasso Render Window
+            The freshly embedded window whose menu actions to surface.
+        """
+        self.render_toolbar.clear()
+        try:
+            from picasso.gui import theme, toolbars
+        except Exception:  # picasso 0.11: no icon theme / toolbar helper
+            self.render_toolbar.setVisible(False)
+            return
+        actions = toolbars.menu_actions(window.menu_bar)
+        added = False
+        pending_sep = False
+        for item in _TOOLBAR_ACTIONS:
+            if item is None:
+                pending_sep = added  # only between real items, never leading
+                continue
+            path, icon_name = item
+            action = actions.get(path)
+            if action is None:
+                logger.debug(f"Render toolbar: action {path!r} not found")
+                continue
+            if pending_sep:
+                self.render_toolbar.addSeparator()
+                pending_sep = False
+            action.setIcon(theme.icon(icon_name))
+            self.render_toolbar.addAction(action)
+            added = True
+        self.render_toolbar.setVisible(added)
+        if added:
+            for btn in (
+                self.display_button,
+                self.channels_button,
+                self.fit_button,
+            ):
+                btn.setVisible(False)
 
     @staticmethod
     def _stop_view_workers(view) -> None:
@@ -378,6 +467,17 @@ class RenderTab(QtWidgets.QWidget):
         # the widgets are destroyed: deleting a live QThread aborts the
         # process. No-op on picasso 0.11 (synchronous, no such threads).
         self._stop_window_workers()
+        # Drop the native toolbar's actions before their window is
+        # destroyed (they belong to it), and restore the plain-button
+        # fallback until a new window repopulates the toolbar.
+        self.render_toolbar.clear()
+        self.render_toolbar.setVisible(False)
+        for btn in (
+            self.display_button,
+            self.channels_button,
+            self.fit_button,
+        ):
+            btn.setVisible(True)
         if self._embedded_view is not None:
             self.canvas_layout.removeWidget(self._embedded_view)
             self._embedded_view.setParent(None)

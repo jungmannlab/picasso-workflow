@@ -29,6 +29,19 @@ This file was started after v0.5.6; earlier history is in the git log.
   drive the canvas (dragging a box, right-drag pan and Ctrl+scroll zoom also
   work).
 
+- **Render tab: picasso 0.12 icon toolbar (navigation, picking, display).**
+  When the embedded picasso is 0.12+, the Render tab surfaces picasso
+  Render's own actions as an icon toolbar reusing picasso's icon theme:
+  the navigation tools (drag-box **Zoom**, **Pan/Move**, **Measure**),
+  **picking** (the Pick tool, pick-shape/size *Tools settings*, *Clear
+  picks*) and display (*Fit in view*, *Display settings* for
+  contrast/colormap/blur/scale bar, *Channels*, *Info*, *3D view*). These
+  are picasso's real `QAction`s, so they behave and enable-on-load exactly
+  as in standalone Render. File I/O (Open/Save/Export) and the heavier
+  processing (undrift/cluster/link/pick-similar) are intentionally left
+  out. On picasso 0.11 (no icon theme) the previous plain buttons are kept
+  as a fallback.
+
 - **Confluence report link in the Run tab.** When a run documents to
   Confluence, the runner records the report page's URL in `progress.json`
   (`report_url`), and the Run-tab monitor shows it as a clickable link
