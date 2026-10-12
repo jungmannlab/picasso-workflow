@@ -346,3 +346,43 @@ def test_render_toolbar_surfaces_native_exploration_actions(qapp, tmp_path):
     assert not tab.display_button.isHidden()
     assert not tab.fit_button.isHidden()
     tab.deleteLater()
+
+
+def test_toolbar_build_failure_does_not_break_embed(qapp, tmp_path):
+    """A failure building the icon toolbar (e.g. picasso changes its
+    action API) must not break the embedded view or skip the worker-thread
+    quit hook -- it falls back silently to the plain buttons."""
+    _make_real_locs_run(tmp_path)
+    tab = RenderTab(_FakeMain(str(tmp_path)))
+    tab.refresh()
+    tab.locs_tree.topLevelItem(0).child(0).setSelected(True)
+
+    def boom(_window):
+        raise RuntimeError("picasso toolbar API changed")
+
+    # simulate picasso's action API raising mid-population
+    tab._fill_render_toolbar = boom
+
+    import warnings
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        try:
+            tab.render_selected(replace=True)
+        except Exception as e:  # pragma: no cover
+            pytest.skip(f"picasso Render embedding unavailable: {e}")
+    if tab._render_window is None:
+        pytest.skip("picasso Render window could not be embedded")
+
+    # the view embedded despite the toolbar failure ...
+    assert tab._embedded_view is tab._render_window.view
+    assert tab.canvas_layout.indexOf(tab._embedded_view) >= 0
+    # ... the quit hook that stops the background threads was still wired ...
+    assert tab._quit_hook_connected
+    # ... and it fell back to the plain buttons with no toolbar shown
+    assert tab.render_toolbar.isHidden()
+    assert not tab.render_toolbar.actions()
+    assert not tab.display_button.isHidden()
+    assert not tab.fit_button.isHidden()
+    tab._teardown_render_window()
+    tab.deleteLater()

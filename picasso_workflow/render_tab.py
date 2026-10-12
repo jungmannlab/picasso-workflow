@@ -370,16 +370,30 @@ class RenderTab(QtWidgets.QWidget):
             return None
         return self._render_window
 
+    def _set_fallback_buttons_visible(self, visible: bool) -> None:
+        """Show or hide the plain exploration buttons the native icon
+        toolbar supersedes (*Display settings* / *Channels* / *Fit in
+        view*); the others (*Zoom in/out* / *Clear*) have no toolbar
+        equivalent and always stay."""
+        for btn in (
+            self.display_button,
+            self.channels_button,
+            self.fit_button,
+        ):
+            btn.setVisible(visible)
+
     def _populate_render_toolbar(self, window) -> None:
         """Fill the icon toolbar with picasso's native exploration actions.
 
-        Reuses the embedded window's own QActions (navigation, picking,
-        display -- see ``_TOOLBAR_ACTIONS``) and picasso's icon theme, so
-        the buttons look and behave exactly as in standalone Render and
-        enable themselves once localizations are loaded. The equivalent
-        plain buttons (*Display settings* / *Channels* / *Fit in view*)
-        are then hidden. On picasso 0.11 (no ``toolbars`` helper / icon
-        theme) the toolbar stays hidden and those buttons are used.
+        Best-effort: reuses the embedded window's own QActions (navigation,
+        picking, display -- see ``_TOOLBAR_ACTIONS``) and picasso's icon
+        theme, so the buttons look and behave exactly as in standalone
+        Render and enable themselves once localizations are loaded; the
+        equivalent plain buttons are then hidden. If the toolbar cannot be
+        built -- picasso 0.11 (no ``toolbars`` helper / icon theme) or any
+        failure reaching picasso's action API -- it is left hidden and the
+        plain buttons are used. A toolbar is a cosmetic enhancement, so its
+        failure must never break the (already embedded) view.
 
         Parameters
         ----------
@@ -388,10 +402,25 @@ class RenderTab(QtWidgets.QWidget):
         """
         self.render_toolbar.clear()
         try:
-            from picasso.gui import theme, toolbars
-        except Exception:  # picasso 0.11: no icon theme / toolbar helper
+            added = self._fill_render_toolbar(window)
+        except Exception as e:  # picasso 0.11, or a changed action API
+            logger.debug(f"Render toolbar unavailable: {e}")
+            added = False
+        if added:
+            self.render_toolbar.setVisible(True)
+            self._set_fallback_buttons_visible(False)
+        else:
+            self.render_toolbar.clear()  # drop any partial population
             self.render_toolbar.setVisible(False)
-            return
+            self._set_fallback_buttons_visible(True)
+
+    def _fill_render_toolbar(self, window) -> bool:
+        """Add the allow-listed native actions to the toolbar; return
+        whether any were added. Raises if picasso's icon theme / toolbar
+        helper is absent or its action API cannot be reached -- the caller
+        turns that into the plain-button fallback."""
+        from picasso.gui import theme, toolbars
+
         actions = toolbars.menu_actions(window.menu_bar)
         added = False
         pending_sep = False
@@ -410,14 +439,7 @@ class RenderTab(QtWidgets.QWidget):
             action.setIcon(theme.icon(icon_name))
             self.render_toolbar.addAction(action)
             added = True
-        self.render_toolbar.setVisible(added)
-        if added:
-            for btn in (
-                self.display_button,
-                self.channels_button,
-                self.fit_button,
-            ):
-                btn.setVisible(False)
+        return added
 
     @staticmethod
     def _stop_view_workers(view) -> None:
@@ -472,12 +494,7 @@ class RenderTab(QtWidgets.QWidget):
         # fallback until a new window repopulates the toolbar.
         self.render_toolbar.clear()
         self.render_toolbar.setVisible(False)
-        for btn in (
-            self.display_button,
-            self.channels_button,
-            self.fit_button,
-        ):
-            btn.setVisible(True)
+        self._set_fallback_buttons_visible(True)
         if self._embedded_view is not None:
             self.canvas_layout.removeWidget(self._embedded_view)
             self._embedded_view.setParent(None)
