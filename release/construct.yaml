@@ -1,0 +1,76 @@
+# constructor recipe for the picasso-workflow one-click installer.
+#
+# Built with `constructor` (BSD-licensed) against the **conda-forge** channel
+# ONLY -- the same configuration Miniforge uses. This deliberately avoids
+# Anaconda's commercial `defaults` channel (repo.anaconda.com) and the Anaconda
+# / Miniconda installers, so the resulting installer carries no Anaconda Terms
+# of Service and is free to use and redistribute at MPG regardless of org size.
+#
+# The base environment is intentionally MINIMAL: just a conda-forge Python +
+# pip. `picasso_workflow` and its whole dependency tree (picassosr, PyQt6,
+# PyQt6-WebEngine, numba, ...) are installed from PyPI wheels in the
+# post-install step (see post_install.{sh,bat}). This reuses the exact pins
+# that already work via `pip install -e .`, instead of re-deriving every
+# package's conda-forge name.
+#
+# Version: the placeholder below is rewritten at build time from the git tag
+# (setuptools-scm) before constructor runs -- see the "Stamp installer version"
+# step in .github/workflows/release.yml. Kept as a literal (not a jinja
+# expression) so the file stays parseable and doesn't depend on constructor's
+# jinja support.
+
+name: picasso-workflow
+version: 0.0.0.dev0
+
+# conda-forge only -- this is the whole point (license-clean, no `defaults`).
+channels:
+  - conda-forge
+conda_default_channels:
+  - conda-forge
+channels_remap: []
+
+# Minimal base env; everything else comes from PyPI in post_install.
+specs:
+  - python=3.10
+  - pip
+
+# --- Per-user, no-admin install (your Windows requirement) ----------------
+# Windows: land under %LOCALAPPDATA% so each user gets their own copy, no
+# admin prompt, no Program Files, HKCU only. Multiple users can install and
+# run simultaneously without colliding.
+default_prefix: '%LOCALAPPDATA%\picasso-workflow'           # [win]
+# Offer (but don't force) an all-users install only if an admin runs it.
+default_prefix_all_users: '%ALLUSERSPROFILE%\picasso-workflow'  # [win]
+# macOS: install into the user's home domain (no sudo). The `.sh` installer
+# built by `installer_type: all` is per-user by nature and is the reliable
+# fallback if the `.pkg` ever prompts for admin -- verify on the first CI run.
+default_location_pkg: picasso-workflow                      # [osx]
+
+# Build the friendly graphical installer plus a shell installer on macOS.
+installer_type: all
+
+# Don't touch the user's shell rc / global conda -- this is a self-contained app.
+initialize_by_default: false
+register_python: false
+register_python_default: false
+
+# Bundle the pre-built picasso_workflow wheel(s); post_install pip-installs
+# from here with --find-links so picassosr + the rest resolve from PyPI.
+# CI drops the wheel into release/wheels/ before building.
+extra_files:
+  - wheels/
+
+post_install: post_install.sh      # [osx]
+post_install: post_install.bat     # [win]
+
+license_file: ../LICENSE
+
+# Branding: reuse the SAME icon the GUI uses (picasso_workflow/picasso-workflow.ico,
+# loaded by gui.py `_app_icon()`). Windows takes the .ico directly; macOS wants
+# a PNG, which CI generates from that same .ico into release/ (one source asset,
+# no new artwork). See .github/workflows/release.yml "Prepare macOS icon".
+icon_image: ../picasso_workflow/picasso-workflow.ico        # [win]
+icon_image: picasso-workflow.png                            # [osx]
+
+# Keep the downloaded conda pkgs out of the final install to shrink it.
+keep_pkgs: false

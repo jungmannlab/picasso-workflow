@@ -1,0 +1,126 @@
+name: Build one-click installers
+
+# Builds the Windows + macOS one-click installers with `constructor`
+# (conda-forge only -- no Anaconda commercial channel/ToS) and attaches them to
+# the GitHub Release for the tag. Fits the setuptools-scm "tag IS the version"
+# model: the tag that triggers this run is the version the installer carries.
+#
+# Trigger: pushing a version tag (vMAJOR.MINOR.PATCH), or manually from the
+# Actions tab (workflow_dispatch) for a dry run that only uploads artifacts.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Installer (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+
+    steps:
+      - name: Checkout (full history for setuptools-scm)
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      # Miniforge, NOT Miniconda -- keeps the build toolchain itself free of
+      # Anaconda's commercial ToS. conda-forge is the only channel.
+      - name: Set up Miniforge
+        uses: conda-incubator/setup-miniconda@v3
+        with:
+          miniforge-version: latest
+          channels: conda-forge
+          conda-remove-defaults: true
+
+      - name: Install build tooling
+        shell: bash -el {0}
+        run: |
+          conda install -y -c conda-forge constructor
+          python -m pip install --upgrade build
+
+      # Build the picasso_workflow wheel from the tagged checkout and stage it
+      # where construct.yaml's `extra_files: [wheels/]` expects it. The wheel's
+      # version comes from setuptools-scm (the tag).
+      - name: Build picasso_workflow wheel
+        shell: bash -el {0}
+        run: |
+          python -m build --wheel --outdir release/wheels .
+          ls -l release/wheels
+
+      # Derive the installer version from the tag (strip leading "v"); fall back
+      # to setuptools-scm for a manual dry run with no tag.
+      - name: Compute PW_VERSION
+        shell: bash -el {0}
+        run: |
+          REF="${GITHUB_REF_NAME:-}"
+          if [[ "$REF" == v* ]]; then
+            echo "PW_VERSION=${REF#v}" >> "$GITHUB_ENV"
+          else
+            echo "PW_VERSION=$(python -m setuptools_scm 2>/dev/null || echo 0.0.0.dev0)" >> "$GITHUB_ENV"
+          fi
+
+      # macOS needs a PNG icon; derive it from the same .ico the GUI uses so
+      # there's a single source icon asset (no separate macOS artwork).
+      - name: Prepare macOS icon
+        if: runner.os == 'macOS'
+        shell: bash -el {0}
+        run: |
+          python -m pip install pillow
+          python - <<'PY'
+          from PIL import Image
+          im = Image.open("picasso_workflow/picasso-workflow.ico")
+          # Pick the largest frame the .ico offers for a crisp installer icon.
+          if getattr(im, "ico", None):
+              im = max(
+                  (im.ico.getimage(i) for i in range(len(im.ico.entry))),
+                  key=lambda f: f.size[0] * f.size[1],
+              )
+          im.convert("RGBA").save("release/picasso-workflow.png")
+          print("wrote release/picasso-workflow.png", im.size)
+          PY
+
+      # Rewrite the placeholder version in construct.yaml from PW_VERSION
+      # (portable across the Windows + macOS runners via the bash shell).
+      - name: Stamp installer version
+        shell: bash -el {0}
+        run: |
+          python - <<'PY'
+          import os, re, pathlib
+          p = pathlib.Path("release/construct.yaml")
+          p.write_text(
+              re.sub(
+                  r"^version:.*$",
+                  "version: " + os.environ["PW_VERSION"],
+                  p.read_text(),
+                  count=1,
+                  flags=re.M,
+              )
+          )
+          print("stamped version:", os.environ["PW_VERSION"])
+          PY
+
+      - name: Build installer with constructor
+        shell: bash -el {0}
+        run: |
+          cd release
+          constructor . --output-dir dist
+          ls -l dist
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: installer-${{ matrix.os }}
+          path: release/dist/*
+
+      # Attach to the GitHub Release only for real tag pushes.
+      - name: Attach to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release/dist/*

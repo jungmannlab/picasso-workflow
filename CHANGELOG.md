@@ -12,6 +12,29 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Added
 
+- **One-click installers for Windows + macOS (scaffold).** A new `release/`
+  directory builds friendly, no-Python-required installers with `constructor`
+  against the **conda-forge** channel only (the Miniforge approach) -- so the
+  installer carries no Anaconda commercial Terms of Service and is free to
+  redistribute. The base env is a minimal conda-forge Python; `post_install`
+  pip-installs the bundled `picasso_workflow` wheel (pulling `picassosr`,
+  PyQt6, PyQt6-WebEngine, numba, ... from PyPI wheels). The Windows installer
+  is **per-user** (`%LOCALAPPDATA%`, no admin, HKCU only), so multiple users on
+  one machine can install and run simultaneously without colliding.
+  `.github/workflows/release.yml` builds both installers on every `vX.Y.Z` tag
+  and attaches them to the GitHub Release. Installers are unsigned for now
+  (one-time SmartScreen/Gatekeeper prompt). See `release/README.md`. *Not yet
+  proven on a real Windows/macOS build -- the first tagged CI run is the
+  proving ground.*
+
+- **GUI: "update available" banner.** On startup the GUI checks the GitHub
+  Releases API (off the UI thread) and, if a newer release exists, shows a
+  dismissible banner above the tabs linking to the download. Fully fail-soft
+  (offline / rate-limited / up-to-date shows nothing) and skipped in headless
+  runs (`QT_QPA_PLATFORM=offscreen`) or when
+  `PICASSO_WORKFLOW_NO_UPDATE_CHECK` is set. Logic in
+  `picasso_workflow/update_check.py` (unit-tested with mocked HTTP).
+
 - **"Doctor" tab: read-only diagnostics for the running GUI.** A new tab
   (right of *Render*) surfaces, at a glance, state that otherwise only lives
   in the logfile: which `config.yaml` layers loaded and from where (bundled →

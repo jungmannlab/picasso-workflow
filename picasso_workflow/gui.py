@@ -10832,6 +10832,26 @@ class PhaseSpacePreviewDialog(QtWidgets.QDialog):
         self.accept()
 
 
+class _UpdateCheckWorker(QtCore.QObject):
+    """Runs the GitHub "is there a newer release?" check off the GUI thread."""
+
+    # Emits an update_check.UpdateInfo if a newer release exists, else None.
+    finished = QtCore.pyqtSignal(object)
+
+    def __init__(self, current_version: str) -> None:
+        super().__init__()
+        self._current_version = current_version
+
+    def run(self) -> None:
+        try:
+            from picasso_workflow.update_check import check_for_update
+
+            result = check_for_update(self._current_version)
+        except Exception:  # pragma: no cover - defensive; must never raise
+            result = None
+        self.finished.emit(result)
+
+
 class Window(QtWidgets.QMainWindow):
     """Main window for the picasso-workflow GUI application."""
 
@@ -10925,9 +10945,15 @@ class Window(QtWidgets.QMainWindow):
         )
         layout.addWidget(self.workflow_type, 0, 4)
 
+        # Update-available banner (hidden until the background check finds a
+        # newer release). Sits between the top controls and the tabs; takes no
+        # space while hidden.
+        self.update_banner = self._build_update_banner()
+        layout.addWidget(self.update_banner, 1, 0, 1, 5)
+
         # Create tab widget
         self.tabs = QtWidgets.QTabWidget()
-        layout.addWidget(self.tabs, 1, 0, 1, 5)
+        layout.addWidget(self.tabs, 2, 0, 1, 5)
 
         # Workflow Config tab
         config_tab = QtWidgets.QWidget()
@@ -11433,6 +11459,12 @@ class Window(QtWidgets.QMainWindow):
         self.tabs.addTab(self.doctor_tab, "Doctor")
         # refresh the render tab's run list when it is first shown / selected
         self.tabs.currentChanged.connect(self._on_main_tab_changed)
+
+        # Check (off-thread) whether a newer release is on GitHub; reveals the
+        # update banner if so. Fully passive and fail-soft -- never blocks
+        # startup or shows anything when offline / up to date.
+        self._update_thread = None
+        self._start_update_check()
 
         # select files to process
         # Single Workflow only: choose how input data is provided - an
@@ -13229,9 +13261,95 @@ class Window(QtWidgets.QMainWindow):
         self.files_table.setRowCount(0)
         self._log_workflow_config_event("files_table.clear")
 
-    # ------------------------------------------------------------------
-    # Results tab: HTML report viewer
-    # ------------------------------------------------------------------
+    # -- update-available banner -------------------------------------------
+
+    def _build_update_banner(self):
+        """Return the (initially hidden) "new version available" banner."""
+        banner = QtWidgets.QFrame()
+        banner.setStyleSheet(
+            "QFrame { background: #fff8e1; border: 1px solid #f0c000; "
+            "border-radius: 4px; }"
+        )
+        banner.setVisible(False)
+        row = QtWidgets.QHBoxLayout(banner)
+        row.setContentsMargins(8, 4, 8, 4)
+
+        self._update_banner_label = QtWidgets.QLabel()
+        self._update_banner_label.setTextFormat(Qt.TextFormat.RichText)
+        self._update_banner_label.setOpenExternalLinks(True)
+        self._update_banner_label.setStyleSheet("border: none;")
+        row.addWidget(self._update_banner_label, 1)
+
+        dismiss = QtWidgets.QPushButton("Dismiss")
+        dismiss.setStyleSheet("border: none;")
+        dismiss.clicked.connect(lambda: banner.setVisible(False))
+        row.addWidget(dismiss, 0)
+        return banner
+
+    def _start_update_check(self):
+        """Kick off the GitHub release check on a background thread.
+
+        Skipped in headless/test runs (``QT_QPA_PLATFORM=offscreen``) and when
+        the user opts out via ``PICASSO_WORKFLOW_NO_UPDATE_CHECK`` -- a network
+        thread spun up during construction would otherwise be torn down while
+        still blocked on the socket (QThread "destroyed while running" abort).
+        """
+        if os.environ.get("QT_QPA_PLATFORM") == "offscreen" or os.environ.get(
+            "PICASSO_WORKFLOW_NO_UPDATE_CHECK"
+        ):
+            return
+        try:
+            worker = _UpdateCheckWorker(__GUIVERSION__)
+            thread = QtCore.QThread(self)
+            worker.moveToThread(thread)
+            # Keep the worker alive for the thread's lifetime; otherwise PyQt
+            # may garbage-collect it before ``started`` fires (see doctor_tab).
+            thread._pw_worker = worker
+            thread.started.connect(worker.run)
+            worker.finished.connect(self._on_update_check_result)
+            worker.finished.connect(thread.quit)
+            worker.finished.connect(worker.deleteLater)
+            thread.finished.connect(thread.deleteLater)
+            thread.finished.connect(self._forget_update_thread)
+            self._update_thread = thread
+            app = QtWidgets.QApplication.instance()
+            if app is not None:
+                app.aboutToQuit.connect(self._stop_update_thread)
+            thread.start()
+        except Exception as e:  # pragma: no cover - defensive
+            logger.debug(f"Could not start the update check: {e}")
+
+    def _on_update_check_result(self, info):
+        """Reveal the banner if ``info`` is an UpdateInfo, else do nothing."""
+        if info is None:
+            return
+        try:
+            self._update_banner_label.setText(
+                f"A new version of picasso-workflow "
+                f"(<b>{info.latest}</b>) is available &mdash; "
+                f'<a href="{info.url}">download it here</a>.'
+            )
+            self.update_banner.setVisible(True)
+        except Exception as e:  # pragma: no cover - defensive
+            logger.debug(f"Could not show the update banner: {e}")
+
+    def _forget_update_thread(self):
+        self._update_thread = None
+
+    def _stop_update_thread(self):
+        """Quit/join the update-check thread on shutdown (destroying a live
+        QThread aborts the process)."""
+        thread = getattr(self, "_update_thread", None)
+        if thread is not None:
+            thread.quit()
+            thread.wait()
+            self._update_thread = None
+
+    def closeEvent(self, event):
+        """Join the update-check thread before the window is destroyed."""
+        self._stop_update_thread()
+        super().closeEvent(event)
+
     def _on_main_tab_changed(self, index):
         """Refresh the Render / Doctor tabs when they are shown."""
         widget = self.tabs.widget(index)
@@ -13246,6 +13364,9 @@ class Window(QtWidgets.QMainWindow):
             except Exception as e:
                 logger.debug(f"Could not refresh the Doctor tab: {e}")
 
+    # ------------------------------------------------------------------
+    # Results tab: HTML report viewer
+    # ------------------------------------------------------------------
     def _build_results_tab(self, results_tab):
         """Populate the Results tab with the HTML report viewer.
 

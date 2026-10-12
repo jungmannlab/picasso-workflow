@@ -1,0 +1,5 @@
+# Build artifacts produced by the installer build (staged by CI).
+wheels/*.whl
+dist/
+# macOS installer icon, generated from picasso_workflow/picasso-workflow.ico.
+picasso-workflow.png
