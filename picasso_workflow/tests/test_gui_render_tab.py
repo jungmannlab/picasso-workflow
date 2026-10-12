@@ -124,9 +124,8 @@ def test_main_window_has_render_tab(qapp):
     win.close()
 
 
-def test_embedded_render_loads_real_locs(qapp, tmp_path):
-    """Smoke test: the embedded picasso Render canvas loads a real locs
-    file, with the processing menu bar hidden."""
+def _make_real_locs_run(tmp_path):
+    """A run folder holding one real (picasso-readable) locs file."""
     picasso_io = pytest.importorskip("picasso.io")
     run = tmp_path / "myrun_240101-1200"
     (run / "03_picasso_localize").mkdir(parents=True)
@@ -148,6 +147,13 @@ def test_embedded_render_loads_real_locs(qapp, tmp_path):
     picasso_io.save_locs(
         str(run / "03_picasso_localize" / "locs.hdf5"), locs, info
     )
+    return run
+
+
+def test_embedded_render_loads_real_locs(qapp, tmp_path):
+    """Smoke test: the embedded picasso Render canvas loads a real locs
+    file, with the processing menu bar hidden."""
+    _make_real_locs_run(tmp_path)
 
     tab = RenderTab(_FakeMain(str(tmp_path)))
     tab.refresh()
@@ -192,4 +198,66 @@ def test_embedded_render_loads_real_locs(qapp, tmp_path):
     assert _area(view.viewport) < before
     tab._fit_in_view()
     qapp.processEvents()
+    # stop picasso 0.12's background threads before the window leaks into
+    # interpreter teardown (destroying a running QThread aborts the process)
+    tab._teardown_render_window()
+    tab.deleteLater()
+
+
+def test_teardown_stops_render_worker_threads(qapp, tmp_path):
+    """Replacing the view (or clearing it) must stop picasso 0.12's
+    background loader / render threads before the view is destroyed --
+    destroying a live QThread aborts the process. On picasso 0.11 (no
+    such threads) teardown must still succeed."""
+    _make_real_locs_run(tmp_path)
+
+    tab = RenderTab(_FakeMain(str(tmp_path)))
+    tab.refresh()
+    tab.locs_tree.topLevelItem(0).child(0).setSelected(True)
+
+    import warnings
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        try:
+            tab.render_selected(replace=True)
+        except Exception as e:  # pragma: no cover
+            pytest.skip(f"picasso Render embedding unavailable: {e}")
+    if tab._render_window is None:
+        pytest.skip("picasso Render window could not be embedded")
+
+    view = tab._render_window.view
+    # spy on whichever thread-stopping methods this picasso exposes
+    # (0.11 has stop_load only; 0.12 adds stop_render_worker)
+    calls = []
+    present = [
+        name
+        for name in ("stop_load", "stop_render_worker")
+        if hasattr(view, name)
+    ]
+    for name in present:
+        orig = getattr(view, name)
+
+        def _spy(*a, _n=name, _o=orig, **k):
+            calls.append(_n)
+            return _o(*a, **k)
+
+        setattr(view, name, _spy)
+
+    # a replace-render tears the old window down; it must not raise
+    tab.locs_tree.topLevelItem(0).child(0).setSelected(True)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        tab.render_selected(replace=True)
+    qapp.processEvents()
+
+    # every stop method this picasso exposes was invoked before the old
+    # view was destroyed (prevents the running-QThread process abort)
+    for name in present:
+        assert name in calls
+    # teardown produced a fresh window regardless of picasso version
+    assert tab._render_window is not None
+    # dispose cleanly: no running QThread may outlive the window
+    tab._teardown_render_window()
+    assert tab._render_window is None
     tab.deleteLater()

@@ -39,6 +39,17 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Fixed
 
+- **Render tab: forward-compatible with picasso 0.12's threaded renderer.**
+  picasso 0.12 (0.12.0a3) moves localization loading *and* scene rendering
+  onto background `QThread`s (the new `picasso.gui.render_worker`); destroying
+  a running `QThread` aborts the process. The embedded Render tab now stops
+  those threads (`View.stop_load()` / `View.stop_render_worker()`, guarded so
+  it is a no-op on picasso 0.11) before it disposes the embedded view -- on
+  every *Render selected* replace, *Clear*, and (via an `aboutToQuit` hook)
+  on application shutdown -- so replacing/closing the view mid-load no longer
+  risks a crash. The dependency pin is unchanged (`picassosr>=0.11.1`); note
+  that picasso 0.12 itself requires Python >=3.11.
+
 - **Code-review fixes for the stepwise / local-run / FRC work.** A multi-agent
   review of this branch surfaced several real bugs, now fixed:
   - *Stepwise boundary checkpoint:* the boundary module's checkpoint is now

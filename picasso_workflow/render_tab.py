@@ -92,6 +92,8 @@ class RenderTab(QtWidgets.QWidget):
         # alive for its dialogs; only its ``view`` widget is embedded.
         self._render_window = None
         self._embedded_view = None
+        # one-shot guard: connect the app-shutdown worker-stop hook once
+        self._quit_hook_connected = False
         self._build_ui()
 
     # -- UI construction ----------------------------------------------------
@@ -312,6 +314,11 @@ class RenderTab(QtWidgets.QWidget):
             self._render_window = window
             self._embedded_view = view
             self._set_controls_enabled(True)
+            # picasso 0.12 loads and renders on background QThreads;
+            # destroying one while it runs aborts the process. The window
+            # we keep alive is never shown, so it gets no closeEvent to
+            # stop them -- do it ourselves when the application quits.
+            self._connect_quit_hook()
         except Exception as e:
             logger.error(f"Could not embed the picasso Render GUI: {e}")
             self.canvas_placeholder.setText(
@@ -323,8 +330,54 @@ class RenderTab(QtWidgets.QWidget):
             return None
         return self._render_window
 
+    @staticmethod
+    def _stop_view_workers(view) -> None:
+        """Stop a picasso ``View``'s background loader / render threads.
+
+        In picasso 0.12 locs loading and scene rendering each run on a
+        ``QThread``, and destroying a running ``QThread`` aborts the
+        process; ``stop_load`` / ``stop_render_worker`` cancel and join
+        those threads. On picasso 0.11, which has neither thread, the
+        methods are absent and this is a no-op.
+        """
+        if view is None:
+            return
+        for name in ("stop_load", "stop_render_worker"):
+            fn = getattr(view, name, None)
+            if fn is None:
+                continue
+            try:
+                fn()
+            except Exception as e:  # pragma: no cover - defensive
+                logger.debug(f"{name} failed: {e}")
+
+    def _stop_window_workers(self) -> None:
+        """Stop the embedded window's background threads (main view and
+        the rotation window's view), mirroring picasso Render's own
+        ``closeEvent`` cleanup."""
+        window = self._render_window
+        if window is None:
+            return
+        self._stop_view_workers(getattr(window, "view", None))
+        window_rot = getattr(window, "window_rot", None)
+        if window_rot is not None:
+            self._stop_view_workers(getattr(window_rot, "view_rot", None))
+
+    def _connect_quit_hook(self) -> None:
+        """Stop the render worker threads on application shutdown (once)."""
+        if self._quit_hook_connected:
+            return
+        app = QtWidgets.QApplication.instance()
+        if app is not None:
+            app.aboutToQuit.connect(self._stop_window_workers)
+            self._quit_hook_connected = True
+
     def _teardown_render_window(self) -> None:
         """Detach and dispose the currently embedded view and its window."""
+        # Stop picasso 0.12's background loader / render threads before
+        # the widgets are destroyed: deleting a live QThread aborts the
+        # process. No-op on picasso 0.11 (synchronous, no such threads).
+        self._stop_window_workers()
         if self._embedded_view is not None:
             self.canvas_layout.removeWidget(self._embedded_view)
             self._embedded_view.setParent(None)
