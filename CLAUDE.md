@@ -36,7 +36,7 @@ Dev branch is `develop`; release path is `develop` → `master` (tag on `master`
 
 ```bash
 # Install (core; pulls picassosr and the PyQt6 GUI deps). Do this in a
-# python>=3.10 env (README recommends a conda env named picasso-workflow).
+# python>=3.11 env (README recommends a conda env named picasso-workflow).
 pip install -e .
 pip install -e ".[cluster]"    # adds mpi4py for the MPI aggregation path
 

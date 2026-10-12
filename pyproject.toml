@@ -7,7 +7,7 @@ dynamic= ["version"]
 name = "picasso_workflow"
 description = "Automation and documentation of DNA-PAINT analysis workflows"
 license = {'file' = "LICENSE"}
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 dependencies = [
     "matplotlib",
     "seaborn",
@@ -16,7 +16,7 @@ dependencies = [
     "tables",
     "numba",
     "openpyxl==3.1.2",
-    "picassosr>=0.11.1",
+    "picassosr>=0.12.0a3",
     # GUI uses PyQt6 directly; keep in sync with picasso's constraint
     "PyQt6>=6.10.2,<7",
     # Embedded HTML report viewer in the GUI Results tab (QWebEngineView);
@@ -104,7 +104,7 @@ fallback_version = "0.3.3.dev0"
 picasso_workflow = ["picasso-workflow.ico"]
 
 [tool.black]
-target-version = ["py310"]
+target-version = ["py311"]
 line-length = 79
 include = "\\.pyi?$"
 exclude = '''
