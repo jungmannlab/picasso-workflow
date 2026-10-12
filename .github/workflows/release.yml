@@ -12,13 +12,6 @@ on:
   push:
     tags:
       - 'v*'
-    # TEMPORARY (remove before merging to master): lets this scaffold be
-    # dry-run from its feature branch. workflow_dispatch only works once the
-    # workflow is on the default branch, so a scoped push trigger is used to
-    # prove the native build first. The release-attach step stays guarded to
-    # tags, so a branch push only uploads artifacts -- it never publishes.
-    branches:
-      - feature/one-click-installer
   workflow_dispatch:
 
 jobs:
