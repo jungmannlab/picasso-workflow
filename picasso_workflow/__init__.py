@@ -16,6 +16,12 @@ from picasso_workflow.workflow import WorkflowRunner, AggregationWorkflowRunner
 from picasso_workflow import standard_singledataset_workflows
 from picasso_workflow import standard_aggregation_workflows
 
+# Runtime diagnostics captured during import (logging destination, .env and
+# config.yaml sources). Populated by config_logger() / _log_dotenv() /
+# load_config() below and surfaced read-only by the GUI "Doctor" tab; holds
+# no secret values.
+DIAGNOSTICS: dict = {}
+
 
 # configure logger
 def config_logger():
@@ -77,6 +83,15 @@ def config_logger():
         level="ERROR",
     )
     logger.info(f"picasso-workflow log file: {logfile}")
+    DIAGNOSTICS["logging"] = {
+        "logfile": logfile,
+        "log_dir": str(log_dir),
+        "rotation": "1 MB",
+        "retention": 5,
+        "file_level": "DEBUG",
+        "stderr_level": "ERROR",
+        "slurm": job_id is not None,
+    }
 
 
 def _deep_merge(base: dict, override: dict) -> dict:
@@ -162,6 +177,15 @@ def _log_dotenv():
             "No .env file found by python-dotenv "
             f"(searched upward from {Path(__file__).parent})."
         )
+    # record the source and the keys it defines (never the values) for the
+    # Doctor tab
+    keys = []
+    if dotenv_path:
+        try:
+            keys = sorted(dotenv_values(dotenv_path).keys())
+        except OSError:
+            pass
+    DIAGNOSTICS["dotenv"] = {"path": dotenv_path or None, "keys": keys}
     return dotenv_path
 
 
@@ -176,6 +200,7 @@ def load_config():
                                   or /etc/picasso_workflow/config.yaml)
       3. Per-user config         (~/.config/picasso_workflow/config.yaml)
     """
+    sources = []  # (layer, path, loaded) for the Doctor tab
     # 1. Package default
     try:
         pkg_config = importlib.resources.files("picasso_workflow").joinpath(
@@ -188,8 +213,10 @@ def load_config():
             f"{yaml.safe_dump(pkg_data, sort_keys=False)}"
         )
         config = pkg_data
+        sources.append(("bundled", str(pkg_config), True))
     except (FileNotFoundError, TypeError) as exc:
         logger.warning(f"No bundled config.yaml available ({exc!r}).")
+        sources.append(("bundled", "<package resource>", False))
         # template = importlib.resources.files("picasso_workflow").joinpath(
         #     "config_template.yaml"
         # )
@@ -206,8 +233,10 @@ def load_config():
             f"{yaml.safe_dump(site_data, sort_keys=False)}"
         )
         config = _deep_merge(config, site_data)
+        sources.append(("site-wide", str(site_config), True))
     else:
         logger.debug(f"No site-wide config.yaml at {site_config} (skipped).")
+        sources.append(("site-wide", str(site_config), False))
 
     # 3. Per-user config (optional)
     user_config = Path.home() / ".config" / "picasso_workflow" / "config.yaml"
@@ -219,9 +248,12 @@ def load_config():
             f"{yaml.safe_dump(user_data, sort_keys=False)}"
         )
         config = _deep_merge(config, user_data)
+        sources.append(("per-user", str(user_config), True))
     else:
         logger.debug(f"No per-user config.yaml at {user_config} (skipped).")
+        sources.append(("per-user", str(user_config), False))
 
+    DIAGNOSTICS["config_sources"] = sources
     return config
 
 

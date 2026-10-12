@@ -12,6 +12,22 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Added
 
+- **"Doctor" tab: read-only diagnostics for the running GUI.** A new tab
+  (right of *Render*) surfaces, at a glance, state that otherwise only lives
+  in the logfile: which `config.yaml` layers loaded and from where (bundled →
+  site-wide → per-user), which `.env` was picked up (and the keys it defines,
+  never the values), where the log is written, the picasso-workflow / picasso
+  / Python / platform versions, whether we are on a SLURM node, and -- per
+  Confluence profile (`Confluence`, `ConfluenceTest`) -- the resolved
+  non-secret connection settings plus whether a token is set. **Secrets are
+  shown as presence only ("set" / "not set"), never their value.** Everything
+  passive is gathered without side effects; each profile also has an opt-in
+  *Test connection* button that makes a single authenticated Confluence
+  request on a background thread (so the GUI never blocks) and reports
+  OK / warning / failure -- no network call is made just by opening the tab.
+  Backed by a new `picasso_workflow.DIAGNOSTICS` dict populated during import
+  (config/.env/log sources) and `picasso_workflow/doctor_tab.py`.
+
 - **"Render" tab: explore a run's localizations with picasso Render.** A new
   tab (right of *Results*) lists the localization files a run saved (one
   entry per `*.hdf5` under its module folders, discovered by scanning the
