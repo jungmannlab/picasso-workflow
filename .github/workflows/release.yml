@@ -139,6 +139,13 @@ jobs:
           print("stamped version:", os.environ["PW_VERSION"], "wheel:", wheel)
           PY
 
+      # Cross-building the Intel (osx-64) installer runs the bundled x86_64
+      # conda-standalone at build time, which needs Rosetta 2 on the arm64
+      # runner. Harmless on Apple Silicon; not run on Windows.
+      - name: Install Rosetta 2 (for the Intel cross-build)
+        if: runner.os == 'macOS'
+        run: sudo softwareupdate --install-rosetta --agree-to-license
+
       - name: Build installer(s) with constructor
         shell: bash -el {0}
         run: |
