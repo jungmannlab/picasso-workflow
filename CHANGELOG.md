@@ -10,6 +10,18 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Wheel installs crashed on startup with `KeyError: 'Templates'`.** The
+  bundled `config.yaml` is gitignored (site-specific / secrets) and so is
+  never shipped in the wheel; `load_config`'s fallback to
+  `config_template.yaml` was commented out, leaving `CONFIG = {}` and the GUI
+  dying at `CONFIG["Templates"]`. The tracked `config_template.yaml` /
+  `.env_template` are now packaged (`[tool.setuptools.package-data]`) and
+  `load_config` falls back to the template when no `config.yaml` is present,
+  so a fresh one-click / `pip install` from a wheel starts with working
+  defaults. Only surfaced in non-editable installs (the one-click installer).
+
 ### Added
 
 - **One-click installers for Windows + macOS (scaffold).** A new `release/`

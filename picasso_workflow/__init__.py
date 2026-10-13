@@ -215,13 +215,29 @@ def load_config():
         config = pkg_data
         sources.append(("bundled", str(pkg_config), True))
     except (FileNotFoundError, TypeError) as exc:
-        logger.warning(f"No bundled config.yaml available ({exc!r}).")
-        sources.append(("bundled", "<package resource>", False))
-        # template = importlib.resources.files("picasso_workflow").joinpath(
-        #     "config_template.yaml"
-        # )
-        # config = _load_yaml(template)
-        config = {}
+        # No config.yaml next to the package (the normal case for a wheel
+        # install -- config.yaml is gitignored and never shipped). Fall back to
+        # the bundled config_template.yaml so defaults like "Templates" exist;
+        # real deployments still override via the site / per-user layers below.
+        logger.warning(
+            f"No bundled config.yaml available ({exc!r}); "
+            "falling back to config_template.yaml."
+        )
+        try:
+            template = importlib.resources.files("picasso_workflow").joinpath(
+                "config_template.yaml"
+            )
+            config = _load_yaml(template)
+            logger.info(
+                f"Loaded bundled config_template.yaml from: {template}"
+            )
+            sources.append(("bundled-template", str(template), True))
+        except (FileNotFoundError, TypeError) as exc2:
+            logger.warning(
+                f"No bundled config_template.yaml either ({exc2!r})."
+            )
+            config = {}
+            sources.append(("bundled", "<package resource>", False))
 
     # 2. Site-wide admin config (optional)
     site_config = _site_config_path()
