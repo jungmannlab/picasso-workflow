@@ -101,7 +101,16 @@ write_to = "picasso_workflow/_version.py"
 fallback_version = "0.3.3.dev0"
 
 [tool.setuptools.package-data]
-picasso_workflow = ["picasso-workflow.ico"]
+# config.yaml and .env are gitignored (site-specific / secrets), so they are
+# absent from a clean checkout and cannot be shipped. The tracked *_template
+# files are bundled instead and serve as the built-in defaults for a wheel
+# install (load_config falls back to config_template.yaml when no config.yaml
+# is present -- see picasso_workflow/__init__.py).
+picasso_workflow = [
+    "picasso-workflow.ico",
+    "config_template.yaml",
+    ".env_template",
+]
 
 [tool.black]
 target-version = ["py311"]

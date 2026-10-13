@@ -10832,6 +10832,242 @@ class PhaseSpacePreviewDialog(QtWidgets.QDialog):
         self.accept()
 
 
+class GettingStartedDialog(QtWidgets.QDialog):
+    """First-run onboarding: explains where settings live and how to begin.
+
+    Shown automatically on first launch (a fresh install runs on built-in
+    default settings, which otherwise leaves a new user with no obvious next
+    step). Reopenable from the Help menu.
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Getting started with picasso-workflow")
+        self.setMinimumWidth(560)
+        layout = QtWidgets.QVBoxLayout(self)
+
+        cfg = self.user_config_path()
+        text = QtWidgets.QLabel(
+            "<h3>Welcome to picasso-workflow</h3>"
+            "<p>You're running with built-in <b>default settings</b>. To do "
+            "real work you'll want your own configuration.</p>"
+            "<p><b>Where settings live.</b> picasso-workflow reads a per-user "
+            "config file:<br><code>"
+            f"{cfg}</code><br>"
+            "Create and edit it to set your workflow <i>templates</i> and "
+            "(optionally) Confluence reporting. It overrides the built-in "
+            "defaults — you never edit the installed app itself.</p>"
+            "<p><b>Good to know.</b> The <b>Doctor</b> tab (top-right) shows "
+            "which config and <code>.env</code> files are loaded and from "
+            "where, so you can confirm your settings took effect.</p>"
+            "<p><b>First steps</b></p>"
+            "<ol>"
+            "<li>Create your settings file (button below) and edit it.</li>"
+            "<li>Pick a <b>Results Folder</b> at the top of the window.</li>"
+            "<li>Load a template or build a workflow, then <b>Run</b>.</li>"
+            "</ol>"
+        )
+        text.setTextFormat(Qt.TextFormat.RichText)
+        text.setWordWrap(True)
+        text.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextBrowserInteraction
+        )
+        layout.addWidget(text)
+
+        layout.addWidget(self._build_confluence_group())
+
+        btns = QtWidgets.QHBoxLayout()
+        create_btn = QtWidgets.QPushButton("Create my settings file…")
+        create_btn.clicked.connect(lambda: self.open_user_config(self))
+        btns.addWidget(create_btn)
+        btns.addStretch(1)
+        self.dont_show = QtWidgets.QCheckBox("Don't show this again")
+        self.dont_show.setChecked(True)
+        btns.addWidget(self.dont_show)
+        close_btn = QtWidgets.QPushButton("Close")
+        close_btn.clicked.connect(self.accept)
+        close_btn.setDefault(True)
+        btns.addWidget(close_btn)
+        layout.addLayout(btns)
+
+    def _build_confluence_group(self):
+        """Optional Confluence token entry, persisted to the per-user .env."""
+        box = QtWidgets.QGroupBox("Confluence reporting (optional)")
+        v = QtWidgets.QVBoxLayout(box)
+
+        info = QtWidgets.QLabel(
+            "To publish reports to Confluence, picasso-workflow needs a "
+            "personal access token in the <code>CONFLUENCE_TOKEN</code> "
+            "environment variable.<br>"
+            "<b>Get one:</b> in Confluence, open your profile → "
+            "<i>Settings → Personal Access Tokens</i> (Server/Data Center) or "
+            "<i>id.atlassian.com → Security → API tokens</i> (Cloud), create a "
+            "token, and paste it below.<br>"
+            "It is saved to your per-user <code>.env</code> and loaded on every "
+            "launch — never written to <code>config.yaml</code> or the logs."
+        )
+        info.setTextFormat(Qt.TextFormat.RichText)
+        info.setWordWrap(True)
+        info.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextBrowserInteraction
+        )
+        v.addWidget(info)
+
+        row = QtWidgets.QHBoxLayout()
+        self._token_edit = QtWidgets.QLineEdit()
+        self._token_edit.setEchoMode(QtWidgets.QLineEdit.EchoMode.Password)
+        self._token_edit.setPlaceholderText("paste your Confluence token")
+        row.addWidget(self._token_edit, 1)
+        show = QtWidgets.QCheckBox("Show")
+        show.toggled.connect(
+            lambda on: self._token_edit.setEchoMode(
+                QtWidgets.QLineEdit.EchoMode.Normal
+                if on
+                else QtWidgets.QLineEdit.EchoMode.Password
+            )
+        )
+        row.addWidget(show)
+        save = QtWidgets.QPushButton("Save token")
+        save.clicked.connect(self._save_token)
+        row.addWidget(save)
+        v.addLayout(row)
+
+        self._token_status = QtWidgets.QLabel()
+        self._refresh_token_status()
+        v.addWidget(self._token_status)
+        return box
+
+    @staticmethod
+    def _token_env_names():
+        """The Confluence token env vars, from confluence.py's single source."""
+        try:
+            from picasso_workflow.confluence import _CONFLUENCE_PROFILES
+
+            return _CONFLUENCE_PROFILES["Confluence"]["token_env"]
+        except Exception:  # pragma: no cover - defensive fallback
+            return ("CONFLUENCE_TOKEN", "CONFLUENCE_BEARER")
+
+    def _refresh_token_status(self):
+        is_set = any(os.environ.get(name) for name in self._token_env_names())
+        self._token_status.setText(
+            "A Confluence token is currently set."
+            if is_set
+            else "No Confluence token is set yet."
+        )
+
+    def _save_token(self):
+        token = self._token_edit.text().strip()
+        if not token:
+            QtWidgets.QMessageBox.information(
+                self, "No token", "Paste a token first, then click Save."
+            )
+            return
+        ok, message = self.save_confluence_token(token)
+        if ok:
+            self._token_edit.clear()
+            self._refresh_token_status()
+            QtWidgets.QMessageBox.information(self, "Token saved", message)
+        else:
+            QtWidgets.QMessageBox.warning(
+                self, "Could not save token", message
+            )
+
+    @staticmethod
+    def _config_dir():
+        from picasso_workflow import _user_config_dir
+
+        return _user_config_dir()
+
+    @staticmethod
+    def env_path():
+        return GettingStartedDialog._config_dir() / ".env"
+
+    @staticmethod
+    def save_confluence_token(token):
+        """Persist ``token`` as the Confluence token in the per-user .env.
+
+        Writes to ``~/.config/picasso_workflow/.env`` (loaded at every launch),
+        tightens its permissions, and sets the variable in the current process
+        so it takes effect immediately. The token value is never logged.
+        Returns ``(ok, message)``.
+        """
+        from dotenv import set_key
+
+        canonical = GettingStartedDialog._token_env_names()[0]
+        try:
+            env = GettingStartedDialog.env_path()
+            env.parent.mkdir(parents=True, exist_ok=True)
+            env.touch(exist_ok=True)
+            try:
+                os.chmod(env, 0o600)
+            except OSError:
+                pass  # best-effort (e.g. Windows)
+            set_key(str(env), canonical, token)
+            os.environ[canonical] = token  # effective this session
+        except Exception as e:
+            return False, str(e)
+        return True, f"Saved to {env}. It will be used on every launch."
+
+    @staticmethod
+    def user_config_path():
+        return GettingStartedDialog._config_dir() / "config.yaml"
+
+    @staticmethod
+    def marker_path():
+        return GettingStartedDialog._config_dir() / ".getting_started_shown"
+
+    @staticmethod
+    def open_user_config(parent=None):
+        """Seed the per-user config from the bundled template, then open it."""
+        import importlib.resources
+
+        cfg = GettingStartedDialog.user_config_path()
+        try:
+            cfg.parent.mkdir(parents=True, exist_ok=True)
+            if not cfg.exists():
+                tmpl = importlib.resources.files("picasso_workflow").joinpath(
+                    "config_template.yaml"
+                )
+                cfg.write_text(
+                    tmpl.read_text(encoding="utf-8"), encoding="utf-8"
+                )
+            QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(str(cfg)))
+        except Exception as e:
+            QtWidgets.QMessageBox.warning(
+                parent, "Could not create the settings file", str(e)
+            )
+
+    def accept(self):
+        if self.dont_show.isChecked():
+            try:
+                m = self.marker_path()
+                m.parent.mkdir(parents=True, exist_ok=True)
+                m.write_text("1", encoding="utf-8")
+            except Exception:
+                pass
+        super().accept()
+
+
+class _UpdateCheckWorker(QtCore.QObject):
+    """Runs the GitHub "is there a newer release?" check off the GUI thread."""
+
+    # Emits an update_check.UpdateInfo if a newer release exists, else None.
+    finished = QtCore.pyqtSignal(object)
+
+    def __init__(self, current_version: str) -> None:
+        super().__init__()
+        self._current_version = current_version
+
+    def run(self) -> None:
+        try:
+            from picasso_workflow.update_check import check_for_update
+
+            result = check_for_update(self._current_version)
+        except Exception:  # pragma: no cover - defensive; must never raise
+            result = None
+        self.finished.emit(result)
+
+
 class Window(QtWidgets.QMainWindow):
     """Main window for the picasso-workflow GUI application."""
 
@@ -10876,7 +11112,9 @@ class Window(QtWidgets.QMainWindow):
 
         workflow_template_combo = QtWidgets.QComboBox()
         workflow_template_combo.addItem("")
-        for template in CONFIG["Templates"].keys():
+        # Tolerate a missing / null / non-dict "Templates" in a user-edited
+        # config.yaml (same defensiveness as _refresh_template_combo).
+        for template in (CONFIG.get("Templates") or {}).keys():
             workflow_template_combo.addItem(template)
         workflow_template_combo.setEditable(False)
         workflow_template_combo.currentTextChanged.connect(
@@ -10884,6 +11122,9 @@ class Window(QtWidgets.QMainWindow):
         )
         workflow_template_combo.setToolTip("Load a template workflow")
         layout.addWidget(workflow_template_combo, 0, 0)
+        # kept as an attribute so it can be repopulated after a live config
+        # reload (Getting Started dialog / Help -> Reload settings).
+        self.workflow_template_combo = workflow_template_combo
         # Results folder selection
         results_folder_button = QtWidgets.QPushButton("Results Folder")
         results_folder_button.setToolTip(
@@ -10925,9 +11166,15 @@ class Window(QtWidgets.QMainWindow):
         )
         layout.addWidget(self.workflow_type, 0, 4)
 
+        # Update-available banner (hidden until the background check finds a
+        # newer release). Sits between the top controls and the tabs; takes no
+        # space while hidden.
+        self.update_banner = self._build_update_banner()
+        layout.addWidget(self.update_banner, 1, 0, 1, 5)
+
         # Create tab widget
         self.tabs = QtWidgets.QTabWidget()
-        layout.addWidget(self.tabs, 1, 0, 1, 5)
+        layout.addWidget(self.tabs, 2, 0, 1, 5)
 
         # Workflow Config tab
         config_tab = QtWidgets.QWidget()
@@ -11433,6 +11680,25 @@ class Window(QtWidgets.QMainWindow):
         self.tabs.addTab(self.doctor_tab, "Doctor")
         # refresh the render tab's run list when it is first shown / selected
         self.tabs.currentChanged.connect(self._on_main_tab_changed)
+
+        # Check (off-thread) whether a newer release is on GitHub; reveals the
+        # update banner if so. Fully passive and fail-soft -- never blocks
+        # startup or shows anything when offline / up to date.
+        self._update_thread = None
+        self._start_update_check()
+
+        # Help menu: re-openable onboarding + a shortcut to the settings file.
+        help_menu = self.menuBar().addMenu("Help")
+        help_menu.addAction("Getting Started…", self._show_getting_started)
+        help_menu.addAction(
+            "Open settings file…",
+            lambda: GettingStartedDialog.open_user_config(self),
+        )
+        help_menu.addAction(
+            "Reload settings file", self._reload_config_into_ui
+        )
+        # On first launch, show the onboarding guide once the window is up.
+        QtCore.QTimer.singleShot(0, self._maybe_show_getting_started)
 
         # select files to process
         # Single Workflow only: choose how input data is provided - an
@@ -13229,9 +13495,155 @@ class Window(QtWidgets.QMainWindow):
         self.files_table.setRowCount(0)
         self._log_workflow_config_event("files_table.clear")
 
-    # ------------------------------------------------------------------
-    # Results tab: HTML report viewer
-    # ------------------------------------------------------------------
+    # -- update-available banner -------------------------------------------
+
+    def _build_update_banner(self):
+        """Return the (initially hidden) "new version available" banner."""
+        banner = QtWidgets.QFrame()
+        banner.setStyleSheet(
+            "QFrame { background: #fff8e1; border: 1px solid #f0c000; "
+            "border-radius: 4px; }"
+        )
+        banner.setVisible(False)
+        row = QtWidgets.QHBoxLayout(banner)
+        row.setContentsMargins(8, 4, 8, 4)
+
+        self._update_banner_label = QtWidgets.QLabel()
+        self._update_banner_label.setTextFormat(Qt.TextFormat.RichText)
+        self._update_banner_label.setOpenExternalLinks(True)
+        self._update_banner_label.setStyleSheet("border: none;")
+        row.addWidget(self._update_banner_label, 1)
+
+        dismiss = QtWidgets.QPushButton("Dismiss")
+        dismiss.setStyleSheet("border: none;")
+        dismiss.clicked.connect(lambda: banner.setVisible(False))
+        row.addWidget(dismiss, 0)
+        return banner
+
+    def _start_update_check(self):
+        """Kick off the GitHub release check on a background thread.
+
+        Skipped in headless/test runs (``QT_QPA_PLATFORM=offscreen``) and when
+        the user opts out via ``PICASSO_WORKFLOW_NO_UPDATE_CHECK`` -- a network
+        thread spun up during construction would otherwise be torn down while
+        still blocked on the socket (QThread "destroyed while running" abort).
+        """
+        if os.environ.get("QT_QPA_PLATFORM") == "offscreen" or os.environ.get(
+            "PICASSO_WORKFLOW_NO_UPDATE_CHECK"
+        ):
+            return
+        try:
+            worker = _UpdateCheckWorker(__GUIVERSION__)
+            thread = QtCore.QThread(self)
+            worker.moveToThread(thread)
+            # Keep the worker alive for the thread's lifetime; otherwise PyQt
+            # may garbage-collect it before ``started`` fires (see doctor_tab).
+            thread._pw_worker = worker
+            thread.started.connect(worker.run)
+            worker.finished.connect(self._on_update_check_result)
+            worker.finished.connect(thread.quit)
+            worker.finished.connect(worker.deleteLater)
+            thread.finished.connect(thread.deleteLater)
+            thread.finished.connect(self._forget_update_thread)
+            self._update_thread = thread
+            app = QtWidgets.QApplication.instance()
+            if app is not None:
+                app.aboutToQuit.connect(self._stop_update_thread)
+            thread.start()
+        except Exception as e:  # pragma: no cover - defensive
+            logger.debug(f"Could not start the update check: {e}")
+
+    def _on_update_check_result(self, info):
+        """Reveal the banner if ``info`` is an UpdateInfo, else do nothing."""
+        if info is None:
+            return
+        try:
+            self._update_banner_label.setText(
+                f"A new version of picasso-workflow "
+                f"(<b>{info.latest}</b>) is available &mdash; "
+                f'<a href="{info.url}">download it here</a>.'
+            )
+            self.update_banner.setVisible(True)
+        except Exception as e:  # pragma: no cover - defensive
+            logger.debug(f"Could not show the update banner: {e}")
+
+    def _forget_update_thread(self):
+        self._update_thread = None
+
+    def _stop_update_thread(self):
+        """Quit/join the update-check thread on shutdown (destroying a live
+        QThread aborts the process).
+
+        Clears the reference first so closeEvent and aboutToQuit (which both
+        call this) can't double-join, and tolerates the thread's C++ object
+        already being torn down after normal completion.
+        """
+        thread = getattr(self, "_update_thread", None)
+        self._update_thread = None
+        if thread is None:
+            return
+        try:
+            thread.quit()
+            thread.wait()
+        except RuntimeError:
+            # The QThread already finished and was deleteLater'd -- nothing to
+            # join.
+            pass
+
+    def closeEvent(self, event):
+        """Join the update-check thread before the window is destroyed."""
+        self._stop_update_thread()
+        super().closeEvent(event)
+
+    # -- getting-started onboarding ----------------------------------------
+
+    def _maybe_show_getting_started(self):
+        """Show the onboarding guide on first launch only (fail-soft)."""
+        # Skip in headless/test runs so the modal dialog can't hang the suite.
+        if os.environ.get("QT_QPA_PLATFORM") == "offscreen":
+            return
+        try:
+            if GettingStartedDialog.marker_path().exists():
+                return
+        except Exception:
+            return
+        self._show_getting_started()
+
+    def _show_getting_started(self):
+        try:
+            GettingStartedDialog(self).exec()
+        except Exception as e:  # pragma: no cover - defensive
+            logger.debug(f"Getting Started dialog failed: {e}")
+            return
+        # Pick up a config the user just created/edited without a restart.
+        self._reload_config_into_ui()
+
+    def _reload_config_into_ui(self):
+        """Re-read the config files and refresh config-driven widgets."""
+        try:
+            from picasso_workflow import reload_config
+
+            reload_config()
+        except Exception as e:  # pragma: no cover - defensive
+            logger.debug(f"Could not reload config: {e}")
+            return
+        self._refresh_template_combo()
+
+    def _refresh_template_combo(self):
+        """Repopulate the template dropdown from the (reloaded) CONFIG."""
+        combo = getattr(self, "workflow_template_combo", None)
+        if combo is None:
+            return
+        current = combo.currentText()
+        combo.blockSignals(True)
+        combo.clear()
+        combo.addItem("")
+        for template in (CONFIG.get("Templates") or {}).keys():
+            combo.addItem(template)
+        idx = combo.findText(current)
+        combo.setCurrentIndex(idx if idx >= 0 else 0)
+        combo.blockSignals(False)
+
     def _on_main_tab_changed(self, index):
         """Refresh the Render / Doctor tabs when they are shown."""
         widget = self.tabs.widget(index)
@@ -13246,6 +13658,9 @@ class Window(QtWidgets.QMainWindow):
             except Exception as e:
                 logger.debug(f"Could not refresh the Doctor tab: {e}")
 
+    # ------------------------------------------------------------------
+    # Results tab: HTML report viewer
+    # ------------------------------------------------------------------
     def _build_results_tab(self, results_tab):
         """Populate the Results tab with the HTML report viewer.
 
@@ -13554,7 +13969,7 @@ class Window(QtWidgets.QMainWindow):
     def on_template_changed(self, template_name):
         """Load a template"""
         try:
-            template_path = CONFIG["Templates"][template_name]
+            template_path = (CONFIG.get("Templates") or {})[template_name]
             if template_path[:2] == 'r"' or template_path[:2] == "r'":
                 template_path = template_path[2:-1]
 

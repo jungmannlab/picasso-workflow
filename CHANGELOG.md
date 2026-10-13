@@ -17,7 +17,51 @@ This file was started after v0.5.6; earlier history is in the git log.
   (picasso 0.12 line, requires 3.11) — supersedes the temporary B7 git-pin
   bridge.
 
+### Fixed
+
+- **Hardened config loading and onboarding (code-review follow-ups).** A typo in a hand-edited `config.yaml` (which the onboarding dialog invites users to edit) now degrades to a skipped layer with a warning instead of crashing `import picasso_workflow`; the startup template dropdown tolerates a null/missing `Templates`; the per-user `.env` fills an *empty* `CONFLUENCE_TOKEN` (not just an unset one); the macOS `post_install` no longer aborts under `set -e` if `stat`/`id` fail; the update check still nudges when the running version is `"unknown"`; the update-check thread shutdown is reentrancy-safe; and the per-user config dir + Confluence token env-var names now come from single sources (`_user_config_dir()`, `confluence._CONFLUENCE_PROFILES`).
+- **Wheel installs crashed on startup with `KeyError: 'Templates'`.** The
+  bundled `config.yaml` is gitignored (site-specific / secrets) and so is
+  never shipped in the wheel; `load_config`'s fallback to
+  `config_template.yaml` was commented out, leaving `CONFIG = {}` and the GUI
+  dying at `CONFIG["Templates"]`. The tracked `config_template.yaml` /
+  `.env_template` are now packaged (`[tool.setuptools.package-data]`) and
+  `load_config` falls back to the template when no `config.yaml` is present,
+  so a fresh one-click / `pip install` from a wheel starts with working
+  defaults. Only surfaced in non-editable installs (the one-click installer).
+
 ### Added
+
+- **Set the Confluence token from the onboarding dialog.** The Getting Started dialog has an optional field to paste a Confluence personal access token (with how-to-get-it guidance and a show/hide toggle). It is persisted to the per-user `~/.config/picasso_workflow/.env` (chmod 600) as `CONFLUENCE_TOKEN` and set in the current process, so Confluence reporting / the Doctor tab's connection test work immediately and on every later launch (a new per-user `.env` is now loaded at startup). The token value is never written to `config.yaml` or the logs.
+- **Live config reload (no restart).** `reload_config()` re-reads the config.yaml layers and updates `CONFIG` in place; the GUI reloads and refreshes the template dropdown when the Getting Started dialog closes (and via Help → Reload settings file), so a config you just created/edited takes effect without restarting.
+- **First-run "Getting started" onboarding dialog.** A fresh install runs on built-in default settings, which left new users with no obvious next step. The GUI now shows a one-time guide explaining where the per-user config file lives (`~/.config/picasso_workflow/config.yaml`), that it overrides the bundled defaults, and the first steps to take; a button seeds that file from the template and opens it. Re-openable from a new **Help** menu (“Getting Started…” / “Open settings file…”). Dismissal is remembered via a marker in the config dir.
+- **macOS installer pinned to Apple Silicon.** Built on `macos-14` (arm64). Intel Macs are not targeted (GitHub's Intel runners are retired and cross-building osx-64 proved unreliable); Intel users install the classic `pip` way.
+- **macOS installer registers a Spotlight-launchable app.** `post_install`
+  now builds a `picasso-workflow.app` in `~/Applications` (per-user, no
+  admin), so the GUI launches from Spotlight (⌘-Space) and the Applications
+  folder; CI builds the `.icns` from the same GUI `.ico`.
+- **One-click installers for Windows + macOS (scaffold).** A new `release/`
+  directory builds friendly, no-Python-required installers with `constructor`
+  against the **conda-forge** channel only (the Miniforge approach) -- so the
+  installer carries no Anaconda commercial Terms of Service and is free to
+  redistribute. The base env is a minimal conda-forge Python; `post_install`
+  pip-installs the bundled `picasso_workflow` wheel (pulling `picassosr`,
+  PyQt6, PyQt6-WebEngine, numba, ... from PyPI wheels). The Windows installer
+  is **per-user** (`%LOCALAPPDATA%`, no admin, HKCU only), so multiple users on
+  one machine can install and run simultaneously without colliding.
+  `.github/workflows/release.yml` builds both installers on every `vX.Y.Z` tag
+  and attaches them to the GitHub Release. Installers are unsigned for now
+  (one-time SmartScreen/Gatekeeper prompt). See `release/README.md`. *Not yet
+  proven on a real Windows/macOS build -- the first tagged CI run is the
+  proving ground.*
+
+- **GUI: "update available" banner.** On startup the GUI checks the GitHub
+  Releases API (off the UI thread) and, if a newer release exists, shows a
+  dismissible banner above the tabs linking to the download. Fully fail-soft
+  (offline / rate-limited / up-to-date shows nothing) and skipped in headless
+  runs (`QT_QPA_PLATFORM=offscreen`) or when
+  `PICASSO_WORKFLOW_NO_UPDATE_CHECK` is set. Logic in
+  `picasso_workflow/update_check.py` (unit-tested with mocked HTTP).
 
 - **"Doctor" tab: read-only diagnostics for the running GUI.** A new tab
   (right of *Render*) surfaces, at a glance, state that otherwise only lives
