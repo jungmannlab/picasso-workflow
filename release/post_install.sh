@@ -27,12 +27,26 @@ exec "$PREFIX/bin/picasso-workflow-gui"
 EOF
 chmod +x "$LAUNCHER"
 
-# macOS: also install a .app into ~/Applications so the GUI is launchable from
-# Spotlight (Cmd+Space) and the Applications folder, like a normal Mac app.
-# Per-user (~/Applications needs no admin) and Spotlight-indexed. The bundle is
-# created on-device, so it is not quarantined and Gatekeeper does not block it.
+# macOS: also install a .app into the user's ~/Applications so the GUI is
+# launchable from Spotlight (Cmd+Space) and the Applications folder, like a
+# normal Mac app. Spotlight-indexed; created on-device so it is not quarantined
+# and Gatekeeper does not block it.
 if [ "$(uname)" = "Darwin" ]; then
-    APP="$HOME/Applications/picasso-workflow.app"
+    # Resolve the REAL user's home. A .pkg postinstall runs as root with
+    # HOME=/var/root, so $HOME would put the app in root's home (invisible to
+    # the user). Fall back to the console (logged-in) user in that case. The
+    # .sh installer runs as the user, so $HOME is already correct there.
+    if [ "$(id -u)" = "0" ]; then
+        REAL_USER=$(stat -f%Su /dev/console 2>/dev/null)
+        [ -z "$REAL_USER" ] && REAL_USER="${SUDO_USER:-${USER:-root}}"
+    else
+        REAL_USER=$(id -un)
+    fi
+    REAL_HOME=$(dscl . -read "/Users/$REAL_USER" NFSHomeDirectory 2>/dev/null \
+        | awk '{print $2}')
+    [ -z "$REAL_HOME" ] && REAL_HOME="$HOME"
+
+    APP="$REAL_HOME/Applications/picasso-workflow.app"
     rm -rf "$APP"
     mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
@@ -63,6 +77,13 @@ EOF
 </dict>
 </plist>
 EOF
+
+    # If we ran as root (.pkg), hand the app to the real user so it is theirs
+    # and shows up for them.
+    if [ "$(id -u)" = "0" ] && [ "$REAL_USER" != "root" ]; then
+        chown -R "$REAL_USER" "$REAL_HOME/Applications/picasso-workflow.app" \
+            2>/dev/null || true
+    fi
 
     # Nudge LaunchServices/Spotlight to index it immediately.
     lsreg="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"

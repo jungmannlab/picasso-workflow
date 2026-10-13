@@ -139,7 +139,7 @@ jobs:
       - name: Upload installer artifact
         uses: actions/upload-artifact@v4
         with:
-          name: installer-${{ matrix.os }}
+          name: picasso-workflow-${{ env.PW_VERSION }}-${{ matrix.os }}
           path: release/dist/*
 
       # Attach to the GitHub Release only for real tag pushes.
