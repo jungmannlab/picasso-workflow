@@ -62,6 +62,9 @@ register_python_default: false
 # build time (CI builds it into release/wheels/) -- see release.yml.
 extra_files:
   - wheels/@WHEEL@
+  # macOS app-bundle icon (CI builds it from the GUI .ico). [osx] only so the
+  # Windows build -- which never generates it -- doesn't look for it.
+  - picasso-workflow.icns      # [osx]
 
 post_install: post_install.sh      # [osx]
 post_install: post_install.bat     # [win]

@@ -24,6 +24,10 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Added
 
+- **macOS installer registers a Spotlight-launchable app.** `post_install`
+  now builds a `picasso-workflow.app` in `~/Applications` (per-user, no
+  admin), so the GUI launches from Spotlight (⌘-Space) and the Applications
+  folder; CI builds the `.icns` from the same GUI `.ico`.
 - **One-click installers for Windows + macOS (scaffold).** A new `release/`
   directory builds friendly, no-Python-required installers with `constructor`
   against the **conda-forge** channel only (the Miniforge approach) -- so the

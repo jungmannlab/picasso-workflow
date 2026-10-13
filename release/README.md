@@ -35,6 +35,16 @@ wheels (the same pins that `pip install -e .` already uses).
 - `wheels/` — the `picasso_workflow` wheel is staged here at build time
   (git-ignored; CI builds it).
 
+### How it launches
+
+- **Windows:** per-user Start Menu + Desktop shortcuts (created by
+  `post_install.bat`).
+- **macOS:** `post_install.sh` builds a `picasso-workflow.app` in
+  `~/Applications`, so it launches from **Spotlight (⌘-Space)** and the
+  Applications folder like a normal Mac app. The bundle is created on-device
+  (not downloaded), so Gatekeeper does not block it. A
+  `Launch picasso-workflow.command` in the install folder is kept as a fallback.
+
 ### Per-user, multi-user (Windows)
 
 The recipe installs **per user** under `%LOCALAPPDATA%\picasso-workflow` with no

@@ -84,6 +84,18 @@ jobs:
           im.convert("RGBA").save("release/picasso-workflow.png")
           print("wrote release/picasso-workflow.png", im.size)
           PY
+          # Also build a multi-size .icns for the ~/Applications .app bundle
+          # (post_install.sh installs it so the GUI is Spotlight-launchable).
+          iconset="$RUNNER_TEMP/picasso.iconset"
+          mkdir -p "$iconset"
+          for s in 16 32 128 256 512; do
+            sips -z $s $s release/picasso-workflow.png \
+              --out "$iconset/icon_${s}x${s}.png" >/dev/null
+            sips -z $((s*2)) $((s*2)) release/picasso-workflow.png \
+              --out "$iconset/icon_${s}x${s}@2x.png" >/dev/null
+          done
+          iconutil -c icns "$iconset" -o release/picasso-workflow.icns
+          ls -l release/picasso-workflow.icns
 
       # Rewrite the placeholders in construct.yaml: the version (from
       # PW_VERSION) and @WHEEL@ (the actual built wheel basename, since

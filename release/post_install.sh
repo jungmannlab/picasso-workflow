@@ -27,4 +27,47 @@ exec "$PREFIX/bin/picasso-workflow-gui"
 EOF
 chmod +x "$LAUNCHER"
 
+# macOS: also install a .app into ~/Applications so the GUI is launchable from
+# Spotlight (Cmd+Space) and the Applications folder, like a normal Mac app.
+# Per-user (~/Applications needs no admin) and Spotlight-indexed. The bundle is
+# created on-device, so it is not quarantined and Gatekeeper does not block it.
+if [ "$(uname)" = "Darwin" ]; then
+    APP="$HOME/Applications/picasso-workflow.app"
+    rm -rf "$APP"
+    mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+
+    cat > "$APP/Contents/MacOS/picasso-workflow" <<EOF
+#!/bin/sh
+export PYTHONNOUSERSITE=1
+exec "$PREFIX/bin/picasso-workflow-gui"
+EOF
+    chmod +x "$APP/Contents/MacOS/picasso-workflow"
+
+    # Icon bundled via extra_files (copied flat into the prefix root).
+    if [ -f "$PREFIX/picasso-workflow.icns" ]; then
+        cp "$PREFIX/picasso-workflow.icns" \
+            "$APP/Contents/Resources/picasso-workflow.icns"
+    fi
+
+    cat > "$APP/Contents/Info.plist" <<'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleName</key><string>picasso-workflow</string>
+    <key>CFBundleDisplayName</key><string>picasso-workflow</string>
+    <key>CFBundleIdentifier</key><string>org.jungmannlab.picasso-workflow</string>
+    <key>CFBundleExecutable</key><string>picasso-workflow</string>
+    <key>CFBundlePackageType</key><string>APPL</string>
+    <key>CFBundleIconFile</key><string>picasso-workflow.icns</string>
+</dict>
+</plist>
+EOF
+
+    # Nudge LaunchServices/Spotlight to index it immediately.
+    lsreg="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
+    [ -x "$lsreg" ] && "$lsreg" -f "$APP" 2>/dev/null || true
+    touch "$APP"
+fi
+
 exit 0
