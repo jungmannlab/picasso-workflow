@@ -21,6 +21,7 @@ import os
 import re
 import sys
 import json
+import pathlib
 import shlex
 import getpass
 import yaml
@@ -10832,6 +10833,112 @@ class PhaseSpacePreviewDialog(QtWidgets.QDialog):
         self.accept()
 
 
+class GettingStartedDialog(QtWidgets.QDialog):
+    """First-run onboarding: explains where settings live and how to begin.
+
+    Shown automatically on first launch (a fresh install runs on built-in
+    default settings, which otherwise leaves a new user with no obvious next
+    step). Reopenable from the Help menu.
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Getting started with picasso-workflow")
+        self.setMinimumWidth(560)
+        layout = QtWidgets.QVBoxLayout(self)
+
+        cfg = self.user_config_path()
+        text = QtWidgets.QLabel(
+            "<h3>Welcome to picasso-workflow</h3>"
+            "<p>You're running with built-in <b>default settings</b>. To do "
+            "real work you'll want your own configuration.</p>"
+            "<p><b>Where settings live.</b> picasso-workflow reads a per-user "
+            "config file:<br><code>"
+            f"{cfg}</code><br>"
+            "Create and edit it to set your workflow <i>templates</i> and "
+            "(optionally) Confluence reporting. It overrides the built-in "
+            "defaults — you never edit the installed app itself.</p>"
+            "<p><b>Good to know.</b> The <b>Doctor</b> tab (top-right) shows "
+            "which config and <code>.env</code> files are loaded and from "
+            "where, so you can confirm your settings took effect.</p>"
+            "<p><b>First steps</b></p>"
+            "<ol>"
+            "<li>Create your settings file (button below) and edit it.</li>"
+            "<li>Pick a <b>Results Folder</b> at the top of the window.</li>"
+            "<li>Load a template or build a workflow, then <b>Run</b>.</li>"
+            "</ol>"
+        )
+        text.setTextFormat(Qt.TextFormat.RichText)
+        text.setWordWrap(True)
+        text.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextBrowserInteraction
+        )
+        layout.addWidget(text)
+
+        btns = QtWidgets.QHBoxLayout()
+        create_btn = QtWidgets.QPushButton("Create my settings file…")
+        create_btn.clicked.connect(lambda: self.open_user_config(self))
+        btns.addWidget(create_btn)
+        btns.addStretch(1)
+        self.dont_show = QtWidgets.QCheckBox("Don't show this again")
+        self.dont_show.setChecked(True)
+        btns.addWidget(self.dont_show)
+        close_btn = QtWidgets.QPushButton("Close")
+        close_btn.clicked.connect(self.accept)
+        close_btn.setDefault(True)
+        btns.addWidget(close_btn)
+        layout.addLayout(btns)
+
+    @staticmethod
+    def user_config_path():
+        return (
+            pathlib.Path.home()
+            / ".config"
+            / "picasso_workflow"
+            / "config.yaml"
+        )
+
+    @staticmethod
+    def marker_path():
+        return (
+            pathlib.Path.home()
+            / ".config"
+            / "picasso_workflow"
+            / ".getting_started_shown"
+        )
+
+    @staticmethod
+    def open_user_config(parent=None):
+        """Seed the per-user config from the bundled template, then open it."""
+        import importlib.resources
+
+        cfg = GettingStartedDialog.user_config_path()
+        try:
+            cfg.parent.mkdir(parents=True, exist_ok=True)
+            if not cfg.exists():
+                tmpl = importlib.resources.files("picasso_workflow").joinpath(
+                    "config_template.yaml"
+                )
+                cfg.write_text(
+                    tmpl.read_text(encoding="utf-8"), encoding="utf-8"
+                )
+            QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(str(cfg)))
+        except Exception as e:
+            QtWidgets.QMessageBox.warning(
+                parent, "Could not create the settings file", str(e)
+            )
+
+    def accept(self):
+        if self.dont_show.isChecked():
+            try:
+                m = self.marker_path()
+                m.parent.mkdir(parents=True, exist_ok=True)
+                m.write_text("1", encoding="utf-8")
+            except Exception:
+                pass
+        super().accept()
+
+
 class _UpdateCheckWorker(QtCore.QObject):
     """Runs the GitHub "is there a newer release?" check off the GUI thread."""
 
@@ -11465,6 +11572,16 @@ class Window(QtWidgets.QMainWindow):
         # startup or shows anything when offline / up to date.
         self._update_thread = None
         self._start_update_check()
+
+        # Help menu: re-openable onboarding + a shortcut to the settings file.
+        help_menu = self.menuBar().addMenu("Help")
+        help_menu.addAction("Getting Started…", self._show_getting_started)
+        help_menu.addAction(
+            "Open settings file…",
+            lambda: GettingStartedDialog.open_user_config(self),
+        )
+        # On first launch, show the onboarding guide once the window is up.
+        QtCore.QTimer.singleShot(0, self._maybe_show_getting_started)
 
         # select files to process
         # Single Workflow only: choose how input data is provided - an
@@ -13349,6 +13466,26 @@ class Window(QtWidgets.QMainWindow):
         """Join the update-check thread before the window is destroyed."""
         self._stop_update_thread()
         super().closeEvent(event)
+
+    # -- getting-started onboarding ----------------------------------------
+
+    def _maybe_show_getting_started(self):
+        """Show the onboarding guide on first launch only (fail-soft)."""
+        # Skip in headless/test runs so the modal dialog can't hang the suite.
+        if os.environ.get("QT_QPA_PLATFORM") == "offscreen":
+            return
+        try:
+            if GettingStartedDialog.marker_path().exists():
+                return
+        except Exception:
+            return
+        self._show_getting_started()
+
+    def _show_getting_started(self):
+        try:
+            GettingStartedDialog(self).exec()
+        except Exception as e:  # pragma: no cover - defensive
+            logger.debug(f"Getting Started dialog failed: {e}")
 
     def _on_main_tab_changed(self, index):
         """Refresh the Render / Doctor tabs when they are shown."""
