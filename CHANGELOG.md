@@ -10,6 +10,13 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ## [Unreleased]
 
+### Changed
+
+- Python baseline raised 3.10 → 3.11 (`requires-python`, black
+  `target-version`, CI matrices); `picassosr` floor moved to `>=0.12.0a3`
+  (picasso 0.12 line, requires 3.11) — supersedes the temporary B7 git-pin
+  bridge.
+
 ### Fixed
 
 - **Hardened config loading and onboarding (code-review follow-ups).** A typo in a hand-edited `config.yaml` (which the onboarding dialog invites users to edit) now degrades to a skipped layer with a warning instead of crashing `import picasso_workflow`; the startup template dropdown tolerates a null/missing `Templates`; the per-user `.env` fills an *empty* `CONFLUENCE_TOKEN` (not just an unset one); the macOS `post_install` no longer aborts under `set -e` if `stat`/`id` fail; the update check still nudges when the running version is `"unknown"`; the update-check thread shutdown is reentrancy-safe; and the per-user config dir + Confluence token env-var names now come from single sources (`_user_config_dir()`, `confluence._CONFLUENCE_PROFILES`).
