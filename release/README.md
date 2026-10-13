@@ -68,8 +68,10 @@ on separate Intel (`macos-13`) and Apple-Silicon (`macos-14`) runners. Users
 pick the one matching their Mac (About This Mac → "Chip"/"Processor").
 
 The installers are **unsigned** for now, so first launch shows a one-time
-Windows SmartScreen ("More info → Run anyway") or macOS Gatekeeper
-(right-click → Open) warning. Code-signing/notarization can be added later.
+Windows SmartScreen ("More info → Run anyway") or macOS Gatekeeper warning.
+Code-signing/notarization can be added later. A click-by-click guide for the
+macOS first-open step (and how a lab admin can distribute without any prompt)
+is in **[`MACOS_FIRST_OPEN.md`](MACOS_FIRST_OPEN.md)**.
 
 ## Build locally (optional; the authoritative build is CI)
 
