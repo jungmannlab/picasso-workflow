@@ -12,11 +12,6 @@ on:
   push:
     tags:
       - 'v*'
-    # TEMPORARY (remove before merging): dry-run the hardened post_install on
-    # the feature branch. Branch pushes only upload artifacts (the release
-    # attach step stays tag-guarded).
-    branches:
-      - feature/one-click-installer
   workflow_dispatch:
 
 jobs:
