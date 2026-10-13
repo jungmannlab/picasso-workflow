@@ -75,3 +75,29 @@ def test_accept_keeps_showing_when_unchecked(qapp, fake_home):
     d.dont_show.setChecked(False)
     d.accept()
     assert not GettingStartedDialog.marker_path().exists()
+
+
+def test_save_confluence_token_persists_and_sets_env(
+    qapp, fake_home, monkeypatch
+):
+    monkeypatch.delenv("CONFLUENCE_TOKEN", raising=False)
+    monkeypatch.delenv("CONFLUENCE_BEARER", raising=False)
+    ok, _ = GettingStartedDialog.save_confluence_token("secret-xyz")
+    assert ok
+    env = GettingStartedDialog.env_path()
+    assert env == fake_home / ".config" / "picasso_workflow" / ".env"
+    # persisted for next launch, and set in the current process
+    assert "CONFLUENCE_TOKEN" in env.read_text()
+    assert os.environ["CONFLUENCE_TOKEN"] == "secret-xyz"
+    # tightened permissions on POSIX
+    if os.name == "posix":
+        assert (env.stat().st_mode & 0o777) == 0o600
+
+
+def test_token_status_reflects_environment(qapp, fake_home, monkeypatch):
+    monkeypatch.setenv("CONFLUENCE_TOKEN", "present")
+    d = GettingStartedDialog()
+    assert "is currently set" in d._token_status.text()
+    monkeypatch.delenv("CONFLUENCE_TOKEN", raising=False)
+    d2 = GettingStartedDialog()
+    assert "No Confluence token" in d2._token_status.text()

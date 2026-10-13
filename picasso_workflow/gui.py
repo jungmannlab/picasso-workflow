@@ -10875,6 +10875,8 @@ class GettingStartedDialog(QtWidgets.QDialog):
         )
         layout.addWidget(text)
 
+        layout.addWidget(self._build_confluence_group())
+
         btns = QtWidgets.QHBoxLayout()
         create_btn = QtWidgets.QPushButton("Create my settings file…")
         create_btn.clicked.connect(lambda: self.open_user_config(self))
@@ -10888,6 +10890,114 @@ class GettingStartedDialog(QtWidgets.QDialog):
         close_btn.setDefault(True)
         btns.addWidget(close_btn)
         layout.addLayout(btns)
+
+    def _build_confluence_group(self):
+        """Optional Confluence token entry, persisted to the per-user .env."""
+        box = QtWidgets.QGroupBox("Confluence reporting (optional)")
+        v = QtWidgets.QVBoxLayout(box)
+
+        info = QtWidgets.QLabel(
+            "To publish reports to Confluence, picasso-workflow needs a "
+            "personal access token in the <code>CONFLUENCE_TOKEN</code> "
+            "environment variable.<br>"
+            "<b>Get one:</b> in Confluence, open your profile → "
+            "<i>Settings → Personal Access Tokens</i> (Server/Data Center) or "
+            "<i>id.atlassian.com → Security → API tokens</i> (Cloud), create a "
+            "token, and paste it below.<br>"
+            "It is saved to your per-user <code>.env</code> and loaded on every "
+            "launch — never written to <code>config.yaml</code> or the logs."
+        )
+        info.setTextFormat(Qt.TextFormat.RichText)
+        info.setWordWrap(True)
+        info.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextBrowserInteraction
+        )
+        v.addWidget(info)
+
+        row = QtWidgets.QHBoxLayout()
+        self._token_edit = QtWidgets.QLineEdit()
+        self._token_edit.setEchoMode(QtWidgets.QLineEdit.EchoMode.Password)
+        self._token_edit.setPlaceholderText("paste your Confluence token")
+        row.addWidget(self._token_edit, 1)
+        show = QtWidgets.QCheckBox("Show")
+        show.toggled.connect(
+            lambda on: self._token_edit.setEchoMode(
+                QtWidgets.QLineEdit.EchoMode.Normal
+                if on
+                else QtWidgets.QLineEdit.EchoMode.Password
+            )
+        )
+        row.addWidget(show)
+        save = QtWidgets.QPushButton("Save token")
+        save.clicked.connect(self._save_token)
+        row.addWidget(save)
+        v.addLayout(row)
+
+        self._token_status = QtWidgets.QLabel()
+        self._refresh_token_status()
+        v.addWidget(self._token_status)
+        return box
+
+    def _refresh_token_status(self):
+        import os
+
+        is_set = bool(
+            os.environ.get("CONFLUENCE_TOKEN")
+            or os.environ.get("CONFLUENCE_BEARER")
+        )
+        self._token_status.setText(
+            "A Confluence token is currently set."
+            if is_set
+            else "No Confluence token is set yet."
+        )
+
+    def _save_token(self):
+        token = self._token_edit.text().strip()
+        if not token:
+            QtWidgets.QMessageBox.information(
+                self, "No token", "Paste a token first, then click Save."
+            )
+            return
+        ok, message = self.save_confluence_token(token)
+        if ok:
+            self._token_edit.clear()
+            self._refresh_token_status()
+            QtWidgets.QMessageBox.information(self, "Token saved", message)
+        else:
+            QtWidgets.QMessageBox.warning(
+                self, "Could not save token", message
+            )
+
+    @staticmethod
+    def env_path():
+        return pathlib.Path.home() / ".config" / "picasso_workflow" / ".env"
+
+    @staticmethod
+    def save_confluence_token(token):
+        """Persist ``token`` as CONFLUENCE_TOKEN in the per-user .env.
+
+        Writes to ``~/.config/picasso_workflow/.env`` (loaded at every launch),
+        tightens its permissions, and sets the variable in the current process
+        so it takes effect immediately. The token value is never logged.
+        Returns ``(ok, message)``.
+        """
+        import os
+
+        from dotenv import set_key
+
+        try:
+            env = GettingStartedDialog.env_path()
+            env.parent.mkdir(parents=True, exist_ok=True)
+            env.touch(exist_ok=True)
+            try:
+                os.chmod(env, 0o600)
+            except OSError:
+                pass  # best-effort (e.g. Windows)
+            set_key(str(env), "CONFLUENCE_TOKEN", token)
+            os.environ["CONFLUENCE_TOKEN"] = token  # effective this session
+        except Exception as e:
+            return False, str(e)
+        return True, f"Saved to {env}. It will be used on every launch."
 
     @staticmethod
     def user_config_path():

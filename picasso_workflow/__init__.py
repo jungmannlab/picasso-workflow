@@ -281,6 +281,15 @@ config_logger()
 _log_dotenv()
 load_dotenv()
 
+# Per-user .env (e.g. the Confluence token saved via the GUI's onboarding
+# dialog). Loaded after the package .env and with override=False, so a value
+# already present in the real environment (e.g. CONFLUENCE_TOKEN exported on
+# the cluster) always wins. Secrets live here -- never in config.yaml or logs.
+_user_env = Path.home() / ".config" / "picasso_workflow" / ".env"
+if _user_env.exists():
+    load_dotenv(_user_env, override=False)
+    logger.info(f"Loaded per-user .env from: {_user_env}")
+
 if os.getenv("SLURM_JOB_ID") is None:
     # keep ON_CLUSTER in sync; original assignment above also reflects this,
     # but .env may have just been loaded, so re-evaluate.
