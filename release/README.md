@@ -55,8 +55,17 @@ picasso's installer, which installs system-wide to `C:\Picasso`.
 ## Distribution
 
 Installers are built automatically by `.github/workflows/release.yml` on every
-`vX.Y.Z` tag push and attached to that tag's **GitHub Release**. Non-coders just
-download the `.exe` (Windows) or `.pkg` (macOS) from the Releases page.
+`vX.Y.Z` tag push and attached to that tag's **GitHub Release**. Three are
+produced:
+
+- **Windows** (`…-Windows-x86_64.exe`)
+- **macOS, Apple Silicon** (`…-MacOSX-arm64.pkg`) — M1/M2/M3/M4 Macs
+- **macOS, Intel** (`…-MacOSX-x86_64.pkg`) — older Intel Macs
+
+`constructor` builds per host architecture (conda packages are arch-specific;
+a universal2 conda env isn't practical), so the two macOS installers are built
+on separate Intel (`macos-13`) and Apple-Silicon (`macos-14`) runners. Users
+pick the one matching their Mac (About This Mac → "Chip"/"Processor").
 
 The installers are **unsigned** for now, so first launch shows a one-time
 Windows SmartScreen ("More info → Run anyway") or macOS Gatekeeper

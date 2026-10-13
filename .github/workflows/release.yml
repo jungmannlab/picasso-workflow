@@ -21,12 +21,22 @@ on:
 
 jobs:
   build:
-    name: Installer (${{ matrix.os }})
+    name: Installer (${{ matrix.label }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, macos-latest]
+        include:
+          - os: windows-latest
+            label: windows
+          # macos-13 is the Intel (x86_64) runner; macos-14 is Apple Silicon
+          # (arm64). Build both so Intel and Apple-Silicon Macs each get a
+          # native installer. (constructor builds for the host arch; there is
+          # no practical universal2 for a full conda env.)
+          - os: macos-13
+            label: macos-intel
+          - os: macos-14
+            label: macos-apple-silicon
 
     steps:
       - name: Checkout (full history for setuptools-scm)
@@ -139,7 +149,7 @@ jobs:
       - name: Upload installer artifact
         uses: actions/upload-artifact@v4
         with:
-          name: picasso-workflow-${{ env.PW_VERSION }}-${{ matrix.os }}
+          name: picasso-workflow-${{ env.PW_VERSION }}-${{ matrix.label }}
           path: release/dist/*
 
       # Attach to the GitHub Release only for real tag pushes.
