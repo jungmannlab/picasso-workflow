@@ -24,6 +24,7 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Added
 
+- **Live config reload (no restart).** `reload_config()` re-reads the config.yaml layers and updates `CONFIG` in place; the GUI reloads and refreshes the template dropdown when the Getting Started dialog closes (and via Help → Reload settings file), so a config you just created/edited takes effect without restarting.
 - **First-run "Getting started" onboarding dialog.** A fresh install runs on built-in default settings, which left new users with no obvious next step. The GUI now shows a one-time guide explaining where the per-user config file lives (`~/.config/picasso_workflow/config.yaml`), that it overrides the bundled defaults, and the first steps to take; a button seeds that file from the template and opens it. Re-openable from a new **Help** menu (“Getting Started…” / “Open settings file…”). Dismissal is remembered via a marker in the config dir.
 - **macOS installer registers a Spotlight-launchable app.** `post_install`
   now builds a `picasso-workflow.app` in `~/Applications` (per-user, no

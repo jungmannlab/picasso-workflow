@@ -11011,6 +11011,9 @@ class Window(QtWidgets.QMainWindow):
         )
         workflow_template_combo.setToolTip("Load a template workflow")
         layout.addWidget(workflow_template_combo, 0, 0)
+        # kept as an attribute so it can be repopulated after a live config
+        # reload (Getting Started dialog / Help -> Reload settings).
+        self.workflow_template_combo = workflow_template_combo
         # Results folder selection
         results_folder_button = QtWidgets.QPushButton("Results Folder")
         results_folder_button.setToolTip(
@@ -11579,6 +11582,9 @@ class Window(QtWidgets.QMainWindow):
         help_menu.addAction(
             "Open settings file…",
             lambda: GettingStartedDialog.open_user_config(self),
+        )
+        help_menu.addAction(
+            "Reload settings file", self._reload_config_into_ui
         )
         # On first launch, show the onboarding guide once the window is up.
         QtCore.QTimer.singleShot(0, self._maybe_show_getting_started)
@@ -13486,6 +13492,35 @@ class Window(QtWidgets.QMainWindow):
             GettingStartedDialog(self).exec()
         except Exception as e:  # pragma: no cover - defensive
             logger.debug(f"Getting Started dialog failed: {e}")
+            return
+        # Pick up a config the user just created/edited without a restart.
+        self._reload_config_into_ui()
+
+    def _reload_config_into_ui(self):
+        """Re-read the config files and refresh config-driven widgets."""
+        try:
+            from picasso_workflow import reload_config
+
+            reload_config()
+        except Exception as e:  # pragma: no cover - defensive
+            logger.debug(f"Could not reload config: {e}")
+            return
+        self._refresh_template_combo()
+
+    def _refresh_template_combo(self):
+        """Repopulate the template dropdown from the (reloaded) CONFIG."""
+        combo = getattr(self, "workflow_template_combo", None)
+        if combo is None:
+            return
+        current = combo.currentText()
+        combo.blockSignals(True)
+        combo.clear()
+        combo.addItem("")
+        for template in CONFIG.get("Templates", {}).keys():
+            combo.addItem(template)
+        idx = combo.findText(current)
+        combo.setCurrentIndex(idx if idx >= 0 else 0)
+        combo.blockSignals(False)
 
     def _on_main_tab_changed(self, index):
         """Refresh the Render / Doctor tabs when they are shown."""

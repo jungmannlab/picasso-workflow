@@ -291,6 +291,20 @@ else:
 CONFIG = load_config()
 
 
+def reload_config() -> dict:
+    """Re-read the config.yaml layers and update ``CONFIG`` in place.
+
+    The dict is mutated (cleared + updated) rather than rebound, so modules
+    that imported ``CONFIG`` by reference see the new values without a restart
+    -- e.g. after the GUI writes a per-user ``config.yaml`` from its Getting
+    Started dialog. Returns the updated ``CONFIG``.
+    """
+    new = load_config()
+    CONFIG.clear()
+    CONFIG.update(new)
+    return CONFIG
+
+
 if __name__ == "__main__":
     # This is just to use the classes and not get PEP errors.
     # This is not expected to do anything meaningful.
