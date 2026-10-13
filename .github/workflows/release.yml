@@ -29,14 +29,14 @@ jobs:
         include:
           - os: windows-latest
             label: windows
-          # macos-13 is the Intel (x86_64) runner; macos-14 is Apple Silicon
-          # (arm64). Build both so Intel and Apple-Silicon Macs each get a
-          # native installer. (constructor builds for the host arch; there is
-          # no practical universal2 for a full conda env.)
-          - os: macos-13
-            label: macos-intel
+          # Apple-Silicon runner builds BOTH macOS installers: the native
+          # arm64 one and -- via `constructor --platform osx-64` -- the Intel
+          # (x86_64) one. GitHub's Intel macOS runners (macos-13) are
+          # unreliable/retired (jobs hang queued), and conda-forge has osx-64
+          # packages + pkgbuild is arch-agnostic, so cross-building here is the
+          # reliable way to still ship an Intel installer.
           - os: macos-14
-            label: macos-apple-silicon
+            label: macos
 
     steps:
       - name: Checkout (full history for setuptools-scm)
@@ -139,11 +139,18 @@ jobs:
           print("stamped version:", os.environ["PW_VERSION"], "wheel:", wheel)
           PY
 
-      - name: Build installer with constructor
+      - name: Build installer(s) with constructor
         shell: bash -el {0}
         run: |
           cd release
+          # Native installer (arm64 on the mac runner, win-64 on Windows).
           constructor . --output-dir dist
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            # Also cross-build the Intel (x86_64) macOS installer here, since
+            # GitHub's Intel runners are unreliable. Output filenames encode the
+            # arch (…-MacOSX-arm64 vs …-MacOSX-x86_64), so they don't clobber.
+            constructor . --platform osx-64 --output-dir dist
+          fi
           ls -l dist
 
       - name: Upload installer artifact

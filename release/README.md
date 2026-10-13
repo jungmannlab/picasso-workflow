@@ -62,10 +62,12 @@ produced:
 - **macOS, Apple Silicon** (`…-MacOSX-arm64.pkg`) — M1/M2/M3/M4 Macs
 - **macOS, Intel** (`…-MacOSX-x86_64.pkg`) — older Intel Macs
 
-`constructor` builds per host architecture (conda packages are arch-specific;
-a universal2 conda env isn't practical), so the two macOS installers are built
-on separate Intel (`macos-13`) and Apple-Silicon (`macos-14`) runners. Users
-pick the one matching their Mac (About This Mac → "Chip"/"Processor").
+`constructor` builds per architecture (conda packages are arch-specific; a
+universal2 conda env isn't practical). Both macOS installers are built on the
+Apple-Silicon runner (`macos-14`): the arm64 one natively and the Intel one via
+`constructor --platform osx-64` (GitHub's Intel `macos-13` runners are
+unreliable/retired). Users pick the one matching their Mac (About This Mac →
+"Chip"/"Processor"); see `MACOS_FIRST_OPEN.md`.
 
 The installers are **unsigned** for now, so first launch shows a one-time
 Windows SmartScreen ("More info → Run anyway") or macOS Gatekeeper warning.
