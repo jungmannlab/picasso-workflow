@@ -12,6 +12,11 @@ on:
   push:
     tags:
       - 'v*'
+    # TEMPORARY (remove before merging): build installers on each push to this
+    # feature branch while it's being install-tested. Branch pushes only upload
+    # artifacts -- the release-attach step stays tag-guarded.
+    branches:
+      - feature/one-click-installer
   workflow_dispatch:
 
 jobs:
