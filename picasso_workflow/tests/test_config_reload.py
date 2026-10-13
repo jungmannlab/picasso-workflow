@@ -2,11 +2,13 @@
 """Tests for picasso_workflow.reload_config (live config reload)."""
 
 import copy
+import tempfile
+from pathlib import Path
 
 import pytest
 
 import picasso_workflow
-from picasso_workflow import CONFIG, reload_config
+from picasso_workflow import CONFIG, _load_layer, reload_config
 
 
 @pytest.fixture()
@@ -40,3 +42,23 @@ def test_reload_config_drops_removed_keys(monkeypatch, restore_config):
     )
     reload_config()
     assert "StaleKey" not in CONFIG
+
+
+def test_load_layer_degrades_instead_of_crashing():
+    # A hand-edited config.yaml with a typo must not crash import/load_config;
+    # _load_layer returns None (the layer is skipped) for bad/odd files.
+    with tempfile.TemporaryDirectory() as d:
+        base = Path(d)
+        malformed = base / "bad.yaml"
+        malformed.write_text("a: [unclosed\n")
+        assert _load_layer(malformed) is None  # YAMLError -> skipped
+
+        not_a_mapping = base / "list.yaml"
+        not_a_mapping.write_text("- a\n- b\n")
+        assert _load_layer(not_a_mapping) is None  # non-dict -> skipped
+
+        assert _load_layer(base / "missing.yaml") is None  # absent -> skipped
+
+        good = base / "ok.yaml"
+        good.write_text("Templates:\n  X: /p\n")
+        assert _load_layer(good) == {"Templates": {"X": "/p"}}

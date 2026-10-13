@@ -118,9 +118,43 @@ def _site_config_path() -> Path:
     return base / "picasso_workflow" / "config.yaml"
 
 
+def _user_config_dir() -> Path:
+    """Per-user config directory (holds config.yaml, .env, onboarding marker).
+
+    Single source of truth shared by load_config() and the GUI, so they can
+    never disagree about where settings live.
+    """
+    return Path.home() / ".config" / "picasso_workflow"
+
+
 def _load_yaml(path) -> dict:
     with open(path, "r") as f:
         return yaml.safe_load(f) or {}
+
+
+def _load_layer(path):
+    """Load one YAML config layer, tolerating problems.
+
+    Returns the parsed mapping, or ``None`` when the file is absent, unparseable
+    (a typo in a hand-edited config.yaml), or not a mapping -- so a bad file
+    degrades to "skip this layer" with a warning instead of crashing
+    ``import picasso_workflow``. A missing file is skipped silently (the caller
+    decides whether that is expected).
+    """
+    try:
+        data = _load_yaml(path)
+    except FileNotFoundError:
+        return None
+    except (TypeError, OSError, yaml.YAMLError) as exc:
+        logger.warning(f"Ignoring unreadable config at {path}: {exc!r}")
+        return None
+    if not isinstance(data, dict):
+        logger.warning(
+            f"Ignoring config at {path}: expected a mapping, got "
+            f"{type(data).__name__}."
+        )
+        return None
+    return data
 
 
 def _mask_value(value: str | None) -> str:
@@ -201,72 +235,53 @@ def load_config():
       3. Per-user config         (~/.config/picasso_workflow/config.yaml)
     """
     sources = []  # (layer, path, loaded) for the Doctor tab
-    # 1. Package default
-    try:
-        pkg_config = importlib.resources.files("picasso_workflow").joinpath(
-            "config.yaml"
-        )
-        pkg_data = _load_yaml(pkg_config)
+    # 1. Package default. config.yaml is gitignored and not shipped in a
+    # wheel, so it is normally absent -- fall back to the bundled
+    # config_template.yaml so defaults like "Templates" exist. A malformed
+    # bundled file falls back too (rather than crashing import).
+    pkg_config = importlib.resources.files("picasso_workflow").joinpath(
+        "config.yaml"
+    )
+    config = _load_layer(pkg_config)
+    if config is not None:
         logger.info(f"Loaded bundled config.yaml from: {pkg_config}")
-        logger.info(
-            "Bundled config.yaml content:\n"
-            f"{yaml.safe_dump(pkg_data, sort_keys=False)}"
-        )
-        config = pkg_data
         sources.append(("bundled", str(pkg_config), True))
-    except (FileNotFoundError, TypeError) as exc:
-        # No config.yaml next to the package (the normal case for a wheel
-        # install -- config.yaml is gitignored and never shipped). Fall back to
-        # the bundled config_template.yaml so defaults like "Templates" exist;
-        # real deployments still override via the site / per-user layers below.
-        logger.warning(
-            f"No bundled config.yaml available ({exc!r}); "
-            "falling back to config_template.yaml."
+    else:
+        template = importlib.resources.files("picasso_workflow").joinpath(
+            "config_template.yaml"
         )
-        try:
-            template = importlib.resources.files("picasso_workflow").joinpath(
-                "config_template.yaml"
-            )
-            config = _load_yaml(template)
+        config = _load_layer(template)
+        if config is not None:
             logger.info(
                 f"Loaded bundled config_template.yaml from: {template}"
             )
             sources.append(("bundled-template", str(template), True))
-        except (FileNotFoundError, TypeError) as exc2:
-            logger.warning(
-                f"No bundled config_template.yaml either ({exc2!r})."
-            )
+        else:
+            logger.warning("No usable bundled config.yaml / template.")
             config = {}
             sources.append(("bundled", "<package resource>", False))
 
-    # 2. Site-wide admin config (optional)
+    # 2. Site-wide admin config (optional). A typo in it is skipped, not fatal.
     site_config = _site_config_path()
-    if site_config.exists():
-        site_data = _load_yaml(site_config)
+    site_data = _load_layer(site_config) if site_config.exists() else None
+    if site_data is not None:
         logger.info(f"Loaded site-wide config.yaml from: {site_config}")
-        logger.info(
-            "Site-wide config.yaml content:\n"
-            f"{yaml.safe_dump(site_data, sort_keys=False)}"
-        )
         config = _deep_merge(config, site_data)
         sources.append(("site-wide", str(site_config), True))
     else:
-        logger.debug(f"No site-wide config.yaml at {site_config} (skipped).")
+        logger.debug(f"No usable site-wide config.yaml at {site_config}.")
         sources.append(("site-wide", str(site_config), False))
 
-    # 3. Per-user config (optional)
-    user_config = Path.home() / ".config" / "picasso_workflow" / "config.yaml"
-    if user_config.exists():
-        user_data = _load_yaml(user_config)
+    # 3. Per-user config (optional). This is the file the GUI's onboarding
+    # dialog creates/edits, so a user typo must degrade gracefully, not crash.
+    user_config = _user_config_dir() / "config.yaml"
+    user_data = _load_layer(user_config) if user_config.exists() else None
+    if user_data is not None:
         logger.info(f"Loaded per-user config.yaml from: {user_config}")
-        logger.info(
-            "Per-user config.yaml content:\n"
-            f"{yaml.safe_dump(user_data, sort_keys=False)}"
-        )
         config = _deep_merge(config, user_data)
         sources.append(("per-user", str(user_config), True))
     else:
-        logger.debug(f"No per-user config.yaml at {user_config} (skipped).")
+        logger.debug(f"No usable per-user config.yaml at {user_config}.")
         sources.append(("per-user", str(user_config), False))
 
     DIAGNOSTICS["config_sources"] = sources
@@ -282,12 +297,16 @@ _log_dotenv()
 load_dotenv()
 
 # Per-user .env (e.g. the Confluence token saved via the GUI's onboarding
-# dialog). Loaded after the package .env and with override=False, so a value
-# already present in the real environment (e.g. CONFLUENCE_TOKEN exported on
-# the cluster) always wins. Secrets live here -- never in config.yaml or logs.
-_user_env = Path.home() / ".config" / "picasso_workflow" / ".env"
+# dialog). A real, non-empty value already in the environment (e.g.
+# CONFLUENCE_TOKEN exported on the cluster) still wins, but a per-user value
+# fills an unset *or empty* variable -- plain load_dotenv(override=False) would
+# treat an empty `CONFLUENCE_TOKEN=` as "already set" and never apply the saved
+# token. Secrets live here -- never in config.yaml or logs.
+_user_env = _user_config_dir() / ".env"
 if _user_env.exists():
-    load_dotenv(_user_env, override=False)
+    for _k, _v in dotenv_values(_user_env).items():
+        if _v is not None and not os.environ.get(_k):
+            os.environ[_k] = _v
     logger.info(f"Loaded per-user .env from: {_user_env}")
 
 if os.getenv("SLURM_JOB_ID") is None:

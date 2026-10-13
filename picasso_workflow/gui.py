@@ -21,7 +21,6 @@ import os
 import re
 import sys
 import json
-import pathlib
 import shlex
 import getpass
 import yaml
@@ -10938,13 +10937,18 @@ class GettingStartedDialog(QtWidgets.QDialog):
         v.addWidget(self._token_status)
         return box
 
-    def _refresh_token_status(self):
-        import os
+    @staticmethod
+    def _token_env_names():
+        """The Confluence token env vars, from confluence.py's single source."""
+        try:
+            from picasso_workflow.confluence import _CONFLUENCE_PROFILES
 
-        is_set = bool(
-            os.environ.get("CONFLUENCE_TOKEN")
-            or os.environ.get("CONFLUENCE_BEARER")
-        )
+            return _CONFLUENCE_PROFILES["Confluence"]["token_env"]
+        except Exception:  # pragma: no cover - defensive fallback
+            return ("CONFLUENCE_TOKEN", "CONFLUENCE_BEARER")
+
+    def _refresh_token_status(self):
+        is_set = any(os.environ.get(name) for name in self._token_env_names())
         self._token_status.setText(
             "A Confluence token is currently set."
             if is_set
@@ -10969,22 +10973,27 @@ class GettingStartedDialog(QtWidgets.QDialog):
             )
 
     @staticmethod
+    def _config_dir():
+        from picasso_workflow import _user_config_dir
+
+        return _user_config_dir()
+
+    @staticmethod
     def env_path():
-        return pathlib.Path.home() / ".config" / "picasso_workflow" / ".env"
+        return GettingStartedDialog._config_dir() / ".env"
 
     @staticmethod
     def save_confluence_token(token):
-        """Persist ``token`` as CONFLUENCE_TOKEN in the per-user .env.
+        """Persist ``token`` as the Confluence token in the per-user .env.
 
         Writes to ``~/.config/picasso_workflow/.env`` (loaded at every launch),
         tightens its permissions, and sets the variable in the current process
         so it takes effect immediately. The token value is never logged.
         Returns ``(ok, message)``.
         """
-        import os
-
         from dotenv import set_key
 
+        canonical = GettingStartedDialog._token_env_names()[0]
         try:
             env = GettingStartedDialog.env_path()
             env.parent.mkdir(parents=True, exist_ok=True)
@@ -10993,29 +11002,19 @@ class GettingStartedDialog(QtWidgets.QDialog):
                 os.chmod(env, 0o600)
             except OSError:
                 pass  # best-effort (e.g. Windows)
-            set_key(str(env), "CONFLUENCE_TOKEN", token)
-            os.environ["CONFLUENCE_TOKEN"] = token  # effective this session
+            set_key(str(env), canonical, token)
+            os.environ[canonical] = token  # effective this session
         except Exception as e:
             return False, str(e)
         return True, f"Saved to {env}. It will be used on every launch."
 
     @staticmethod
     def user_config_path():
-        return (
-            pathlib.Path.home()
-            / ".config"
-            / "picasso_workflow"
-            / "config.yaml"
-        )
+        return GettingStartedDialog._config_dir() / "config.yaml"
 
     @staticmethod
     def marker_path():
-        return (
-            pathlib.Path.home()
-            / ".config"
-            / "picasso_workflow"
-            / ".getting_started_shown"
-        )
+        return GettingStartedDialog._config_dir() / ".getting_started_shown"
 
     @staticmethod
     def open_user_config(parent=None):
@@ -11113,7 +11112,9 @@ class Window(QtWidgets.QMainWindow):
 
         workflow_template_combo = QtWidgets.QComboBox()
         workflow_template_combo.addItem("")
-        for template in CONFIG["Templates"].keys():
+        # Tolerate a missing / null / non-dict "Templates" in a user-edited
+        # config.yaml (same defensiveness as _refresh_template_combo).
+        for template in (CONFIG.get("Templates") or {}).keys():
             workflow_template_combo.addItem(template)
         workflow_template_combo.setEditable(False)
         workflow_template_combo.currentTextChanged.connect(
@@ -13571,12 +13572,23 @@ class Window(QtWidgets.QMainWindow):
 
     def _stop_update_thread(self):
         """Quit/join the update-check thread on shutdown (destroying a live
-        QThread aborts the process)."""
+        QThread aborts the process).
+
+        Clears the reference first so closeEvent and aboutToQuit (which both
+        call this) can't double-join, and tolerates the thread's C++ object
+        already being torn down after normal completion.
+        """
         thread = getattr(self, "_update_thread", None)
-        if thread is not None:
+        self._update_thread = None
+        if thread is None:
+            return
+        try:
             thread.quit()
             thread.wait()
-            self._update_thread = None
+        except RuntimeError:
+            # The QThread already finished and was deleteLater'd -- nothing to
+            # join.
+            pass
 
     def closeEvent(self, event):
         """Join the update-check thread before the window is destroyed."""
@@ -13626,7 +13638,7 @@ class Window(QtWidgets.QMainWindow):
         combo.blockSignals(True)
         combo.clear()
         combo.addItem("")
-        for template in CONFIG.get("Templates", {}).keys():
+        for template in (CONFIG.get("Templates") or {}).keys():
             combo.addItem(template)
         idx = combo.findText(current)
         combo.setCurrentIndex(idx if idx >= 0 else 0)
@@ -13957,7 +13969,7 @@ class Window(QtWidgets.QMainWindow):
     def on_template_changed(self, template_name):
         """Load a template"""
         try:
-            template_path = CONFIG["Templates"][template_name]
+            template_path = (CONFIG.get("Templates") or {})[template_name]
             if template_path[:2] == 'r"' or template_path[:2] == "r'":
                 template_path = template_path[2:-1]
 

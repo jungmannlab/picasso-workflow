@@ -38,20 +38,24 @@ def _is_newer(latest: str, current: str) -> bool:
 
     Prefers PEP 440 comparison via ``packaging`` (handles the
     setuptools-scm dev/local versions this project uses); falls back to a naive
-    numeric-tuple compare if ``packaging`` is unavailable.
+    numeric-tuple compare when ``packaging`` is unavailable or a version is
+    unparseable (e.g. the ``"unknown"`` fallback when ``_version.py`` is
+    missing -- in which case we still want any real release to count as newer
+    so the user gets nudged).
     """
+
+    def _nums(v):
+        return tuple(int(x) for x in re.findall(r"\d+", v)[:3])
+
     try:
         from packaging.version import InvalidVersion, parse
 
         try:
             return parse(latest) > parse(current)
         except InvalidVersion:
-            return False
+            return _nums(latest) > _nums(current)
     except Exception:
-        nums = lambda v: tuple(  # noqa: E731
-            int(x) for x in re.findall(r"\d+", v)[:3]
-        )
-        return nums(latest) > nums(current)
+        return _nums(latest) > _nums(current)
 
 
 def check_for_update(

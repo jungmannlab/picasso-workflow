@@ -12,6 +12,7 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Fixed
 
+- **Hardened config loading and onboarding (code-review follow-ups).** A typo in a hand-edited `config.yaml` (which the onboarding dialog invites users to edit) now degrades to a skipped layer with a warning instead of crashing `import picasso_workflow`; the startup template dropdown tolerates a null/missing `Templates`; the per-user `.env` fills an *empty* `CONFLUENCE_TOKEN` (not just an unset one); the macOS `post_install` no longer aborts under `set -e` if `stat`/`id` fail; the update check still nudges when the running version is `"unknown"`; the update-check thread shutdown is reentrancy-safe; and the per-user config dir + Confluence token env-var names now come from single sources (`_user_config_dir()`, `confluence._CONFLUENCE_PROFILES`).
 - **Wheel installs crashed on startup with `KeyError: 'Templates'`.** The
   bundled `config.yaml` is gitignored (site-specific / secrets) and so is
   never shipped in the wheel; `load_config`'s fallback to

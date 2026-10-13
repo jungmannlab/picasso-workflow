@@ -36,14 +36,16 @@ if [ "$(uname)" = "Darwin" ]; then
     # HOME=/var/root, so $HOME would put the app in root's home (invisible to
     # the user). Fall back to the console (logged-in) user in that case. The
     # .sh installer runs as the user, so $HOME is already correct there.
+    # NB: `set -e` aborts on a bare `VAR=$(cmd)` whose command fails, so append
+    # `|| true` to tolerate stat/id/dscl failing (then fall back).
     if [ "$(id -u)" = "0" ]; then
-        REAL_USER=$(stat -f%Su /dev/console 2>/dev/null)
+        REAL_USER=$(stat -f%Su /dev/console 2>/dev/null) || REAL_USER=""
         [ -z "$REAL_USER" ] && REAL_USER="${SUDO_USER:-${USER:-root}}"
     else
-        REAL_USER=$(id -un)
+        REAL_USER=$(id -un 2>/dev/null) || REAL_USER="${USER:-$(whoami)}"
     fi
     REAL_HOME=$(dscl . -read "/Users/$REAL_USER" NFSHomeDirectory 2>/dev/null \
-        | awk '{print $2}')
+        | awk '{print $2}') || REAL_HOME=""
     [ -z "$REAL_HOME" ] && REAL_HOME="$HOME"
 
     APP="$REAL_HOME/Applications/picasso-workflow.app"

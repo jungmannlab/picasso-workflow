@@ -36,6 +36,12 @@ def test_is_newer_bad_input_is_false():
     assert _is_newer("not-a-version", "0.5.6") is False
 
 
+def test_is_newer_unknown_current_still_nudges():
+    # When _version.py is missing, __version__ == "unknown"; a real release
+    # must still count as newer so the user gets the update banner.
+    assert _is_newer("0.6.0", "unknown") is True
+
+
 # -- check_for_update (mocked HTTP) -------------------------------------------
 
 
