@@ -29,14 +29,13 @@ jobs:
         include:
           - os: windows-latest
             label: windows
-          # Apple-Silicon runner builds BOTH macOS installers: the native
-          # arm64 one and -- via `constructor --platform osx-64` -- the Intel
-          # (x86_64) one. GitHub's Intel macOS runners (macos-13) are
-          # unreliable/retired (jobs hang queued), and conda-forge has osx-64
-          # packages + pkgbuild is arch-agnostic, so cross-building here is the
-          # reliable way to still ship an Intel installer.
+          # Apple Silicon only. GitHub's Intel macOS runners (macos-13) hang
+          # queued (effectively retired), and cross-building the osx-64
+          # installer on arm64 proved unreliable -- Intel Macs are a shrinking
+          # minority, so the installer targets Apple Silicon. Intel users can
+          # still `pip install` into a conda env the classic way.
           - os: macos-14
-            label: macos
+            label: macos-apple-silicon
 
     steps:
       - name: Checkout (full history for setuptools-scm)
@@ -139,25 +138,11 @@ jobs:
           print("stamped version:", os.environ["PW_VERSION"], "wheel:", wheel)
           PY
 
-      # Cross-building the Intel (osx-64) installer runs the bundled x86_64
-      # conda-standalone at build time, which needs Rosetta 2 on the arm64
-      # runner. Harmless on Apple Silicon; not run on Windows.
-      - name: Install Rosetta 2 (for the Intel cross-build)
-        if: runner.os == 'macOS'
-        run: sudo softwareupdate --install-rosetta --agree-to-license
-
-      - name: Build installer(s) with constructor
+      - name: Build installer with constructor
         shell: bash -el {0}
         run: |
           cd release
-          # Native installer (arm64 on the mac runner, win-64 on Windows).
           constructor . --output-dir dist
-          if [ "$RUNNER_OS" = "macOS" ]; then
-            # Also cross-build the Intel (x86_64) macOS installer here, since
-            # GitHub's Intel runners are unreliable. Output filenames encode the
-            # arch (…-MacOSX-arm64 vs …-MacOSX-x86_64), so they don't clobber.
-            constructor . --platform osx-64 --output-dir dist
-          fi
           ls -l dist
 
       - name: Upload installer artifact

@@ -8,17 +8,15 @@ A short, click-by-click guide. No coding needed.
 
 ---
 
-## 1. Pick the installer for your Mac
+## 1. Which Macs are supported
 
-Click the Apple menu  → **About This Mac** and look at **Chip** / **Processor**:
+The installer targets **Apple Silicon** Macs (M1 / M2 / M3 / M4) — check via the
+Apple menu  → **About This Mac** → **Chip**. Download
+`picasso-workflow-<version>-MacOSX-arm64.pkg`.
 
-| Your Mac says… | Download this file |
-|---|---|
-| **Apple M1 / M2 / M3 / M4** | `picasso-workflow-<version>-MacOSX-arm64.pkg` |
-| **Intel** | `picasso-workflow-<version>-MacOSX-x86_64.pkg` |
-
-(If you download the wrong one, macOS will warn that it can't run — just grab
-the other.)
+> **Intel Macs** aren't covered by the one-click installer. If About This Mac
+> shows an Intel processor, install the classic way instead (create a conda env
+> and `pip install picasso_workflow`), or ask the lab for help.
 
 ---
 
