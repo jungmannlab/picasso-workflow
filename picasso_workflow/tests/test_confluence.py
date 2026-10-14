@@ -256,6 +256,35 @@ class Test_B_ConfluenceReporterModules(unittest.TestCase):
     def zfit(self):
         pass
 
+    def plugin(self):
+        parameters = {"api_name": "myfunc", "inject": ["locs"]}
+        results = {
+            "start time": "now",
+            "duration": 3.5,
+            "plugin_api_name": "myfunc",
+            "plugin_callable": "mypkg.myfunc",
+            "injected": ["locs"],
+            "plugin_report": "did a thing <ok>",
+            "plugin_result": {"count": 3},
+            "plugin_files": ["/tmp/out.csv"],
+        }
+        # self.cr.ci is shared across all module tests; isolate our calls.
+        self.cr.ci.upload_attachment.reset_mock()
+        self.cr.ci.update_page_content.reset_mock()
+        self.cr.plugin(0, parameters, results)
+
+        # the report section was posted and the file uploaded
+        self.cr.ci.update_page_content.assert_called()
+        self.cr.ci.upload_attachment.assert_called_once_with(
+            self.cr.report_page_id, "/tmp/out.csv"
+        )
+
+        # clean up
+        pgid, pgtitle = self.cr.ci.get_page_properties(
+            self.cr.report_page_name
+        )
+        self.cr.ci.delete_page(pgid)
+
     # @unittest.skip("")
     def export_brightfield(self):
         parameters = {}

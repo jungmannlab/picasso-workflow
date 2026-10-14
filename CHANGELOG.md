@@ -10,6 +10,17 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ## [Unreleased]
 
+### Added
+
+- **Generic `plugin` module** bridging to the picasso (≥ 0.11) plugin system.
+  A single-dataset workflow step can call any installed, *enabled* picasso API
+  plugin export (`PICASSO_API`) via `("plugin", {"api_name": ..., "kwargs":
+  {...}, "inject": ["locs", "info", "movie"]})`. Workflow state is injected as
+  opt-in keyword arguments; a `dict` return may update `locs`/`info` and
+  contribute `report`/`files` to the Confluence/HTML report. Only plugins the
+  user has already enabled are visible (picasso's opt-in trust model is
+  honoured). See README "Picasso plugins".
+
 ### Changed
 
 - Python baseline raised 3.10 → 3.11 (`requires-python`, black

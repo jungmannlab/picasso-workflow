@@ -70,6 +70,55 @@ class AbstractModuleCollection(abc.ABC):
         """
 
     @abc.abstractmethod
+    def plugin(self, i, parameters, results):
+        """Call an installed, enabled picasso API plugin export.
+
+        Generic bridge to the picasso plugin system: looks up a name exported
+        by an enabled plugin's ``PICASSO_API`` mapping
+        (``picasso.plugins.load_api_plugins``) and calls it. Workflow state is
+        passed in as opt-in keyword arguments and a structured return value may
+        update the pipeline. Only plugins already enabled in picasso
+        (``~/.picasso/plugins/``) are available; this module never enables a
+        plugin itself.
+
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters : dict
+            Required keys:
+
+            ``api_name`` : str
+                Name of the ``PICASSO_API`` export to call.
+
+            Optional keys:
+
+            ``kwargs`` : dict
+                Keyword arguments passed verbatim to the plugin callable.
+                Default is ``{}``.
+            ``inject`` : list of str
+                Which workflow state to pass to the callable as extra keyword
+                arguments; allowed values ``"locs"``, ``"info"`` and
+                ``"movie"`` map to ``locs=self.locs`` / ``info=self.info`` /
+                ``movie=self.movie``. Opt-in (default ``[]``) so a callable
+                that does not accept those keywords is not forced to.
+        results : dict
+            Module results (decorator-provided keys only; see class docstring).
+
+        Returns
+        -------
+        parameters : dict
+            Input parameters, unchanged.
+        results : dict
+            Results updated with ``plugin_api_name``, ``plugin_callable`` and
+            ``injected``. If the callable returns a dict, its reserved keys are
+            consumed: ``locs``/``info`` update the pipeline state, ``report``
+            is stored as ``plugin_report``, ``files`` as ``plugin_files`` and
+            any remaining keys as ``plugin_result``. A non-dict return value is
+            stored as ``plugin_result``.
+        """
+
+    @abc.abstractmethod
     def analysis_documentation(self, i, parameters, results):
         """Document where and how the analysis is being performed.
 

@@ -88,6 +88,46 @@ native-picasso pipeline. The implementation lives in
 `picasso_set/params.py` and registry entries (`module_set="picasso"`) in
 `modulespec.py`.
 
+## Picasso plugins
+
+Recent picasso versions (≥ 0.11) ship a **plugin system**: single `.py` files
+in `~/.picasso/plugins/`, enabled opt-in, that extend picasso. One of their
+extension points is a **Python API** — a plugin exports a mapping
+`PICASSO_API = {"name": callable}` that scripts (and picasso-workflow) can call.
+
+The generic `plugin` workflow module is a bridge to that API, so **any
+installed, enabled plugin export is usable as a workflow step** without adding a
+dedicated module. It is a single-dataset module and only sees plugins already
+enabled in picasso (it never enables one itself — enable it once via the picasso
+GUI plugin store or by editing `~/.picasso/plugins/.installed.json`).
+
+A step looks like:
+
+```python
+("plugin", {
+    "api_name": "my_export",      # key in some plugin's PICASSO_API
+    "kwargs": {"threshold": 5},   # passed verbatim to the callable
+    "inject": ["locs", "info"],   # opt-in: pass self.locs / self.info / self.movie
+})
+```
+
+Calling convention:
+
+- `api_name` (required) — the `PICASSO_API` export to call. If it is not among
+  the enabled plugins' exports, the module fails with the list of available
+  names.
+- `kwargs` (optional) — keyword arguments forwarded verbatim.
+- `inject` (optional, default none) — which current workflow state to pass as
+  extra keyword arguments (`locs`, `info`, `movie`). Opt-in so a callable that
+  does not accept those keywords is not forced to.
+
+Return handling: if the callable returns a `dict`, the reserved keys `locs` /
+`info` update the pipeline state, `report` and `files` are documented in the
+report, and any other keys are recorded as the plugin result. A non-dict return
+is recorded as the result. Rich, plugin-specific reporting is the plugin
+author's responsibility via the `report` key; otherwise the module documents the
+call and a best-effort summary of the return.
+
 ## Per-channel parameters
 
 In an aggregation (or investigation) workflow, every channel is analyzed by

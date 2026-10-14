@@ -468,6 +468,84 @@ class ModuleDescriptor(util.AbstractModuleCollection):
 
         return parameters_spec, results_spec
 
+    def plugin(self):
+        """Call an installed, enabled picasso API plugin export.
+
+        Parameters
+        ----------
+        parameters : dict
+            Required keys:
+                api_name : str
+                    Name of the PICASSO_API export to call.
+            Optional keys:
+                kwargs : dict
+                    Keyword arguments passed verbatim to the callable.
+                inject : list
+                    Workflow state to pass as keyword arguments
+                    (``locs``/``info``/``movie``).
+
+        Returns
+        -------
+        parameters : dict
+            as input, unchanged
+        results : dict
+            updated with plugin_api_name, plugin_callable, injected and
+            (depending on the callable's return) plugin_report, plugin_files
+            and plugin_result.
+        """
+        parameters_spec = {
+            "api_name": {
+                "type": "str",
+                "required": True,
+                "description": "Name of the PICASSO_API export to call.",
+            },
+            "kwargs": {
+                "type": "dict",
+                "required": False,
+                "description": "Keyword arguments passed to the callable.",
+            },
+            "inject": {
+                "type": "list",
+                "element_type": "str",
+                "required": False,
+                "description": (
+                    "Workflow state to pass as keyword arguments "
+                    "(locs/info/movie)."
+                ),
+            },
+        }
+
+        results_spec = {
+            "plugin_api_name": {
+                "type": "str",
+                "description": "The PICASSO_API export that was called.",
+            },
+            "plugin_callable": {
+                "type": "str",
+                "description": "Module and name of the resolved callable.",
+            },
+            "injected": {
+                "type": "list",
+                "element_type": "str",
+                "description": "Workflow state injected into the call.",
+            },
+            "plugin_report": {
+                "type": "str",
+                "description": "Report content returned by the plugin.",
+            },
+            "plugin_files": {
+                "type": "list",
+                "element_type": "str",
+                "description": "Output files reported by the plugin.",
+            },
+            "plugin_result": {
+                "type": "dict",
+                "description": "Remaining values returned by the plugin.",
+            },
+        }
+
+        return parameters_spec, results_spec
+
     def analysis_documentation(self):
         """This module documents where and how analysis is being performed
 

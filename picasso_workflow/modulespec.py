@@ -351,6 +351,14 @@ _SPECS = [
         scopes=_BOTH,
         summary="Generate a random value and test plot for debugging.",
     ),
+    _s(
+        "plugin",
+        relation=E,
+        picasso_symbol="picasso.plugins.load_api_plugins",
+        scopes=_SINGLE,
+        summary="Call an installed, enabled picasso API plugin "
+        "(PICASSO_API export).",
+    ),
     # --- loaders ------------------------------------------------------------
     _s(
         "load_dataset_movie",

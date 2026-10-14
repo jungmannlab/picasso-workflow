@@ -2131,6 +2131,77 @@ class TestAnalyseModules(unittest.TestCase):
         return
         shutil.rmtree(os.path.join(self.results_folder, "00_random_val"))
 
+    def plugin(self):
+        """Test the generic picasso-plugin bridge module."""
+        import picasso.plugins as pplugins
+
+        captured = {}
+
+        def fake_api(**kwargs):
+            captured.update(kwargs)
+            return {
+                "locs": "NEWLOCS",
+                "info": [{"from": "plugin"}],
+                "report": "did a thing",
+                "count": 3,
+            }
+
+        fake_api.__name__ = "fake_api"
+
+        # self.ap is shared across all module tests in test_modules; restore
+        # the pipeline state we clobber so later module tests are unaffected.
+        orig_locs = self.ap.locs
+        orig_info = self.ap.info
+        try:
+            # --- happy path: inject state, consume structured return ---
+            with patch.object(
+                pplugins,
+                "load_api_plugins",
+                return_value={"myfunc": fake_api},
+            ):
+                self.ap.locs = "OLDLOCS"
+                self.ap.info = []
+                _, results = self.ap.plugin(
+                    0,
+                    {
+                        "api_name": "myfunc",
+                        "kwargs": {"threshold": 5},
+                        "inject": ["locs", "info"],
+                    },
+                )
+
+            # injected state and explicit kwargs reached the callable
+            self.assertEqual(captured["locs"], "OLDLOCS")
+            self.assertEqual(captured["info"], [])
+            self.assertEqual(captured["threshold"], 5)
+            # structured return updated the pipeline
+            self.assertEqual(self.ap.locs, "NEWLOCS")
+            self.assertEqual(self.ap.info, [{"from": "plugin"}])
+            # results recorded report / leftover result / provenance
+            self.assertEqual(results["plugin_report"], "did a thing")
+            self.assertEqual(results["plugin_result"], {"count": 3})
+            self.assertEqual(results["plugin_api_name"], "myfunc")
+            self.assertEqual(results["injected"], ["locs", "info"])
+            self.assertTrue(results["success"])
+
+            # --- unknown export raises a clear AutoPicassoError ---
+            self.ap.locs = None  # keep _save_state_on_error a no-op
+            with patch.object(pplugins, "load_api_plugins", return_value={}):
+                with self.assertRaises(analyse.AutoPicassoError):
+                    self.ap.plugin(1, {"api_name": "does_not_exist"})
+        finally:
+            self.ap.locs = orig_locs
+            self.ap.info = orig_info
+
+        shutil.rmtree(
+            os.path.join(self.results_folder, "00_plugin"),
+            ignore_errors=True,
+        )
+        shutil.rmtree(
+            os.path.join(self.results_folder, "01_plugin"),
+            ignore_errors=True,
+        )
+
     def render(self):
         return
         shutil.rmtree(os.path.join(self.results_folder, "00_render"))

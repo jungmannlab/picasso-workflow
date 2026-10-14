@@ -859,6 +859,76 @@ class ConfluenceReporter(AbstractModuleCollection):
         """
         return self._emit(text, postpone_report)
 
+    def plugin(self, i, parameters, results, postpone_report=False):
+        """Report the generic ``plugin`` module to Confluence.
+
+        Documents which picasso API plugin export was called, the state
+        injected into it, and a best-effort summary of what it returned
+        (``plugin_report`` / ``plugin_result``); uploads any files the plugin
+        reported under ``plugin_files``.
+
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters : dict
+            The module's parameters (see
+            :class:`~picasso_workflow.util.AbstractModuleCollection`).
+        results : dict
+            The module's results (see
+            :class:`~picasso_workflow.util.AbstractModuleCollection`).
+        postpone_report : bool, optional
+            If True, build the report text but defer posting it. Default is
+            False.
+        """
+        logger.debug(f"Reporting plugin module {i:02d}")
+        injected = results.get("injected", [])
+        text = f"""
+        <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
+        <p><strong>Module {i:02d}: Plugin</strong></p>
+        <ul>
+        <li>API export: {html.escape(str(results.get('plugin_api_name', '')))}
+        </li>
+        <li>Callable: {html.escape(str(results.get('plugin_callable', '')))}
+        </li>
+        <li>Injected state: {html.escape(str(injected) if injected else '-')}
+        </li>
+        <li>Start Time: {results['start time']}</li>
+        <li>Duration: {results["duration"] // 60:.0f} min
+        {(results["duration"] % 60):.02f} s</li>
+        </ul>"""
+
+        if (report := results.get("plugin_report")) is not None:
+            text += (
+                "<p><strong>Plugin report</strong></p>"
+                f"<pre>{html.escape(str(report))}</pre>"
+            )
+        if (result := results.get("plugin_result")) is not None:
+            text += (
+                "<p><strong>Plugin result</strong></p>"
+                f"<pre>{html.escape(str(result))}</pre>"
+            )
+
+        files = results.get("plugin_files", [])
+        if files:
+            text += "<p><strong>Plugin files</strong></p><ul>"
+            for fp in files:
+                try:
+                    self.ci.upload_attachment(self.report_page_id, fp)
+                except Exception as e:  # noqa: BLE001
+                    logger.error(f"Could not upload plugin file {fp}: {e}")
+                fn = os.path.split(fp)[1]
+                text += (
+                    "<li><ac:link><ri:attachment "
+                    f'ri:filename="{html.escape(fn)}" /></ac:link></li>'
+                )
+            text += "</ul>"
+
+        text += """
+        </ac:layout-cell></ac:layout-section></ac:layout>
+        """
+        return self._emit(text, postpone_report)
+
     @module_decorator
     def conditional_branch(
         self,
