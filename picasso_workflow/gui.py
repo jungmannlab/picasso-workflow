@@ -11960,6 +11960,7 @@ class Window(QtWidgets.QMainWindow):
                 name
                 for name in self.module_descriptor.get_module_names()
                 if not self._is_hidden_by_module_set(name, False)
+                and not self._is_experimental(name)
             ]
         )
         self.module_combobox.currentTextChanged.connect(self.on_module_changed)
@@ -15073,6 +15074,10 @@ class Window(QtWidgets.QMainWindow):
                 spec = MODULE_REGISTRY.get(name)
                 if spec is not None and scope not in spec.scopes:
                     continue  # hide scope-inappropriate modules
+                # hide experimental modules, but keep the current selection
+                # visible so an existing row using one stays editable
+                if name != previous and self._is_experimental(name):
+                    continue
                 # keep the current selection visible even when its module
                 # set is toggled off (e.g. editing an existing row)
                 if name != previous and self._is_hidden_by_module_set(
@@ -15120,6 +15125,24 @@ class Window(QtWidgets.QMainWindow):
                 "saver",
             )
         return spec is not None and spec.module_set == "picasso"
+
+    @staticmethod
+    def _is_experimental(name):
+        """True when module ``name`` is flagged experimental (palette-hidden).
+
+        Experimental modules are functional and dispatchable from a workflow
+        but kept out of the palette until ready for users (see
+        :class:`~picasso_workflow.modulespec.ModuleSpec`). An existing
+        workflow row that uses one is still inserted on demand by
+        :meth:`_module_palette_index`, so it remains editable.
+
+        Parameters
+        ----------
+        name : str
+            A module name from the palette.
+        """
+        spec = MODULE_REGISTRY.get(name)
+        return spec is not None and spec.experimental
 
     def _module_palette_index(self, module_name):
         """Return the palette index of ``module_name``, inserting if hidden.

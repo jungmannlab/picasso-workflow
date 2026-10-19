@@ -22,7 +22,10 @@ This file was started after v0.5.6; earlier history is in the git log.
   (picasso's opt-in trust model is honoured). Note: plugins in the official
   registry are currently GUI plugins (`class Plugin`) and do not expose
   `PICASSO_API`, so this module targets API-style plugins (see README "Picasso
-  plugins").
+  plugins"). **Merged as experimental and hidden from the GUI module palette**
+  (`ModuleSpec.experimental=True`) until API plugins exist to test it against;
+  still dispatchable from a workflow and covered by unit tests so it stays
+  green in CI. Un-set the flag to surface it.
 
 ### Changed
 

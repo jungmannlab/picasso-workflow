@@ -89,6 +89,19 @@ class TestModuleSpecRegistry(unittest.TestCase):
                     f"{spec.name}: WRAPS module must record a picasso_symbol",
                 )
 
+    def test_experimental_defaults_false(self):
+        # Only deliberately-parked modules are hidden; everything else must
+        # stay visible in the palette.
+        experimental = {
+            name for name, spec in MODULE_REGISTRY.items() if spec.experimental
+        }
+        self.assertEqual(
+            {"plugin"},
+            experimental,
+            "unexpected experimental (palette-hidden) modules: "
+            f"{sorted(experimental - {'plugin'})}",
+        )
+
 
 class TestModuleSpecValidation(unittest.TestCase):
     def test_unknown_token_rejected(self):
