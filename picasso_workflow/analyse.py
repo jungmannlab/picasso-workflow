@@ -1426,6 +1426,92 @@ class AutoPicasso(
         """
         return parameters, results
 
+    @module_decorator
+    def plugin(self, i, parameters, results):
+        """Call an installed, enabled picasso API plugin export.
+
+        Generic bridge to the picasso plugin system: looks up ``api_name`` in
+        the merged ``PICASSO_API`` exports of the enabled plugins and calls it.
+        Workflow state named in ``inject`` is passed as keyword arguments, and
+        a dict return value may update ``self.locs`` / ``self.info`` and
+        contribute report content.
+
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters : dict
+            See :meth:`picasso_workflow.util.AbstractModuleCollection.plugin`.
+        results : dict
+            Module results (decorator-provided keys only).
+
+        Returns
+        -------
+        parameters : dict
+            Input parameters, unchanged.
+        results : dict
+            Results updated as documented on the contract method.
+        """
+        try:
+            from picasso import plugins as picasso_plugins
+        except ImportError as exc:
+            raise AutoPicassoError(
+                "The installed picasso has no plugin system (needs picasso "
+                ">= 0.11). Cannot run the 'plugin' module."
+            ) from exc
+
+        api_name = parameters["api_name"]
+        exports = picasso_plugins.load_api_plugins()
+        if api_name not in exports:
+            raise AutoPicassoError(
+                f"picasso API plugin export {api_name!r} not found. Available "
+                f"(enabled) exports: {sorted(exports)}. Enable the plugin in "
+                "~/.picasso/plugins/ first."
+            )
+        fn = exports[api_name]
+
+        call_kwargs = dict(parameters.get("kwargs", {}))
+        inject = parameters.get("inject", [])
+        state = {"locs": self.locs, "info": self.info, "movie": self.movie}
+        for key in inject:
+            if key not in state:
+                raise AutoPicassoError(
+                    f"Cannot inject unknown workflow state {key!r}; allowed: "
+                    f"{sorted(state)}."
+                )
+            call_kwargs[key] = state[key]
+
+        ret = fn(**call_kwargs)
+
+        results["picasso version"] = picassoversion
+        results["plugin_api_name"] = api_name
+        results["plugin_callable"] = (
+            f"{getattr(fn, '__module__', '?')}."
+            f"{getattr(fn, '__name__', '?')}"
+        )
+        results["injected"] = list(inject)
+
+        if isinstance(ret, dict):
+            if "locs" in ret:
+                self.locs = ret["locs"]
+            if "info" in ret:
+                self.info = ret["info"]
+            if "report" in ret:
+                results["plugin_report"] = ret["report"]
+            if "files" in ret:
+                results["plugin_files"] = ret["files"]
+            extra = {
+                k: v
+                for k, v in ret.items()
+                if k not in ("locs", "info", "report", "files")
+            }
+            if extra:
+                results["plugin_result"] = extra
+        elif ret is not None:
+            results["plugin_result"] = ret
+
+        return parameters, results
+
     #    @profile_resource_usage
     @module_decorator
     def conditional_branch(self, i, parameters, results):

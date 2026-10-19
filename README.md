@@ -88,6 +88,65 @@ native-picasso pipeline. The implementation lives in
 `picasso_set/params.py` and registry entries (`module_set="picasso"`) in
 `modulespec.py`.
 
+## Picasso plugins
+
+Recent picasso versions (≥ 0.11) ship a **plugin system**: single `.py` files
+in `~/.picasso/plugins/`, enabled opt-in, that extend picasso through three
+entry points — a **GUI** action (`class Plugin`), a **CLI** subcommand
+(`register_cli`), and a **Python API** (`PICASSO_API = {"name": callable}`),
+all documented in picasso's `plugin_template.py`.
+
+The generic `plugin` workflow module bridges to **the Python-API entry point
+only** — it calls a name exported in some enabled plugin's `PICASSO_API`
+mapping via `picasso.plugins.load_api_plugins()`. The GUI and CLI entry points
+are not usable from a headless workflow (the GUI needs an interactive Qt window;
+the CLI adds `picasso` subcommands), so this module cannot call them.
+
+> **Compatibility note.** This targets plugins that expose a `PICASSO_API`
+> export — e.g. plugins you (or your lab) write for scripting, following
+> picasso's `plugin_template.py`. The plugins currently published in the
+> official registry ([`jungmannlab/picasso_plugins`](https://github.com/jungmannlab/picasso_plugins))
+> are **GUI plugins** (`class Plugin`, organized under the `render/`,
+> `average/`, … app folders); they do **not** define `PICASSO_API`, so this
+> module cannot run them as-is. To make a GUI plugin workflow-usable, its author
+> would add a `PICASSO_API` export (a thin callable wrapping the plugin's
+> non-interactive logic).
+
+It is a single-dataset module and only sees plugins already enabled in picasso
+(it never enables one itself — enable it once via the picasso GUI plugin store or
+by editing `~/.picasso/plugins/.installed.json`).
+
+A step looks like:
+
+```python
+("plugin", {
+    "api_name": "my_export",      # key in some plugin's PICASSO_API
+    "kwargs": {"threshold": 5},   # passed verbatim to the callable
+    "inject": ["locs", "info"],   # opt-in: pass self.locs / self.info / self.movie
+})
+```
+
+Calling convention:
+
+- `api_name` (required) — the `PICASSO_API` export to call. If it is not among
+  the enabled plugins' exports, the module fails with the list of available
+  names.
+- `kwargs` (optional) — keyword arguments forwarded verbatim.
+- `inject` (optional, default none) — which current workflow state to pass as
+  extra keyword arguments (`locs`, `info`, `movie`). Opt-in so a callable that
+  does not accept those keywords is not forced to.
+
+Return handling: a plain `PICASSO_API` callable just returns a value (picasso's
+template example returns a number), which is recorded under `plugin_result` — so
+any such plugin runs, it simply does not feed the pipeline. To additionally
+update the pipeline, a callable can follow this module's **convention** and
+return a `dict`: the reserved keys `locs` / `info` update the pipeline state,
+`report` and `files` are documented in the report, and any remaining keys are
+recorded as the plugin result. This dict convention is specific to
+picasso-workflow, not part of picasso's plugin contract; rich, plugin-specific
+reporting is the plugin author's responsibility via the `report` key, otherwise
+the module documents the call and a best-effort summary of the return.
+
 ## Per-channel parameters
 
 In an aggregation (or investigation) workflow, every channel is analyzed by

@@ -189,6 +189,11 @@ class ModuleSpec:
         a migration candidate for core ``picasso``.
     scopes : frozenset[Scope]
         Non-empty set of workflow scopes the module is valid in.
+    experimental : bool
+        If True, the module is functional (dispatchable from a workflow and
+        covered by tests) but hidden from the GUI module palette -- for
+        features merged to keep them alive in CI but not yet ready for users
+        to pick. Un-set this flag to surface the module.
     summary : str
         One-line human description (mirrors the contract docstring).
     module_set : str
@@ -215,6 +220,8 @@ class ModuleSpec:
     outpost: bool = False
     # --- workflow scope ---
     scopes: frozenset[Scope] = frozenset({Scope.SINGLE})
+    # --- visibility ---
+    experimental: bool = False
     # --- docs ---
     summary: str = ""
     # --- module set ---
@@ -263,6 +270,7 @@ def _s(
     picasso_symbol=None,
     outpost=False,
     scopes=(Scope.SINGLE,),
+    experimental=False,
     summary="",
     module_set="native",
     params=None,
@@ -279,6 +287,7 @@ def _s(
         picasso_symbol=picasso_symbol,
         outpost=outpost,
         scopes=frozenset(scopes),
+        experimental=experimental,
         summary=summary,
         module_set=module_set,
         params=params,
@@ -350,6 +359,19 @@ _SPECS = [
         relation=N,
         scopes=_BOTH,
         summary="Generate a random value and test plot for debugging.",
+    ),
+    _s(
+        "plugin",
+        relation=E,
+        picasso_symbol="picasso.plugins.load_api_plugins",
+        scopes=_SINGLE,
+        # Hidden from the GUI palette until the picasso plugin ecosystem
+        # ships PICASSO_API plugins to drive it (no API plugins exist yet).
+        # Still dispatchable from a workflow and covered by unit tests, so it
+        # stays green in CI and the module contract cannot drift.
+        experimental=True,
+        summary="Call an installed, enabled picasso API plugin "
+        "(PICASSO_API export).",
     ),
     # --- loaders ------------------------------------------------------------
     _s(

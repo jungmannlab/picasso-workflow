@@ -10,6 +10,23 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ## [Unreleased]
 
+### Added
+
+- **Generic `plugin` module** bridging to the **Python-API entry point**
+  (`PICASSO_API`) of the picasso (≥ 0.11) plugin system. A single-dataset
+  workflow step can call any installed, *enabled* `PICASSO_API` export via
+  `("plugin", {"api_name": ..., "kwargs": {...}, "inject": ["locs", "info",
+  "movie"]})`. Workflow state is injected as opt-in keyword arguments; a `dict`
+  return may update `locs`/`info` and contribute `report`/`files` to the
+  Confluence/HTML report. Only plugins the user has already enabled are visible
+  (picasso's opt-in trust model is honoured). Note: plugins in the official
+  registry are currently GUI plugins (`class Plugin`) and do not expose
+  `PICASSO_API`, so this module targets API-style plugins (see README "Picasso
+  plugins"). **Merged as experimental and hidden from the GUI module palette**
+  (`ModuleSpec.experimental=True`) until API plugins exist to test it against;
+  still dispatchable from a workflow and covered by unit tests so it stays
+  green in CI. Un-set the flag to surface it.
+
 ### Changed
 
 - **Render tab locs tree is now three-level for aggregation runs.** The
