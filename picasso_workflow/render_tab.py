@@ -292,25 +292,46 @@ class RenderTab(QtWidgets.QWidget):
         self._populate_tree()
 
     def _populate_tree(self) -> None:
-        """Fill the tree with the current run's locs files, grouped by dir."""
+        """Fill the tree, nesting each locs file under its path components.
+
+        The label from :func:`enumerate_locs_files` is a file's path
+        relative to the run folder, so splitting it on the path separator
+        yields the natural hierarchy: an aggregation run nests as
+        ``<target>/<module>/<file>`` (three levels), a single-dataset run as
+        ``<module>/<file>`` (two). Each folder component becomes a group
+        node (reused across the files beneath it) and the file is a leaf
+        carrying its absolute path in ``_PATH_ROLE``.
+        """
         self.locs_tree.clear()
         run = self.run_combo.currentData()
         if not run:
             return
+        # folder prefix (e.g. "sgl_00/03_localize") -> its tree node, so a
+        # folder shared by several files is created once and reused.
         groups: dict[str, QtWidgets.QTreeWidgetItem] = {}
         for label, path in enumerate_locs_files(run):
-            head, tail = os.path.split(label)
-            group_key = head or "."
-            group = groups.get(group_key)
-            if group is None:
-                group = QtWidgets.QTreeWidgetItem([group_key])
-                self.locs_tree.addTopLevelItem(group)
-                group.setExpanded(True)
-                groups[group_key] = group
-            item = QtWidgets.QTreeWidgetItem([tail])
+            *folders, filename = label.replace("\\", "/").split("/")
+            parent = None  # None => top level
+            prefix = ""
+            for folder in folders:
+                prefix = f"{prefix}/{folder}" if prefix else folder
+                group = groups.get(prefix)
+                if group is None:
+                    group = QtWidgets.QTreeWidgetItem([folder])
+                    if parent is None:
+                        self.locs_tree.addTopLevelItem(group)
+                    else:
+                        parent.addChild(group)
+                    group.setExpanded(True)
+                    groups[prefix] = group
+                parent = group
+            item = QtWidgets.QTreeWidgetItem([filename])
             item.setData(0, self._PATH_ROLE, path)
             item.setToolTip(0, path)
-            group.addChild(item)
+            if parent is None:
+                self.locs_tree.addTopLevelItem(item)
+            else:
+                parent.addChild(item)
 
     def _selected_paths(self) -> list[str]:
         """Absolute paths of the selected leaf (file) items."""

@@ -138,6 +138,30 @@ def generate_random_code(length):
     return random_code
 
 
+def _safe_filename_component(name):
+    """Make a per-channel tag safe to use as a single filename component.
+
+    A dataset's ``#tags`` value feeds the saved locs filename (e.g. the
+    ``("$$map", "#tags", None)`` default of ``save_single_dataset`` and the
+    ``tag + ".hdf5"`` of the aggregated saver). Replace path separators so
+    a tag such as ``"cell/A"`` cannot write into a missing subdirectory, and
+    a leading ``"/"`` cannot discard the target folder into an absolute path.
+
+    Parameters
+    ----------
+    name : str
+        The raw filename component (typically a channel tag).
+
+    Returns
+    -------
+    str
+        ``name`` with ``/`` and ``\\`` replaced by ``_``.
+    """
+    for sep in ("/", "\\"):
+        name = name.replace(sep, "_")
+    return name
+
+
 def _summarize_accepted_structures(geometry_table):
     """Aggregate per-structure geometry over the accepted structures.
 
@@ -10410,9 +10434,10 @@ class AutoPicasso(
             Module results (see
             :class:`~picasso_workflow.util.AbstractModuleCollection`).
         """
-        results["filepath"] = os.path.join(
-            results["folder"], parameters.get("filename") or "locs"
+        filename = _safe_filename_component(
+            parameters.get("filename") or "locs"
         )
+        results["filepath"] = os.path.join(results["folder"], filename)
         root, ext = os.path.splitext(results["filepath"])
         if ext != ".hdf5":
             results["filepath"] = root + ".hdf5"
@@ -11109,7 +11134,9 @@ class AutoPicasso(
         for locs, info, tag in zip(
             self.channel_locs, self.channel_info, self.channel_tags
         ):
-            filepath = os.path.join(folder, tag + ".hdf5")
+            filepath = os.path.join(
+                folder, _safe_filename_component(tag) + ".hdf5"
+            )
             io.save_locs(filepath, locs, info)
             allfps.append(filepath)
         return allfps

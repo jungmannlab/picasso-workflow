@@ -77,7 +77,9 @@ def minimal(filepath, box_size=7):
         (
             "save_single_dataset",
             {
-                "filename": "locs.hdf5",
+                # Save as "<tag>.hdf5" per channel in an aggregation run;
+                # falls back to "locs.hdf5" standalone (tag-less).
+                "filename": ("$$map", "#tags", None),
             },
         ),
     ]
@@ -126,7 +128,9 @@ def picasso_native(filepath, fit_method="mle", gradient=5000):
         (
             "save_single_dataset",
             {
-                "filename": "locs.hdf5",
+                # Save as "<tag>.hdf5" per channel in an aggregation run;
+                # falls back to "locs.hdf5" standalone (tag-less).
+                "filename": ("$$map", "#tags", None),
             },
         ),
     ]

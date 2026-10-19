@@ -33,6 +33,22 @@ class MockPicassoMovie:
         return np.random.randint(0, 1000, size=self.shape[1:], dtype=np.uint16)
 
 
+class TestSafeFilenameComponent(unittest.TestCase):
+    """A per-channel tag must stay a single, folder-local filename part."""
+
+    def test_replaces_path_separators(self):
+        # a "/" tag would otherwise write into a missing subdirectory, and a
+        # leading "/" would discard the folder into an absolute path
+        self.assertEqual(analyse._safe_filename_component("cell/A"), "cell_A")
+        self.assertEqual(analyse._safe_filename_component("/abs"), "_abs")
+        self.assertEqual(analyse._safe_filename_component("a\\b"), "a_b")
+
+    def test_leaves_plain_tags_unchanged(self):
+        self.assertEqual(
+            analyse._safe_filename_component("channel 0"), "channel 0"
+        )
+
+
 # @unittest.skip("")
 class TestAnalyseModules(unittest.TestCase):
     """Tests the implementation of the analysis modules defined in

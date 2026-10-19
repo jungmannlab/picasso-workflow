@@ -11891,7 +11891,7 @@ class Window(QtWidgets.QMainWindow):
         # picasso-workflow modules, checked = the native-picasso set
         # (picasso_* names) plus the data loaders and savers.
         self.show_picasso_set_checkbox = QtWidgets.QCheckBox(
-            "Native-picasso (picasso_*) module set"
+            "Only show native-picasso (picasso_*) modules"
         )
         self.show_picasso_set_checkbox.setToolTip(
             "Toggle the module palette between the classic picasso-workflow "

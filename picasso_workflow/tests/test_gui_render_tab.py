@@ -103,6 +103,32 @@ def test_render_tab_populates_tree(qapp, tmp_path):
     tab.deleteLater()
 
 
+def test_render_tab_nests_aggregation_targets(qapp, tmp_path):
+    # an aggregation run: per-target subfolders, each with module folders
+    run = tmp_path / "AnalysisResults" / "agg_240101-1200"
+    for tag in ("sgl_00_ch0", "sgl_01_ch1"):
+        loc = run / tag / "03_picasso_localize" / "locs.hdf5"
+        loc.parent.mkdir(parents=True)
+        loc.write_bytes(b"")
+    (run / "WorkflowRunner.yaml").write_text("results: {}\n")
+    tab = RenderTab(_FakeMain(str(tmp_path)))
+    tab.refresh()
+    # level 1: one node per target
+    targets = [
+        tab.locs_tree.topLevelItem(i)
+        for i in range(tab.locs_tree.topLevelItemCount())
+    ]
+    assert [t.text(0) for t in targets] == ["sgl_00_ch0", "sgl_01_ch1"]
+    # level 2: the module folder; level 3: the locs file (a leaf w/ a path)
+    module = targets[0].child(0)
+    assert targets[0].childCount() == 1
+    assert module.text(0) == "03_picasso_localize"
+    leaf = module.child(0)
+    assert module.childCount() == 1 and leaf.text(0) == "locs.hdf5"
+    assert leaf.data(0, tab._PATH_ROLE).endswith("locs.hdf5")
+    tab.deleteLater()
+
+
 def test_render_tab_selected_paths(qapp, tmp_path):
     _make_run(tmp_path)
     tab = RenderTab(_FakeMain(str(tmp_path)))

@@ -12,6 +12,14 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Changed
 
+- **Render tab locs tree is now three-level for aggregation runs.** The
+  file list nests each saved `*.hdf5` under its path components —
+  `target → module → file` for an aggregation run (per-channel
+  `*_sgl_NN_<tag>` folders), still `module → file` for a single-dataset
+  run — instead of the previous flat module-folder grouping.
+- **Clarified the module-palette toggle label** in the workflow builder:
+  "Native-picasso (picasso_\*) module set" → "Only show native-picasso
+  (picasso_\*) modules".
 - Python baseline raised 3.10 → 3.11 (`requires-python`, black
   `target-version`, CI matrices); `picassosr` floor moved to `>=0.12.0a3`
   (picasso 0.12 line, requires 3.11) — supersedes the temporary B7 git-pin
@@ -19,6 +27,12 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Fixed
 
+- **Sanitize tag-derived locs filenames.** A dataset's `#tags` value now
+  feeds the saved filename by default, so `save_single_dataset` and the
+  aggregated saver replace path separators (`/`, `\`) in a tag before using
+  it as a filename — a tag like `"cell/A"` can no longer write into a
+  missing subdirectory, and a leading `/` can no longer escape the results
+  folder into an absolute path.
 - **Hardened config loading and onboarding (code-review follow-ups).** A typo in a hand-edited `config.yaml` (which the onboarding dialog invites users to edit) now degrades to a skipped layer with a warning instead of crashing `import picasso_workflow`; the startup template dropdown tolerates a null/missing `Templates`; the per-user `.env` fills an *empty* `CONFLUENCE_TOKEN` (not just an unset one); the macOS `post_install` no longer aborts under `set -e` if `stat`/`id` fail; the update check still nudges when the running version is `"unknown"`; the update-check thread shutdown is reentrancy-safe; and the per-user config dir + Confluence token env-var names now come from single sources (`_user_config_dir()`, `confluence._CONFLUENCE_PROFILES`).
 - **Wheel installs crashed on startup with `KeyError: 'Templates'`.** The
   bundled `config.yaml` is gitignored (site-specific / secrets) and so is
@@ -32,6 +46,11 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Added
 
+- **Per-channel locs filenames by default.** The two standard single-dataset
+  recipes (`minimal`, `picasso_native`) now default `save_single_dataset`'s
+  `filename` to `("$$map", "#tags", None)`, matching the GUI default. In an
+  aggregation run each channel's locs are saved as `<tag>.hdf5`; a standalone
+  (tag-less) run falls back to `locs.hdf5` as before.
 - **Set the Confluence token from the onboarding dialog.** The Getting Started dialog has an optional field to paste a Confluence personal access token (with how-to-get-it guidance and a show/hide toggle). It is persisted to the per-user `~/.config/picasso_workflow/.env` (chmod 600) as `CONFLUENCE_TOKEN` and set in the current process, so Confluence reporting / the Doctor tab's connection test work immediately and on every later launch (a new per-user `.env` is now loaded at startup). The token value is never written to `config.yaml` or the logs.
 - **Live config reload (no restart).** `reload_config()` re-reads the config.yaml layers and updates `CONFIG` in place; the GUI reloads and refreshes the template dropdown when the Getting Started dialog closes (and via Help → Reload settings file), so a config you just created/edited takes effect without restarting.
 - **First-run "Getting started" onboarding dialog.** A fresh install runs on built-in default settings, which left new users with no obvious next step. The GUI now shows a one-time guide explaining where the per-user config file lives (`~/.config/picasso_workflow/config.yaml`), that it overrides the bundled defaults, and the first steps to take; a button seeds that file from the template and opens it. Re-openable from a new **Help** menu (“Getting Started…” / “Open settings file…”). Dismissal is remembered via a marker in the config dir.
