@@ -54,6 +54,14 @@ This file was started after v0.5.6; earlier history is in the git log.
   wrapper, which is removed. No behavioural change — no call site passed the
   wrapper's `save` argument (which it silently dropped anyway). First step of the
   outpost de-duplication tracked in `picasso_workflow/outpost/MANIFEST.md`.
+- **Dedup to picasso 0.12 (batch 2):** `picasso_outpost.picked_locs` now
+  delegates pick-finding to `picasso.postprocess.picked_locs` (circular picks,
+  radius = `pick_diameter / 2`), keeping the workflow's concatenated-DataFrame
+  + `group` + optional non-picked wrapper; the forked `get_block_locs_at` /
+  `locs_at` copies are removed. Verified membership- and group-identical to the
+  former in-house loop (only intra-frame row order differs, which is
+  semantically irrelevant for localizations) by a new
+  `tests/test_outpost_dedup_equivalence.py`.
 - **All production picasso imports now route through the boundary.** Every
   `from picasso import ...` in picasso-workflow production code is now
   `from picasso_workflow._picasso_api import ...` (the boundary lazily
