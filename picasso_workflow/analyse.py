@@ -7439,7 +7439,14 @@ class AutoPicasso(
         """
         folder_in, file_in = os.path.split(parameters["fp_locs"])
         file_nameonly, _ = os.path.splitext(file_in)
-        Meas = outpost_modules.binding_event_analysis.Measurement(
+        # Lazy import: needs the optional ``[binding-events]`` extra (lmfit,
+        # pandarallel), so importing analyse.py stays cheap and dependency-free.
+        from picasso_workflow.outpost.binding_events.analysis import (
+            Measurement,
+        )
+        from picasso_workflow.outpost.binding_events.plotting import Plotting
+
+        Meas = Measurement(
             in_path=parameters["fp_locs"],
             save_path=results["folder"],
             saving_path=file_nameonly,
@@ -7448,7 +7455,7 @@ class AutoPicasso(
         Meas.Begin()
         Meas.FileSaver()
 
-        Plotter = outpost_modules.binding_event_plotting.Plotting(
+        Plotter = Plotting(
             table_g=Meas.table_g,
             table_k=Meas.table_k,
             show=False,

@@ -12,6 +12,9 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Added
 
+- **`[binding-events]` optional extra** (`lmfit`, `pandarallel`) for the
+  `binding_event_analysis` workflow module. Its code is imported lazily, so the
+  deps are only needed when that module runs: `pip install -e ".[binding-events]"`.
 - **Phase 2 outpost scaffold** (`picasso_workflow/outpost/`): a `MANIFEST.md`
   that tracks the migration of picasso-adjacent code (`picasso_outpost.py` +
   `outpost_modules/`) into feature-focused submodules, with a per-feature status
@@ -67,6 +70,11 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Changed
 
+- **Outpost restructure (binding-events slice).** `binding_event_analysis` and
+  `binding_event_plotting` moved from the flat `outpost_modules/` into a cohesive
+  `outpost/binding_events/` feature package (as `analysis`/`plotting`). The next
+  incremental `picasso_outpost` → `outpost/<feature>/` step (see
+  `outpost/MANIFEST.md`).
 - **Packaging: subpackages now ship in non-editable wheels.** Switched
   `[tool.setuptools]` from the non-recursive `packages = ["picasso_workflow"]`
   to `[tool.setuptools.packages.find]` (`include = ["picasso_workflow*"]`), so
@@ -135,6 +143,13 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Fixed
 
+- **`binding_event_analysis` module no longer crashes at runtime.** It called
+  `outpost_modules.binding_event_analysis.Measurement(...)`, but that submodule
+  was never imported into the `outpost_modules` package (its `__init__` imports
+  only `mask`/`ripleys`), so the call raised `AttributeError` whenever the module
+  ran. It is experimental and mocked in the unit tier, so nothing caught it. The
+  code now lives in `picasso_workflow/outpost/binding_events/` and is imported
+  explicitly by the workflow module.
 - **Sanitize tag-derived locs filenames.** A dataset's `#tags` value now
   feeds the saved filename by default, so `save_single_dataset` and the
   aggregated saver replace path separators (`/`, `\`) in a tag before using
