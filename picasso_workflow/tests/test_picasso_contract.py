@@ -14,6 +14,7 @@ picassosr pin in ``pyproject.toml``, or update the boundary in
 """
 
 import importlib
+import inspect
 
 import pytest
 
@@ -49,6 +50,21 @@ def test_submodule_attrs_present(submodule, attrs):
     mod = importlib.import_module(f"picasso.{submodule}")
     missing = [a for a in attrs if not hasattr(mod, a)]
     assert not missing, f"picasso.{submodule} is missing: {missing}"
+
+
+@pytest.mark.parametrize(
+    "dotted, params", sorted(api.SIGNATURE_CONTRACT.items())
+)
+def test_signature_params_present(dotted, params):
+    """Parameter names the workflow passes must still exist upstream."""
+    modname, fname = dotted.rsplit(".", 1)
+    fn = getattr(importlib.import_module(f"picasso.{modname}"), fname)
+    present = set(inspect.signature(fn).parameters)
+    missing = [p for p in params if p not in present]
+    assert not missing, (
+        f"picasso.{dotted} no longer accepts {missing} "
+        f"(current params: {sorted(present)})"
+    )
 
 
 def test_fit_method_map_accessor():

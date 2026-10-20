@@ -1,0 +1,67 @@
+name: picasso early-warning
+
+# Non-gating early-warning: runs the picasso contract test (and the unit tier)
+# against the LATEST upstream picassosr -- including pre-releases and beyond our
+# pin ceiling -- so an upstream rename / API change shows up here as a red run
+# BEFORE we bump the `picassosr` pin, instead of silently at runtime on the
+# cluster. It gates nothing (scheduled + manual only); a failure is the signal.
+#
+# Pairs with tests/test_picasso_contract.py, which runs pinned on every PR via
+# "Unit Tests (hosted)". This job is the forward-looking companion to that gate.
+
+# NOTE: GitHub runs `schedule:` and shows the `workflow_dispatch` "Run
+# workflow" button ONLY from the workflow file on the repository's DEFAULT
+# branch (`master`). This file reaches `master` with the next `develop ->
+# master` release, at which point the weekly run activates; until then it does
+# not fire from `develop`. Cherry-pick it to `master` if you want it live sooner.
+on:
+  schedule:
+    - cron: "0 6 * * 1" # Mondays 06:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  contract-vs-latest-picasso:
+    runs-on: ubuntu-latest
+    env:
+      QT_QPA_PLATFORM: offscreen
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install Qt runtime libraries (headless PyQt6 import)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libegl1 libgl1 libxkbcommon0 libdbus-1-3
+
+      - name: Install picasso-workflow (pinned picassosr)
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
+      - name: Bump picassosr to the latest upstream (pre-releases allowed)
+        # --force-reinstall --no-deps swaps only picassosr to the newest release
+        # on PyPI, past our pin ceiling. pip prints a reverse-dependency warning
+        # (picasso-workflow requires picassosr<0.13) but still installs it --
+        # that override is exactly the point of this job.
+        run: python -m pip install --pre --upgrade --force-reinstall --no-deps picassosr
+
+      - name: Report the picasso version under test
+        run: python -c "import picasso; print('picasso under test:', picasso.__version__)"
+
+      - name: Contract test against latest picasso
+        run: python -m pytest picasso_workflow/tests/test_picasso_contract.py -v
+
+      - name: Unit tier against latest picasso (informational)
+        run: |
+          python -m pytest \
+            --ignore=picasso_workflow/tests/test_real_data_integration.py -q
