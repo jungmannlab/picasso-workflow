@@ -8724,7 +8724,7 @@ class AutoPicasso(
             ``threshold``, ``fig_frc`` and ``fig_images`` (if ``n_splits`` ==
             1).
         """
-        from picasso_workflow.outpost_modules.resolution_frc import (
+        from picasso_workflow.outpost.resolution.resolution_frc import (
             compute_frc_averaged,
             compute_frc_resolution,
         )
@@ -8964,7 +8964,7 @@ class AutoPicasso(
             ``cutoff_frequency`` (1/nm), ``frc_curve_mean``, ``frc_curve_std``,
             ``spatial_frequencies``, ``threshold`` and ``fig_frc``.
         """
-        from picasso_workflow.outpost_modules.resolution_frc import (
+        from picasso_workflow.outpost.resolution.resolution_frc import (
             compute_frc_spatial,
         )
 
@@ -9009,7 +9009,7 @@ class AutoPicasso(
         ]
 
         # Create plot using external function
-        from picasso_workflow.outpost_modules.resolution_frc import (
+        from picasso_workflow.outpost.resolution.resolution_frc import (
             create_frc_plot,
         )
 
@@ -9066,7 +9066,7 @@ class AutoPicasso(
             ``decorr_curve_mean``, ``decorr_curve_std``, ``r_values`` and
             ``fig_decorr``.
         """
-        from picasso_workflow.outpost_modules.resolution_decorrelation import (
+        from picasso_workflow.outpost.resolution.resolution_decorrelation import (
             compute_decorr_spatial,
         )
 
