@@ -37,7 +37,11 @@
   // Bring up the default-deny egress firewall every time the container starts.
   "postStartCommand": "sudo /usr/local/bin/init-firewall.sh",
 
-  "postCreateCommand": "pip install --user -e '.'",
+  // `[dev]` pulls the test/lint tooling now that it lives in an optional extra
+  // (out of runtime deps). No `--pre` needed: the picassosr pin references a
+  // pre-release (>=0.12.0a3), so pip allows pre-releases for that requirement
+  // only and resolves 0.12.0a3 on this 3.11 base.
+  "postCreateCommand": "pip install --user -e '.[dev]'",
 
   "customizations": {
     "vscode": {
