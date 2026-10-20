@@ -33,7 +33,7 @@ import tempfile
 import functools
 import inspect
 import textwrap
-from picasso import lib
+from picasso_workflow._picasso_api import lib
 from PyQt6 import QtWidgets, QtCore, QtGui
 from PyQt6.QtCore import Qt, QEvent
 

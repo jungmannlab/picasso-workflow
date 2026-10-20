@@ -12,8 +12,7 @@ Initial date: March 7, 2024
 from __future__ import annotations
 
 # from picasso_workflow.outpost_modules import g5m
-from picasso import g5m
-import picasso
+from picasso_workflow._picasso_api import g5m
 import copy
 import gc
 
@@ -40,9 +39,9 @@ import psutil
 import yaml
 from matplotlib import colormaps
 from memory_profiler import memory_usage
-from picasso import CONFIG as pCONFIG
-from picasso import __version__ as picassoversion
-from picasso import (
+from picasso_workflow._picasso_api import CONFIG as pCONFIG
+from picasso_workflow._picasso_api import __version__ as picassoversion
+from picasso_workflow._picasso_api import (
     aim,
     clusterer,
     # g5m,
@@ -1453,7 +1452,9 @@ class AutoPicasso(
             Results updated as documented on the contract method.
         """
         try:
-            from picasso import plugins as picasso_plugins
+            from picasso_workflow._picasso_api import (
+                plugins as picasso_plugins,
+            )
         except ImportError as exc:
             raise AutoPicassoError(
                 "The installed picasso has no plugin system (needs picasso "
@@ -3711,7 +3712,7 @@ class AutoPicasso(
             ``fp_fig_zhist`` (z-distribution histogram).
         """
         import shutil
-        from picasso import zfit
+        from picasso_workflow._picasso_api import zfit
 
         # fp_cfg = os.path.join(results["folder"], "config.yaml")
         # with open(fp_cfg, "w") as config_file:
@@ -3915,7 +3916,9 @@ class AutoPicasso(
             new_config = yaml.full_load(config_file)
 
         # if new_config is not None:
-        picasso.CONFIG = new_config
+        from picasso_workflow._picasso_api import set_config
+
+        set_config(new_config)  # mutate picasso's global CONFIG
         pCONFIG = new_config
         print(new_config)
 
@@ -11046,8 +11049,9 @@ class AutoPicasso(
             non-reference channel), and ``fp_calibration`` (the saved
             calibration file).
         """
-        from picasso import registration
-        from picasso.registration import tform
+        from picasso_workflow._picasso_api import registration
+
+        tform = registration.tform
 
         if parameters.get("filepaths"):
             self._load_channels_from_filepaths(parameters["filepaths"])

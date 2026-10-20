@@ -4347,7 +4347,7 @@ def compute_undrift_rsso(locs, pixelsize, info, parameters, results_folder):
     """
     import gc
     import psutil
-    from picasso import io
+    from picasso_workflow._picasso_api import io
     import matplotlib.pyplot as plt
 
     # from concurrent.futures import ProcessPoolExecutor

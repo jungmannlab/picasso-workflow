@@ -37,7 +37,7 @@ import matplotlib.pyplot as plt
 from scipy.spatial import KDTree
 from scipy.ndimage import zoom
 from scipy.ndimage import gaussian_filter
-from picasso import io
+from picasso_workflow._picasso_api import io
 from picasso_workflow.outpost_modules.ripleys import init_plot, plot_ripleys
 
 BLUR_FACTOR = 0.3  # gaussian blur factor for the mask, cam. pixels

@@ -28,8 +28,8 @@ import pandas as pd
 
 from loguru import logger
 
-from picasso import __version__ as picassoversion
-from picasso import (
+from picasso_workflow._picasso_api import __version__ as picassoversion
+from picasso_workflow._picasso_api import (
     aim,
     clusterer,
     g5m,
@@ -251,7 +251,7 @@ class PicassoSetCoreMixin:
                 )
             z_params = (zc, mf, io.load_calibration(zc))
             if fit_z_gpu:
-                from picasso import zfit
+                from picasso_workflow._picasso_api import zfit
 
                 if not zfit.CUDA_AVAILABLE:
                     logger.warning(
@@ -321,7 +321,7 @@ class PicassoSetCoreMixin:
 
         # post-fit steps, mirroring the CLI's _localize_finish
         if z_params is not None:
-            from picasso import zfit
+            from picasso_workflow._picasso_api import zfit
 
             zpath, mf, z_calibration = z_params
             z_calibration["Magnification Factor"] = mf

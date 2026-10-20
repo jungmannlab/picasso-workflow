@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import os
 
-from picasso import io
+from picasso_workflow._picasso_api import io
 
 from picasso_workflow.module_runtime import module_decorator
 

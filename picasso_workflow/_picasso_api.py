@@ -26,6 +26,8 @@ imported ad hoc elsewhere, so the boundary stays a single reviewable surface.
 
 from __future__ import annotations
 
+import importlib
+
 # --- Contract manifest: the public picasso surface we depend on -------------
 
 #: picasso submodules imported (as whole modules) somewhere in
@@ -54,7 +56,8 @@ PUBLIC_SUBMODULES = (
 TOP_LEVEL_ATTRS = ("CONFIG", "__version__")
 
 #: Attributes picasso-workflow reads off a specific submodule, beyond the
-#: module merely being importable.
+#: module merely being importable. Reached via the re-exported submodule
+#: (e.g. ``registration.tform``), not re-exported flat by ``__getattr__``.
 SUBMODULE_ATTRS = {
     "registration": ("tform",),
 }
@@ -115,3 +118,35 @@ def get_spinna_batch_analysis():
     except ImportError as exc:
         raise _missing("picasso.__main__._spinna_batch_analysis") from exc
     return _spinna_batch_analysis
+
+
+def set_config(config) -> None:
+    """Replace picasso's global ``CONFIG`` (``picasso.CONFIG``).
+
+    picasso-workflow's camera-config handling mutates the picasso-level global
+    so subsequent picasso calls observe it. Routed through the boundary so the
+    assignment stays here rather than via a bare ``import picasso`` elsewhere.
+    """
+    import picasso
+
+    picasso.CONFIG = config
+
+
+def __getattr__(name: str):
+    """Lazily re-export the picasso surface (PEP 562).
+
+    Lets the rest of picasso-workflow reach picasso *through* this boundary --
+    ``from picasso_workflow._picasso_api import io`` -- while preserving the
+    exact (often deferred) import timing of the original ``from picasso import
+    io``: the picasso submodule is imported only when the name is first
+    accessed, and the returned object *is* the real picasso submodule.
+    """
+    if name in PUBLIC_SUBMODULES:
+        return importlib.import_module(f"picasso.{name}")
+    if name in TOP_LEVEL_ATTRS:
+        return getattr(importlib.import_module("picasso"), name)
+    raise AttributeError(
+        f"module {__name__!r} has no attribute {name!r}. If picasso-workflow "
+        "needs it, add it to PUBLIC_SUBMODULES / TOP_LEVEL_ATTRS (and the "
+        "contract test) so the boundary stays a single declared surface."
+    )

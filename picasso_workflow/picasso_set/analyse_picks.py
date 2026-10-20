@@ -27,8 +27,8 @@ import pandas as pd
 import yaml
 from loguru import logger
 
-from picasso import __version__ as picassoversion
-from picasso import io, lib, postprocess
+from picasso_workflow._picasso_api import __version__ as picassoversion
+from picasso_workflow._picasso_api import io, lib, postprocess
 
 from picasso_workflow.module_runtime import module_decorator
 
@@ -438,7 +438,7 @@ class PicassoSetPicksMixin:
             Module results (see
             :class:`~picasso_workflow.util.AbstractModuleCollection`).
         """
-        from picasso import masking
+        from picasso_workflow._picasso_api import masking
 
         disp_px_size = parameters["disp_px_size"]
         blur = parameters["blur"]

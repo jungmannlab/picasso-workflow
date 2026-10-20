@@ -67,6 +67,22 @@ def test_signature_params_present(dotted, params):
     )
 
 
+@pytest.mark.parametrize("submodule", api.PUBLIC_SUBMODULES)
+def test_boundary_reexports_submodule(submodule):
+    """The boundary lazily re-exports each submodule as the real picasso one."""
+    assert getattr(api, submodule) is importlib.import_module(
+        f"picasso.{submodule}"
+    )
+
+
+def test_boundary_reexports_top_level_attrs():
+    """The boundary re-exports each top-level attr as picasso's own."""
+    import picasso
+
+    for name in api.TOP_LEVEL_ATTRS:
+        assert getattr(api, name) is getattr(picasso, name)
+
+
 def test_fit_method_map_accessor():
     """The guarded ``_FIT_METHOD_MAP`` accessor returns a non-empty mapping."""
     fit_map = api.get_fit_method_map()
