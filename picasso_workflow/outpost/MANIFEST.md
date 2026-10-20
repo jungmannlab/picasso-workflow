@@ -31,10 +31,15 @@ WIP / not ready.
 
 | feature | source | upstream target | ready | callers | notes |
 |---|---|---|---|---|---|
-| pick / undrift-from-picked fork | `picasso_outpost.py` `picked_locs`, `pick_similar`, `pick_gold`, `undrift_from_picked`, `locs_at`, `get_block_locs_at`, `_rmsd_at_com`, `sort_picked_locs` (4144–5023) | `picasso.postprocess.{picked_locs,undrift_from_picked,pick_similar,get_block_locs_at_numba}`, `picasso.lib.{locs_at,rmsd_at_com}` | H | analyse.py | **Biggest single win.** Near-verbatim fork. Add fork-vs-upstream equivalence tests, then rewire + delete. Keep only the genuinely novel `cluster_picksim`/`find_structures` (OPTICS). NB: `get_block_locs_at_numba` lives in `postprocess`, not `lib`. |
-| spot extraction | `picasso_outpost.py` `get_spots`, `normalize_spot`, `_cut_spots*` (1941–2026) | `picasso.localize` | H | analyse.py | Re-exports of upstream logic. |
-| `generate_N_structures` | `picasso_outpost.py` (2733) | `picasso.spinna.generate_N_structures` | H | — | Shim over upstream. |
-| global shift solve | `picasso_outpost.py` `_solve_optimal_shifts` (1737) | `picasso.lib.minimize_shifts` | H | align path | Overlaps upstream. |
+| `generate_N_structures` | `picasso_outpost.py` | `spinna.generate_N_structures` | ✅ done | analyse.py | **Deduped (batch 1).** Thin wrapper (silently dropped its `save` arg) removed. |
+| `picked_locs` (+ `get_block_locs_at`, `locs_at`) | `picasso_outpost.py` | `postprocess.picked_locs("Circle", pick_size=d/2)` | ✅ done | analyse.py | **Deduped (batch 2).** The forked `get_block_locs_at`/`locs_at` copies deleted. Membership + group identical; only intra-frame row order differs (see `tests/test_outpost_dedup_equivalence.py`). |
+| `pick_similar` | `picasso_outpost.py` (≈4594) + `get_pick_similar_vals`, `pick_similar_analysis` | — | ❌ keep | analyse.py | NOT redundant: a deliberate *variant* returning `(picks, nlocs, rmsds, labels)` diagnostics, not just picks like upstream (its own comment says so). The workflow's phase-space analysis needs the extra outputs. |
+| `pick_gold` | `picasso_outpost.py` (≈4164) | — | ❌ keep | analyse.py | Workflow-specific gold-bead criteria (n_locs/RMSD thresholds); already calls upstream `postprocess._pick_similar`. (Boundary follow-up: that's a private reach-in → belongs behind a `_picasso_api` accessor.) |
+| `_undrift_from_picked` | `picasso_outpost.py` (≈4370) + `_undrift_from_picked_coordinate` | `postprocess.undrift_from_picked` (partial) | ⏳ maybe | analyse.py | Wrapper: computes drift via a custom per-coordinate routine, **applies** it, returns `(locs, info, drift)` — divergent interface from upstream (which returns just a drift DataFrame). Only the drift *computation* is a possible future dedup, gated by its own equivalence test. |
+| spot extraction | `picasso_outpost.py` `get_spots`, `normalize_spot`, `_cut_spots*` | — | ❌ keep | analyse.py | NOT a dedup: `_cut_spots_byrandomframe` is deliberate random-frame *sampling*, divergent from `localize.get_spots`. |
+| global shift solve | `picasso_outpost.py` `_solve_optimal_shifts` | `picasso.lib.minimize_shifts` | ⏳ maybe | internal | Used internally (not dead); overlaps upstream but needs an equivalence check before rewiring. |
+
+**Dedup reality (verified batches 1–3):** of the functions the triage listed, only `generate_N_structures` and `picked_locs` were *genuine* redundancies — both done. The rest of the so-called "pick/undrift fork" are **divergent workflow variants** that *use* upstream internals but return workflow-specific structures (diagnostics, applied drift, sampled spots), so they stay. The clean dedup wins are complete; remaining items (`_undrift_from_picked` drift computation, `_solve_optimal_shifts`) are uncertain and individually gated. Net leverage now shifts to **promotion** (upstreaming the novel primitives) and the **boundary follow-up** (route `pick_gold`'s private `postprocess._pick_similar` reach-in through `_picasso_api`).
 | masking primitives | local `otsu()` (`mask.py:590`, `ripleys.py`), inline render/blur, `apply_to_locs` binning | `picasso.masking.{generate_image,mask_image(method="otsu"),mask_locs}` | M | analyse.py | Preserve the PW `otsu()/3` threshold **as a parameter**, not a reason to keep a private Otsu. Consolidate the 3 masking copies onto one `CellMask`. |
 | dbscan_molint mask precursor | `dbscan_molint/mask.py` | `CellMask` / `picasso.masking` | M | analyse.py | 2022 script-style precursor with known bugs + "Luciano's code" file coupling. Fold `CSR_sim_in_mask*` onto `CellMask`, delete the rest. |
 
@@ -54,8 +59,9 @@ WIP / not ready.
 
 ## Suggested PR sequence
 
-1. ✅ Delete dead code + this scaffold (**this PR**).
-2. **Dedup batch 1**: pick/undrift fork → upstream (with equivalence tests). Biggest shrink.
-3. **Dedup batch 2**: spot extraction, `generate_N_structures`, `_solve_optimal_shifts`, masking primitives.
-4. **Restructure**: physically split `picasso_outpost.py` + fold `outpost_modules/` into `outpost/<feature>/`, flipping rows as each feature lands.
-5. **Promote** #1, #3, #6 first (readiness H) as upstream picasso PRs; then #2/#4 (shared shift kernel), #5/#5b, #7.
+1. ✅ Delete dead code + this scaffold (#38).
+2. ✅ **Dedup batches 1–2** (#39): `generate_N_structures`, `picked_locs`. Equivalence-tested.
+3. ✅ **Dedup batch 3** (investigation): confirmed the rest of the pick/undrift fork is NOT redundant (divergent variants — `pick_similar`, `pick_gold`, `_undrift_from_picked` stay); MANIFEST corrected. Clean dedup wins complete.
+4. **Boundary follow-up**: route `pick_gold`'s private `postprocess._pick_similar` reach-in through a `_picasso_api` accessor (like `_FIT_METHOD_MAP`).
+5. **Restructure**: physically split `picasso_outpost.py` + fold `outpost_modules/` into `outpost/<feature>/`, flipping rows as each feature lands.
+6. **Promote** (readiness H first): CSR k-NN stats, correspondence-free ICP registration, binding-events; then point-set shift kernel / RSSO drift, resolution (FRC/decorrelation/PPAC), CellMask morphology.
