@@ -49,6 +49,16 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Changed
 
+- **All production picasso imports now route through the boundary.** Every
+  `from picasso import ...` in picasso-workflow production code is now
+  `from picasso_workflow._picasso_api import ...` (the boundary lazily
+  re-exports the picasso surface via PEP 562 `__getattr__`, preserving the
+  original — often deferred — import timing; a new `set_config` helper owns the
+  one `picasso.CONFIG` mutation). A new enforcement test
+  (`tests/test_no_direct_picasso_imports.py`) fails if a direct picasso import
+  reappears in production, keeping the coupling a single reviewable surface. The
+  only documented exceptions are the Qt-GUI surface (`picasso.gui.*` in
+  `render_tab.py`) and the isolated experimental modules.
 - **Render tab locs tree is now three-level for aggregation runs.** The
   file list nests each saved `*.hdf5` under its path components —
   `target → module → file` for an aggregation run (per-channel

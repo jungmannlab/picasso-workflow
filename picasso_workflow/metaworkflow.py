@@ -24,7 +24,7 @@ from loguru import logger
 import time
 from datetime import datetime
 import hashlib
-from picasso import io
+from picasso_workflow._picasso_api import io
 import pathlib
 from functools import reduce
 import textwrap
@@ -495,7 +495,7 @@ def find_dnapaint_raw(working_folder: str) -> tuple[dict, str]:
         Path to the written ``src_loc.yaml`` describing the datasets.
     """
     from picasso_workflow import util
-    from picasso import io
+    from picasso_workflow._picasso_api import io
 
     datasets = util.find_raw_movies(working_folder)
 
@@ -938,7 +938,9 @@ class AbstractWorkflowCoordinator(abc.ABC):
         except Exception:
             pw_version = "unknown"
         try:
-            from picasso import __version__ as picasso_version
+            from picasso_workflow._picasso_api import (
+                __version__ as picasso_version,
+            )
         except Exception:
             picasso_version = "unknown"
 

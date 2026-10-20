@@ -10,7 +10,7 @@ from __future__ import annotations
 # import logging
 from loguru import logger
 
-from picasso import render, lib
+from picasso_workflow._picasso_api import render, lib
 import matplotlib.pyplot as plt
 import numpy as np
 import colorsys

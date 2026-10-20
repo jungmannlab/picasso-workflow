@@ -26,7 +26,7 @@ import os
 from dataclasses import dataclass
 from datetime import datetime
 
-from picasso import (
+from picasso_workflow._picasso_api import (
     io,
     localize,
     render,

@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import os
 
-from picasso import io, localize
+from picasso_workflow._picasso_api import io, localize
 
 from picasso_workflow.module_runtime import module_decorator
 
@@ -71,7 +71,7 @@ class PicassoSetCalibrationMixin:
             Module results (see
             :class:`~picasso_workflow.util.AbstractModuleCollection`).
         """
-        from picasso import zfit
+        from picasso_workflow._picasso_api import zfit
 
         magnification_factor = parameters.get("magnification_factor")
         fitting_method = parameters.get("fitting_method", "gausslq")
@@ -141,7 +141,7 @@ class PicassoSetCalibrationMixin:
             Module results (see
             :class:`~picasso_workflow.util.AbstractModuleCollection`).
         """
-        from picasso import zfit
+        from picasso_workflow._picasso_api import zfit
 
         d = parameters["d"]
         magnification_factor = parameters["magnification_factor"]
@@ -199,7 +199,7 @@ class PicassoSetCalibrationMixin:
             Module results (see
             :class:`~picasso_workflow.util.AbstractModuleCollection`).
         """
-        from picasso import scmos
+        from picasso_workflow._picasso_api import scmos
 
         dark = parameters["dark"]
         light = parameters.get("light") or []
@@ -266,7 +266,7 @@ class PicassoSetCalibrationMixin:
             Module results (see
             :class:`~picasso_workflow.util.AbstractModuleCollection`).
         """
-        from picasso import scmos
+        from picasso_workflow._picasso_api import scmos
 
         calibration = io.load_camera_calibration(parameters["calibration"])
         test_movie, _ = io.load_movie(parameters["movie"])
@@ -329,7 +329,7 @@ class PicassoSetCalibrationMixin:
             Module results (see
             :class:`~picasso_workflow.util.AbstractModuleCollection`).
         """
-        from picasso import spline
+        from picasso_workflow._picasso_api import spline
 
         files = list(parameters["files"])
         step = parameters["step"]
