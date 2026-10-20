@@ -80,6 +80,10 @@ SIGNATURE_CONTRACT = {
 INTERNAL_SYMBOLS = {
     "_FIT_METHOD_MAP": "picasso.__main__._FIT_METHOD_MAP",
     "_spinna_batch_analysis": "picasso.__main__._spinna_batch_analysis",
+    "_pick_similar": "picasso.postprocess._pick_similar",
+    "_n_block_locs_at": "picasso.postprocess._n_block_locs_at",
+    "_to_photons": "picasso.localize._to_photons",
+    "_targets_from_structures": "picasso.spinna._targets_from_structures",
 }
 
 
@@ -94,17 +98,31 @@ def _missing(symbol: str) -> RuntimeError:
     )
 
 
+def get_internal(name: str):
+    """Return a guarded private picasso symbol registered in INTERNAL_SYMBOLS.
+
+    Private picasso symbols (leading underscore) carry no stability guarantee,
+    so this is the single place picasso-workflow reaches into them: a rename or
+    removal upstream raises here with a clear, actionable message (and the
+    contract test catches it). Add new ones to :data:`INTERNAL_SYMBOLS` rather
+    than touching picasso internals ad hoc elsewhere.
+    """
+    dotted = INTERNAL_SYMBOLS[name]
+    modpath, attr = dotted.rsplit(".", 1)
+    try:
+        module = importlib.import_module(modpath)
+        return getattr(module, attr)
+    except (ImportError, AttributeError) as exc:
+        raise _missing(dotted) from exc
+
+
 def get_fit_method_map() -> dict:
     """Return picasso's ``_FIT_METHOD_MAP`` (fit-method name -> internal key).
 
     Guards the private ``picasso.__main__._FIT_METHOD_MAP`` that the
     localisation core uses to translate a configured fit-method string.
     """
-    try:
-        from picasso.__main__ import _FIT_METHOD_MAP
-    except ImportError as exc:
-        raise _missing("picasso.__main__._FIT_METHOD_MAP") from exc
-    return _FIT_METHOD_MAP
+    return get_internal("_FIT_METHOD_MAP")
 
 
 def get_spinna_batch_analysis():
@@ -113,11 +131,7 @@ def get_spinna_batch_analysis():
     Guards ``picasso.__main__._spinna_batch_analysis`` used by the SPINNA
     aggregation path in :mod:`picasso_workflow.picasso_outpost`.
     """
-    try:
-        from picasso.__main__ import _spinna_batch_analysis
-    except ImportError as exc:
-        raise _missing("picasso.__main__._spinna_batch_analysis") from exc
-    return _spinna_batch_analysis
+    return get_internal("_spinna_batch_analysis")
 
 
 def set_config(config) -> None:

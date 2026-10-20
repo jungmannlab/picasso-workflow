@@ -28,7 +28,6 @@ from datetime import datetime
 
 from picasso_workflow._picasso_api import (
     io,
-    localize,
     render,
     imageprocess,
     postprocess,
@@ -36,6 +35,7 @@ from picasso_workflow._picasso_api import (
     spinna,
 )
 from picasso_workflow import util
+from picasso_workflow._picasso_api import get_internal
 from picasso_workflow._picasso_api import get_spinna_batch_analysis
 
 from scipy.spatial import KDTree
@@ -52,6 +52,12 @@ from scipy.spatial.distance import pdist
 from scipy import stats
 import glob
 from collections import Counter
+
+# Resolved once at import time (not per-call) because the numba-jitted
+# ``pick_similar_analysis`` below calls it: nopython mode cannot call the plain
+# ``get_internal`` function, but it can call this module-level dispatcher
+# global. Still guarded + contract-tested via INTERNAL_SYMBOLS.
+_n_block_locs_at = get_internal("_n_block_locs_at")
 
 # logger = logging.getLogger(__name__)
 
@@ -1957,7 +1963,7 @@ def get_spots(movie, identifications, box, camera_info):
         The cut spots in photons.
     """
     spots = _cut_spots(movie, identifications, box)
-    return localize._to_photons(spots, camera_info)
+    return get_internal("_to_photons")(spots, camera_info)
 
 
 def _cut_spots(movie, ids, box):
@@ -2185,7 +2191,7 @@ def screen_label_uncertainty(
         Filepaths of the saved screening figures (one per screened
         target).
     """
-    targets = spinna._targets_from_structures(structures)
+    targets = get_internal("_targets_from_structures")(structures)
     # nn_counts keys for all target pairs (reset per candidate fit)
     nn_keys = [
         f"{t1}-{t2}" for i, t1 in enumerate(targets) for t2 in targets[i:]
@@ -4208,7 +4214,7 @@ def pick_gold(locs, info, diameter=2, std_range=1.4, mean_rmsd=0.4):
     kwargs["max_rmsd"] = max_rmsd
 
     # pick similar
-    x_similar, y_similar = postprocess._pick_similar(**kwargs)
+    x_similar, y_similar = get_internal("_pick_similar")(**kwargs)
     # add picks
     similar = list(zip(x_similar, y_similar))
     return similar
@@ -4799,7 +4805,7 @@ def pick_similar_analysis(
             y_r = y_r2
         for j, y_grid in enumerate(y):
             y_range = y_r[j]
-            n_block_locs = postprocess._n_block_locs_at(
+            n_block_locs = _n_block_locs_at(
                 x_range, y_range, K, L, block_starts, block_ends
             )
             if n_block_locs >= min_n_locs:

@@ -92,3 +92,9 @@ def test_fit_method_map_accessor():
 def test_spinna_batch_analysis_accessor():
     """The guarded ``_spinna_batch_analysis`` accessor returns a callable."""
     assert callable(api.get_spinna_batch_analysis())
+
+
+@pytest.mark.parametrize("name", sorted(api.INTERNAL_SYMBOLS))
+def test_internal_symbol_resolves(name):
+    """Every registered private picasso symbol still resolves upstream."""
+    assert api.get_internal(name) is not None
