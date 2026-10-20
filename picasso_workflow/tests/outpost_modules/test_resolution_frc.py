@@ -10,7 +10,7 @@ Date: 2025
 import unittest
 import numpy as np
 import pandas as pd
-from picasso_workflow.outpost_modules import resolution_frc
+from picasso_workflow.outpost.resolution import resolution_frc
 
 
 class TestResolutionFRC(unittest.TestCase):

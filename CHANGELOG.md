@@ -76,6 +76,11 @@ This file was started after v0.5.6; earlier history is in the git log.
   `_spinna_batch_analysis` accessors. The contract test now verifies every
   registered private symbol still resolves, so an upstream rename/removal of a
   private symbol fails loudly in CI instead of silently on the cluster.
+- **Outpost restructure (first slice):** the resolution estimators moved from
+  the flat `outpost_modules/` into a cohesive `outpost/resolution/` feature
+  package (`resolution_frc`, `resolution_decorrelation`); import sites updated,
+  behaviour unchanged. First step of the incremental `picasso_outpost` →
+  `outpost/<feature>/` reorganisation tracked in `outpost/MANIFEST.md`.
 - **Dedup to picasso 0.12 (batch 1):** call `spinna.generate_N_structures`
   directly instead of through the redundant `picasso_outpost.generate_N_structures`
   wrapper, which is removed. No behavioural change — no call site passed the

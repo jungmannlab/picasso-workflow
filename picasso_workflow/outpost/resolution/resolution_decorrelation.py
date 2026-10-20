@@ -286,7 +286,7 @@ def _process_tile_decorr(tile_task):
         ``kc_max``, ``resolution`` and ``success=True``. On failure:
         ``tile_id``, ``n_locs``, ``error`` and ``success=False``.
     """
-    from picasso_workflow.outpost_modules.resolution_frc import (
+    from picasso_workflow.outpost.resolution.resolution_frc import (
         render_image_histogram,
     )
 
