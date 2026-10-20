@@ -59,6 +59,17 @@ SUBMODULE_ATTRS = {
     "registration": ("tform",),
 }
 
+#: Picasso functions whose *parameter names* picasso-workflow passes (by
+#: keyword or position).  A silent upstream rename of one of these would break
+#: the call at runtime; the contract test asserts each listed parameter still
+#: exists in the installed picassosr.  Keys are ``<submodule>.<function>``.
+SIGNATURE_CONTRACT = {
+    "io.save_locs": ("path", "locs", "info"),
+    "io.load_locs": ("path",),
+    "io.load_movie": ("path",),
+    "postprocess.undrift": ("locs", "info", "segmentation"),
+}
+
 #: Private picasso symbols picasso-workflow currently depends on, mapped to
 #: their upstream location.  These are the fragile seams -- leading underscore,
 #: no public API yet.  Each is reached only through an accessor below; track

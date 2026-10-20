@@ -12,6 +12,18 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Added
 
+- **picasso early-warning CI** (`.github/workflows/picasso-early-warning.yml`):
+  a scheduled (weekly) + manual, non-gating job that runs the picasso contract
+  test and the unit tier against the **latest upstream `picassosr`** (pre-
+  releases included, past our pin ceiling). An upstream API change surfaces here
+  as a red run before the pin is bumped, rather than silently on the cluster.
+- **Signature-level picasso contract**: the contract test now also asserts the
+  *parameter names* picasso-workflow passes to key picasso functions
+  (`io.save_locs` / `load_locs` / `load_movie`, `postprocess.undrift`) via a new
+  `SIGNATURE_CONTRACT` in `_picasso_api.py` — catching a parameter rename, not
+  just a symbol removal.
+- **`coverage` added to the `[dev]` extra** so `run-unittests.yml`'s
+  `python -m coverage` steps have the module after `pip install -e ".[dev]"`.
 - **Declared picasso API boundary** (`picasso_workflow/_picasso_api.py`): a
   single module recording the picasso surface picasso-workflow depends on, with
   guarded accessors for the private `picasso.__main__` symbols

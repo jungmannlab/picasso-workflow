@@ -55,6 +55,10 @@ picasso-workflow-gui = "picasso_workflow._launcher:main"
 # mirror .pre-commit-config.yaml / the hosted lint job where they overlap.
 dev = [
     "pytest==9.0.3",
+    # coverage is driven by run-unittests.yml (`python -m coverage run`); keep
+    # it in the dev extra so that workflow's install (`pip install -e ".[dev]"`)
+    # provides it.
+    "coverage>=7,<8",
     "pre-commit>=3.5.1",
     "bandit==1.7.8",
     "isort==5.13.2",
