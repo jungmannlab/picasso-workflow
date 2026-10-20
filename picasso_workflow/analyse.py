@@ -11455,7 +11455,7 @@ class AutoPicasso(
             return parameters, results
 
         # N_structures = spinna.generate_N_structures(
-        N_structures = picasso_outpost.generate_N_structures(
+        N_structures = spinna.generate_N_structures(
             structures, n_sim_targets, parameters["granularity"]
         )
 
@@ -12970,7 +12970,7 @@ class AutoPicasso(
         # pixelsize = self.analysis_config["camera_info"].get("Pixelsize")
         # structures = self._create_spinna_structure(
         #     self.channel_tags, [1, 2], distance=parameters["distance"])
-        # N_structures = picasso_outpost.generate_N_structures(
+        # N_structures = spinna.generate_N_structures(
         #     structures, n_sim_targets, parameters["res_factor"]
         # )
         # # bin size: more than Nyquist subsampling
@@ -13117,7 +13117,7 @@ class AutoPicasso(
                 structures
             )
 
-            N_structures = picasso_outpost.generate_N_structures(
+            N_structures = spinna.generate_N_structures(
                 structures, n_sim_targets, parameters["res_factor"]
             )
 
@@ -16694,7 +16694,7 @@ class AutoPicasso(
             # fit_le does not bootstrap; run one bootstrap stoichiometry fit
             # on the fitted mixer to recover proportion uncertainties.
             # best_mixer.structures order is [monomer_A, monomer_B, het].
-            N_structures = picasso_outpost.generate_N_structures(
+            N_structures = spinna.generate_N_structures(
                 best_mixer.structures,
                 n_exp,
                 parameters["granularity"],

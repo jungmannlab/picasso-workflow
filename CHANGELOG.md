@@ -49,6 +49,11 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Changed
 
+- **Dedup to picasso 0.12 (batch 1):** call `spinna.generate_N_structures`
+  directly instead of through the redundant `picasso_outpost.generate_N_structures`
+  wrapper, which is removed. No behavioural change — no call site passed the
+  wrapper's `save` argument (which it silently dropped anyway). First step of the
+  outpost de-duplication tracked in `picasso_workflow/outpost/MANIFEST.md`.
 - **All production picasso imports now route through the boundary.** Every
   `from picasso import ...` in picasso-workflow production code is now
   `from picasso_workflow._picasso_api import ...` (the boundary lazily
