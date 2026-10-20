@@ -67,6 +67,14 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Changed
 
+- **Packaging: subpackages now ship in non-editable wheels.** Switched
+  `[tool.setuptools]` from the non-recursive `packages = ["picasso_workflow"]`
+  to `[tool.setuptools.packages.find]` (`include = ["picasso_workflow*"]`), so
+  every subpackage — `outpost/`, `outpost/resolution/`, `outpost_modules/`,
+  `picasso_set/`, `dbscan_molint/`, `ripleys_analysis/` — is declared and
+  included in a wheel/sdist. The old explicit list omitted them (a wheel install
+  could miss them; masked until now by editable installs), and future
+  `outpost/<feature>/` folders are now auto-included.
 - **Private picasso reach-ins routed through the boundary.** The four
   attribute-level reach-ins into private picasso symbols
   (`postprocess._pick_similar`, `postprocess._n_block_locs_at`,
