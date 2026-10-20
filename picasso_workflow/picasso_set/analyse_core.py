@@ -205,7 +205,7 @@ class PicassoSetCoreMixin:
             Module results (see
             :class:`~picasso_workflow.util.AbstractModuleCollection`).
         """
-        from picasso.__main__ import _FIT_METHOD_MAP
+        from picasso_workflow._picasso_api import get_fit_method_map
 
         fit_method = parameters.get("fit_method", "mle")
         box = parameters.get("box_side_length", 7)
@@ -219,7 +219,7 @@ class PicassoSetCoreMixin:
         drift = parameters.get("drift", 0)
         fit_z_gpu = parameters.get("fit_z_gpu", False)
 
-        fitting_method = _FIT_METHOD_MAP[fit_method]
+        fitting_method = get_fit_method_map()[fit_method]
         if fitting_method.endswith("-gpu") and not localize.CUDA_AVAILABLE:
             raise RuntimeError(
                 "No CUDA-capable GPU found, so the requested GPU fit "

@@ -83,7 +83,7 @@ jobs:
           $Env:Path += ";C:\actions-runner\_work\_tool\Python\3.11.9\x64\Scripts"
           python --version
           # python -m pip install -r requirements.txt
-          python -m pip install -e .
+          python -m pip install -e ".[dev]"
 
       - name: Run unit tests
         run: |
