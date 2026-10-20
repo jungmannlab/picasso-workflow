@@ -96,7 +96,8 @@ Tests are located in `picasso_workflow/tests/` with test data in `TestData/`:
 
 ## Key Dependencies
 
-- **picassosr**: Core analysis engine (>=0.7.3)
+- **picassosr**: Core analysis engine (>=0.12.0a3,<0.13; the 0.12 line
+  requires Python >=3.11)
 - **atlassian-python-api**: Confluence integration
 - **mpi4py**: Cluster computing support (optional)
 - **scipy**, **numpy**, **pandas**: Scientific computing

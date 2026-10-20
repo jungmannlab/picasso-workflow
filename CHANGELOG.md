@@ -12,6 +12,14 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Added
 
+- **Declared picasso API boundary** (`picasso_workflow/_picasso_api.py`): a
+  single module recording the picasso surface picasso-workflow depends on, with
+  guarded accessors for the private `picasso.__main__` symbols
+  (`_FIT_METHOD_MAP`, `_spinna_batch_analysis`) that the localisation core and
+  the SPINNA aggregation path reach into. A new unit-tier contract test
+  (`tests/test_picasso_contract.py`) asserts that surface against the installed
+  `picassosr`, so an upstream rename or removal fails loudly in CI instead of
+  silently at runtime on the cluster.
 - **Generic `plugin` module** bridging to the **Python-API entry point**
   (`PICASSO_API`) of the picasso (≥ 0.11) plugin system. A single-dataset
   workflow step can call any installed, *enabled* `PICASSO_API` export via
@@ -41,6 +49,14 @@ This file was started after v0.5.6; earlier history is in the git log.
   `target-version`, CI matrices); `picassosr` floor moved to `>=0.12.0a3`
   (picasso 0.12 line, requires 3.11) — supersedes the temporary B7 git-pin
   bridge.
+- **Dependency hygiene:** development/test tooling (`pytest`, `pre-commit`,
+  `bandit`, `isort`) moved out of runtime `dependencies` into a new `[dev]`
+  optional extra, and a duplicate `memory_profiler` entry removed, so a plain
+  install no longer pulls test tooling. CI now installs with
+  `pip install -e ".[dev]"`.
+- **`picassosr` pin gained an upper bound** (`>=0.12.0a3,<0.13`) so a future
+  picasso minor cannot be pulled in untested; bump it deliberately with a green
+  picasso contract test.
 
 ### Fixed
 

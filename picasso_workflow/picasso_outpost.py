@@ -35,8 +35,8 @@ from picasso import (
     lib,
     spinna,
 )
-from picasso.__main__ import _spinna_batch_analysis as spinna_batch_analysis
 from picasso_workflow import util
+from picasso_workflow._picasso_api import get_spinna_batch_analysis
 
 from scipy.spatial import KDTree
 from scipy.special import gamma as _gamma
@@ -2054,6 +2054,9 @@ def spinna_batch(parameters_filename):
             i += 1
         result_dir = f"{result_dir}_{i}"
 
+    # Private picasso symbol, reached only through the declared boundary in
+    # picasso_workflow._picasso_api (see that module).
+    spinna_batch_analysis = get_spinna_batch_analysis()
     spinna_batch_analysis(parameters_filename)
 
     fp_summary = os.path.join(result_dir, "summary_results.csv")

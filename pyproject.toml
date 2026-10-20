@@ -16,7 +16,12 @@ dependencies = [
     "tables",
     "numba",
     "openpyxl==3.1.2",
-    "picassosr>=0.12.0a3",
+    # Upper bound caps at the next picasso minor, where the library is allowed
+    # to break API. Bump it deliberately with a green picasso contract test
+    # (tests/test_picasso_contract.py), not automatically -- an open-ended lower
+    # bound onto a pre-release would otherwise float across untested picasso
+    # releases.
+    "picassosr>=0.12.0a3,<0.13",
     # GUI uses PyQt6 directly; keep in sync with picasso's constraint
     "PyQt6>=6.10.2,<7",
     # Embedded HTML report viewer in the GUI Results tab (QWebEngineView);
@@ -27,11 +32,6 @@ dependencies = [
     "nvidia-ml-py>=12.0.0",
     "moviepy==1.0.3",
     "python-dotenv==1.2.3",
-    "pre-commit>=3.5.1",
-    "bandit==1.7.8",
-    # "coverage>=6.5,<6.6",
-    "pytest==9.0.3",
-    "isort==5.13.2",
     "psutil",
     # atlassian-python-api 5.0 restructured the Confluence client (Cloud/Server
     # subclasses, get_page_by_title space -> space_key, methods relocated),
@@ -40,7 +40,6 @@ dependencies = [
     "memory-profiler>=0.61.0",
     "loguru>=0.7.3",
     "h5py",
-    "memory_profiler",
     # "mpi4py",
     # "openmpi"
 ]
@@ -50,6 +49,16 @@ keywords = ["picasso"]
 picasso-workflow-gui = "picasso_workflow._launcher:main"
 
 [project.optional-dependencies]
+# Development & test tooling -- NOT needed at runtime, so kept out of the base
+# deps to keep `pip install picasso_workflow` (and every downstream env) lean.
+# CI installs the package with this extra: `pip install -e ".[dev]"`. Versions
+# mirror .pre-commit-config.yaml / the hosted lint job where they overlap.
+dev = [
+    "pytest==9.0.3",
+    "pre-commit>=3.5.1",
+    "bandit==1.7.8",
+    "isort==5.13.2",
+]
 cluster = [
     "mpi4py>=4.0.2",
 ]
