@@ -12,6 +12,24 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Added
 
+- **Phase 2 outpost scaffold** (`picasso_workflow/outpost/`): a `MANIFEST.md`
+  that tracks the migration of picasso-adjacent code (`picasso_outpost.py` +
+  `outpost_modules/`) into feature-focused submodules, with a per-feature status
+  (`keep` / `dedup` / `promote` / `extend-up` / `delete`), upstream target, and
+  readiness — the burndown for upstreaming the genuinely-novel parts into
+  picasso and deleting the parts picasso ≥ 0.12 now provides.
+
+### Removed
+
+- **Dead SPINNA / NN modules** (`spinna.py`, `spinna_io.py`, `spinna_main.py`,
+  `spinna_mle.py`, `spinna_mle_2.py`, `nn_redistribution.py`): gitignored
+  local experiments that were never committed and are imported nowhere (the
+  workflow's SPINNA runs through `picasso.spinna`). Removed from disk and the
+  now-stale `.gitignore`, flake8 `extend-exclude`, and picasso-import-lint
+  allowlist references cleaned up.
+- **`outpost_modules/g5m.py`**: a fully commented-out dead copy; the live `g5m`
+  comes from `picasso.g5m` through the boundary.
+
 - **picasso early-warning CI** (`.github/workflows/picasso-early-warning.yml`):
   a scheduled (weekly) + manual, non-gating job that runs the picasso contract
   test and the unit tier against the **latest upstream `picassosr`** (pre-

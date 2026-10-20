@@ -154,9 +154,8 @@ strict = true
 max-line-length = 88  # informational; E501 is ignored
 extend-ignore = "E203,E501,W503"
 # extend-exclude keeps flake8's sensible defaults and additionally skips the
-# generated/snapshot test fixtures and the isolated experimental modules
-# (not imported by the package) that still carry WIP F-codes.
-extend-exclude = "docs,picasso_workflow/_version.py,picasso_workflow/spinna_mle.py,picasso_workflow/spinna_mle_2.py,picasso_workflow/nn_redistribution.py,picasso_workflow/tests/TestData"
+# generated version file and the snapshot/test-data fixtures.
+extend-exclude = "docs,picasso_workflow/_version.py,picasso_workflow/tests/TestData"
 
 [tool.bandit]
 exclude = "/tests"

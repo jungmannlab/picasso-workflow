@@ -13,11 +13,10 @@ picasso`, and does not false-positive on picasso import examples that appear in
 docstrings or comments. `picassosr` / `picasso_workflow` are not picasso.
 
 The only production files allowed to import picasso directly are the boundary
-module itself, the Qt-GUI tab (`render_tab.py`, which reaches `picasso.gui.*`
-internals the flat boundary does not yet re-export), and the isolated
-experimental modules (not imported by the package, flake8-excluded). The
-private ``picasso.__main__`` symbols are reached only through guarded accessors
-in the boundary, so they are NOT allowlisted anywhere else -- a new direct
+module itself and the Qt-GUI tab (`render_tab.py`, which reaches `picasso.gui.*`
+internals the flat boundary does not yet re-export). The private
+``picasso.__main__`` symbols are reached only through guarded accessors in the
+boundary, so they are NOT allowlisted anywhere else -- a new direct
 `from picasso.__main__ import ...` outside the boundary now fails this test.
 """
 
@@ -30,9 +29,6 @@ PKG = pathlib.Path(__file__).resolve().parent.parent  # picasso_workflow/
 _ALLOWLIST_FILES = {
     "_picasso_api.py": "the declared boundary itself",
     "render_tab.py": "picasso.gui.* Qt internals not yet behind the boundary",
-    "spinna_mle.py": "experimental, not imported by the package",
-    "spinna_mle_2.py": "experimental, not imported by the package",
-    "nn_redistribution.py": "experimental, not imported by the package",
 }
 
 

@@ -1,0 +1,61 @@
+# Outpost migration manifest
+
+Per-feature status for the Phase 2 reorganisation of picasso-workflow's
+picasso-adjacent code. Source of truth for what moves where. See `README.md`
+for the `keep / dedup / promote / extend-up / delete` vocabulary.
+
+Readiness/effort: **H** = ready/clean, **M** = needs a refactor first, **L** =
+WIP / not ready.
+
+## Done
+
+| feature | source | status | notes |
+|---|---|---|---|
+| spinna_mle / spinna_mle_2 / nn_redistribution / spinna / spinna_io / spinna_main | `picasso_workflow/spinna*.py`, `nn_redistribution.py` | **delete** ✅ | Dead, never committed (gitignored local experiments); 0 imports anywhere. Removed from disk + gitignore + flake8-exclude + lint allowlist. |
+| g5m (outpost copy) | `outpost_modules/g5m.py` | **delete** ✅ | Fully commented-out; live `g5m` comes from `picasso.g5m` via the boundary. |
+
+## Promote — genuinely novel, upstream candidates (ranked by readiness)
+
+| # | feature → target module | source | status | ready | callers | blockers / notes |
+|---|---|---|---|---|---|---|
+| 1 | **CSR k-NN statistics** → `picasso.postprocess` | `picasso_outpost.py` `nndistribution_from_csr`, `csr_cdf_for_ks_test`, `nndist_loglikelihood_csr`, `estimate_density_from_neighbordists` (+ `minimization_loglike`, `_check_distance_window`) (2765–3147) | promote | **H** | analyse.py | Pure numpy/scipy, no picasso coupling. Analytic CSR model + density MLE picasso lacks. Minor cleanup: recursion/renormalisation in `nndistribution_from_csr`. |
+| 2 | **Point-set pairwise-shift kernel** → `picasso.imageprocess` | `picasso_outpost.py` `_calculate_pairwise_shift` + `_find_peak_center_of_mass`, `_fit_2d_gaussian_peak`, `_calculate_adaptive_bins`, `_normalize_quality_metrics` (518–1361) | promote | M | analyse.py (10+), undrift_rsso | Split numeric core from plot-saving/filename params. Complements image-based `imageprocess.rcc`; **unblocks RSSO drift (#4)**. |
+| 3 | **Correspondence-free rigid registration** → `picasso.registration` | `picasso_outpost.py` `register_to_template`, `_rigid_fit` (Kabsch), `_match_within_gate` (Hungarian), `_icp_refine`, `_rotation_matrix`; companion `subcluster_docking_sites` (5542–5800) | promote | **H** | analyse.py (origami) | Small, self-contained (numpy + `scipy.optimize.linear_sum_assignment`). Rotation-sweep + ICP template fit under unknown correspondence — complements `picasso.registration`’s matched-point affine. |
+| 4 | **RSSO drift** → `picasso.postprocess` / `picasso.aim` | `outpost_modules/undrift_rsso.py` | promote | M | analyse.py (`undrift_rsso`) | Novel 4th drift method (point-space). Depends on #2 — extract the shared shift kernel first. Leave plotting + multiprocessing workflow-side. |
+| 5 | **Resolution: FRC + decorrelation** → `picasso.postprocess` | `outpost_modules/resolution_frc.py`, `resolution_decorrelation.py` | promote | **H** | analyse.py | Standard published methods, self-contained (decorrelation reuses `resolution_frc.render_image_histogram`). |
+| 5b | **Resolution: PPAC** → `picasso.postprocess` | `picasso_outpost.py` `resolution_ppac*`, `analyse_resolution_ppac` (7158–7662) | promote | M | analyse.py | Third, independent resolution estimator. Prune dead params (`batch_size`, `use_chunking`) + collapse to one backend first. |
+| 6 | **Binding-event analysis** → picasso (new module) | `outpost_modules/binding_event_analysis.py` (`Measurement`), `binding_event_plotting.py` (`Plotting`) | promote | **H** | analyse.py | Cleanly paired analysis+plotting, zero picasso/sibling coupling. |
+| 7 | **CellMask morphology + density CSR** → extend `picasso.masking` | `outpost_modules/mask.py` `CellMask` (morphology: `filter_mask`, `component_masks`, `erode`/`dilate`; stats: `area`, `mean_density`; `random_points*`) | extend-up | M | analyse.py, ripleys | The cell-object layer `picasso.masking` lacks. Contribute the new part; dedup the overlapping thresholding (see masking/dedup below). |
+
+## Dedup — redundant with picasso ≥ 0.12, rewire + delete the fork
+
+| feature | source | upstream target | ready | callers | notes |
+|---|---|---|---|---|---|
+| pick / undrift-from-picked fork | `picasso_outpost.py` `picked_locs`, `pick_similar`, `pick_gold`, `undrift_from_picked`, `locs_at`, `get_block_locs_at`, `_rmsd_at_com`, `sort_picked_locs` (4144–5023) | `picasso.postprocess.{picked_locs,undrift_from_picked,pick_similar,get_block_locs_at_numba}`, `picasso.lib.{locs_at,rmsd_at_com}` | H | analyse.py | **Biggest single win.** Near-verbatim fork. Add fork-vs-upstream equivalence tests, then rewire + delete. Keep only the genuinely novel `cluster_picksim`/`find_structures` (OPTICS). NB: `get_block_locs_at_numba` lives in `postprocess`, not `lib`. |
+| spot extraction | `picasso_outpost.py` `get_spots`, `normalize_spot`, `_cut_spots*` (1941–2026) | `picasso.localize` | H | analyse.py | Re-exports of upstream logic. |
+| `generate_N_structures` | `picasso_outpost.py` (2733) | `picasso.spinna.generate_N_structures` | H | — | Shim over upstream. |
+| global shift solve | `picasso_outpost.py` `_solve_optimal_shifts` (1737) | `picasso.lib.minimize_shifts` | H | align path | Overlaps upstream. |
+| masking primitives | local `otsu()` (`mask.py:590`, `ripleys.py`), inline render/blur, `apply_to_locs` binning | `picasso.masking.{generate_image,mask_image(method="otsu"),mask_locs}` | M | analyse.py | Preserve the PW `otsu()/3` threshold **as a parameter**, not a reason to keep a private Otsu. Consolidate the 3 masking copies onto one `CellMask`. |
+| dbscan_molint mask precursor | `dbscan_molint/mask.py` | `CellMask` / `picasso.masking` | M | analyse.py | 2022 script-style precursor with known bugs + "Luciano's code" file coupling. Fold `CSR_sim_in_mask*` onto `CellMask`, delete the rest. |
+
+## Keep — stays workflow-side
+
+| feature | source | why |
+|---|---|---|
+| channel alignment orchestration | `picasso_outpost.py` `align_channels`, `align_by_rcc`, `plot_shift` | Workflow multi-channel wrapper (now over upstream `align_from_picked`/`rcc`). |
+| spinna wrappers | `picasso_outpost.py` `spinna_batch`, `single_spinna_run`, `screen_label_uncertainty`, plotting (2027–2695) | Thin wrappers over `picasso.spinna` + workflow plumbing/plots. |
+| dbscan-molint analysis | `picasso_outpost.py` `DBSCAN_analysis*`, `degree_of_clustering`, barcode/interaction plots (3148–4016); `dbscan_molint/` | Coupled to the molint report/Confluence format. |
+| origami orchestration + descriptors | `picasso_outpost.py` `pick_origami`, `OrigamiTemplate` builders, `structure_pattern_features`, `lattice_defect*` (5024–6648) | Workflow-shaped; geometry primitives may promote later after #3 lands. |
+| kinetics simulation | `picasso_outpost.py` `simulate_origami_nlocs_rmsd`, `origami_phase_space_preview` (5265–5445) | WIP/experimental. |
+| Zeiss import | `picasso_outpost.py` `convert_zeiss_file` (1901) | Niche .czi conversion glue (`aicsimageio`). |
+| render glue | `outpost_modules/render.py` | matplotlib wrapper over `picasso.render`. |
+| Ripley DC-Atlas redo | `outpost_modules/ripley_dcatlas_analysis.py` | Explicit reproducible redo of a published pipeline. |
+| report plot helpers | `picasso_outpost.py` `plot_1dhist`, `plot_2dhist`, `_save_*_histogram_plot` | Reporting. |
+
+## Suggested PR sequence
+
+1. ✅ Delete dead code + this scaffold (**this PR**).
+2. **Dedup batch 1**: pick/undrift fork → upstream (with equivalence tests). Biggest shrink.
+3. **Dedup batch 2**: spot extraction, `generate_N_structures`, `_solve_optimal_shifts`, masking primitives.
+4. **Restructure**: physically split `picasso_outpost.py` + fold `outpost_modules/` into `outpost/<feature>/`, flipping rows as each feature lands.
+5. **Promote** #1, #3, #6 first (readiness H) as upstream picasso PRs; then #2/#4 (shared shift kernel), #5/#5b, #7.
