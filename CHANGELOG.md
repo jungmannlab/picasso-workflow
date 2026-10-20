@@ -89,6 +89,13 @@ This file was started after v0.5.6; earlier history is in the git log.
   package (`resolution_frc`, `resolution_decorrelation`); import sites updated,
   behaviour unchanged. First step of the incremental `picasso_outpost` →
   `outpost/<feature>/` reorganisation tracked in `outpost/MANIFEST.md`.
+- **Outpost restructure (spatial-stats slice):** the Ripley's-K code (`ripleys`
+  and the DC-Atlas pipeline `ripley_dcatlas_analysis`) moved from the flat
+  `outpost_modules/` into `outpost/spatial_stats/`; `analyse.ripleysk2` and the
+  DC-Atlas module's internal import updated, `ripleys` dropped from
+  `outpost_modules/__init__.py`, behaviour unchanged. The separately-wired
+  legacy `ripleys_analysis/` subpackage is left for a later sub-slice. Guarded
+  by `tests/test_outpost_spatial_stats.py`.
 - **Dedup to picasso 0.12 (batch 1):** call `spinna.generate_N_structures`
   directly instead of through the redundant `picasso_outpost.generate_N_structures`
   wrapper, which is removed. No behavioural change — no call site passed the

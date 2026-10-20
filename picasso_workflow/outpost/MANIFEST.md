@@ -54,7 +54,9 @@ WIP / not ready.
 | kinetics simulation | `picasso_outpost.py` `simulate_origami_nlocs_rmsd`, `origami_phase_space_preview` (5265–5445) | WIP/experimental. |
 | Zeiss import | `picasso_outpost.py` `convert_zeiss_file` (1901) | Niche .czi conversion glue (`aicsimageio`). |
 | render glue | `outpost_modules/render.py` | matplotlib wrapper over `picasso.render`. |
-| Ripley DC-Atlas redo | `outpost_modules/ripley_dcatlas_analysis.py` | Explicit reproducible redo of a published pipeline. |
+| Ripley's K core | `outpost/spatial_stats/ripleys.py` | Ripley's K / RDF / FRC + CSR/randomized controls + plotting (Rafal). Report-coupled (`confluence.ripleysk2`). **Moved** from `outpost_modules/` into `outpost/spatial_stats/`. |
+| Ripley DC-Atlas redo | `outpost/spatial_stats/ripley_dcatlas_analysis.py` | Explicit reproducible redo of a published pipeline (built on `ripleys`). **Moved** into `outpost/spatial_stats/`. |
+| Ripley subpackage (legacy) | `ripleys_analysis/` (`run_ripleysAnalysis`, `ripleysModule`, `dataModule`, `maskModule`) | Separate, older Ripley implementation, live-wired via `analyse.ripleysk`. A distinct `spatial_stats` sub-slice will fold it in (import-path-only move); not touched by the first `spatial_stats` move. |
 | report plot helpers | `picasso_outpost.py` `plot_1dhist`, `plot_2dhist`, `_save_*_histogram_plot` | Reporting. |
 
 ## Suggested PR sequence
@@ -63,5 +65,10 @@ WIP / not ready.
 2. ✅ **Dedup batches 1–2** (#39): `generate_N_structures`, `picked_locs`. Equivalence-tested.
 3. ✅ **Dedup batch 3** (investigation): confirmed the rest of the pick/undrift fork is NOT redundant (divergent variants — `pick_similar`, `pick_gold`, `_undrift_from_picked` stay); MANIFEST corrected. Clean dedup wins complete.
 4. **Boundary follow-up**: route `pick_gold`'s private `postprocess._pick_similar` reach-in through a `_picasso_api` accessor (like `_FIT_METHOD_MAP`).
-5. **Restructure**: physically split `picasso_outpost.py` + fold `outpost_modules/` into `outpost/<feature>/`, flipping rows as each feature lands.
+5. **Restructure** (incremental, one feature per PR): fold `outpost_modules/`
+   into `outpost/<feature>/` and physically split `picasso_outpost.py`, flipping
+   rows as each feature lands. Done so far: `resolution/` (#42),
+   `binding_events/` (#45), `spatial_stats/` (ripleys + DC-Atlas). Still flat in
+   `outpost_modules/`: `mask`, `undrift_rsso`, `render`; plus the legacy
+   `ripleys_analysis/` subpackage and the `picasso_outpost.py` monolith.
 6. **Promote** (readiness H first): CSR k-NN stats, correspondence-free ICP registration, binding-events; then point-set shift kernel / RSSO drift, resolution (FRC/decorrelation/PPAC), CellMask morphology.
