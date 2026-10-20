@@ -67,6 +67,15 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Changed
 
+- **Private picasso reach-ins routed through the boundary.** The four
+  attribute-level reach-ins into private picasso symbols
+  (`postprocess._pick_similar`, `postprocess._n_block_locs_at`,
+  `localize._to_photons`, `spinna._targets_from_structures`) now go through a
+  guarded `_picasso_api.get_internal(name)` accessor and are registered in
+  `INTERNAL_SYMBOLS`, consistent with the existing `_FIT_METHOD_MAP` /
+  `_spinna_batch_analysis` accessors. The contract test now verifies every
+  registered private symbol still resolves, so an upstream rename/removal of a
+  private symbol fails loudly in CI instead of silently on the cluster.
 - **Dedup to picasso 0.12 (batch 1):** call `spinna.generate_N_structures`
   directly instead of through the redundant `picasso_outpost.generate_N_structures`
   wrapper, which is removed. No behavioural change — no call site passed the
