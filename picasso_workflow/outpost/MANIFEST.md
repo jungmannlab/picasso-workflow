@@ -40,7 +40,7 @@ WIP / not ready.
 | global shift solve | `picasso_outpost.py` `_solve_optimal_shifts` | `picasso.lib.minimize_shifts` | ⏳ maybe | internal | Used internally (not dead); overlaps upstream but needs an equivalence check before rewiring. |
 
 **Dedup reality (verified batches 1–3):** of the functions the triage listed, only `generate_N_structures` and `picked_locs` were *genuine* redundancies — both done. The rest of the so-called "pick/undrift fork" are **divergent workflow variants** that *use* upstream internals but return workflow-specific structures (diagnostics, applied drift, sampled spots), so they stay. The clean dedup wins are complete; remaining items (`_undrift_from_picked` drift computation, `_solve_optimal_shifts`) are uncertain and individually gated. Net leverage now shifts to **promotion** (upstreaming the novel primitives) and the **boundary follow-up** (route `pick_gold`'s private `postprocess._pick_similar` reach-in through `_picasso_api`).
-| masking primitives | local `otsu()` (`outpost/masking/mask.py`, `spatial_stats/ripleys.py`), inline render/blur, `apply_to_locs` binning | `picasso.masking.{generate_image,mask_image(method="otsu"),mask_locs}` | M | analyse.py | Preserve the PW `otsu()/3` threshold **as a parameter**, not a reason to keep a private Otsu. Consolidate the 3 masking copies onto one `CellMask`. |
+| masking primitives | local `otsu()` (`outpost/masking/mask.py`; also in the Ripley's-K module, `outpost_modules/ripleys.py` → `spatial_stats/ripleys.py` after #46), inline render/blur, `apply_to_locs` binning | `picasso.masking.{generate_image,mask_image(method="otsu"),mask_locs}` | M | analyse.py | Preserve the PW `otsu()/3` threshold **as a parameter**, not a reason to keep a private Otsu. Consolidate the 3 masking copies onto one `CellMask`. |
 | dbscan_molint mask precursor | `dbscan_molint/mask.py` | `CellMask` / `picasso.masking` | M | analyse.py | 2022 script-style precursor with known bugs + "Luciano's code" file coupling. Fold `CSR_sim_in_mask*` onto `CellMask`, delete the rest. |
 
 ## Keep — stays workflow-side
@@ -65,9 +65,9 @@ WIP / not ready.
 4. **Boundary follow-up**: route `pick_gold`'s private `postprocess._pick_similar` reach-in through a `_picasso_api` accessor (like `_FIT_METHOD_MAP`).
 5. **Restructure** (incremental, one feature per PR): fold `outpost_modules/`
    into `outpost/<feature>/` and physically split `picasso_outpost.py`, flipping
-   rows as each feature lands. Done so far: `resolution/` (#42),
-   `binding_events/` (#45), `spatial_stats/` (#46, ripleys + DC-Atlas),
-   `masking/` (CellMask). Still flat in `outpost_modules/`: `undrift_rsso`,
-   `render`; plus the legacy `ripleys_analysis/` subpackage and the
-   `picasso_outpost.py` monolith.
+   rows as each feature lands. On `develop`: `resolution/` (#42). In-flight PRs
+   off `develop`: `binding_events/` (#45), `spatial_stats/` (#46, ripleys +
+   DC-Atlas), `masking/` (#47, this slice, CellMask). Once all land, still flat
+   in `outpost_modules/`: `undrift_rsso`, `render`; plus the legacy
+   `ripleys_analysis/` subpackage and the `picasso_outpost.py` monolith.
 6. **Promote** (readiness H first): CSR k-NN stats, correspondence-free ICP registration, binding-events; then point-set shift kernel / RSSO drift, resolution (FRC/decorrelation/PPAC), CellMask morphology.
