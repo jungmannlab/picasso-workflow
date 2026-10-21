@@ -12,6 +12,32 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Added
 
+- **WP-6 — `preprocess` single-dataset recipe + thin registry client.** The
+  authoritative-localization reduction run when a FOV/round completes, and the
+  per-module provenance logging that feeds the picasso-registry corpus.
+  - **`standard_singledataset_workflows.preprocess`** — a location-agnostic
+    single-dataset recipe `load_dataset_movie → identify → localize → render →
+    save_single_dataset`. **No undrift** here: drift correction (and
+    aggregation) run on the SLURM cluster, and only localizations cross to it
+    (C33/C15). `validate_preprocess` validates it against `MODULE_REGISTRY`,
+    seeding the cluster-deferred `locs_undrifted` capability so render/save
+    (which predate the acquire→cluster split) don't read as missing a step.
+  - **Reuse of the lossless live locs (`live_locs.py`).** When the live pass
+    was lossless and still valid for the movie — decided by **checksumming the
+    frame range** (`frame_range_checksum` + `reuse_live_locs`) against a
+    `LiveLocsDescriptor` — the live localizations are authoritative, so the
+    recipe loads them (`load_dataset_localizations`) and **skips
+    re-localization** entirely; any mismatch (lossy pass, partial coverage,
+    changed data) falls back to re-localizing. The upstream live-locs
+    provenance type is not in this repo yet (WP-4), so the descriptor is a
+    documented, tested seam the caller supplies.
+  - **`registry_client.RegistryLogger`** — a thin, **best-effort, non-blocking**
+    wrapper that POSTs **one metrics record per module** plus artifact pointers
+    to picasso-registry, all keyed by `run_id`. A registry outage is swallowed
+    and logged, never raised into the recipe. The client is **injectable**
+    (real `RegistryClient`, or a test double), so unit tests stay hermetic;
+    wired into `WorkflowRunner.call_module` and configured via
+    `analysis_config["registry"]` (absent → disabled no-op, the default).
 - **WP-ADVISOR — shared, deterministic, LLM-free QC advisor + Materials &
   Methods (`picasso_workflow.qc_advisor`).** Ported from LiveLocalization V0.8
   (`qc_advisor.py` / `materials_methods.py` and the filter/min-net-gradient
