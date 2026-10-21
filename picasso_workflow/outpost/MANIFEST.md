@@ -37,7 +37,7 @@ remains is the keep-it-clean backlog:
 |---|---|---|
 | **Fragile private reach-ins** — depend on picasso *private* symbols; guarded by `get_internal` + the contract test, but any upstream refactor can break them | `postprocess._pick_similar` (`pick_gold`), `postprocess._n_block_locs_at` (`pick_similar`), `localize._to_photons` (`get_spots`), `spinna._targets_from_structures` (`screen_label_uncertainty`) | upstream a **public** picasso API for each, then drop the `get_internal`. (The boundary + contract test already make the breakage *loud*, not silent — so this is hardening, not a live bug.) |
 | **Duplication of picasso** — re-implements what picasso ≥ 0.12 provides | **3 copies of `otsu()`** (`masking/mask.py`, `spatial_stats/ripleys.py`, `ripley_dcatlas_analysis.py`) vs `picasso.masking.mask_image(method="otsu")` — `picasso_set` already uses the upstream API; `_undrift_from_picked` drift computation; `_solve_optimal_shifts` vs `picasso.lib.minimize_shifts`; `dbscan_molint/mask.py` precursor | equivalence-test, then rewire to upstream + delete the fork (see Dedup table). |
-| **Monolith** — promote-candidates and keep-glue physically interleaved in one file | `picasso_outpost.py` — **5845 lines (was 7579), ~80 top-level defs** | split into `outpost/<feature>/`. Prerequisite to cleanly promoting the upstream-bound parts, which are currently entangled with keep-glue. |
+| **Monolith** — promote-candidates and keep-glue physically interleaved in one file | `picasso_outpost.py` — **4845 lines (was 7579), ~72 top-level defs** | split into `outpost/<feature>/`. Prerequisite to cleanly promoting the upstream-bound parts, which are currently entangled with keep-glue. |
 
 **Reading:** the upstream-bound set is the *promotion* backlog; the table above
 is the *keep-it-clean* backlog. Both are gated behind splitting the monolith,
@@ -86,7 +86,7 @@ which is what physically separates the two kinds of code.
 |---|---|---|
 | channel alignment orchestration | `picasso_outpost.py` `align_channels`, `align_by_rcc`, `plot_shift` | Workflow multi-channel wrapper (now over upstream `align_from_picked`/`rcc`). |
 | spinna wrappers | `outpost/spinna/wrappers.py` (moved, S3) | Thin wrappers over `picasso.spinna` + workflow plumbing/plots. |
-| dbscan-molint analysis | `picasso_outpost.py` `DBSCAN_analysis*`, `degree_of_clustering`, barcode/interaction plots (3148–4016); `dbscan_molint/` | Coupled to the molint report/Confluence format. |
+| dbscan-molint analysis | `outpost/clustering/molint.py` `DBSCAN_analysis*`, `degree_of_clustering`, barcode/interaction plots (moved, S4); `dbscan_molint/` subpackage (fold = S4b) | Coupled to the molint report/Confluence format. |
 | origami orchestration + descriptors | `picasso_outpost.py` `pick_origami`, `OrigamiTemplate` builders, `structure_pattern_features`, `lattice_defect*` (5024–6648) | Workflow-shaped; geometry primitives may promote later after #3 lands. |
 | kinetics simulation | `picasso_outpost.py` `simulate_origami_nlocs_rmsd`, `origami_phase_space_preview` (5265–5445) | WIP/experimental. |
 | Zeiss import | `outpost/formats/zeiss.py` `convert_zeiss_file` (moved, S3c) | Niche .czi conversion glue (picasso `io.load_czi`; `[formats]` extra). |
@@ -113,7 +113,7 @@ which is what physically separates the two kinds of code.
 
 ## Monolith split — sequenced plan (`picasso_outpost.py` → `outpost/<feature>/`)
 
-`picasso_outpost.py` = **5845 lines (was 7579), ~80 top-level defs**, used
+`picasso_outpost.py` = **4845 lines (was 7579), ~72 top-level defs**, used
 at **48 sites in `analyse.py`** and heavily in `tests/test_picasso_outpost.py`.
 Unlike the AutoPicasso-mocked unit tests, `test_picasso_outpost.py` calls these
 functions **directly**, so a repointed test gives *real* coverage of each move —
@@ -135,7 +135,7 @@ gets its own `registration/` rather than living under `origami/`.
 | S3 ✅ | **spinna wrappers** (`spinna_batch`, `screen_label_uncertainty`, `single_spinna_run`, `single_spinna_fit_le_run`, `plot_spinna_nnd`, `_plot_label_unc_scan`, `load_structures_from_dict`) | `outpost/spinna/wrappers.py` | keep | **Done** (−706 lines). Carried `spinna`/`get_internal`/`get_spinna_batch_analysis` + `os`/`glob`/`datetime` imports; removed `spinna`/`get_spinna_batch_analysis`/`glob`/`datetime` as now-orphaned from the monolith. 9 analyse call sites (top-level alias import) + ~12 `test_analyse` `@patch`/direct refs repointed to `outpost.spinna.wrappers`. |
 | S3b ✅ | **spot extraction** (`get_spots`, `_cut_spots`, `_cut_spots_byrandomframe`, `normalize_spot`) | `outpost/spots/extraction.py` | keep | **Done** (−85 lines). Needs `np` + `get_internal`. analyse `_draw_sample_spots` (2 calls, deferred import). No orphaned monolith imports. |
 | S3c ✅ | **Zeiss import** (`convert_zeiss_file`) | `outpost/formats/zeiss.py` | keep | **Done** (batched with S3b). Uses picasso's native `io.load_czi`/`io.save_raw` (needs `[formats]` extra). analyse `convert_zeiss_movie` + `test_analyse` `@patch` repointed. |
-| S4 | **dbscan-molint** (3126–4120: `DBSCAN_analysis*`, `degree_of_clustering`, barcode/interaction plots) + the `dbscan_molint/` subpackage | `outpost/clustering/` | keep | Large; coupled to the molint Confluence report format. |
+| S4 ✅ | **dbscan-molint** (`DBSCAN_analysis*`, `_do_dbscan_molint`, `degree_of_clustering`, barcode/interaction plots) | `outpost/clustering/molint.py` | keep | **Done** (−996 lines). Needs np/pd/plt/mlines/stats/os/yaml/util/io; **removed `mlines`/`io`/`util`/`stats` as now-orphaned** from the monolith (sklearn `DBSCAN` stays — origami uses it). No test callers. The `dbscan_molint/` subpackage is used via deferred imports and stays put — **folding it into `clustering/` is a separate step (S4b).** |
 | S5 | **channel alignment + shift kernel** (65–1363 + `_solve_optimal_shifts` 1742: `align_channels`/`align_by_rcc`/`align_by_picked`/`align_by_rsso`/`plot_shift`/`shift_from_rcc` + `_calculate_pairwise_shift` & peak-fit helpers + shift-histogram plots) | `outpost/alignment/` with the **shift kernel as its own `shift_kernel.py`** | keep + promote | shift kernel used by `align_by_rsso` (same cluster) + 2 analyse deferred imports; isolate it for upstreaming (row 2). `_solve_optimal_shifts` is a dedup-maybe (vs `picasso.lib.minimize_shifts`). |
 | S6 | **picks / fiducials** (4122–4939: `pick_gold`, `pick_similar*`, `picked_locs`, `index_locs`, `_undrift_from_picked*`, `shift_from_picked`, `sort_picked_locs`, `find_structures`, block/locs helpers) | `outpost/picks/` | keep | `pick_gold`/`pick_similar` use `get_internal` (carry dispatcher); `_undrift_from_picked` is a dedup-maybe. |
 | S7 | **ICP registration** (5459–5856: `register_to_template`, `_rigid_fit` Kabsch, `_match_within_gate` Hungarian, `_icp_refine`, `_rotation_matrix`, `subcluster_docking_sites`, `classify/accept_candidate`, `_elongation`/`_radius_of_gyration`) | `outpost/registration/` | promote | **Separated from origami** so it is upstream-ready. Called only internally (origami, S8) + `test_picasso_outpost` (6 sites) — no analyse coupling. |

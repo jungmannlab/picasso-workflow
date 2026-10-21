@@ -92,6 +92,17 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Changed
 
+- **Monolith split S4 — DBSCAN molecular-interaction analysis → `outpost/clustering/`.**
+  The DBSCAN-molint cluster (`DBSCAN_analysis`, `DBSCAN_analysis_pd`,
+  `_do_dbscan_molint`, `degree_of_clustering`, and the barcode /
+  interaction-graph / degree-of-clustering plots) moved out of
+  `picasso_outpost.py` (−996 lines) into `outpost/clustering/molint.py`.
+  `analyse.py` (`dbscan_molint`, `find_cluster_motifs`, `interaction_graph`,
+  7 call sites) repointed via a module alias import; the now-orphaned
+  `mlines`/`io`/`util`/`stats` imports removed from the monolith (sklearn
+  `DBSCAN` stays — the origami cluster still uses it). The `dbscan_molint/`
+  subpackage is unchanged (still used via deferred imports; folding it in is a
+  later step). Behaviour unchanged (`keep` — coupled to the molint report).
 - **Monolith split S3b/S3c — spot extraction → `outpost/spots/`, Zeiss import →
   `outpost/formats/`.** Two small, unrelated `keep` clusters moved out of
   `picasso_outpost.py` (−126 lines) into their own feature folders: spot cutting
