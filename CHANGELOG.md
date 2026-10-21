@@ -92,6 +92,14 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Changed
 
+- **Monolith split S3b/S3c — spot extraction → `outpost/spots/`, Zeiss import →
+  `outpost/formats/`.** Two small, unrelated `keep` clusters moved out of
+  `picasso_outpost.py` (−126 lines) into their own feature folders: spot cutting
+  (`get_spots`, `_cut_spots`, `_cut_spots_byrandomframe`, `normalize_spot`) →
+  `outpost/spots/extraction.py`, and Zeiss `.czi`→`.raw` conversion
+  (`convert_zeiss_file`) → `outpost/formats/zeiss.py`. `analyse`
+  (`convert_zeiss_movie`, `_draw_sample_spots`) + the `convert_zeiss_file`
+  `@patch` repointed. Behaviour unchanged.
 - **Monolith split S3 — SPINNA wrappers → `outpost/spinna/`.** The workflow-side
   wrappers over `picasso.spinna` (`spinna_batch`, `single_spinna_run`,
   `single_spinna_fit_le_run`, `screen_label_uncertainty`, `plot_spinna_nnd`,
