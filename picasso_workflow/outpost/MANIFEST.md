@@ -53,7 +53,7 @@ WIP / not ready.
 | origami orchestration + descriptors | `picasso_outpost.py` `pick_origami`, `OrigamiTemplate` builders, `structure_pattern_features`, `lattice_defect*` (5024–6648) | Workflow-shaped; geometry primitives may promote later after #3 lands. |
 | kinetics simulation | `picasso_outpost.py` `simulate_origami_nlocs_rmsd`, `origami_phase_space_preview` (5265–5445) | WIP/experimental. |
 | Zeiss import | `picasso_outpost.py` `convert_zeiss_file` (1901) | Niche .czi conversion glue (`aicsimageio`). |
-| render glue | `outpost_modules/render.py` | matplotlib wrapper over `picasso.render`. |
+| render glue | `outpost/render/render.py` | matplotlib wrapper over `picasso.render`. **Moved** from `outpost_modules/` into `outpost/render/`. |
 | Ripley's K core | `outpost/spatial_stats/ripleys.py` | Ripley's K / RDF / FRC + CSR/randomized controls + plotting (Rafal). Report-coupled (`confluence.ripleysk2`). **Moved** from `outpost_modules/` into `outpost/spatial_stats/`. |
 | Ripley DC-Atlas redo | `outpost/spatial_stats/ripley_dcatlas_analysis.py` | Explicit reproducible redo of a published pipeline (built on `ripleys`). **Moved** into `outpost/spatial_stats/`. |
 | Ripley subpackage (legacy) | `ripleys_analysis/` (`run_ripleysAnalysis`, `ripleysModule`, `dataModule`, `maskModule`) | Separate, older Ripley implementation, live-wired via `analyse.ripleysk`. A distinct `spatial_stats` sub-slice will fold it in (import-path-only move); not touched by the first `spatial_stats` move. |
@@ -69,7 +69,7 @@ WIP / not ready.
    into `outpost/<feature>/` and physically split `picasso_outpost.py`, flipping
    rows as each feature lands. Done so far: `resolution/` (#42),
    `binding_events/` (#45), `spatial_stats/` (#46, ripleys + DC-Atlas),
-   `masking/` (#47, CellMask); `undrift_rsso` retired (deleted). Still flat in
-   `outpost_modules/`: `render`; plus the legacy `ripleys_analysis/` subpackage
-   and the `picasso_outpost.py` monolith.
+   `masking/` (#47, CellMask), `render/` (#49); `undrift_rsso` retired
+   (deleted). `outpost_modules/` now holds no feature modules; the legacy
+   `ripleys_analysis/` subpackage and the `picasso_outpost.py` monolith remain.
 6. **Promote** (readiness H first): CSR k-NN stats, correspondence-free ICP registration, binding-events; then point-set shift kernel, resolution (FRC/decorrelation/PPAC), CellMask morphology.

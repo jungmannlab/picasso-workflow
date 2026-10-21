@@ -123,6 +123,13 @@ This file was started after v0.5.6; earlier history is in the git log.
   `mask`, so importing the class avoids shadowing); `mask` dropped from
   `outpost_modules/__init__.py`; the `tests/outpost_modules/test_mask.py` import
   updated. Behaviour unchanged. Guarded by `tests/test_outpost_masking.py`.
+- **Outpost restructure (render slice):** the `render` matplotlib glue over
+  `picasso.render` (`plot_scene` + the scene renderers) moved from the flat
+  `outpost_modules/` into `outpost/render/`. Only the import line in `analyse.py`
+  changed (`from picasso_workflow.outpost.render import render`); the ~17
+  `render.*` call sites are unchanged. With this and the earlier slices,
+  `outpost_modules/` is down to a single remaining module (`undrift_rsso`).
+  Guarded by `tests/test_outpost_render.py`.
 - **Dedup to picasso 0.12 (batch 1):** call `spinna.generate_N_structures`
   directly instead of through the redundant `picasso_outpost.generate_N_structures`
   wrapper, which is removed. No behavioural change — no call site passed the
