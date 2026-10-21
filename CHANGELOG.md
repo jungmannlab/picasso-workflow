@@ -74,6 +74,20 @@ This file was started after v0.5.6; earlier history is in the git log.
     escalated severity + a rounded metric fingerprint instead of the kind alone,
     so a worsening live update (e.g. NeNA 3→9 nm) is delivered, not swallowed.
 
+### Fixed
+
+- **Integration fix (surfaced by the `develop` refresh): route the WP-ADVISOR
+  `estimate_min_net_gradient` picasso import through the `_picasso_api`
+  boundary.** `qc_advisor/filter_advisor.py` did a direct in-function
+  `from picasso import localize`; `develop` has since added the single-surface
+  picasso boundary (`picasso_workflow._picasso_api`) + the AST enforcement test
+  `test_no_direct_picasso_imports`, which the refresh merged alongside the
+  WP-ADVISOR code → the direct import became the lone offender. Changed it to the
+  lazy `from picasso_workflow._picasso_api import localize` (same deferred import
+  timing via the boundary's PEP-562 `__getattr__`, so the advisor package still
+  imports without picasso). No behaviour change; `test_no_direct_picasso_imports`
+  + the full `qc_advisor` suite green.
+
 ### Changed
 
 - **Stack-wide dependency harmonization (decision C41, picasso is the anchor).**
