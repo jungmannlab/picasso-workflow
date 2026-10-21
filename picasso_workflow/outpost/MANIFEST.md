@@ -108,3 +108,39 @@ which is what physically separates the two kinds of code.
    holds no feature modules; only the `picasso_outpost.py` monolith remains to
    split.
 6. **Promote** (readiness H first): CSR k-NN stats, correspondence-free ICP registration, binding-events; then point-set shift kernel, resolution (FRC/decorrelation/PPAC), CellMask morphology.
+
+## Monolith split — sequenced plan (`picasso_outpost.py` → `outpost/<feature>/`)
+
+`picasso_outpost.py` = **7579 lines, 107 top-level defs, 7 feature areas**, used
+at **48 sites in `analyse.py`** and heavily in `tests/test_picasso_outpost.py`.
+Unlike the AutoPicasso-mocked unit tests, `test_picasso_outpost.py` calls these
+functions **directly**, so a repointed test gives *real* coverage of each move —
+the safety net the earlier outpost slices lacked. Each PR extracts one cohesive
+cluster into `outpost/<feature>/`, updates its `analyse.py` import sites +
+internal cross-refs + `test_picasso_outpost.py` references, with the same
+contract/test care as the earlier slices. **Promote-candidates get their own
+module** so they can later be upstreamed cleanly (the triage's point). Pure
+moves, no behaviour change.
+
+This **refines the README target layout**: `drift/` is obsolete (undrift_rsso
+deleted) — the shared shift kernel moves to `alignment/`; and ICP registration
+gets its own `registration/` rather than living under `origami/`.
+
+| # | cluster (lines in current file) | → target | dest | notes / deps |
+|---|---|---|---|---|
+| S1 | **PPAC resolution** (7075–7579: `resolution_ppac*`, `analyse_resolution_ppac`) | `outpost/resolution/resolution_ppac.py` | promote | Self-contained; `resolution/__init__` already anticipates it. 2 analyse sites + `test_12/13/14`. Prune dead `batch_size`/`use_chunking` params (row 5b). |
+| S2 | **CSR k-NN stats** (2743–3123: `nndistribution_from_csr`, `csr_cdf_for_ks_test`, `nndist_loglikelihood_csr`, `estimate_density_from_neighbordists`, `minimization_loglike`, `_check_distance_window`) | `outpost/spatial_stats/csr_knn.py` | promote | Self-contained numpy/scipy; `spatial_stats/__init__` already anticipates it. 3 analyse sites + `test_04*`. |
+| S3 | **spinna + spot-extraction + Zeiss** (1906–2741: `spinna_batch`…`load_structures_from_dict`, `get_spots`/`_cut_spots*`/`normalize_spot`, `convert_zeiss_file`) | `outpost/spinna/` | keep | Carry the `get_internal` dispatcher: `get_spots`→`_to_photons`, `screen_label_uncertainty`→`_targets_from_structures`. |
+| S4 | **dbscan-molint** (3126–4120: `DBSCAN_analysis*`, `degree_of_clustering`, barcode/interaction plots) + the `dbscan_molint/` subpackage | `outpost/clustering/` | keep | Large; coupled to the molint Confluence report format. |
+| S5 | **channel alignment + shift kernel** (65–1363 + `_solve_optimal_shifts` 1742: `align_channels`/`align_by_rcc`/`align_by_picked`/`align_by_rsso`/`plot_shift`/`shift_from_rcc` + `_calculate_pairwise_shift` & peak-fit helpers + shift-histogram plots) | `outpost/alignment/` with the **shift kernel as its own `shift_kernel.py`** | keep + promote | shift kernel used by `align_by_rsso` (same cluster) + 2 analyse deferred imports; isolate it for upstreaming (row 2). `_solve_optimal_shifts` is a dedup-maybe (vs `picasso.lib.minimize_shifts`). |
+| S6 | **picks / fiducials** (4122–4939: `pick_gold`, `pick_similar*`, `picked_locs`, `index_locs`, `_undrift_from_picked*`, `shift_from_picked`, `sort_picked_locs`, `find_structures`, block/locs helpers) | `outpost/picks/` | keep | `pick_gold`/`pick_similar` use `get_internal` (carry dispatcher); `_undrift_from_picked` is a dedup-maybe. |
+| S7 | **ICP registration** (5459–5856: `register_to_template`, `_rigid_fit` Kabsch, `_match_within_gate` Hungarian, `_icp_refine`, `_rotation_matrix`, `subcluster_docking_sites`, `classify/accept_candidate`, `_elongation`/`_radius_of_gyration`) | `outpost/registration/` | promote | **Separated from origami** so it is upstream-ready. Called only internally (origami, S8) + `test_picasso_outpost` (6 sites) — no analyse coupling. |
+| S8 | **origami orchestration** (4941–5457 + 5858–7029: `OrigamiTemplate` + builders, kinetics sim, structure/lattice descriptors, `pick_origami`) | `outpost/origami/` | keep | Biggest keep cluster; imports `registration` (S7). Largest diff — may itself split into templates+kinetics / descriptors / `pick_origami`. |
+| S9 | **report plot helpers** (7031–7073: `plot_1dhist`, `plot_2dhist`) + any leftovers | fold into a reporting util | keep | Tiny; last. After this `picasso_outpost.py` is empty → delete it. |
+
+**Order rationale:** S1–S2 are clean, self-contained *promote* clusters with
+folders already waiting (lowest risk, immediate payoff). S3–S6 are cohesive
+*keep* clusters. S7 (ICP *promote*) is extracted **before** S8 so origami imports
+a clean `registration` module. S8 is the largest/most tangled — last. S9 empties
+and removes the file. Each S-step is one PR (S8 possibly two), merged
+sequentially with the same union-rebase dance as #45–#51.
