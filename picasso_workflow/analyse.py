@@ -5584,7 +5584,9 @@ class AutoPicasso(
             ``(frame_idx, shift_x, shift_y, uncertainty_x, uncertainty_y,
             confidence, quality)``.
         """
-        from picasso_workflow.picasso_outpost import _calculate_pairwise_shift
+        from picasso_workflow.outpost.alignment.shift_kernel import (
+            _calculate_pairwise_shift,
+        )
 
         (
             frame_idx,
@@ -5676,7 +5678,9 @@ class AutoPicasso(
         """
         import numpy as np
 
-        from picasso_workflow.picasso_outpost import _calculate_pairwise_shift
+        from picasso_workflow.outpost.alignment.shift_kernel import (
+            _calculate_pairwise_shift,
+        )
 
         (
             frame_idx,
@@ -8537,7 +8541,7 @@ class AutoPicasso(
                 Previously saved hdf5 files to load and align. If omitted, the
                 last processed data is used.
             ``align_pars`` : dict
-                Kwargs of ``picasso_outpost.align_channels``
+                Kwargs of ``outpost.alignment.channels.align_channels``
                 (``max_iterations``, ``convergence``).
             ``fp_fiducials`` : list of str
                 Previously saved hdf5 files of fiducial markers to load and
@@ -8555,6 +8559,8 @@ class AutoPicasso(
             Module results (see
             :class:`~picasso_workflow.util.AbstractModuleCollection`).
         """
+        from picasso_workflow.outpost.alignment import channels
+
         pixelsize = self.pixelsize
         rcode = generate_random_code(6)
         if parameters.get("filepaths"):
@@ -8603,7 +8609,7 @@ class AutoPicasso(
             algo_used,
             fp_figs,
             shift_uncertainties,
-        ) = picasso_outpost.align_channels(
+        ) = channels.align_channels(
             self.channel_locs,
             self.channel_info,
             self.channel_tags,
@@ -8649,7 +8655,7 @@ class AutoPicasso(
 
         if fn := parameters.get("fig_filename", "fig_align.png"):
             fig_filepath = os.path.join(results["folder"], fn)
-            picasso_outpost.plot_shift(shifts, cum_shifts, fig_filepath)
+            channels.plot_shift(shifts, cum_shifts, fig_filepath)
             results["fig_filepath"] = fig_filepath
 
             # Add confidence interval plotting for RSSO method

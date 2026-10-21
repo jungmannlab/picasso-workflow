@@ -92,6 +92,18 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Changed
 
+- **Monolith split S5 — channel alignment + shift kernel → `outpost/alignment/`.**
+  The biggest slice (−1841 lines): the channel-alignment orchestration
+  (`align_channels`, `align_by_rcc`/`align_by_picked`/`align_by_rsso`,
+  `shift_from_rcc`, `plot_shift`, `_solve_optimal_shifts`) and the point-set
+  pairwise-shift estimation machinery (`_calculate_pairwise_shift` + peak-fit /
+  adaptive-bin / quality-metric helpers + shift-histogram plot savers) moved out
+  of `picasso_outpost.py` into a two-module `outpost/alignment/` package —
+  `channels.py` (orchestration, `keep`) and `shift_kernel.py` (the estimation
+  machinery; its numeric core is `picasso.imageprocess` promote candidate #2).
+  `analyse.py` and the `test_picasso_outpost` RSSO/align tests repointed; the
+  now-orphaned `plt`/`os`/`render`/`imageprocess` imports removed from the
+  monolith. Behaviour unchanged.
 - **Monolith split S4 — DBSCAN molecular-interaction analysis → `outpost/clustering/`.**
   The DBSCAN-molint cluster (`DBSCAN_analysis`, `DBSCAN_analysis_pd`,
   `_do_dbscan_molint`, `degree_of_clustering`, and the barcode /
