@@ -20,8 +20,10 @@ integration glue — a `keep`. The two axes keep that distinction explicit.)
 
 - **Upstream-bound** (`promote` / `extend-up`) — genuinely novel; stage for
   picasso. Re-verified this pass: CSR k-NN stats, point-set shift kernel,
-  correspondence-free ICP registration, resolution (FRC / decorrelation / PPAC),
-  binding-events, CellMask morphology. None are glue-mislabeled.
+  correspondence-free ICP registration, resolution (FRC / decorrelation;
+  **PPAC deferred** — never performed well, needs a perf rewrite before
+  promotion, see S1), binding-events, CellMask morphology. None are
+  glue-mislabeled.
 - **Workflow-bound** (`keep`) — permanent glue / orchestration / reporting over
   picasso (channel-alignment, spinna wrappers, origami, dbscan-molint, render,
   Ripley's-K, report helpers). `render` moved here from the promote mindset.
@@ -35,7 +37,7 @@ remains is the keep-it-clean backlog:
 |---|---|---|
 | **Fragile private reach-ins** — depend on picasso *private* symbols; guarded by `get_internal` + the contract test, but any upstream refactor can break them | `postprocess._pick_similar` (`pick_gold`), `postprocess._n_block_locs_at` (`pick_similar`), `localize._to_photons` (`get_spots`), `spinna._targets_from_structures` (`screen_label_uncertainty`) | upstream a **public** picasso API for each, then drop the `get_internal`. (The boundary + contract test already make the breakage *loud*, not silent — so this is hardening, not a live bug.) |
 | **Duplication of picasso** — re-implements what picasso ≥ 0.12 provides | **3 copies of `otsu()`** (`masking/mask.py`, `spatial_stats/ripleys.py`, `ripley_dcatlas_analysis.py`) vs `picasso.masking.mask_image(method="otsu")` — `picasso_set` already uses the upstream API; `_undrift_from_picked` drift computation; `_solve_optimal_shifts` vs `picasso.lib.minimize_shifts`; `dbscan_molint/mask.py` precursor | equivalence-test, then rewire to upstream + delete the fork (see Dedup table). |
-| **Monolith** — promote-candidates and keep-glue physically interleaved in one file | `picasso_outpost.py` — **7579 lines, 107 top-level defs, 7 feature areas** | split into `outpost/<feature>/`. Prerequisite to cleanly promoting the upstream-bound parts, which are currently entangled with keep-glue. |
+| **Monolith** — promote-candidates and keep-glue physically interleaved in one file | `picasso_outpost.py` — **7067 lines (was 7579), ~97 top-level defs** | split into `outpost/<feature>/`. Prerequisite to cleanly promoting the upstream-bound parts, which are currently entangled with keep-glue. |
 
 **Reading:** the upstream-bound set is the *promotion* backlog; the table above
 is the *keep-it-clean* backlog. Both are gated behind splitting the monolith,
@@ -58,7 +60,7 @@ which is what physically separates the two kinds of code.
 | 2 | **Point-set pairwise-shift kernel** → `picasso.imageprocess` | `picasso_outpost.py` `_calculate_pairwise_shift` + `_find_peak_center_of_mass`, `_fit_2d_gaussian_peak`, `_calculate_adaptive_bins`, `_normalize_quality_metrics` (518–1361) | promote | M | analyse.py (10+) | Split numeric core from plot-saving/filename params. Complements image-based `imageprocess.rcc`. |
 | 3 | **Correspondence-free rigid registration** → `picasso.registration` | `picasso_outpost.py` `register_to_template`, `_rigid_fit` (Kabsch), `_match_within_gate` (Hungarian), `_icp_refine`, `_rotation_matrix`; companion `subcluster_docking_sites` (5542–5800) | promote | **H** | analyse.py (origami) | Small, self-contained (numpy + `scipy.optimize.linear_sum_assignment`). Rotation-sweep + ICP template fit under unknown correspondence — complements `picasso.registration`’s matched-point affine. |
 | 5 | **Resolution: FRC + decorrelation** → `picasso.postprocess` | `outpost_modules/resolution_frc.py`, `resolution_decorrelation.py` | promote | **H** | analyse.py | Standard published methods, self-contained (decorrelation reuses `resolution_frc.render_image_histogram`). |
-| 5b | **Resolution: PPAC** → `picasso.postprocess` | `picasso_outpost.py` `resolution_ppac*`, `analyse_resolution_ppac` (7158–7662) | promote | M | analyse.py | Third, independent resolution estimator. Prune dead params (`batch_size`, `use_chunking`) + collapse to one backend first. |
+| 5b | **Resolution: PPAC** → `picasso.postprocess` | `outpost/resolution/resolution_ppac.py` (moved, S1) | ⚠️ deferred | L | analyse.py | Third resolution estimator, but **never performed well** — demoted from `promote` until rewritten (O(G²) KDTree-per-cell → displacement-vector histogram; see its module docstring / the S1 row). Not promote-ready as-is. |
 | 6 | **Binding-event analysis** → picasso (new module) | `outpost/binding_events/{analysis,plotting}.py` (`Measurement`, `Plotting`) | promote | **H** | analyse.py | Cleanly paired analysis+plotting, zero picasso/sibling coupling. **Moved** into `outpost/binding_events/`; deps in the `[binding-events]` extra. |
 | 7 | **CellMask morphology + density CSR** → extend `picasso.masking` | `outpost/masking/mask.py` `CellMask` (morphology: `filter_mask`, `component_masks`, `erode`/`dilate`; stats: `area`, `mean_density`; `random_points*`) | extend-up | M | analyse.py, ripleys | The cell-object layer `picasso.masking` lacks. **Moved** from `outpost_modules/` into `outpost/masking/`. Contribute the new part; dedup the overlapping thresholding (see masking/dedup below). |
 
@@ -111,7 +113,7 @@ which is what physically separates the two kinds of code.
 
 ## Monolith split — sequenced plan (`picasso_outpost.py` → `outpost/<feature>/`)
 
-`picasso_outpost.py` = **7579 lines, 107 top-level defs, 7 feature areas**, used
+`picasso_outpost.py` = **7067 lines (was 7579), ~97 top-level defs**, used
 at **48 sites in `analyse.py`** and heavily in `tests/test_picasso_outpost.py`.
 Unlike the AutoPicasso-mocked unit tests, `test_picasso_outpost.py` calls these
 functions **directly**, so a repointed test gives *real* coverage of each move —
@@ -128,7 +130,7 @@ gets its own `registration/` rather than living under `origami/`.
 
 | # | cluster (lines in current file) | → target | dest | notes / deps |
 |---|---|---|---|---|
-| S1 | **PPAC resolution** (7075–7579: `resolution_ppac*`, `analyse_resolution_ppac`) | `outpost/resolution/resolution_ppac.py` | keep ⚠️ needs-work | Move as a pure extraction, but **flag: not promote-ready — never performed well.** Root cause: it rebuilds a `KDTree(xy_shift)` for *every* grid cell → O(G²·N log N); the sparse/chunked/parallel variants are band-aids on that. **Fix (do before promoting):** the G×G map is a 2D histogram of pairwise displacement vectors — build one `KDTree`, `query_pairs` within `r_max` once, `np.histogram2d` the displacements. After the rewrite + an equivalence test, revisit promotion. Prune dead `batch_size`/`use_chunking` params then. |
+| S1 ✅ | **PPAC resolution** (`resolution_ppac*`, `analyse_resolution_ppac`) | `outpost/resolution/resolution_ppac.py` | keep ⚠️ needs-work | **Done** (−512 lines from the monolith). **Flagged not promote-ready — never performed well.** Root cause: rebuilds a `KDTree(xy_shift)` for *every* grid cell → O(G²·N log N); sparse/chunked/parallel variants are band-aids. **Fix before promoting** (written up in the module docstring): the G×G map is a 2D histogram of pairwise displacement vectors — build one `KDTree`, `query_pairs` within `r_max` once, `np.histogram2d` the displacements; then drop dead `batch_size`/`use_chunking` + redundant backends, add an equivalence test, revisit promotion. |
 | S2 | **CSR k-NN stats** (2743–3123: `nndistribution_from_csr`, `csr_cdf_for_ks_test`, `nndist_loglikelihood_csr`, `estimate_density_from_neighbordists`, `minimization_loglike`, `_check_distance_window`) | `outpost/spatial_stats/csr_knn.py` | promote | Self-contained numpy/scipy; `spatial_stats/__init__` already anticipates it. 3 analyse sites + `test_04*`. |
 | S3 | **spinna wrappers** (2032–2741: `spinna_batch`, `screen_label_uncertainty`, `single_spinna_run`, `single_spinna_fit_le_run`, `plot_spinna_nnd`, `_plot_label_unc_scan`, `load_structures_from_dict`) | `outpost/spinna/` | keep | Thin wrappers over `picasso.spinna` + plots. `screen_label_uncertainty` uses `get_internal("_targets_from_structures")` — carry the dispatcher. |
 | S3b | **spot extraction** (1946–2029: `get_spots`, `_cut_spots`, `_cut_spots_byrandomframe`, `normalize_spot`) | `outpost/spots/` | keep | Distinct from spinna — localization spot-cutting for re-fitting. `get_spots` uses `get_internal("_to_photons")`. (`_cut_spots_byrandomframe` = deliberate random-frame sampling, not a dedup — see Dedup table.) |

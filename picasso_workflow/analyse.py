@@ -5236,7 +5236,7 @@ class AutoPicasso(
             ``resolution_dblradial`` (double-Gaussian FWHM), ``fig_resolution``
             and ``fig_radial``.
         """
-        from picasso_workflow.picasso_outpost import (
+        from picasso_workflow.outpost.resolution.resolution_ppac import (
             analyse_resolution_ppac,
             resolution_ppac,
         )
