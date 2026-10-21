@@ -92,6 +92,16 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Changed
 
+- **Monolith split S3 — SPINNA wrappers → `outpost/spinna/`.** The workflow-side
+  wrappers over `picasso.spinna` (`spinna_batch`, `single_spinna_run`,
+  `single_spinna_fit_le_run`, `screen_label_uncertainty`, `plot_spinna_nnd`,
+  `load_structures_from_dict`, `_plot_label_unc_scan`) moved out of
+  `picasso_outpost.py` (−706 lines) into `outpost/spinna/wrappers.py`. `analyse`
+  (9 call sites, via a module alias import) and the `test_analyse` mocks
+  (`@patch` targets + direct calls) repointed; the now-orphaned
+  `spinna`/`get_spinna_batch_analysis`/`glob`/`datetime` imports removed from the
+  monolith. Behaviour unchanged (`keep` — thin orchestration over
+  `picasso.spinna`, not an upstream candidate).
 - **Monolith split S2 — analytic CSR k-NN stats → `outpost/spatial_stats/`.**
   The CSR nearest-neighbour-distance model + density MLE
   (`nndistribution_from_csr`, `nndist_loglikelihood_csr`,
