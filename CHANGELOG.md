@@ -12,6 +12,9 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Added
 
+- **`[binding-events]` optional extra** (`lmfit`, `pandarallel`) for the
+  `binding_event_analysis` workflow module. Its code is imported lazily, so the
+  deps are only needed when that module runs: `pip install -e ".[binding-events]"`.
 - **Phase 2 outpost scaffold** (`picasso_workflow/outpost/`): a `MANIFEST.md`
   that tracks the migration of picasso-adjacent code (`picasso_outpost.py` +
   `outpost_modules/`) into feature-focused submodules, with a per-feature status
@@ -67,6 +70,11 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Changed
 
+- **Outpost restructure (binding-events slice).** `binding_event_analysis` and
+  `binding_event_plotting` moved from the flat `outpost_modules/` into a cohesive
+  `outpost/binding_events/` feature package (as `analysis`/`plotting`). The next
+  incremental `picasso_outpost` → `outpost/<feature>/` step (see
+  `outpost/MANIFEST.md`).
 - **Packaging: subpackages now ship in non-editable wheels.** Switched
   `[tool.setuptools]` from the non-recursive `packages = ["picasso_workflow"]`
   to `[tool.setuptools.packages.find]` (`include = ["picasso_workflow*"]`), so
@@ -142,6 +150,19 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Fixed
 
+- **`binding_event_analysis` module made runnable again.** The method was
+  broken by a chain of latent errors, none caught because the module is
+  experimental and mocked in the unit tier. Fixed all of them: (1) it called
+  `outpost_modules.binding_event_analysis.Measurement(...)`, but that submodule
+  was never imported into the `outpost_modules` package (its `__init__` imports
+  only `mask`/`ripleys`), so the call raised `AttributeError`; the code now
+  lives in `picasso_workflow/outpost/binding_events/` and is imported explicitly;
+  (2) `Measurement(...)` was passed `saving_path=`, but the constructor takes
+  `saving_name=` (`TypeError`); (3) three method calls used the wrong case —
+  `Plotter.plot_td()` / `plot_r()` / `saveAllResults()` vs the actual `Plot_td`
+  / `Plot_r` / `SaveAllResults` (`AttributeError`). A new static API-contract
+  test (`test_outpost_binding_events.py`) asserts the call-site kwargs and
+  method names match the classes, so these cannot silently reappear.
 - **Flaky test teardown on overlay filesystems.** Tests clean up their result
   folders with `shutil.rmtree`; on the container's (and CI's) overlay
   filesystem, shutil's fd-based `_rmtree_safe_fd` intermittently raised
