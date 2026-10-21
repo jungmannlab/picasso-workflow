@@ -1398,7 +1398,9 @@ class TestAnalyseModules(unittest.TestCase):
 
         shutil.rmtree(os.path.join(self.results_folder, "00_fit_csr"))
 
-    @patch("picasso_workflow.analyse.picasso_outpost.nndistribution_from_csr")
+    @patch(
+        "picasso_workflow.outpost.spatial_stats.csr_knn.nndistribution_from_csr"
+    )
     def test_fit_csr_plot_max_dist_controls_display_range(self, mock_nnd):
         """plot_max_dist sets the plotting range, independent of the fit.
 
