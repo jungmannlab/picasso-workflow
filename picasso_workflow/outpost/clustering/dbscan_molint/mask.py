@@ -19,7 +19,7 @@ import configparser
 from datetime import datetime
 
 
-from picasso_workflow.dbscan_molint import io
+from picasso_workflow.outpost.clustering.dbscan_molint import io
 
 """
 ===============================================================================

@@ -92,6 +92,14 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Changed
 
+- **S4b — `dbscan_molint/` backend folded under `outpost/clustering/`.** The
+  top-level `picasso_workflow/dbscan_molint/` subpackage (`dbscan`, `mask`,
+  `output_metrics`, `io`) — the DBSCAN molecular-interaction backend behind the
+  `molint` analysis extracted in S4 — moved to
+  `picasso_workflow/outpost/clustering/dbscan_molint/`, so the whole feature now
+  lives under its `outpost/<feature>/` home. Pure `git mv`: the one internal
+  import and the deferred importers in `analyse.py` and `outpost/clustering/
+  molint.py` were repointed; import timing and behaviour are unchanged.
 - **Monolith split S9 (final) — report histogram helpers →
   `outpost/reporting/`; `picasso_outpost.py` deleted.** The last two functions
   in the monolith, `plot_1dhist` / `plot_2dhist`, moved to
