@@ -1,9 +1,8 @@
-#!/usr/bin/env python
-"""Exploratory DNA-PAINT analysis functions related to picasso.
+"""Report histogram helpers (extracted from picasso_outpost).
 
-A collection of picasso-related functions that, if they prove useful, may be
-moved into a future picasso release. Keeping them here makes testing cycles
-faster.
+`keep` -- workflow-side presentation glue that draws 1D / 2D histograms of
+localization fields for the HTML / Confluence report modules. Both bin via
+``lib.calculate_optimal_bins`` (picasso >= 0.10).
 
 Author: Heinrich Grabmayr
 Initial date: March 8, 2024

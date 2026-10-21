@@ -3161,7 +3161,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                     the previously saved hdf5 files to be loaded and
                     aligned. if not given, the last processed data is used
                 align_pars : dict
-                    kwargs of picasso_outpost.align_channels
+                    kwargs of outpost.alignment.channels.align_channels
                         max_iterations, convergence
                 fp_fiducials : list of str
                     the previously saved hdf5 files of fiducial markers

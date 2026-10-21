@@ -1228,7 +1228,7 @@ class AbstractModuleCollection(abc.ABC):
                 Previously saved hdf5 files to load and align. If omitted, the
                 last processed data is used.
             ``align_pars`` : dict
-                Kwargs of ``picasso_outpost.align_channels``
+                Kwargs of ``outpost.alignment.channels.align_channels``
                 (``max_iterations``, ``convergence``).
             ``fp_fiducials`` : list of str
                 Previously saved hdf5 files of fiducial markers to load and
@@ -1904,7 +1904,7 @@ class AbstractModuleCollection(abc.ABC):
         report's "Lattice filter" panels show each gate's metric distribution
         and threshold; thresholds beyond the exposed knobs are calibrated
         defaults, tunable via
-        :func:`picasso_outpost.cluster_lattice_defects`.
+        :func:`picasso_workflow.outpost.origami.origami.cluster_lattice_defects`.
 
         Parameters
         ----------
@@ -1967,7 +1967,7 @@ class AbstractModuleCollection(abc.ABC):
                 Lattice method: min matched sites as a fraction of the design
                 nodes to count as on-lattice (default 0.66). The remaining
                 on-lattice gate thresholds use calibrated defaults (tune via
-                :func:`picasso_outpost.cluster_lattice_defects`).
+                :func:`picasso_workflow.outpost.origami.origami.cluster_lattice_defects`).
         results : dict
             Module results (see class docstring). With ``cluster_patterns``
             also ``n_pattern_clusters``, ``pattern_summary``,

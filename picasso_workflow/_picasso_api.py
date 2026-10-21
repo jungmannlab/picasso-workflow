@@ -129,7 +129,7 @@ def get_spinna_batch_analysis():
     """Return picasso's private ``_spinna_batch_analysis`` callable.
 
     Guards ``picasso.__main__._spinna_batch_analysis`` used by the SPINNA
-    aggregation path in :mod:`picasso_workflow.picasso_outpost`.
+    aggregation path in :mod:`picasso_workflow.outpost.spinna.wrappers`.
     """
     return get_internal("_spinna_batch_analysis")
 

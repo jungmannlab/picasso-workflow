@@ -185,8 +185,8 @@ class ModuleSpec:
         For ``WRAPS``/``EXTENDS``, the wrapped/extended picasso entry point
         (e.g. ``"picasso.aim.aim"``). Required when ``relation`` is ``WRAPS``.
     outpost : bool
-        Orthogonal flag: implementation currently lives in ``picasso_outpost``;
-        a migration candidate for core ``picasso``.
+        Orthogonal flag: implementation currently lives in the ``outpost/``
+        package; a migration candidate for core ``picasso``.
     scopes : frozenset[Scope]
         Non-empty set of workflow scopes the module is valid in.
     experimental : bool
