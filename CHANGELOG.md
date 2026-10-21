@@ -10,6 +10,18 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ## [Unreleased]
 
+### Fixed
+
+- **WP-TEMPLATE-CONFORMANCE code review: an aggregation template's default now
+  covers the whole pipeline.** ``Template.resolve`` previously returned only the
+  recipe's ``aggregation_modules``, so a change to the per-dataset
+  ``single_dataset_modules`` half (e.g. ``box_size``, fit params, an added
+  single-dataset step) was invisible to both ``template_version`` and
+  ``config_diff`` — and an aggregation run has no separate single-dataset
+  template run to catch it. ``resolve`` now returns ``single_dataset_modules``
+  followed by ``aggregation_modules`` (the two phases' module names are disjoint
+  in the shipped recipes), so the version/diff see the full content.
+
 ### Added
 
 - **WP-TEMPLATE-CONFORMANCE — versioned analysis templates + deviation logging

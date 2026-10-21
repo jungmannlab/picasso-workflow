@@ -18,6 +18,7 @@ import unittest
 
 import yaml
 
+import picasso_workflow.standard_aggregation_workflows as saw
 import picasso_workflow.standard_singledataset_workflows as ssw
 from picasso_workflow.modulespec import _step_name, _step_params
 from picasso_workflow import templates as tpl
@@ -165,11 +166,39 @@ class TestTemplateRegistry(unittest.TestCase):
         self.assertEqual(_step_name(wf[0]), "load_dataset_movie")
         self.assertEqual(_step_name(wf[-1]), "save_single_dataset")
 
-    def test_aggregation_resolves_to_aggregation_modules(self):
+    def test_aggregation_resolves_to_full_pipeline(self):
+        # The aggregation template default is the WHOLE pipeline: the
+        # per-dataset single_dataset_modules THEN the aggregation_modules, so
+        # a per-dataset deviation (e.g. box_size) is visible to the version +
+        # diff (an aggregation run has no separate single-dataset template).
         wf = tpl.get_template("minimal_channel_align").resolve()
         names = [_step_name(s) for s in wf]
-        self.assertIn("align_channels", names)
-        self.assertNotIn("load_dataset_movie", names)  # that's single-scope
+        self.assertIn("align_channels", names)  # aggregation half
+        self.assertIn("load_dataset_movie", names)  # single-dataset half
+        # single-dataset steps precede aggregation steps.
+        self.assertLess(
+            names.index("load_dataset_movie"), names.index("align_channels")
+        )
+
+    def test_aggregation_version_sensitive_to_single_dataset_change(self):
+        # A change to the per-dataset half must change the aggregation
+        # template's content hash (the bug this guards: resolving to only the
+        # aggregation modules made single-dataset changes invisible).
+        base = saw.minimal_channel_align(filepaths=["/data/a.hdf5"])
+        bumped = saw.minimal_channel_align(filepaths=["/data/a.hdf5"])
+        # bump a per-dataset param in the single_dataset_modules half.
+        name, params = bumped["single_dataset_modules"][1]
+        params = {**params, "box_size": (params.get("box_size", 7) or 7) + 2}
+        bumped["single_dataset_modules"][1] = (name, params)
+
+        def _full(d):
+            return list(d["single_dataset_modules"]) + list(
+                d["aggregation_modules"]
+            )
+
+        self.assertNotEqual(
+            tpl.content_hash(_full(base)), tpl.content_hash(_full(bumped))
+        )
 
 
 class TestVersionHashStability(unittest.TestCase):

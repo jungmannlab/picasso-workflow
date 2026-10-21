@@ -195,14 +195,24 @@ class Template:
     def resolve(self) -> Workflow:
         """Materialize the concrete default workflow (ordered steps).
 
-        Aggregation recipes return a ``{single_dataset_modules, ...,
+        Single-scope recipes return the step list directly. Aggregation
+        recipes return a ``{single_dataset_modules, ...,
         aggregation_modules}`` mapping; the template default is the
-        *aggregation* module list (the part a run's aggregation workflow is
-        diffed against). Single-scope recipes return the step list directly.
+        **whole** pipeline — the per-dataset ``single_dataset_modules``
+        followed by the ``aggregation_modules`` — so a change to *either* half
+        (e.g. the per-dataset ``box_size`` or an added aggregation step) is
+        visible to both ``template_version`` and ``config_diff``. (Diffing only
+        the aggregation half would make per-dataset deviations invisible, since
+        an aggregation run has no separate single-dataset template run to catch
+        them.) The two phases' module names are disjoint in the shipped
+        recipes, so the flat concatenation is unambiguous; a run diffed against
+        this default must likewise supply its single+aggregation steps.
         """
         built = self.builder(**self.builder_kwargs)
         if isinstance(built, dict):
-            return list(built.get("aggregation_modules", []))
+            return list(built.get("single_dataset_modules", [])) + list(
+                built.get("aggregation_modules", [])
+            )
         return list(built)
 
     @property
