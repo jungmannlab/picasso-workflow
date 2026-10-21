@@ -92,6 +92,16 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Changed
 
+- **Monolith split S2 — analytic CSR k-NN stats → `outpost/spatial_stats/`.**
+  The CSR nearest-neighbour-distance model + density MLE
+  (`nndistribution_from_csr`, `nndist_loglikelihood_csr`,
+  `estimate_density_from_neighbordists`, `csr_cdf_for_ks_test`,
+  `minimization_loglike`, `_check_distance_window`) moved out of
+  `picasso_outpost.py` (−383 lines) into
+  `outpost/spatial_stats/csr_knn.py` (self-contained numpy/scipy). `analyse.py`
+  (`fit_csr`) and `test_picasso_outpost.py` import sites updated; three
+  now-orphaned scipy imports removed from the monolith. Behaviour unchanged — a
+  genuine `picasso.postprocess` promote candidate, now isolated.
 - **Monolith split S1 — PPAC resolution → `outpost/resolution/`.** The
   point-pattern-autocorrelation resolution estimator (`resolution_ppac` and
   helpers, `analyse_resolution_ppac`) moved out of `picasso_outpost.py` (−512

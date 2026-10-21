@@ -7772,6 +7772,8 @@ class AutoPicasso(
             ``wasserstein_distances_per_k``, ``mean_wasserstein_distance`` and
             ``ks_pvalues_per_k``.
         """
+        from picasso_workflow.outpost.spatial_stats import csr_knn
+
         if isinstance(parameters["nneighbors"], str):
             nneighbor_list = [np.loadtxt(parameters["nneighbors"])]
             tags = ["locs"]
@@ -7841,9 +7843,7 @@ class AutoPicasso(
                 (
                     rho_mle,
                     fitresult,
-                ) = picasso_outpost.estimate_density_from_neighbordists(
-                    **kwargs
-                )
+                ) = csr_knn.estimate_density_from_neighbordists(**kwargs)
                 lo = rho_init / bound_factor
                 hi = rho_init * bound_factor
                 at_bound = rho_mle <= lo * (1 + 1e-3) or rho_mle >= hi * (
@@ -7903,7 +7903,7 @@ class AutoPicasso(
                         )
 
                         # Get theoretical CSR probability distribution
-                        csr_pdf = picasso_outpost.nndistribution_from_csr(
+                        csr_pdf = csr_knn.nndistribution_from_csr(
                             r_theory,
                             k,
                             rho_mle,
@@ -7937,7 +7937,7 @@ class AutoPicasso(
                         # Calculate Kolmogorov-Smirnov test
                         # Use CDF function from picasso_outpost
                         def csr_cdf(x):
-                            return picasso_outpost.csr_cdf_for_ks_test(
+                            return csr_knn.csr_cdf_for_ks_test(
                                 x,
                                 k,
                                 rho_mle,
@@ -8064,17 +8064,14 @@ class AutoPicasso(
                 frac_in_window = (
                     float(np.mean(in_window)) if in_window.size else 0.0
                 )
-                nnhist_an = (
-                    frac_in_window
-                    * picasso_outpost.nndistribution_from_csr(
-                        rvals,
-                        k,
-                        rho_mle,
-                        d=d,
-                        min_dist=fit_min_dist,
-                        max_dist=fit_max_dist,
-                        renormalize=True,
-                    )
+                nnhist_an = frac_in_window * csr_knn.nndistribution_from_csr(
+                    rvals,
+                    k,
+                    rho_mle,
+                    d=d,
+                    min_dist=fit_min_dist,
+                    max_dist=fit_max_dist,
+                    renormalize=True,
                 )
                 if i == 0:
                     lbl = f"rho_init {1E6*rho_init:.1f} um^-2"

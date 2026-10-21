@@ -23,6 +23,11 @@ from picasso_workflow.outpost.resolution.resolution_ppac import (
     analyse_resolution_ppac,
     resolution_ppac,
 )
+from picasso_workflow.outpost.spatial_stats.csr_knn import (
+    estimate_density_from_neighbordists,
+    nndist_loglikelihood_csr,
+    nndistribution_from_csr,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -98,7 +103,7 @@ class TestPicassoOutpost(unittest.TestCase):
 
     def test_04a_nndistribution_from_csr(self):
         r = np.arange(50)
-        p = picasso_outpost.nndistribution_from_csr(r, 2, 0.3)
+        p = nndistribution_from_csr(r, 2, 0.3)
         assert p.shape == r.shape
 
     def test_04b_nndist_loglikelihood_csr(self):
@@ -108,14 +113,11 @@ class TestPicassoOutpost(unittest.TestCase):
         np.random.seed(42)
         rho = 0.2
         r = np.linspace(0, 20, num=30)
-        pdists = [
-            picasso_outpost.nndistribution_from_csr(r, k, rho)
-            for k in range(1, 4)
-        ]
+        pdists = [nndistribution_from_csr(r, k, rho) for k in range(1, 4)]
         # test for one spot
         nnobs = np.array([max(pd) for pd in pdists])
         print(nnobs, rho)
-        loglike = picasso_outpost.nndist_loglikelihood_csr(nnobs, rho)
+        loglike = nndist_loglikelihood_csr(nnobs, rho)
         assert loglike <= 0
 
         # test for multiple spots
@@ -126,7 +128,7 @@ class TestPicassoOutpost(unittest.TestCase):
                 for pd in pdists
             ]
         )
-        loglike = picasso_outpost.nndist_loglikelihood_csr(nnobs, rho)
+        loglike = nndist_loglikelihood_csr(nnobs, rho)
         assert loglike <= 0
 
     def test_04c_estimate_density_from_neighbordists(self):
@@ -138,8 +140,7 @@ class TestPicassoOutpost(unittest.TestCase):
         kmin = 1
         kmax = 5
         pdists = [
-            picasso_outpost.nndistribution_from_csr(r, k, rho)
-            for k in range(kmin, kmax + 1)
+            nndistribution_from_csr(r, k, rho) for k in range(kmin, kmax + 1)
         ]
         nspots = 20000
         nnobs = np.array(
@@ -149,7 +150,7 @@ class TestPicassoOutpost(unittest.TestCase):
             ]
         )
         rho_init = rho * 4 / 3
-        rhofit, fitres = picasso_outpost.estimate_density_from_neighbordists(
+        rhofit, fitres = estimate_density_from_neighbordists(
             nnobs, rho_init, kmin
         )
         # print(fitres)
@@ -166,7 +167,7 @@ class TestPicassoOutpost(unittest.TestCase):
         #     # dist / np.sum(dist) leads to fitting problems (!?)
         #     ax.plot(r + (r[1] - r[0]) / 2, pdists[i] * nspots / 4.9, color=color,
         #             label='base distribution')
-        #     fdist = picasso_outpost.nndistribution_from_csr(r, k, rhofit)
+        #     fdist = nndistribution_from_csr(r, k, rhofit)
         #     ax.plot(r + (r[1] - r[0]) / 2, fdist * nspots / 4.9, color=color,
         #             linestyle=':', label='fitted distribution')
         # ax.set_title(f'input density {rho:.4f}; fitted density: {rhofit:.4f}')
@@ -180,7 +181,7 @@ class TestPicassoOutpost(unittest.TestCase):
         # test_rhos = np.linspace(rho / 4, rho * 2, num=20)
         # loglikes = np.zeros_like(test_rhos)
         # for i, trho in enumerate(test_rhos):
-        #     loglikes[i] = picasso_outpost.minimization_loglike([trho], nnobs, kmin)
+        #     loglikes[i] = minimization_loglike([trho], nnobs, kmin)
         # fig, ax = plt.subplots()
         # ax.plot(test_rhos, loglikes)
         # fig.savefig(os.path.join(results_folder, 'loglike_minimization.png'))
@@ -910,7 +911,7 @@ def test_04d_estimate_density_rejects_empty_distance_window():
         ]
     )
     with pytest.raises(ValueError) as excinfo:
-        picasso_outpost.estimate_density_from_neighbordists(
+        estimate_density_from_neighbordists(
             nn_dists, 1e-3, kmin=1, min_dist=50.0, max_dist=300.0
         )
     msg = str(excinfo.value)
@@ -921,7 +922,7 @@ def test_04d_estimate_density_rejects_empty_distance_window():
 
 
 def test_04e_nndistribution_from_csr_tolerates_empty_array():
-    out = picasso_outpost.nndistribution_from_csr(
+    out = nndistribution_from_csr(
         np.array([]), 2, 1e-3, min_dist=50.0, max_dist=300.0
     )
     assert out.size == 0
