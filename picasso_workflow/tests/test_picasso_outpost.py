@@ -18,11 +18,11 @@ import pytest
 # from matplotlib import cm
 
 
-from picasso_workflow import picasso_outpost
 from picasso_workflow.outpost.formats import zeiss
 from picasso_workflow.outpost.alignment import channels
 from picasso_workflow.outpost.picks import picks as picks_mod
 from picasso_workflow.outpost.registration import icp
+from picasso_workflow.outpost.origami import origami as origami_mod
 from picasso_workflow.outpost.resolution.resolution_ppac import (
     analyse_resolution_ppac,
     resolution_ppac,
@@ -993,7 +993,7 @@ def _rot2d(deg):
 
 def test_origami_template_from_grid_recovers_geometry():
     """A 3x4 / 20 nm grid recovers n_sites, spacing and extent."""
-    tmpl = picasso_outpost.origami_template_from_grid(3, 4, 20.0)
+    tmpl = origami_mod.origami_template_from_grid(3, 4, 20.0)
     assert tmpl.n_sites_expected == 12
     assert abs(tmpl.grid_spacing_nm - 20.0) < 1e-6
     # centered
@@ -1004,13 +1004,13 @@ def test_origami_template_from_grid_recovers_geometry():
 
 def test_load_origami_template_dispatch():
     """The dispatcher handles grid / explicit-site specs."""
-    grid = picasso_outpost.load_origami_template(
+    grid = origami_mod.load_origami_template(
         {"n_rows": 2, "n_cols": 3, "spacing_nm": 15.0}
     )
     assert grid.n_sites_expected == 6
     assert abs(grid.grid_spacing_nm - 15.0) < 1e-6
 
-    sites = picasso_outpost.load_origami_template(
+    sites = origami_mod.load_origami_template(
         {"sites_nm": [[0, 0], [10, 0], [0, 10]]}
     )
     assert sites.n_sites_expected == 3
@@ -1021,21 +1021,21 @@ def test_load_origami_template_rejects_bad_specs():
     coordinate list is rejected with a clear error (not a cryptic numpy
     TypeError). Regression for the GUI emitting ``{0, 3, 4, 20}`` (a set)."""
     with pytest.raises(TypeError) as excinfo:
-        picasso_outpost.load_origami_template({0, 3, 4, 20})
+        origami_mod.load_origami_template({0, 3, 4, 20})
     assert "set" in str(excinfo.value)
     assert "n_rows" in str(excinfo.value)  # points at the right form
 
     with pytest.raises(ValueError) as excinfo2:
-        picasso_outpost.load_origami_template({"foo": 1, "bar": 2})
+        origami_mod.load_origami_template({"foo": 1, "bar": 2})
     assert "unrecognised" in str(excinfo2.value)
 
     # the corrected grid form works
-    tmpl = picasso_outpost.load_origami_template(
+    tmpl = origami_mod.load_origami_template(
         {"n_rows": 3, "n_cols": 4, "spacing_nm": 20.0}
     )
     assert tmpl.n_sites_expected == 12
     # an ordered list of coordinate pairs works
-    tmpl2 = picasso_outpost.load_origami_template([[0, 0], [20, 0], [0, 20]])
+    tmpl2 = origami_mod.load_origami_template([[0, 0], [20, 0], [0, 20]])
     assert tmpl2.n_sites_expected == 3
 
 
@@ -1059,10 +1059,10 @@ def test_design_file_roundtrip(tmp_path):
             f,
         )
     # parse without anchoring: native spacing 0.5
-    raw = picasso_outpost.parse_design_sites(str(fp))
+    raw = origami_mod.parse_design_sites(str(fp))
     assert len(raw) == 12
     # anchor to 20 nm physical spacing
-    tmpl = picasso_outpost.origami_template_from_design_file(
+    tmpl = origami_mod.origami_template_from_design_file(
         str(fp), grid_spacing_nm=20.0
     )
     assert tmpl.n_sites_expected == 12
@@ -1072,7 +1072,7 @@ def test_design_file_roundtrip(tmp_path):
 @pytest.mark.parametrize("angle", [0.0, 17.0, 45.0, 90.0, 213.0])
 def test_register_invariance_rotation_translation(angle):
     """Rotated + translated structures still register (full resolution)."""
-    tmpl = picasso_outpost.origami_template_from_grid(3, 4, 20.0)
+    tmpl = origami_mod.origami_template_from_grid(3, 4, 20.0)
     observed = tmpl.sites_nm @ _rot2d(angle).T + np.array([500.0, -300.0])
     reg = icp.register_to_template(observed, tmpl.sites_nm)
     assert reg["n_resolved"] == 12
@@ -1100,7 +1100,7 @@ def test_register_detects_mirror_on_chiral_template():
 def test_missing_site_boundary(k):
     """A candidate with k missing sites is accepted iff k <= allowed."""
     allowed = 2
-    tmpl = picasso_outpost.origami_template_from_grid(3, 4, 20.0)
+    tmpl = origami_mod.origami_template_from_grid(3, 4, 20.0)
     observed = tmpl.sites_nm @ _rot2d(22.0).T + np.array([100.0, 100.0])
     observed = observed[np.arange(len(observed)) >= k]  # drop first k sites
     reg = icp.register_to_template(observed, tmpl.sites_nm)
@@ -1119,7 +1119,7 @@ def test_missing_site_boundary(k):
 def test_geometry_recovery_from_simulated_locs_is_idempotent():
     """Sub-cluster + register recovers planted geometry, deterministically."""
     rng = np.random.default_rng(0)
-    tmpl = picasso_outpost.origami_template_from_grid(3, 4, 20.0)
+    tmpl = origami_mod.origami_template_from_grid(3, 4, 20.0)
     true_sites = tmpl.sites_nm @ _rot2d(35.0).T + np.array([250.0, 400.0])
     # ~40 localizations per site, sigma 2 nm
     cloud = np.vstack(
@@ -1146,7 +1146,7 @@ def test_subcluster_resolves_all_sites_for_bright_structures():
     resolved sites of bright, well-populated structures - worse the more
     localizations a site had. A quarter-spacing eps recovers them."""
     rng = np.random.default_rng(1)
-    tmpl = picasso_outpost.origami_template_from_grid(3, 4, 20.0)
+    tmpl = origami_mod.origami_template_from_grid(3, 4, 20.0)
     # bright (50 locs/site), slightly spread (sigma 3 nm), random orientation
     sites = tmpl.sites_nm @ _rot2d(28.0).T + np.array([300.0, 200.0])
     cloud = np.vstack([s + rng.normal(0, 3.0, size=(50, 2)) for s in sites])
@@ -1194,11 +1194,11 @@ def test_classify_candidate_reasons_and_ordering():
 
 def test_simulate_origami_phase_space_is_physical_and_reproducible():
     """Simulated (nlocs, rmsd) match the geometry/kinetics and are seeded."""
-    tmpl = picasso_outpost.origami_template_from_grid(3, 4, 20.0)
+    tmpl = origami_mod.origami_template_from_grid(3, 4, 20.0)
     geo_rmsd = float(np.sqrt(np.mean((tmpl.sites_nm**2).sum(axis=1))))
 
     # no jitter, no missing, high locs -> rmsd ~ geometric spread
-    nl, rm = picasso_outpost.simulate_origami_nlocs_rmsd(
+    nl, rm = origami_mod.simulate_origami_nlocs_rmsd(
         tmpl, 0.0, 0, 200.0, n_sim=400, random_seed=0
     )
     assert abs(rm.mean() - geo_rmsd) < 3.0
@@ -1206,17 +1206,17 @@ def test_simulate_origami_phase_space_is_physical_and_reproducible():
     assert abs(nl.mean() - 12 * 200.0) < 200.0
 
     # missing sites + jitter produce a real 2D cloud (not a point)
-    nl2, rm2 = picasso_outpost.simulate_origami_nlocs_rmsd(
+    nl2, rm2 = origami_mod.simulate_origami_nlocs_rmsd(
         tmpl, 4.0, 4, 50.0, n_sim=2000, random_seed=0
     )
     assert np.std(nl2) > 20 and np.std(rm2) > 1.0
     assert nl2.min() < nl.mean()  # fewer sites -> fewer locs
 
     # reproducible with the same seed
-    a, _ = picasso_outpost.simulate_origami_nlocs_rmsd(
+    a, _ = origami_mod.simulate_origami_nlocs_rmsd(
         tmpl, 3.0, 2, 50.0, n_sim=100, random_seed=7
     )
-    b, _ = picasso_outpost.simulate_origami_nlocs_rmsd(
+    b, _ = origami_mod.simulate_origami_nlocs_rmsd(
         tmpl, 3.0, 2, 50.0, n_sim=100, random_seed=7
     )
     assert np.array_equal(a, b)
@@ -1225,7 +1225,7 @@ def test_simulate_origami_phase_space_is_physical_and_reproducible():
 def test_origami_phase_space_preview():
     """The one-call GUI preview returns a per-frame nlocs window from a
     geometry + kinetics."""
-    out = picasso_outpost.origami_phase_space_preview(
+    out = origami_mod.origami_phase_space_preview(
         {"n_rows": 3, "n_cols": 4, "spacing_nm": 20.0},
         n_frames=10000,
         kinetics={
@@ -1245,7 +1245,7 @@ def test_origami_phase_space_preview():
     assert 0 < out["min_n_locs_per_frame"] < out["max_n_locs_per_frame"]
     assert out["min_rmsd"] < out["max_rmsd"]
     # explicit mean_locs_per_site works without kinetics
-    out2 = picasso_outpost.origami_phase_space_preview(
+    out2 = origami_mod.origami_phase_space_preview(
         {"n_rows": 3, "n_cols": 4, "spacing_nm": 20.0},
         n_frames=10000,
         mean_locs_per_site=100.0,
@@ -1258,7 +1258,7 @@ def test_phase_space_window_from_sim():
     """The window brackets the simulated cloud and converts rmsd to px."""
     nlocs = np.linspace(300, 700, 1000)
     rmsd_nm = np.linspace(20.0, 32.0, 1000)
-    win = picasso_outpost.phase_space_window_from_sim(
+    win = origami_mod.phase_space_window_from_sim(
         nlocs, rmsd_nm, pixelsize=130.0, quantile=0.01
     )
     assert win["min_nlocs"] < win["max_nlocs"]
@@ -1274,7 +1274,7 @@ def test_kinetics_window_brackets_matched_simulation():
     k_on, tau_b, conc = 1e6, 0.5, 5e-9
     n_frames, exposure = 10000, 0.1
     n_sites = 12
-    per_site = picasso_outpost.predict_locs_per_site(
+    per_site = origami_mod.predict_locs_per_site(
         k_on, tau_b, conc, n_frames, exposure
     )
     assert per_site > 0
@@ -1283,7 +1283,7 @@ def test_kinetics_window_brackets_matched_simulation():
     mean_total = per_site * n_sites
     totals = rng.normal(mean_total, 0.1 * mean_total, size=500)
     qmin, qmax = np.quantile(totals, 0.25), np.quantile(totals, 0.98)
-    kmin, kmax = picasso_outpost.kinetics_nlocs_window(
+    kmin, kmax = origami_mod.kinetics_nlocs_window(
         k_on, tau_b, conc, n_frames, exposure, n_sites, rel_tol=0.5
     )
     assert kmin <= qmin
@@ -1295,7 +1295,7 @@ def test_pick_origami_rejects_degenerate_footprint():
     diameter can be derived: pick_origami must raise a clear error rather
     than dividing by zero deep inside picasso's get_index_blocks.
     Regression for footprint_diameter=0 reaching pick_similar."""
-    template = picasso_outpost.origami_template_from_sites([[0.0, 0.0]])
+    template = origami_mod.origami_template_from_sites([[0.0, 0.0]])
     assert template.n_sites_expected == 1
     assert template.extent_nm == 0.0
     assert template.grid_spacing_nm == 0.0
@@ -1308,7 +1308,7 @@ def test_pick_origami_rejects_degenerate_footprint():
     )
     info = [{"Width": 64, "Height": 64, "Frames": 100}]
     with pytest.raises(ValueError) as excinfo:
-        picasso_outpost.pick_origami(
+        origami_mod.pick_origami(
             locs, info, template, pixelsize=130.0, footprint_diameter=0.0
         )
     assert "footprint_diameter" in str(excinfo.value)
@@ -1328,9 +1328,9 @@ def test_structure_pattern_features_reads_out_geometry():
     """The site-graph descriptor recovers site count and lattice spacing,
     and is (near-)invariant to rotation."""
     rng = np.random.default_rng(0)
-    tmpl = picasso_outpost.origami_template_from_grid(3, 4, 20.0)
+    tmpl = origami_mod.origami_template_from_grid(3, 4, 20.0)
     cloud = _pattern_blob(tmpl.sites_nm @ _rot2d(37.0).T, 25, rng)
-    feats, names, aux = picasso_outpost.structure_pattern_features(
+    feats, names, aux = origami_mod.structure_pattern_features(
         cloud, expected_spacing_nm=20.0, max_pair_nm=90.0
     )
     assert len(feats) == len(names)
@@ -1338,7 +1338,7 @@ def test_structure_pattern_features_reads_out_geometry():
     assert abs(aux["nn_nm"] - 20.0) < 3.0
     # rotation invariance of the descriptor
     cloud2 = _pattern_blob(tmpl.sites_nm @ _rot2d(113.0).T, 25, rng)
-    feats2, _, _ = picasso_outpost.structure_pattern_features(
+    feats2, _, _ = origami_mod.structure_pattern_features(
         cloud2, expected_spacing_nm=20.0, max_pair_nm=90.0
     )
     assert np.linalg.norm(feats - feats2) < 0.4 * np.linalg.norm(feats)
@@ -1349,7 +1349,7 @@ def test_structure_pattern_features_single_site_has_no_pairs():
     histogram and zero spacing/elongation."""
     rng = np.random.default_rng(1)
     cloud = _pattern_blob(np.array([[0.0, 0.0]]), 30, rng)
-    feats, names, aux = picasso_outpost.structure_pattern_features(
+    feats, names, aux = origami_mod.structure_pattern_features(
         cloud, expected_spacing_nm=20.0, max_pair_nm=90.0
     )
     assert aux["n_sites"] == 1
@@ -1364,7 +1364,7 @@ def test_cluster_structure_patterns_auto_separates_designs():
     rng = np.random.default_rng(0)
 
     def grid():
-        s = picasso_outpost.origami_template_from_grid(3, 4, 20.0).sites_nm
+        s = origami_mod.origami_template_from_grid(3, 4, 20.0).sites_nm
         return s
 
     def line():
@@ -1392,7 +1392,7 @@ def test_cluster_structure_patterns_auto_separates_designs():
             truth.append(name)
     truth = np.array(truth)
 
-    res = picasso_outpost.cluster_structure_patterns(
+    res = origami_mod.cluster_structure_patterns(
         structs, expected_spacing_nm=20.0, min_cluster_size=15
     )
     labels = res["labels"]
@@ -1417,13 +1417,13 @@ def test_cluster_structure_patterns_fixed_k_assigns_all():
     rng = np.random.default_rng(2)
     structs = []
     for _ in range(30):
-        s = picasso_outpost.origami_template_from_grid(3, 4, 20.0).sites_nm
+        s = origami_mod.origami_template_from_grid(3, 4, 20.0).sites_nm
         structs.append(
             _pattern_blob(s @ _rot2d(rng.uniform(0, 360)).T, 20, rng)
         )
     for _ in range(30):
         structs.append(_pattern_blob(np.array([[0.0, 0.0]]), 20, rng))
-    res = picasso_outpost.cluster_structure_patterns(
+    res = origami_mod.cluster_structure_patterns(
         structs, expected_spacing_nm=20.0, k=2
     )
     assert res["method"] == "gmm(k=2)"
@@ -1433,9 +1433,7 @@ def test_cluster_structure_patterns_fixed_k_assigns_all():
 
 def test_cluster_structure_patterns_empty_input():
     """No structures -> empty, well-formed result (no crash)."""
-    res = picasso_outpost.cluster_structure_patterns(
-        [], expected_spacing_nm=20.0
-    )
+    res = origami_mod.cluster_structure_patterns([], expected_spacing_nm=20.0)
     assert res["labels"].shape == (0,)
     assert res["cluster_summary"] == []
 
@@ -1458,8 +1456,8 @@ def _lattice_blob(node_idx, template, spacing, rng, n_per=50, sig=1.2):
 
 def test_template_symmetry_permutations_3x4_grid():
     """A 3x4 grid has the 4-element D2 symmetry group (no 90 deg rotation)."""
-    tmpl = picasso_outpost.origami_template_from_grid(3, 4, 20.0).sites_nm
-    perms = picasso_outpost.template_symmetry_permutations(tmpl)
+    tmpl = origami_mod.origami_template_from_grid(3, 4, 20.0).sites_nm
+    perms = origami_mod.template_symmetry_permutations(tmpl)
     assert len(perms) == 4
     # each permutation is a bijection of the 12 nodes
     for p in perms:
@@ -1471,7 +1469,7 @@ def test_subcluster_min_samples_1_is_clamped():
     becomes its own site); it is clamped to >= 2 so a full grid still
     resolves ~12 sites rather than one per localization."""
     rng = np.random.default_rng(0)
-    tmpl = picasso_outpost.origami_template_from_grid(3, 4, 20.0).sites_nm
+    tmpl = origami_mod.origami_template_from_grid(3, 4, 20.0).sites_nm
     cloud = _lattice_blob(range(12), tmpl, 20.0, rng)
     c1 = icp.subcluster_docking_sites(cloud, 20.0, min_samples=1)
     c2 = icp.subcluster_docking_sites(cloud, 20.0, min_samples=2)
@@ -1484,10 +1482,10 @@ def test_lattice_defect_features_reads_fit_and_occupancy():
     spacing; a scaled grid recovers its spacing; a missing site shows up as a
     zero in the occupancy."""
     rng = np.random.default_rng(0)
-    tmpl = picasso_outpost.origami_template_from_grid(3, 4, 20.0).sites_nm
+    tmpl = origami_mod.origami_template_from_grid(3, 4, 20.0).sites_nm
 
     full = _lattice_blob(range(12), tmpl, 20.0, rng)
-    a = picasso_outpost.lattice_defect_features(full, tmpl, 20.0)
+    a = origami_mod.lattice_defect_features(full, tmpl, 20.0)
     assert a["n_matched"] == 12
     assert sum(a["occupancy"]) == 12
     assert a["rmse_nm"] < 4.0
@@ -1497,27 +1495,25 @@ def test_lattice_defect_features_reads_fit_and_occupancy():
     assert sorted(a["site_nodes"].tolist()) == list(range(12))
 
     scaled = _lattice_blob(range(12), tmpl, 24.0, rng)
-    a2 = picasso_outpost.lattice_defect_features(scaled, tmpl, 20.0)
+    a2 = origami_mod.lattice_defect_features(scaled, tmpl, 20.0)
     assert abs(a2["fitted_spacing_nm"] - 24.0) < 3.0
 
     miss = _lattice_blob([j for j in range(12) if j != 5], tmpl, 20.0, rng)
-    a3 = picasso_outpost.lattice_defect_features(miss, tmpl, 20.0)
+    a3 = origami_mod.lattice_defect_features(miss, tmpl, 20.0)
     assert sum(a3["occupancy"]) == 11
 
 
 def test_lattice_defect_symmetry_canonicalizes_corners():
     """Missing any of the 4 symmetry-equivalent corners is one defect class."""
     rng = np.random.default_rng(1)
-    tmpl = picasso_outpost.origami_template_from_grid(3, 4, 20.0).sites_nm
+    tmpl = origami_mod.origami_template_from_grid(3, 4, 20.0).sites_nm
     occ = set()
     for corner in (0, 3, 8, 11):  # the four corners (row*4 + col indexing)
         cloud = _lattice_blob(
             [j for j in range(12) if j != corner], tmpl, 20.0, rng
         )
         occ.add(
-            picasso_outpost.lattice_defect_features(cloud, tmpl, 20.0)[
-                "occupancy"
-            ]
+            origami_mod.lattice_defect_features(cloud, tmpl, 20.0)["occupancy"]
         )
     assert len(occ) == 1
 
@@ -1526,7 +1522,7 @@ def test_cluster_lattice_defects_two_stage_separation():
     """Stage A splits off-lattice junk (-1); stage B groups the on-lattice
     picks by defect pattern (full vs a fixed single-site defect)."""
     rng = np.random.default_rng(0)
-    tmpl = picasso_outpost.origami_template_from_grid(3, 4, 20.0).sites_nm
+    tmpl = origami_mod.origami_template_from_grid(3, 4, 20.0).sites_nm
     structs, truth = [], []
     for _ in range(60):
         structs.append(_lattice_blob(range(12), tmpl, 20.0, rng))
@@ -1541,7 +1537,7 @@ def test_cluster_lattice_defects_two_stage_separation():
         truth.append("junk")
     truth = np.array(truth)
 
-    res = picasso_outpost.cluster_lattice_defects(structs, tmpl, 20.0)
+    res = origami_mod.cluster_lattice_defects(structs, tmpl, 20.0)
     labels = res["labels"]
     assert res["n_nodes"] == 12
     # junk is off-lattice
@@ -1570,7 +1566,7 @@ def test_cluster_lattice_defects_two_stage_separation():
     assert min(full["occupancy"]) == 1.0  # full class: every node always on
 
     # exact grouping still separates the two patterns (>= 2 classes)
-    res_exact = picasso_outpost.cluster_lattice_defects(
+    res_exact = origami_mod.cluster_lattice_defects(
         structs, tmpl, 20.0, defect_grouping="exact"
     )
     on_classes = {lb for lb in res_exact["labels"] if lb != -1}
@@ -1581,19 +1577,19 @@ def test_lattice_pair_score_separates_lattice_from_blob():
     """The registration-free pair-score is high for a genuine lattice pick
     and near zero for an amorphous blob of the same extent/count."""
     rng = np.random.default_rng(0)
-    tmpl = picasso_outpost.origami_template_from_grid(3, 4, 20.0).sites_nm
+    tmpl = origami_mod.origami_template_from_grid(3, 4, 20.0).sites_nm
     lattice = _lattice_blob(range(12), tmpl, 20.0, rng)
     # the dominant junk class is a single tight spot (one blinking site): all
     # pairs sit at short range, so the design-spacing band is empty -> score ~0
     tight = rng.normal(0, 2.5, size=(len(lattice), 2))
-    s_lat = picasso_outpost.lattice_pair_score(lattice, 20.0)
-    s_tight = picasso_outpost.lattice_pair_score(tight, 20.0)
+    s_lat = origami_mod.lattice_pair_score(lattice, 20.0)
+    s_tight = origami_mod.lattice_pair_score(tight, 20.0)
     assert s_lat > 1.0
     assert s_tight < 0.5
     assert s_lat > 3 * s_tight
     # degenerate inputs are safe (score 0, no error)
-    assert picasso_outpost.lattice_pair_score(lattice[:2], 20.0) == 0.0
-    assert picasso_outpost.lattice_pair_score(lattice, 0.0) == 0.0
+    assert origami_mod.lattice_pair_score(lattice[:2], 20.0) == 0.0
+    assert origami_mod.lattice_pair_score(lattice, 0.0) == 0.0
 
 
 def test_cluster_lattice_defects_prescreen_matches_and_annotates():
@@ -1601,17 +1597,17 @@ def test_cluster_lattice_defects_prescreen_matches_and_annotates():
     (real lattices pass), tags every pick with its ``pair_score``, and
     disabling it (``min_pair_score=None``) is a no-op on the labels."""
     rng = np.random.default_rng(1)
-    tmpl = picasso_outpost.origami_template_from_grid(3, 4, 20.0).sites_nm
+    tmpl = origami_mod.origami_template_from_grid(3, 4, 20.0).sites_nm
     structs = []
     for _ in range(30):
         structs.append(_lattice_blob(range(12), tmpl, 20.0, rng))
     for _ in range(30):
         structs.append(rng.normal(0, 60, size=(int(rng.integers(3, 8)), 2)))
 
-    ref = picasso_outpost.cluster_lattice_defects(
+    ref = origami_mod.cluster_lattice_defects(
         structs, tmpl, 20.0, min_pair_score=None
     )
-    scr = picasso_outpost.cluster_lattice_defects(
+    scr = origami_mod.cluster_lattice_defects(
         structs, tmpl, 20.0, min_pair_score=0.5
     )
     # same on-lattice set (the pre-screen only removes junk from the fit)
@@ -1632,7 +1628,7 @@ def test_cluster_lattice_defects_uniformity_gate():
     fails the on-lattice gate, while the same geometry with uniform blinking
     passes - so aggregates / bad picks are excluded from the defect classes."""
     rng = np.random.default_rng(0)
-    tmpl = picasso_outpost.origami_template_from_grid(3, 4, 20.0).sites_nm
+    tmpl = origami_mod.origami_template_from_grid(3, 4, 20.0).sites_nm
 
     def blob(bright_mult):
         pts = []
@@ -1644,7 +1640,7 @@ def test_cluster_lattice_defects_uniformity_gate():
 
     uniform = [blob(1) for _ in range(20)]
     bright = [blob(10) for _ in range(20)]
-    res = picasso_outpost.cluster_lattice_defects(uniform + bright, tmpl, 20.0)
+    res = origami_mod.cluster_lattice_defects(uniform + bright, tmpl, 20.0)
     labels = res["labels"]
     # uniform picks are on-lattice; the one-bright-site picks are rejected
     assert (labels[:20] != -1).sum() >= 18

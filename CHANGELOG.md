@@ -92,6 +92,20 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Changed
 
+- **Monolith split S8 — DNA-origami picking → `outpost/origami/`.** The largest
+  slice (−1686 lines): the entire origami cluster (`OrigamiTemplate` + the
+  grid/design-file/site template builders, the kinetics simulation
+  `simulate_origami_nlocs_rmsd` / `origami_phase_space_preview`, the structure-
+  and lattice-defect descriptors and their clustering, and the `pick_origami`
+  orchestrator) moved out of `picasso_outpost.py` into
+  `outpost/origami/origami.py`. It imports the `pick_similar` family from
+  `outpost/picks` and the correspondence-free registration from
+  `outpost/registration` directly, so **both temporary forward-imports the
+  monolith carried (from S6 and S7) are gone**. `analyse.py`, `gui.py`
+  (`origami_phase_space_preview`), and the `test_analyse` / `test_picasso_outpost`
+  references repointed; the now-orphaned sklearn / scipy / yaml / dataclass /
+  Counter imports removed from the monolith. This drains `picasso_outpost.py` to
+  just the two report-plot helpers (removed next). Behaviour unchanged.
 - **Monolith split S7 — correspondence-free ICP registration → `outpost/registration/`.**
   The rigid point-set registration cluster (`register_to_template` + `_rigid_fit`
   Kabsch / `_match_within_gate` Hungarian / `_icp_refine` / `_rotation_matrix`,
