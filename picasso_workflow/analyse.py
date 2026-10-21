@@ -7449,7 +7449,7 @@ class AutoPicasso(
         Meas = Measurement(
             in_path=parameters["fp_locs"],
             save_path=results["folder"],
-            saving_path=file_nameonly,
+            saving_name=file_nameonly,
             total_n_frames=self.frames,
         )
         Meas.Begin()
@@ -7471,13 +7471,13 @@ class AutoPicasso(
         results["fig_sbr"] = fp
         _, fp = Plotter.Plot_tb()
         results["fig_tb"] = fp
-        _, fp = Plotter.plot_td()
+        _, fp = Plotter.Plot_td()
         results["fig_td"] = fp
-        _, fp = Plotter.plot_r()
+        _, fp = Plotter.Plot_r()
         results["fig_r"] = fp
         _, fp = Plotter.Plot_locs()
         results["fig_locs"] = fp
-        config = Plotter.saveAllResults()
+        config = Plotter.SaveAllResults()
         for k, v in config.items():
             results[k] = v
 

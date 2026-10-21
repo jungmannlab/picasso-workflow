@@ -143,13 +143,19 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Fixed
 
-- **`binding_event_analysis` module no longer crashes at runtime.** It called
+- **`binding_event_analysis` module made runnable again.** The method was
+  broken by a chain of latent errors, none caught because the module is
+  experimental and mocked in the unit tier. Fixed all of them: (1) it called
   `outpost_modules.binding_event_analysis.Measurement(...)`, but that submodule
   was never imported into the `outpost_modules` package (its `__init__` imports
-  only `mask`/`ripleys`), so the call raised `AttributeError` whenever the module
-  ran. It is experimental and mocked in the unit tier, so nothing caught it. The
-  code now lives in `picasso_workflow/outpost/binding_events/` and is imported
-  explicitly by the workflow module.
+  only `mask`/`ripleys`), so the call raised `AttributeError`; the code now
+  lives in `picasso_workflow/outpost/binding_events/` and is imported explicitly;
+  (2) `Measurement(...)` was passed `saving_path=`, but the constructor takes
+  `saving_name=` (`TypeError`); (3) three method calls used the wrong case —
+  `Plotter.plot_td()` / `plot_r()` / `saveAllResults()` vs the actual `Plot_td`
+  / `Plot_r` / `SaveAllResults` (`AttributeError`). A new static API-contract
+  test (`test_outpost_binding_events.py`) asserts the call-site kwargs and
+  method names match the classes, so these cannot silently reappear.
 - **Sanitize tag-derived locs filenames.** A dataset's `#tags` value now
   feeds the saved filename by default, so `save_single_dataset` and the
   aggregated saver replace path separators (`/`, `\`) in a tag before using
