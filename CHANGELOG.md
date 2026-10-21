@@ -24,6 +24,17 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Removed
 
+- **`undrift_rsso` drift module retired.** The RSSO (Redundant Spot Shift
+  Overrepresentation) point-space drift method was never performant, so it is
+  removed entirely: the 6.5k-line `outpost_modules/undrift_rsso.py`, the
+  `undrift_rsso` method and its ~17 drift helpers in `analyse.py`, and the
+  corresponding `ConfluenceReporter`, `AbstractModuleCollection` (`util`),
+  `modulespec` registry, and `gui` builder entries, plus its unit tests and the
+  `test_z_integration` skip-set entry. The three other drift methods
+  (`undrift_rcc`, `undrift_aim`, `undrift_from_picked`) are unaffected, as is the
+  unrelated RSSO-based *channel alignment* (`picasso_outpost.align_by_rsso`),
+  which is a different feature. Workflows that referenced the `undrift_rsso`
+  module will no longer validate — use `undrift_aim` or `undrift_rcc` instead.
 - **Dead SPINNA / NN modules** (`spinna.py`, `spinna_io.py`, `spinna_main.py`,
   `spinna_mle.py`, `spinna_mle_2.py`, `nn_redistribution.py`): gitignored
   local experiments that were never committed and are imported nowhere (the
