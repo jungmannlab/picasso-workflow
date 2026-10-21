@@ -20,6 +20,7 @@ import pytest
 
 from picasso_workflow import picasso_outpost
 from picasso_workflow.outpost.formats import zeiss
+from picasso_workflow.outpost.alignment import channels
 from picasso_workflow.outpost.resolution.resolution_ppac import (
     analyse_resolution_ppac,
     resolution_ppac,
@@ -50,7 +51,7 @@ class TestPicassoOutpost(unittest.TestCase):
         )
         info_b = [{"Width": 10, "Height": 10, "Pixelsize": 130}]
 
-        picasso_outpost.shift_from_rcc([locs_a, locs_b], [info_a, info_b])
+        channels.shift_from_rcc([locs_a, locs_b], [info_a, info_b])
 
     def test_02_align_channels(self):
         locs_a = pd.DataFrame(
@@ -73,7 +74,7 @@ class TestPicassoOutpost(unittest.TestCase):
             method,
             fp_figs,
             shift_uncertainties,
-        ) = picasso_outpost.align_channels(
+        ) = channels.align_channels(
             [locs_a, locs_b, locs_c], [info_a, info_b, info_c]
         )
         logger.debug(f"shift: {shift}")
@@ -336,7 +337,7 @@ class TestPicassoOutpost(unittest.TestCase):
             method,
             fp_figs,
             shift_uncertainties,
-        ) = picasso_outpost.align_channels(
+        ) = channels.align_channels(
             [locs_a, locs_b],
             [info_a, info_b],
             force_method="RSSO",
@@ -393,7 +394,7 @@ class TestPicassoOutpost(unittest.TestCase):
         # original_locs_a = locs_a.copy()
         # original_locs_b = locs_b.copy()
 
-        shifts, fp_figs, shift_uncertainties = picasso_outpost.align_by_rsso(
+        shifts, fp_figs, shift_uncertainties = channels.align_by_rsso(
             [locs_a, locs_b], max_shift=3.0
         )
 
@@ -456,7 +457,7 @@ class TestPicassoOutpost(unittest.TestCase):
         )
 
         # Test with the improved algorithm
-        shifts, fp_figs, shift_uncertainties = picasso_outpost.align_by_rsso(
+        shifts, fp_figs, shift_uncertainties = channels.align_by_rsso(
             [locs_a, locs_b, locs_c], max_shift=5.0
         )
 
@@ -514,7 +515,7 @@ class TestPicassoOutpost(unittest.TestCase):
             channel_locs.append(locs)
 
         # Test with the improved algorithm
-        shifts, fp_figs, shift_uncertainties = picasso_outpost.align_by_rsso(
+        shifts, fp_figs, shift_uncertainties = channels.align_by_rsso(
             channel_locs, max_shift=5.0
         )
 
@@ -572,13 +573,11 @@ class TestPicassoOutpost(unittest.TestCase):
         # Create temporary directory for plots
         with tempfile.TemporaryDirectory() as temp_dir:
             # Test with plotting enabled
-            shifts, fp_figs, shift_uncertainties = (
-                picasso_outpost.align_by_rsso(
-                    [locs_a, locs_b],
-                    max_shift=3.0,
-                    plot_histogram=True,
-                    plot_dir=temp_dir,
-                )
+            shifts, fp_figs, shift_uncertainties = channels.align_by_rsso(
+                [locs_a, locs_b],
+                max_shift=3.0,
+                plot_histogram=True,
+                plot_dir=temp_dir,
             )
 
             # Check that plot file was created via file system
@@ -840,7 +839,7 @@ class TestPicassoOutpost(unittest.TestCase):
         )
 
         # Test with uncertainty analysis
-        shifts, fp_figs, shift_uncertainties = picasso_outpost.align_by_rsso(
+        shifts, fp_figs, shift_uncertainties = channels.align_by_rsso(
             [locs_a, locs_b, locs_c], max_shift=3.0
         )
 
