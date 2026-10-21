@@ -2229,7 +2229,7 @@ class TestAnalyseModules(unittest.TestCase):
         return
         shutil.rmtree(os.path.join(self.results_folder, "00_find_structures"))
 
-    @patch("picasso_workflow.analyse.picasso_outpost.pick_origami")
+    @patch("picasso_workflow.outpost.origami.origami.pick_origami")
     @patch("picasso_workflow.outpost.picks.picks.picked_locs")
     @patch("picasso_workflow.analyse.render.plot_scene")
     @patch("picasso_workflow.analyse.io.save_locs")
@@ -2390,10 +2390,10 @@ class TestAnalyseModules(unittest.TestCase):
         shutil.rmtree(os.path.join(self.results_folder, "00_pick_origami"))
 
     @patch(
-        "picasso_workflow.analyse.picasso_outpost."
+        "picasso_workflow.outpost.origami.origami."
         "cluster_structure_patterns"
     )
-    @patch("picasso_workflow.analyse.picasso_outpost.pick_origami")
+    @patch("picasso_workflow.outpost.origami.origami.pick_origami")
     @patch("picasso_workflow.outpost.picks.picks.picked_locs")
     @patch("picasso_workflow.analyse.render.plot_scene")
     @patch("picasso_workflow.analyse.io.save_locs")
@@ -2558,8 +2558,8 @@ class TestAnalyseModules(unittest.TestCase):
 
         shutil.rmtree(os.path.join(self.results_folder, "00_pick_origami"))
 
-    @patch("picasso_workflow.analyse.picasso_outpost.cluster_lattice_defects")
-    @patch("picasso_workflow.analyse.picasso_outpost.pick_origami")
+    @patch("picasso_workflow.outpost.origami.origami.cluster_lattice_defects")
+    @patch("picasso_workflow.outpost.origami.origami.pick_origami")
     @patch("picasso_workflow.outpost.picks.picks.picked_locs")
     @patch("picasso_workflow.analyse.render.plot_scene")
     @patch("picasso_workflow.analyse.io.save_locs")

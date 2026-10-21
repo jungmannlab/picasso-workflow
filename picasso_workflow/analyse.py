@@ -108,6 +108,7 @@ from picasso_workflow.module_runtime import module_decorator  # noqa: F401
 from picasso_workflow.outpost.clustering import molint as clustering_molint
 from picasso_workflow.outpost.masking.mask import CellMask
 from picasso_workflow.outpost.render import render
+from picasso_workflow.outpost.origami import origami as origami_mod
 from picasso_workflow.outpost.picks import picks as picks_mod
 from picasso_workflow.outpost.spinna import wrappers as spinna_wrappers
 from picasso_workflow.picasso_set.analyse_calibration import (
@@ -173,7 +174,7 @@ def _summarize_accepted_structures(geometry_table):
     Parameters
     ----------
     geometry_table : list of dict
-        Per-structure geometry rows (see ``picasso_outpost.pick_origami``).
+        Per-structure geometry rows (see ``origami_mod.pick_origami``).
 
     Returns
     -------
@@ -12472,7 +12473,7 @@ class AutoPicasso(
             raise ValueError(
                 "pick_origami needs a 'design_file' or a 'geometry' spec"
             )
-        template = picasso_outpost.load_origami_template(template_spec)
+        template = origami_mod.load_origami_template(template_spec)
         results["n_sites_expected"] = template.n_sites_expected
         results["grid_spacing_nm"] = template.grid_spacing_nm
 
@@ -12481,7 +12482,7 @@ class AutoPicasso(
         # min/max_n_locs_per_frame (the "Preview phase space" GUI dialog
         # simulates the expected origami cloud to suggest those bounds); the
         # module itself no longer simulates.
-        pick_result = picasso_outpost.pick_origami(
+        pick_result = origami_mod.pick_origami(
             self.locs,
             self.info,
             template,
@@ -12766,7 +12767,7 @@ class AutoPicasso(
         """Cluster accepted origami by resolved geometry and emit outputs.
 
         Builds the invariant site-graph descriptor for each accepted
-        structure (:func:`picasso_outpost.cluster_structure_patterns`) and
+        structure (:func:`origami_mod.cluster_structure_patterns`) and
         writes, per discovered pattern cluster, a picasso pick ``.yaml`` and
         a grouped ``.hdf5``, plus a ``pattern_table.csv`` summary, a
         representative render per cluster, and a phase-space scatter coloured
@@ -12816,7 +12817,7 @@ class AutoPicasso(
                 lattice_kwargs["defect_grouping"] = str(
                     parameters["pattern_defect_grouping"]
                 )
-            cl = picasso_outpost.cluster_lattice_defects(
+            cl = origami_mod.cluster_lattice_defects(
                 structures_xy_nm,
                 template.sites_nm,
                 template.grid_spacing_nm,
@@ -12824,7 +12825,7 @@ class AutoPicasso(
                 **lattice_kwargs,
             )
         else:
-            cl = picasso_outpost.cluster_structure_patterns(
+            cl = origami_mod.cluster_structure_patterns(
                 structures_xy_nm,
                 expected_spacing_nm=template.grid_spacing_nm,
                 **sub_kwargs,

@@ -10260,7 +10260,7 @@ class PhaseSpacePreviewDialog(QtWidgets.QDialog):
 
     Simulates the expected ``(nlocs, rmsd)`` cloud for the current
     ``pick_origami`` geometry + kinetics (via
-    :func:`picasso_workflow.picasso_outpost.origami_phase_space_preview`),
+    :func:`picasso_workflow.origami.origami_phase_space_preview`),
     shows it with the suggested pick window, and lets the user write the
     suggested ``min/max_n_locs_per_frame`` (and RMSD) back into the module's
     parameter fields. The simulation is cheap (order 0.1 s), so this is
@@ -10394,7 +10394,7 @@ class PhaseSpacePreviewDialog(QtWidgets.QDialog):
             return default
 
     def _simulate(self):
-        from picasso_workflow import picasso_outpost
+        from picasso_workflow.outpost.origami import origami
 
         p = self._params
         geometry = p.get("geometry")
@@ -10420,7 +10420,7 @@ class PhaseSpacePreviewDialog(QtWidgets.QDialog):
             )
             return
         try:
-            preview = picasso_outpost.origami_phase_space_preview(
+            preview = origami.origami_phase_space_preview(
                 geometry,
                 n_frames=self.n_frames_spin.value(),
                 kinetics=kinetics,
