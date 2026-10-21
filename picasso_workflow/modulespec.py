@@ -614,28 +614,12 @@ _SPECS = [
     ),
     # --- Ripley's K ---------------------------------------------------------
     _s(
-        "ripleysk",
-        requires=["locs_undrifted"],
-        provides=["ripleys_k", "report_items"],
-        relation=E,
-        scopes=_BOTH,
-        summary="Compute Ripley's K spatial statistics for the dataset.",
-    ),
-    _s(
         "ripleysk2",
         requires=["locs_undrifted"],
         provides=["ripleys_k", "report_items"],
         relation=E,
         scopes=_BOTH,
         summary="Compute Ripley's K statistics (second implementation).",
-    ),
-    _s(
-        "ripleysk_average",
-        requires=["ripleys_k"],
-        provides=["ripleys_k", "report_items"],
-        relation=E,
-        scopes=_AGG,
-        summary="Average Ripley's K curves across datasets.",
     ),
     _s(
         "ripleysk_average2",

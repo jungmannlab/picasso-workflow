@@ -20,7 +20,6 @@ This is `picasso-workflow`, a Python package for automated DNA-PAINT analysis wo
 ### Specialized Modules
 - **`dbscan_molint/`**: DBSCAN clustering with molecular interactions analysis
 - **`outpost_modules/`**: Extended analysis modules including binding event analysis, rendering, and Ripley's K analysis
-- **`ripleys_analysis/`**: Dedicated Ripley's K spatial analysis functionality
 - **`spinna*.py`**: SPINNA (Spatial Point Pattern Analysis) related modules for MLE fitting
 
 ### Standard Workflows

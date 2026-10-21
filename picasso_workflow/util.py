@@ -1479,20 +1479,8 @@ class AbstractModuleCollection(abc.ABC):
         """
 
     @abc.abstractmethod
-    def ripleysk(self):
-        """Compute Ripley's K spatial statistics for the dataset."""
-
-    # @abc.abstractmethod
-    # def ripleysk_rafal(self):
-    #     pass
-
-    @abc.abstractmethod
     def ripleysk2(self):
         """Compute Ripley's K statistics (second implementation)."""
-
-    @abc.abstractmethod
-    def ripleysk_average(self):
-        """Average Ripley's K curves across datasets."""
 
     @abc.abstractmethod
     def ripleysk_average2(self):

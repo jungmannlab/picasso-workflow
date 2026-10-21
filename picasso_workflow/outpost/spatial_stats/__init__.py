@@ -10,7 +10,8 @@ Holds picasso-workflow's Ripley's-K / CSR-envelope code moved out of the flat
 
 The analytic CSR k-NN statistics (``nndistribution_from_csr`` and friends,
 `promote` candidate #1) still live in ``picasso_outpost.py`` and will move here
-when that monolith is split. The older, separately-wired ``ripleys_analysis``
-subpackage (``run_ripleysAnalysis``) is a distinct implementation and is folded
-in by a later slice -- see ``../MANIFEST.md``.
+when that monolith is split. (The older, separately-wired ``ripleys_analysis``
+subpackage that backed the legacy ``ripleysk`` / ``ripleysk_average`` modules
+was retired -- those were superseded by ``ripleysk2`` / ``ripleysk_average2``,
+which use the ``ripleys`` module here.) See ``../MANIFEST.md``.
 """
