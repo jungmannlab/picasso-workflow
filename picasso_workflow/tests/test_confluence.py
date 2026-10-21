@@ -1426,22 +1426,6 @@ class Test_B_ConfluenceReporterModules(unittest.TestCase):
         )
         self.cr.ci.delete_page(pgid)
 
-    # @unittest.skip("")
-    def undrift_rsso(self):
-        parameters = {}
-        results = {
-            "start time": "now",
-            "duration": 4.12,
-            "success": True,
-        }
-        self.cr.undrift_rsso(0, parameters, results)
-
-        # clean up
-        pgid, pgtitle = self.cr.ci.get_page_properties(
-            self.cr.report_page_name
-        )
-        self.cr.ci.delete_page(pgid)
-
 
 # @unittest.skip('')
 class Test_B_ConfluenceReporter(unittest.TestCase):

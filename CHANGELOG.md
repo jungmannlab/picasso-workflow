@@ -24,6 +24,17 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Removed
 
+- **`undrift_rsso` drift module retired.** The RSSO (Redundant Spot Shift
+  Overrepresentation) point-space drift method was never performant, so it is
+  removed entirely: the 6.5k-line `outpost_modules/undrift_rsso.py`, the
+  `undrift_rsso` method and its ~17 drift helpers in `analyse.py`, and the
+  corresponding `ConfluenceReporter`, `AbstractModuleCollection` (`util`),
+  `modulespec` registry, and `gui` builder entries, plus its unit tests and the
+  `test_z_integration` skip-set entry. The three other drift methods
+  (`undrift_rcc`, `undrift_aim`, `undrift_from_picked`) are unaffected, as is the
+  unrelated RSSO-based *channel alignment* (`picasso_outpost.align_by_rsso`),
+  which is a different feature. Workflows that referenced the `undrift_rsso`
+  module will no longer validate — use `undrift_aim` or `undrift_rcc` instead.
 - **Legacy `ripleysk` / `ripleysk_average` Ripley modules + `ripleys_analysis`
   subpackage retired.** The original Ripley's-K pair (backed by the separate
   `ripleys_analysis/` subpackage: `run_ripleysAnalysis`, `ripleysModule`,
@@ -123,6 +134,13 @@ This file was started after v0.5.6; earlier history is in the git log.
   `mask`, so importing the class avoids shadowing); `mask` dropped from
   `outpost_modules/__init__.py`; the `tests/outpost_modules/test_mask.py` import
   updated. Behaviour unchanged. Guarded by `tests/test_outpost_masking.py`.
+- **Outpost restructure (render slice):** the `render` matplotlib glue over
+  `picasso.render` (`plot_scene` + the scene renderers) moved from the flat
+  `outpost_modules/` into `outpost/render/`. Only the import line in `analyse.py`
+  changed (`from picasso_workflow.outpost.render import render`); the ~17
+  `render.*` call sites are unchanged. With this and the earlier slices,
+  `outpost_modules/` is down to a single remaining module (`undrift_rsso`).
+  Guarded by `tests/test_outpost_render.py`.
 - **Dedup to picasso 0.12 (batch 1):** call `spinna.generate_N_structures`
   directly instead of through the redundant `picasso_outpost.generate_N_structures`
   wrapper, which is removed. No behavioural change — no call site passed the

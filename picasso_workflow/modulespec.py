@@ -487,16 +487,6 @@ _SPECS = [
         summary="Undrift localized data using the AIM algorithm.",
     ),
     _s(
-        "undrift_rsso",
-        requires=["locs"],
-        provides=["locs_undrifted", "drift"],
-        role="undrift",
-        relation=E,
-        outpost=True,
-        scopes=_SINGLE,
-        summary="Undrift localized data using iterative RSSO drift correction.",
-    ),
-    _s(
         "undrift_from_picked",
         requires=["locs", "picks"],
         provides=["locs_undrifted", "drift"],

@@ -72,7 +72,6 @@ _TEMPLATES_DIR = os.path.join(
 _SMOKE_SKIP_MODULES = {
     "undrift_rcc",
     "undrift_aim",
-    "undrift_rsso",
     "undrift_from_picked",
     "save_single_dataset",
     "save_datasets_aggregated",
