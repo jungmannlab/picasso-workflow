@@ -260,7 +260,7 @@ def estimate_min_net_gradient(
     without picasso. Ported from V0.8.
     """
     try:
-        from picasso import localize
+        from picasso_workflow._picasso_api import localize
     except Exception as e:  # pragma: no cover - env-dependent
         return {"error": f"picasso.localize unavailable: {e}"}
     try:
