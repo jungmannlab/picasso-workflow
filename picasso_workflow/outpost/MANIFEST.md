@@ -7,6 +7,40 @@ for the `keep / dedup / promote / extend-up / delete` vocabulary.
 Readiness/effort: **H** = ready/clean, **M** = needs a refactor first, **L** =
 WIP / not ready.
 
+## Triage — two axes (2026-10-21)
+
+Every outpost item sits on **two independent axes**. The
+`keep/dedup/promote/extend-up/delete` statuses below encode the **destination**
+axis; this section adds the **integration-health** axis for everything that
+stays, and distils the resulting backlog. (Motivation: the `outpost/<feature>/`
+layout made `render` *look* like an upstream candidate when it is actually
+integration glue — a `keep`. The two axes keep that distinction explicit.)
+
+**Axis 1 — Destination** (where the code belongs long-term):
+
+- **Upstream-bound** (`promote` / `extend-up`) — genuinely novel; stage for
+  picasso. Re-verified this pass: CSR k-NN stats, point-set shift kernel,
+  correspondence-free ICP registration, resolution (FRC / decorrelation / PPAC),
+  binding-events, CellMask morphology. None are glue-mislabeled.
+- **Workflow-bound** (`keep`) — permanent glue / orchestration / reporting over
+  picasso (channel-alignment, spinna wrappers, origami, dbscan-molint, render,
+  Ripley's-K, report helpers). `render` moved here from the promote mindset.
+
+**Axis 2 — Integration health** (for everything that stays — is it wired to
+picasso *well*?). The **import boundary is already clean**: no direct
+`import picasso` in production; every use goes through `_picasso_api`. What
+remains is the keep-it-clean backlog:
+
+| health issue | items | fix |
+|---|---|---|
+| **Fragile private reach-ins** — depend on picasso *private* symbols; guarded by `get_internal` + the contract test, but any upstream refactor can break them | `postprocess._pick_similar` (`pick_gold`), `postprocess._n_block_locs_at` (`pick_similar`), `localize._to_photons` (`get_spots`), `spinna._targets_from_structures` (`screen_label_uncertainty`) | upstream a **public** picasso API for each, then drop the `get_internal`. (The boundary + contract test already make the breakage *loud*, not silent — so this is hardening, not a live bug.) |
+| **Duplication of picasso** — re-implements what picasso ≥ 0.12 provides | **3 copies of `otsu()`** (`masking/mask.py`, `spatial_stats/ripleys.py`, `ripley_dcatlas_analysis.py`) vs `picasso.masking.mask_image(method="otsu")` — `picasso_set` already uses the upstream API; `_undrift_from_picked` drift computation; `_solve_optimal_shifts` vs `picasso.lib.minimize_shifts`; `dbscan_molint/mask.py` precursor | equivalence-test, then rewire to upstream + delete the fork (see Dedup table). |
+| **Monolith** — promote-candidates and keep-glue physically interleaved in one file | `picasso_outpost.py` — **7579 lines, 107 top-level defs, 7 feature areas** | split into `outpost/<feature>/`. Prerequisite to cleanly promoting the upstream-bound parts, which are currently entangled with keep-glue. |
+
+**Reading:** the upstream-bound set is the *promotion* backlog; the table above
+is the *keep-it-clean* backlog. Both are gated behind splitting the monolith,
+which is what physically separates the two kinds of code.
+
 ## Done
 
 | feature | source | status | notes |
@@ -64,7 +98,7 @@ WIP / not ready.
 1. ✅ Delete dead code + this scaffold (#38).
 2. ✅ **Dedup batches 1–2** (#39): `generate_N_structures`, `picked_locs`. Equivalence-tested.
 3. ✅ **Dedup batch 3** (investigation): confirmed the rest of the pick/undrift fork is NOT redundant (divergent variants — `pick_similar`, `pick_gold`, `_undrift_from_picked` stay); MANIFEST corrected. Clean dedup wins complete.
-4. **Boundary follow-up**: route `pick_gold`'s private `postprocess._pick_similar` reach-in through a `_picasso_api` accessor (like `_FIT_METHOD_MAP`).
+4. ✅ **Boundary follow-up** (#41): `pick_gold`'s private `postprocess._pick_similar` reach-in — and three others (`_n_block_locs_at`, `localize._to_photons`, `spinna._targets_from_structures`) — now go through `_picasso_api.get_internal`, registered in `INTERNAL_SYMBOLS` and checked by the contract test. (Durable fix = upstream a public API for each — see the Triage integration-health table.)
 5. **Restructure** (incremental, one feature per PR): fold `outpost_modules/`
    into `outpost/<feature>/` and physically split `picasso_outpost.py`, flipping
    rows as each feature lands. Done so far: `resolution/` (#42),
