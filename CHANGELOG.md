@@ -92,6 +92,20 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Changed
 
+- **Monolith split S7 — correspondence-free ICP registration → `outpost/registration/`.**
+  The rigid point-set registration cluster (`register_to_template` + `_rigid_fit`
+  Kabsch / `_match_within_gate` Hungarian / `_icp_refine` / `_rotation_matrix`,
+  the DBSCAN docking-site sub-clustering `subcluster_docking_sites`, the
+  candidate helpers, and the shape descriptors `_elongation` /
+  `_radius_of_gyration`) moved out of `picasso_outpost.py` (−408 lines) into
+  `outpost/registration/icp.py` — isolating the `picasso.registration` promote
+  candidate from the origami orchestration. The shared `_median_nn_spacing`
+  geometry helper moved with it (register_to_template needs it); the module
+  imports `get_pick_similar_vals` from `outpost/picks` (one-way). The origami
+  cluster (still in the monolith until S8) forward-imports the names it uses; the
+  now-orphaned `linear_sum_assignment`/`DBSCAN` imports were removed from the
+  monolith. `test_picasso_outpost` repointed. No analyse coupling; behaviour
+  unchanged.
 - **Monolith split S6 — pick / fiducial processing → `outpost/picks/`.** The
   pick-finding + fiducial-drift cluster (`pick_gold`, `picked_locs`,
   `pick_similar` + the numba-jitted `pick_similar_analysis` path, `index_locs`,
