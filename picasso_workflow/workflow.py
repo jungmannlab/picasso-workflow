@@ -1181,6 +1181,9 @@ class AggregationWorkflowRunner:
             wr.stop_after = stop_index
         self.cpage_names.append(wr.reporter_config["report_name"])
         self._agg_report_folder = wr.result_folder
+        # Tag this sub-runner's per-module registry records as aggregation
+        # scope (the default is "single"); see _log_module_to_registry.
+        wr.registry_scope = "aggregation"
         agg_success = wr.run()
         self.all_results["aggregation"] = wr.results
         self.save(self.result_folder)
@@ -2915,6 +2918,22 @@ class WorkflowRunner:
         an artifact pointer for each saved file the module recorded (a locs
         HDF5, a render PNG).
 
+        The ``scope`` ("single"/"aggregation") the record is tagged with comes
+        from ``self.registry_scope`` (default "single"); the aggregation runner
+        sets it to "aggregation" on the runner that executes the aggregation
+        modules, so aggregation metrics are not mislabeled as single-scope.
+
+        Known limitation (deferred to the WP-9 hand-off, which owns
+        aggregation/cluster provenance): when an ``AggregationWorkflowRunner``
+        fans a single ``run_id`` out to N per-dataset sub-runners, their
+        ``module_index`` restarts at 0 per sub-run, so aggregation-run metrics
+        keyed by ``(run_id, module_index)`` are not yet unique across the
+        sub-runs. Single-dataset preprocess (WP-6's deliverable) is one runner
+        with unique indices and is unaffected. Likewise, inject the registry
+        via ``base_url`` (the production path): a live client *object* placed in
+        ``analysis_config["registry"]["client"]`` is not deepcopy-safe across
+        the aggregation runner's config copy.
+
         Parameters
         ----------
         fun_name : str
@@ -2927,8 +2946,9 @@ class WorkflowRunner:
         reg = self._registry_logger()
         if not reg.enabled:
             return
+        scope = getattr(self, "registry_scope", "single")
         reg.log_module_metrics(
-            fun_name, i, _module_metrics(results), scope="single"
+            fun_name, i, _module_metrics(results), scope=scope
         )
         for kind, uri in _module_artifacts(results):
             reg.log_artifact(fun_name, kind, uri)

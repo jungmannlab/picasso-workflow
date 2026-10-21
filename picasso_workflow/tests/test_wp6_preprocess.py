@@ -386,6 +386,22 @@ class TestWorkflowRunnerRegistryWiring(unittest.TestCase):
         finally:
             shutil.rmtree(wr.result_folder, ignore_errors=True)
 
+    def test_scope_defaults_single_and_follows_registry_scope(self):
+        # Metrics are tagged "single" by default; the aggregation runner sets
+        # registry_scope="aggregation" on its sub-runner, so aggregation
+        # metrics are not mislabeled as single-scope.
+        dbl = _RecordingDouble()
+        wr = self._runner({"run_id": "runS", "client": dbl})
+        try:
+            wr.autopicasso.m = lambda i, p: (p, {"success": True})
+            wr.call_module("m", 0, {})
+            self.assertEqual(dbl.metrics[-1]["scope"], "single")
+            wr.registry_scope = "aggregation"
+            wr.call_module("m", 1, {})
+            self.assertEqual(dbl.metrics[-1]["scope"], "aggregation")
+        finally:
+            shutil.rmtree(wr.result_folder, ignore_errors=True)
+
     @patch("picasso_workflow.workflow.ConfluenceReporter", MagicMock)
     @patch("picasso_workflow.workflow.AutoPicasso", MagicMock)
     @patch("picasso_workflow.workflow.ParameterCommandExecutor", MagicMock)

@@ -10,6 +10,20 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ## [Unreleased]
 
+### Fixed
+
+- **WP-6 code review: per-module registry ``scope`` is no longer hardcoded to
+  ``"single"``.** The aggregation runner now sets ``registry_scope =
+  "aggregation"`` on the sub-runner that executes the aggregation modules, and
+  ``_log_module_to_registry`` reads ``self.registry_scope`` (default
+  ``"single"``) — so aggregation-scope metrics are not mislabeled as single in
+  the registry's ``Metrics.scope`` column. Documented as a deferred limitation
+  (WP-9 hand-off): aggregation runs fan one ``run_id`` out to N per-dataset
+  sub-runners whose ``module_index`` restarts at 0, so ``(run_id, index)`` is
+  not yet unique across sub-runs; single-dataset preprocess (one runner, unique
+  indices) is unaffected. Inject the registry via ``base_url`` for aggregation
+  runs — a live client *object* in ``analysis_config`` is not deepcopy-safe.
+
 ### Added
 
 - **WP-6 — `preprocess` single-dataset recipe + thin registry client.** The
