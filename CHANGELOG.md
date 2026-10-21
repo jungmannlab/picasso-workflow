@@ -156,6 +156,16 @@ This file was started after v0.5.6; earlier history is in the git log.
   / `Plot_r` / `SaveAllResults` (`AttributeError`). A new static API-contract
   test (`test_outpost_binding_events.py`) asserts the call-site kwargs and
   method names match the classes, so these cannot silently reappear.
+- **Flaky test teardown on overlay filesystems.** Tests clean up their result
+  folders with `shutil.rmtree`; on the container's (and CI's) overlay
+  filesystem, shutil's fd-based `_rmtree_safe_fd` intermittently raised
+  `OSError("Cannot call rmtree on a symbolic link")` for a *plain* directory — a
+  TOCTOU race in its `scandir` → `is_symlink` recheck (no symlink actually
+  exists, verified via `os.path.islink`). It surfaced under cold-`numba`-cache
+  timing as a nondeterministic teardown failure — a *different* test each run,
+  passing in isolation — while the tests' own assertions always passed. An
+  autouse fixture (`tests/conftest.py`) retries the transient; **12/12
+  cold-cache full-suite runs now pass** (previously ~1 in 4 failed).
 - **Sanitize tag-derived locs filenames.** A dataset's `#tags` value now
   feeds the saved filename by default, so `save_single_dataset` and the
   aggregated saver replace path separators (`/`, `\`) in a tag before using
