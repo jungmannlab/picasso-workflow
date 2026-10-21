@@ -7,7 +7,7 @@ dynamic= ["version"]
 name = "picasso_workflow"
 description = "Automation and documentation of DNA-PAINT analysis workflows"
 license = {'file' = "LICENSE"}
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 dependencies = [
     # Shared numeric/IO libs pinned to the stack-wide C41 harmonization ranges
     # (picasso 0.11.3 is the anchor), so picasso-workflow resolves to the same
@@ -20,7 +20,12 @@ dependencies = [
     "tables>=3.10.1,<4",
     "numba>=0.62.1,<1",
     "openpyxl==3.1.2",
-    "picassosr>=0.11.1",
+    # Upper bound caps at the next picasso minor, where the library is allowed
+    # to break API. Bump it deliberately with a green picasso contract test
+    # (tests/test_picasso_contract.py), not automatically -- an open-ended lower
+    # bound onto a pre-release would otherwise float across untested picasso
+    # releases.
+    "picassosr>=0.12.0a3,<0.13",
     # GUI uses PyQt6 directly; keep in sync with picasso's constraint
     "PyQt6>=6.10.2,<7",
     # Embedded HTML report viewer in the GUI Results tab (QWebEngineView);
@@ -31,11 +36,6 @@ dependencies = [
     "nvidia-ml-py>=12.0.0",
     "moviepy==1.0.3",
     "python-dotenv==1.2.3",
-    "pre-commit>=3.5.1",
-    "bandit==1.7.8",
-    # "coverage>=6.5,<6.6",
-    "pytest==9.0.3",
-    "isort==5.13.2",
     "psutil",
     # atlassian-python-api 5.0 restructured the Confluence client (Cloud/Server
     # subclasses, get_page_by_title space -> space_key, methods relocated),
@@ -45,7 +45,6 @@ dependencies = [
     "loguru>=0.7.3",
     # C41 anchor range (was unpinned).
     "h5py>=3.15.1,<4",
-    "memory_profiler",
     # "mpi4py",
     # "openmpi"
 ]
@@ -55,6 +54,20 @@ keywords = ["picasso"]
 picasso-workflow-gui = "picasso_workflow._launcher:main"
 
 [project.optional-dependencies]
+# Development & test tooling -- NOT needed at runtime, so kept out of the base
+# deps to keep `pip install picasso_workflow` (and every downstream env) lean.
+# CI installs the package with this extra: `pip install -e ".[dev]"`. Versions
+# mirror .pre-commit-config.yaml / the hosted lint job where they overlap.
+dev = [
+    "pytest==9.0.3",
+    # coverage is driven by run-unittests.yml (`python -m coverage run`); keep
+    # it in the dev extra so that workflow's install (`pip install -e ".[dev]"`)
+    # provides it.
+    "coverage>=7,<8",
+    "pre-commit>=3.5.1",
+    "bandit==1.7.8",
+    "isort==5.13.2",
+]
 cluster = [
     "mpi4py>=4.0.2",
 ]
@@ -93,9 +106,25 @@ gpu = [
     "numba-cuda",
     "nvidia-cuda-runtime-cu12",
 ]
+# DNA-PAINT binding-event analysis (the ``binding_event_analysis`` workflow
+# module, Steen et al. 2024). Its code lives in
+# ``picasso_workflow/outpost/binding_events/`` and is imported lazily, so these
+# deps are only needed when that module runs. Install with
+# ``pip install -e ".[binding-events]"``.
+binding-events = [
+    "lmfit",
+    "pandarallel",
+]
 
-[tool.setuptools]
-packages = ["picasso_workflow", "picasso_workflow.qc_advisor"]
+[tool.setuptools.packages.find]
+# Auto-discover picasso_workflow and all its subpackages so feature folders
+# (e.g. outpost/, outpost/resolution/, outpost/clustering/dbscan_molint/,
+# picasso_set/ ...) ship in
+# a non-editable wheel. The former explicit ``packages = ["picasso_workflow"]``
+# was non-recursive, so subpackages were not declared and a wheel install could
+# miss them. (The test package still ships as data via the setuptools-scm file
+# finder, as before; trimming that is a separate change.)
+include = ["picasso_workflow*"]
 
 [tool.setuptools_scm]
 # Writes the version into a file that is importable at runtime, even when
@@ -106,10 +135,19 @@ write_to = "picasso_workflow/_version.py"
 fallback_version = "0.3.3.dev0"
 
 [tool.setuptools.package-data]
-picasso_workflow = ["picasso-workflow.ico"]
+# config.yaml and .env are gitignored (site-specific / secrets), so they are
+# absent from a clean checkout and cannot be shipped. The tracked *_template
+# files are bundled instead and serve as the built-in defaults for a wheel
+# install (load_config falls back to config_template.yaml when no config.yaml
+# is present -- see picasso_workflow/__init__.py).
+picasso_workflow = [
+    "picasso-workflow.ico",
+    "config_template.yaml",
+    ".env_template",
+]
 
 [tool.black]
-target-version = ["py310"]
+target-version = ["py311"]
 line-length = 79
 include = "\\.pyi?$"
 exclude = '''
@@ -137,9 +175,8 @@ strict = true
 max-line-length = 88  # informational; E501 is ignored
 extend-ignore = "E203,E501,W503"
 # extend-exclude keeps flake8's sensible defaults and additionally skips the
-# generated/snapshot test fixtures and the isolated experimental modules
-# (not imported by the package) that still carry WIP F-codes.
-extend-exclude = "docs,picasso_workflow/_version.py,picasso_workflow/spinna_mle.py,picasso_workflow/spinna_mle_2.py,picasso_workflow/nn_redistribution.py,picasso_workflow/tests/TestData"
+# generated version file and the snapshot/test-data fixtures.
+extend-exclude = "docs,picasso_workflow/_version.py,picasso_workflow/tests/TestData"
 
 [tool.bandit]
 exclude = "/tests"

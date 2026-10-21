@@ -36,6 +36,117 @@ via picassosr.
 	- Aggregation workflow: multiple datasets undergo a single-dataset
 	workflow and are then aggregated.
 
+## The picasso-set modules
+
+Besides the classic picasso-workflow modules, there is a second module set
+that recapitulates **native picasso 1:1**: every `picasso_*` module mirrors
+one picasso CLI command (or Render-GUI/library operation where no CLI
+exists) with the **exact picasso parameter names and defaults**, so anyone
+who knows `picasso localize ...` can build the same pipeline as a workflow
+with zero learning curve. The set covers four tiers:
+
+- **Core pipeline** — `picasso_localize` (all CLI fit methods incl.
+  spline/GPU/3D and the calibration files), `picasso_undrift_rcc` /
+  `picasso_undrift_aim` / `picasso_undrift_fiducials`, `picasso_link`,
+  `picasso_dark`, `picasso_groupprops`, `picasso_density`,
+  `picasso_pair_correlation`, `picasso_dbscan` / `picasso_hdbscan` /
+  `picasso_smlm_cluster`, `picasso_nneighbor`, `picasso_clusterfilter`,
+  `picasso_cluster_combine`(`_dist`), `picasso_g5m`, `picasso_render`,
+  `picasso_align`, `picasso_join`.
+- **Pick-based postprocessing** — `picasso_picked_locs`,
+  `picasso_pick_similar`, `picasso_remove_locs_in_picks`,
+  `picasso_pick_properties`, `picasso_pick_kinetics`, `picasso_fret`,
+  `picasso_mask_locs`, `picasso_nena`, `picasso_frc`. Picks travel as
+  pick-region `.yaml` file paths (`picks_file` parameter, the
+  `io.load_picks` format), so they can come from GUI-exported files or
+  from `picasso_pick_similar` via `$get_prior_result`.
+- **Calibration & 3D** — `picasso_zfit`, `picasso_calibrate_z`,
+  `picasso_camera_calibrate` / `picasso_camera_validate`,
+  `picasso_spline_calibrate`, `picasso_lateral_calibrate`; their
+  calibration files feed `picasso_localize` / `picasso_zfit` via result
+  references.
+- **Format converters** — `picasso_csv2hdf`, `picasso_smap2hdf` (load the
+  imported file as the current dataset) and `picasso_hdf2csv`/`ts`/
+  `imagej`/`nis`/`chimera`/`visp`/`smap` (export the current locs, or an
+  explicit file, with the CLI-identical output suffixes).
+
+Documented deviations from the CLI are called out per module docstring; the
+notable ones: `picasso_localize` defaults `drift=0` (the CLI's default 1000
+would also undrift — the workflow has dedicated undrift modules) and its
+camera parameters default to "from the loaded movie metadata / camera
+config" instead of the CLI literals; interactive displays become saved
+figures in the module's result folder.
+
+In the GUI, a checkbox in the *Current Module* box toggles the palette
+between the classic modules and the picasso-set (shown together with the
+data loaders); both sets mix freely in one workflow — module names are
+globally unique. Reporting (Confluence/HTML) is automatic via a generic
+spec-driven reporter; the predefined recipe
+`standard_singledataset_workflows.picasso_native()` shows a minimal
+native-picasso pipeline. The implementation lives in
+`picasso_workflow/picasso_set/` with its GUI parameter schemas in
+`picasso_set/params.py` and registry entries (`module_set="picasso"`) in
+`modulespec.py`.
+
+## Picasso plugins
+
+Recent picasso versions (≥ 0.11) ship a **plugin system**: single `.py` files
+in `~/.picasso/plugins/`, enabled opt-in, that extend picasso through three
+entry points — a **GUI** action (`class Plugin`), a **CLI** subcommand
+(`register_cli`), and a **Python API** (`PICASSO_API = {"name": callable}`),
+all documented in picasso's `plugin_template.py`.
+
+The generic `plugin` workflow module bridges to **the Python-API entry point
+only** — it calls a name exported in some enabled plugin's `PICASSO_API`
+mapping via `picasso.plugins.load_api_plugins()`. The GUI and CLI entry points
+are not usable from a headless workflow (the GUI needs an interactive Qt window;
+the CLI adds `picasso` subcommands), so this module cannot call them.
+
+> **Compatibility note.** This targets plugins that expose a `PICASSO_API`
+> export — e.g. plugins you (or your lab) write for scripting, following
+> picasso's `plugin_template.py`. The plugins currently published in the
+> official registry ([`jungmannlab/picasso_plugins`](https://github.com/jungmannlab/picasso_plugins))
+> are **GUI plugins** (`class Plugin`, organized under the `render/`,
+> `average/`, … app folders); they do **not** define `PICASSO_API`, so this
+> module cannot run them as-is. To make a GUI plugin workflow-usable, its author
+> would add a `PICASSO_API` export (a thin callable wrapping the plugin's
+> non-interactive logic).
+
+It is a single-dataset module and only sees plugins already enabled in picasso
+(it never enables one itself — enable it once via the picasso GUI plugin store or
+by editing `~/.picasso/plugins/.installed.json`).
+
+A step looks like:
+
+```python
+("plugin", {
+    "api_name": "my_export",      # key in some plugin's PICASSO_API
+    "kwargs": {"threshold": 5},   # passed verbatim to the callable
+    "inject": ["locs", "info"],   # opt-in: pass self.locs / self.info / self.movie
+})
+```
+
+Calling convention:
+
+- `api_name` (required) — the `PICASSO_API` export to call. If it is not among
+  the enabled plugins' exports, the module fails with the list of available
+  names.
+- `kwargs` (optional) — keyword arguments forwarded verbatim.
+- `inject` (optional, default none) — which current workflow state to pass as
+  extra keyword arguments (`locs`, `info`, `movie`). Opt-in so a callable that
+  does not accept those keywords is not forced to.
+
+Return handling: a plain `PICASSO_API` callable just returns a value (picasso's
+template example returns a number), which is recorded under `plugin_result` — so
+any such plugin runs, it simply does not feed the pipeline. To additionally
+update the pipeline, a callable can follow this module's **convention** and
+return a `dict`: the reserved keys `locs` / `info` update the pipeline state,
+`report` and `files` are documented in the report, and any remaining keys are
+recorded as the plugin result. This dict convention is specific to
+picasso-workflow, not part of picasso's plugin contract; rich, plugin-specific
+reporting is the plugin author's responsibility via the `report` key, otherwise
+the module documents the call and a best-effort summary of the return.
+
 ## Per-channel parameters
 
 In an aggregation (or investigation) workflow, every channel is analyzed by
@@ -190,6 +301,136 @@ the bundled `picasso_workflow/config.yaml` for a worked `hpcl8XXX` example.
 
 - see examples in the folder "examples".
 - if you have access, see examples in "/Volumes/pool-miblab/users/grabmayr/picasso-workflow_testdata"
+
+### Resuming a failed or interrupted run
+
+When a workflow fails (typically because of a wrongly set module argument),
+fix the argument and re-run with resume instead of starting from scratch:
+
+- **GUI**: tick *Continue previous run (resume)* next to the *always save*
+  option before generating/launching the script.
+- **API**: pass `continue_previous_runner=True` to
+  `WorkflowRunner.config_from_dicts` /
+  `AggregationWorkflowRunner.config_from_dicts` (the coordinators in
+  `metaworkflow.py` expose it as `continue_previous_runners`).
+
+On resume, the runner loads the previous run's `WorkflowRunner.yaml` and
+decides where to restart:
+
+1. The **frontier** is the first module that must re-run: the first one
+   that did not previously succeed, *or* the first one whose parameters you
+   changed since the previous run (so fixing an argument of an
+   already-succeeded module re-runs it too). Parameter changes are detected
+   against a pristine snapshot of the previous run's configuration
+   (recorded in `WorkflowRunner.yaml`), so `$`-command resolution and
+   values modules write back into their own parameters do not read as
+   edits. Runs recorded before this snapshot existed are compared
+   best-effort against the persisted (mutated) parameters: edits are
+   detected, known module write-backs (estimated `min_gradient`, resolved
+   output paths, defaults) are ignored, but *removing* a parameter is not
+   noticed.
+2. Walking back from the frontier, the latest module that saved
+   localizations to disk becomes the **checkpoint**: its locs are loaded
+   back into memory, everything up to it is skipped, and the modules after
+   it re-run. Checkpoints are created by `save_single_dataset`,
+   `load_dataset_localizations`, `load_datasets_to_aggregate`,
+   `save_datasets_aggregated`, and by any module run with
+   `save_locs: True` (or the *always save* option / `always_save` config).
+   Checkpoint paths are translated across machines via the `Drivepaths`
+   config, so a run can be resumed on a different machine.
+3. Without any checkpoint before the frontier, the workflow still
+   continues at the frontier if none of the remaining modules needs
+   in-memory state from before it (file-mediated workflows, e.g.
+   continuing after a `manual` step); otherwise it re-runs from scratch —
+   so consider adding `save_locs: True` to expensive modules (localize,
+   undrift, clustering) to keep resumes cheap.
+
+Some state only lives in memory and cannot be restored from saved locs:
+the raw movie, spot identifications, the drift trace and a loaded picasso
+config. A checkpoint that would strand such a dependency (e.g. resuming
+directly at `localize`, which needs the movie and identifications) is
+rejected automatically and the run falls back to an earlier checkpoint or
+to scratch.
+
+### Running locally
+
+Besides the SLURM cluster, a workflow can run directly on the local
+machine: the *Run locally* tab in the GUI's Run section starts the same
+generated `start_workflow.py` with the GUI's Python environment, logging
+to `local_run.log` in the results folder. The live progress monitor and
+the run information display (below the run sub-tabs) serve both run
+modes. *Stop after current module* requests a graceful stop at the next
+module boundary — the run stays resumable — while *Kill local run*
+terminates the process immediately. When a module fails, its traceback
+appears in the *Error details* pane next to the run information (for
+local and cluster runs; local runs also fall back to the traceback
+recorded in `WorkflowRunner.yaml` and to the `local_run.log` tail).
+
+### Exploring results in the Render tab
+
+The *Render* tab (right of *Results*) embeds the picasso Render canvas to
+explore the localizations a run produced. Pick a run, and the left panel
+lists its saved localization files (every `*.hdf5` under the run's module
+folders); select one — or several, to overlay them as channels — and
+*Render selected* shows them on the right. The embedded canvas offers
+picasso Render's exploration and adjustment features: zoom (the *Zoom in* /
+*Zoom out* / *Fit in view* buttons, dragging a box in the canvas, or
+Ctrl+scroll), pan (right-drag), and contrast, colormap, blur method, scale
+bar and per-channel display via the *Display settings* and *Channels*
+buttons. Its processing features (undrift, pick, cluster, …) are
+intentionally not exposed.
+
+### Stepwise (module-by-module) development runs
+
+When developing a new workflow, parameters are usually dialed in one
+module at a time. Instead of running the whole pipeline (and failing
+somewhere in the middle), run it only **up to a chosen module**, inspect
+the results, adjust parameters, and step on:
+
+1. Build the workflow in the GUI as usual.
+2. Tick **Run only up to module** and pick the target module — or simply
+   right-click a module in the workflow list and choose *Run up to this
+   module locally* / *on cluster*.
+3. Start the workflow (locally or on the cluster). It runs up to the
+   chosen module and stops cleanly; the progress monitor shows the run as
+   **paused** and the remaining modules as pending.
+4. Inspect the module's result folder / report, adjust parameters, pick
+   the next target module and start again.
+
+Each step is a **resumed** run (the resume checkbox is forced on while
+stepping), so the usual resume rules apply: previously succeeded modules
+are skipped, modules whose parameters you changed re-run automatically,
+and the boundary module of every step saves its localizations as a
+checkpoint — the next step continues from there instead of recomputing.
+Because checkpoints are plain `locs.hdf5` files (translated across
+machines via the `Drivepaths` config), steps can alternate freely between
+local and cluster execution — e.g. run the GPU-heavy `localize` step on
+the cluster and iterate on clustering parameters locally.
+
+For aggregation workflows the target module can sit in either phase: a
+boundary in the *single-dataset* phase runs every dataset up to it and
+skips the aggregation; a boundary in the *aggregation* phase runs the
+single-dataset phase fully first. Stepwise runs are not available for
+Investigation workflows.
+
+In scripts, pass `stop_after` directly:
+
+```python
+# single-dataset workflow: stop after module index 2
+coordinator.run_analysis(
+    workflow_modules_sgl,
+    continue_previous_runners=True,
+    stop_after=2,
+)
+
+# aggregation workflow: phase is "single" or "aggregation"
+coordinator.run_analysis(
+    workflow_modules_sgl,
+    workflow_modules_agg,
+    continue_previous_runners=True,
+    stop_after=("single", 2),
+)
+```
 
 ### One-click installers
 

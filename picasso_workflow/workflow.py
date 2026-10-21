@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import os
 import time
+from dataclasses import dataclass
 from datetime import datetime
 
 # import logging
@@ -36,12 +37,23 @@ from picasso_workflow.html_reporter import (
     HTMLReporter,
     write_aggregation_index,
 )
-from picasso_workflow.modulespec import Scope, validate_workflow
+from picasso_workflow.modulespec import (
+    CHANNEL_LOCS_CAPABILITIES,
+    LOCS_STATE_CAPABILITIES,
+    MEMORY_ONLY_CAPABILITIES,
+    MODULE_REGISTRY,
+    RUNTIME_PARAMETER_WRITE_BACKS,
+    SINGLE_LOCS_CAPABILITIES,
+    Scope,
+    restart_conflicts,
+    validate_workflow,
+)
 from picasso_workflow.util import (
     AbstractModuleCollection,
     ParameterCommandExecutor,
     ParameterTiler,
     DictSimpleTyper,
+    convert_filepath_for_machine,
 )
 from picasso_workflow import progress as pwprogress
 from picasso_workflow.progress import (
@@ -50,6 +62,7 @@ from picasso_workflow.progress import (
     DONE,
     FAILED,
     ABORTED,
+    PAUSED,
 )
 
 
@@ -101,6 +114,432 @@ def _log_workflow_validation(steps, scope, label):
         logger.debug(f"{label}: pre-flight validation passed.")
 
 
+@dataclass(frozen=True)
+class ResumePlan:
+    """How a (possibly resumed) run starts.
+
+    Parameters
+    ----------
+    start_index : int
+        The first module to execute; modules before it are skipped.
+    frontier : int
+        The first module that must re-run: either it did not previously
+        succeed, or its parameters changed since the previous run. Modules
+        in ``[start_index, frontier)`` previously succeeded but re-run
+        because their in-memory effects are not covered by the checkpoint.
+    checkpoint : dict or None
+        The checkpoint descriptor to restore before running (with added
+        ``module_index``/``module_id`` bookkeeping), or None for a scratch
+        run / a run needing no restore.
+    description : str
+        One human-readable line describing the decision, for the log.
+    """
+
+    start_index: int
+    frontier: int
+    checkpoint: dict | None
+    description: str
+
+
+# Modules whose legacy results keys reference restorable locs files, for
+# resuming runs recorded before the explicit "checkpoint" descriptor
+# existed. Name-gated because other modules record unrelated "filepath"
+# keys (e.g. the manual module's user-provided file).
+_LEGACY_SINGLE_CHECKPOINT_MODULES = {
+    "save_single_dataset",
+    "load_dataset_localizations",
+}
+_LEGACY_CHANNEL_CHECKPOINT_MODULES = {
+    "load_datasets_to_aggregate",
+    "save_datasets_aggregated",
+}
+
+
+def _existing_file(fp) -> str | None:
+    """Resolve a persisted file path against the current machine.
+
+    Paths in ``WorkflowRunner.yaml`` were written on the machine that ran
+    the analysis; :func:`~picasso_workflow.util.convert_filepath_for_machine`
+    translates known drive roots (``Drivepaths`` config) so a run can be
+    resumed on another machine.
+
+    Parameters
+    ----------
+    fp : object
+        The persisted path (any type; non-strings are rejected).
+
+    Returns
+    -------
+    str or None
+        The (possibly translated) path if the file exists, else None.
+    """
+    if not isinstance(fp, str) or not fp:
+        return None
+    fp = convert_filepath_for_machine(fp)
+    return fp if os.path.isfile(fp) else None
+
+
+def _valid_single_part(part) -> dict | None:
+    """Validate the ``single`` part of a checkpoint descriptor.
+
+    Parameters
+    ----------
+    part : object
+        The candidate part.
+
+    Returns
+    -------
+    dict or None
+        The part with a machine-resolved file path, or None if malformed
+        or the file is missing.
+    """
+    if not isinstance(part, dict):
+        return None
+    fp = _existing_file(part.get("filepath"))
+    return {"filepath": fp} if fp is not None else None
+
+
+def _valid_channels_part(part) -> dict | None:
+    """Validate the ``channels`` part of a checkpoint descriptor.
+
+    Parameters
+    ----------
+    part : object
+        The candidate part.
+
+    Returns
+    -------
+    dict or None
+        The part with machine-resolved file paths (and tags derived from
+        the filenames when absent or malformed), or None if malformed or
+        any referenced file is missing.
+    """
+    if not isinstance(part, dict):
+        return None
+    fps = part.get("filepaths")
+    if not isinstance(fps, (list, tuple)) or not fps:
+        return None
+    resolved = [_existing_file(fp) for fp in fps]
+    if any(fp is None for fp in resolved):
+        return None
+    tags = part.get("tags")
+    if not isinstance(tags, (list, tuple)) or len(tags) != len(resolved):
+        # files are named {tag}.hdf5 by _save_datasets_agg
+        tags = [os.path.splitext(os.path.basename(fp))[0] for fp in resolved]
+    return {"filepaths": resolved, "tags": list(tags)}
+
+
+def _checkpoint_from_module_results(
+    module_name: str, module_results: dict
+) -> dict | None:
+    """Extract a restorable checkpoint from a module's saved results.
+
+    Parameters
+    ----------
+    module_name : str
+        The module's name (without index prefix).
+    module_results : dict
+        The module's entry in the runner's results (from
+        ``WorkflowRunner.yaml``).
+
+    Returns
+    -------
+    dict or None
+        A checkpoint descriptor (``single`` and/or ``channels`` parts, see
+        :meth:`AutoPicasso.load_checkpoint`), or None if the module results
+        reference no restorable locs on disk. A descriptor may cover only
+        part of the recorded state (e.g. its channel files were deleted);
+        the resume planner checks whether the unrestored state is actually
+        needed before accepting it (see ``_checkpoint_lost_capabilities``).
+    """
+    # 1) explicit descriptor recorded by the module / module_decorator
+    explicit = module_results.get("checkpoint")
+    if isinstance(explicit, dict):
+        valid = {}
+        if (single := _valid_single_part(explicit.get("single"))) is not None:
+            valid["single"] = single
+        channels = _valid_channels_part(explicit.get("channels"))
+        if channels is not None:
+            valid["channels"] = channels
+        if valid:
+            if len(valid) < len(explicit.keys() & {"single", "channels"}):
+                logger.warning(
+                    "Checkpoint descriptor is only partially restorable "
+                    "(some files are missing); the resume planner checks "
+                    "whether the missing state is needed."
+                )
+            return valid
+    # 2) legacy channel keys (runs recorded before the explicit descriptor)
+    if module_name in _LEGACY_CHANNEL_CHECKPOINT_MODULES:
+        part = _valid_channels_part(
+            {
+                "filepaths": module_results.get("filepaths"),
+                "tags": module_results.get("tags"),
+            }
+        )
+        if part is not None:
+            return {"channels": part}
+    # 3) legacy single-locs key
+    if module_name in _LEGACY_SINGLE_CHECKPOINT_MODULES:
+        fp = module_results.get("filepath")
+        if isinstance(fp, str) and fp.endswith(".hdf5"):
+            resolved = _existing_file(fp)
+            if resolved is not None:
+                return {"single": {"filepath": resolved}}
+    # 4) legacy module_decorator auto-save (save_locs / always_save)
+    folder = module_results.get("folder")
+    if isinstance(folder, str):
+        fp = _existing_file(os.path.join(folder, "locs.hdf5"))
+        if fp is not None:
+            return {"single": {"filepath": fp}}
+    return None
+
+
+def _checkpoint_lost_capabilities(checkpoint: dict | None) -> frozenset[str]:
+    """The capabilities still lost after restoring a checkpoint.
+
+    Parameters
+    ----------
+    checkpoint : dict or None
+        A checkpoint descriptor, or None for no restore at all.
+
+    Returns
+    -------
+    frozenset[str]
+        Capability tokens the restart must not depend on: the memory-only
+        set plus whatever locs state the checkpoint does not cover.
+    """
+    restored: frozenset[str] = frozenset()
+    if checkpoint:
+        if "single" in checkpoint:
+            restored |= SINGLE_LOCS_CAPABILITIES
+        if "channels" in checkpoint:
+            restored |= CHANNEL_LOCS_CAPABILITIES
+    return MEMORY_ONLY_CAPABILITIES | (LOCS_STATE_CAPABILITIES - restored)
+
+
+def _module_parameters_changed(prev_params: dict, new_params: dict) -> bool:
+    """Whether a module's parameters changed between two runs.
+
+    Compares the previous run's *pristine* parameters (snapshotted before
+    any ``$``-command resolution or module write-back, see
+    ``WorkflowRunner.workflow_modules_pristine``) against the caller's.
+    Both sides are simple-typed the same way ``WorkflowRunner.save``
+    serializes to yaml, so numpy/tuple round-trips do not read as changes.
+    A false positive only costs a safe extra re-run.
+
+    Parameters
+    ----------
+    prev_params : dict
+        The module's pristine parameters from the previous run.
+    new_params : dict
+        The module's parameters as configured now.
+
+    Returns
+    -------
+    bool
+    """
+    typer = DictSimpleTyper(to_simple_type=True)
+    prev = typer.run(copy.deepcopy(prev_params))
+    new = typer.run(copy.deepcopy(new_params))
+    return prev != new
+
+
+_ORIGINALNOCMD_SUFFIX = "_originalnocmd"
+
+
+def _substitute_companions(params: dict) -> None:
+    """Replace resolved command values by their ``*_originalnocmd`` originals.
+
+    ``ParameterCommandExecutor`` resolves command tuples in place but keeps
+    the raw command (sign-stripped, truncated to two elements) under a
+    companion key. Substituting the originals back, on both sides of a
+    comparison, makes resolved and unresolved parameter sets comparable.
+
+    Parameters
+    ----------
+    params : dict
+        A (deep-copied) parameter dict; modified in place.
+    """
+    for key in [
+        k
+        for k in params
+        if isinstance(k, str) and k.endswith(_ORIGINALNOCMD_SUFFIX)
+    ]:
+        params[key[: -len(_ORIGINALNOCMD_SUFFIX)]] = params.pop(key)
+
+
+def _normalize_command(value):
+    """Normalize a raw ``$``-command tuple to the companion-key form.
+
+    The ``*_originalnocmd`` companions store commands sign-stripped and
+    truncated to two elements; normalize raw commands the same way so the
+    two forms compare equal.
+
+    Parameters
+    ----------
+    value : object
+        A parameter value.
+
+    Returns
+    -------
+    object
+        The normalized value (unchanged for non-command values).
+    """
+    if (
+        isinstance(value, tuple)
+        and value
+        and isinstance(value[0], str)
+        and value[0].startswith("$")
+    ):
+        return (value[0].lstrip("$"),) + tuple(value[1:2])
+    return value
+
+
+def _legacy_values_differ(
+    prev_value, new_value, ignore: frozenset = frozenset(), path: str = ""
+) -> bool:
+    """Conservatively compare a legacy parameter value against a new one.
+
+    Parameters
+    ----------
+    prev_value : object
+        Value from a legacy yaml (resolved commands, module write-backs).
+    new_value : object
+        Value as configured now.
+    ignore : frozenset[str], optional
+        Dotted key paths to skip (keys the module overwrites at run time).
+    path : str, optional
+        The dotted path of the value being compared (for ``ignore``).
+
+    Returns
+    -------
+    bool
+        Whether the new value differs from the previous one. Keys present
+        only on the previous side are ignored (module write-backs).
+    """
+    if isinstance(new_value, dict) and isinstance(prev_value, dict):
+        _substitute_companions(prev_value)
+        _substitute_companions(new_value)
+        for key, value in new_value.items():
+            key_path = f"{path}.{key}" if path else str(key)
+            if key_path in ignore:
+                continue
+            if key not in prev_value or _legacy_values_differ(
+                prev_value[key], value, ignore, key_path
+            ):
+                return True
+        return False
+    if isinstance(new_value, list) and isinstance(prev_value, list):
+        if len(new_value) != len(prev_value):
+            return True
+        return any(
+            _legacy_values_differ(p, n, ignore, path)
+            for p, n in zip(prev_value, new_value)
+        )
+    return _normalize_command(new_value) != _normalize_command(prev_value)
+
+
+def _module_parameters_changed_legacy(
+    prev_params: dict, new_params: dict, module_name: str = ""
+) -> bool:
+    """Best-effort parameter comparison against a pre-snapshot yaml.
+
+    Runs recorded before the pristine snapshot existed only persisted the
+    *mutated* parameters (``$``-commands resolved in place, values written
+    back by the modules themselves). Comparison is therefore conservative:
+    commands are normalized to the ``*_originalnocmd`` companion form,
+    only keys present in the new parameters are compared, and keys the
+    module is known to overwrite at run time
+    (:data:`~picasso_workflow.modulespec.RUNTIME_PARAMETER_WRITE_BACKS`,
+    e.g. the auto-estimated ``min_gradient``) are skipped. Remaining
+    limitation: *removing* a parameter is not detected.
+
+    Parameters
+    ----------
+    prev_params : dict
+        The module's parameters from the legacy yaml.
+    new_params : dict
+        The module's parameters as configured now.
+    module_name : str, optional
+        The module's name, to look up its run-time write-back keys.
+
+    Returns
+    -------
+    bool
+    """
+    typer = DictSimpleTyper(to_simple_type=True)
+    prev = typer.run(copy.deepcopy(prev_params))
+    new = typer.run(copy.deepcopy(new_params))
+    ignore = RUNTIME_PARAMETER_WRITE_BACKS.get(module_name, frozenset())
+    return _legacy_values_differ(prev, new, ignore)
+
+
+_RUNSTAMP_RE = re.compile(r"_(\d{6}-\d{4})$")
+
+
+def _strip_runstamp(report_name: str) -> str:
+    """Strip a trailing ``_%y%m%d-%H%M`` runstamp from a report name.
+
+    The coordinators stamp report names per launch; for finding a previous
+    run, the stable, stamp-free base name is what matters.
+
+    Parameters
+    ----------
+    report_name : str
+        The (possibly stamped) report name.
+
+    Returns
+    -------
+    str
+        The base name without a trailing runstamp.
+    """
+    return _RUNSTAMP_RE.sub("", report_name)
+
+
+def _find_previous_runner_postfix(folder: str, report_name: str) -> str | None:
+    """Find the postfix of the latest previous runner folder.
+
+    Runner folders are named ``{report_name}_{postfix}``, where the postfix
+    ends in a ``%y%m%d-%H%M`` timestamp and may carry a per-run token in
+    front of it (e.g. ``p1a2b3_240310-1130``, woven in by the
+    coordinators). The folder with the latest trailing timestamp wins.
+
+    Parameters
+    ----------
+    folder : str
+        The folder to look in.
+    report_name : str
+        The stable (stamp-free) base report name.
+
+    Returns
+    -------
+    str or None
+        The postfix of the latest previous runner, or None if none found.
+    """
+    try:
+        dirs = [
+            it
+            for it in os.listdir(folder)
+            if it.startswith(report_name + "_")
+            and os.path.isdir(os.path.join(folder, it))
+        ]
+    except FileNotFoundError:
+        return None
+    latest_datetime = None
+    latest_postfix = None
+    for d in dirs:
+        postfix = d[len(report_name) + 1 :]
+        try:
+            dt = datetime.strptime(postfix.rsplit("_", 1)[-1], "%y%m%d-%H%M")
+        except ValueError:
+            continue
+        if latest_datetime is None or latest_datetime < dt:
+            latest_datetime = dt
+            latest_postfix = postfix
+    return latest_postfix
+
+
 # logger = logging.getLogger(__name__)
 
 
@@ -128,6 +567,12 @@ class AggregationWorkflowRunner:
             self.postfix = datetime.now().strftime("%y%m%d-%H%M")
         self.continue_workflow = False
         self.single_workflow_parallel = False
+        # Stepwise development runs: ``("single", i)`` stops every
+        # single-dataset workflow after module i and skips the aggregation;
+        # ``("aggregation", i)`` runs the single-dataset phase fully and
+        # stops the aggregation workflow after module i. A per-launch
+        # directive, not persisted to AggregationWorkflowRunner.yaml.
+        self.stop_after = None
         self.sgl_workflow_locations = []
         self.cpage_names = []
         self._html_reporting = False
@@ -148,6 +593,7 @@ class AggregationWorkflowRunner:
         single_workflow_parallel: bool = False,
         rank: int | None = None,
         size: int | None = None,
+        stop_after: tuple | None = None,
     ) -> "AggregationWorkflowRunner":
         """Build a configured runner from plain config dicts.
 
@@ -186,6 +632,10 @@ class AggregationWorkflowRunner:
         rank, size : int, optional
             SLURM task identity overriding the environment-derived values, used
             to control how single workflows are distributed across ranks.
+        stop_after : tuple, optional
+            Stepwise development boundary, as ``(phase, index)`` with phase
+            ``"single"`` or ``"aggregation"`` (see the ``stop_after``
+            attribute). Default is None (run everything).
 
         Returns
         -------
@@ -215,21 +665,37 @@ class AggregationWorkflowRunner:
         if continue_previous_runner:
             folder = analysis_config["result_location"]
             report_name = reporter_config["report_name"]
-            # Use extracted postfix if available, otherwise
-            # check for previous runner
+            # Candidate postfixes: an explicitly passed/extracted one first
+            # (it may name the exact run to adopt), then the latest previous
+            # run found on disk. The extracted postfix may merely be THIS
+            # launch's timestamp (the coordinators stamp the report name per
+            # launch), in which case its folder does not exist and the
+            # discovery takes over.
+            candidates = []
             if extracted_postfix is not None:
-                postfix = extracted_postfix
-            else:
-                postfix = cls._check_previous_runner(folder, report_name)
-            logger.debug(f"Found postfix: {postfix}")
-            if postfix is not None:
-                report_name = report_name + "_" + postfix
-                runner_folder = os.path.join(folder, report_name)
+                candidates.append(extracted_postfix)
+            discovered = cls._check_previous_runner(folder, report_name)
+            if discovered is not None and discovered not in candidates:
+                candidates.append(discovered)
+            logger.debug(f"Previous-runner postfix candidates: {candidates}")
+            for candidate in candidates:
+                runner_folder = os.path.join(
+                    folder, report_name + "_" + candidate
+                )
                 try:
-                    instance = cls.load(runner_folder)
-                    return instance
+                    # adopt the caller's reporter choice: the persisted one
+                    # may reference reporters disabled since (see load())
+                    instance = cls.load(
+                        runner_folder, reporter_config=reporter_config
+                    )
                 except FileNotFoundError:
                     logger.debug(f"Could not load runner from {runner_folder}")
+                    continue
+                # take over the caller's (possibly fixed) parameters;
+                # change detection happens per WorkflowRunner
+                instance._adopt_aggregation_workflow(aggregation_workflow)
+                instance.stop_after = stop_after
+                return instance
 
         # If we have an extracted postfix but aren't continuing, use it
         if extracted_postfix is not None and not continue_previous_runner:
@@ -250,6 +716,7 @@ class AggregationWorkflowRunner:
             instance.rank = rank
         if size is not None:
             instance.size = size
+        instance.stop_after = stop_after
         instance.single_workflow_parallel = single_workflow_parallel
         instance.parameter_tiler = ParameterTiler(instance, sgltilepars)
         instance.all_results = {
@@ -342,27 +809,7 @@ class AggregationWorkflowRunner:
             The postfix of the latest previous runner in that location, or
             None if none are found.
         """
-        dirs = [
-            it
-            for it in os.listdir(folder)
-            if os.path.isdir(os.path.join(folder, it))
-        ]
-        dirs = [it for it in dirs if report_name in it]
-        # find the latest runner
-        latest_datetime = None
-        latest_postfix = None
-        for d in dirs:
-            try:
-                # cut out the postfix
-                postfix_start = len(report_name) + 1
-                postfix = d[postfix_start:]
-                dt = datetime.strptime(postfix, "%y%m%d-%H%M")
-            except Exception:
-                continue
-            if latest_datetime is None or latest_datetime < dt:
-                latest_datetime = dt
-                latest_postfix = postfix
-        return latest_postfix
+        return _find_previous_runner_postfix(folder, report_name)
 
     def _initialize_confluence_interface(
         self,
@@ -457,6 +904,15 @@ class AggregationWorkflowRunner:
         )
         self.progress.datasets_init(tags)
         self.progress.mark_running()
+        # Link the aggregation overview page for the GUI monitor (best-effort).
+        cfg = (self.reporter_config or {}).get("ConfluenceReporter") or {}
+        if getattr(self, "ci", None) is not None and cfg.get("parent_page_id"):
+            try:
+                self.progress.set_report_url(
+                    self.ci.page_url(cfg["parent_page_id"])
+                )
+            except Exception as e:
+                logger.debug(f"Could not record aggregation report URL: {e}")
 
         # Multi-node parallelism: distribute the single-dataset workflows
         # across the SLURM ranks by dynamic self-scheduling. Each rank walks
@@ -469,6 +925,9 @@ class AggregationWorkflowRunner:
         # result folder; rank 0 then waits for every marker, loads the results
         # produced by other ranks from disk, and runs the aggregation. With a
         # single task (off-cluster) every dataset runs here.
+        # stepwise development boundary, split into phase and module index
+        stop_phase, stop_index = self.stop_after or (None, None)
+
         claim_dir = self._claim_dir()
         if self.size > 1:
             os.makedirs(claim_dir, exist_ok=True)
@@ -511,7 +970,10 @@ class AggregationWorkflowRunner:
                 "leaving aggregation to rank 0."
             )
             rank_ok = all(owned) if owned else True
-            self.progress.finish(DONE if rank_ok else FAILED)
+            if rank_ok and stop_phase == "single":
+                self.progress.finish(PAUSED)
+            else:
+                self.progress.finish(DONE if rank_ok else FAILED)
             return rank_ok
 
         # Rank 0 (or a single-task run): wait for the single datasets handled
@@ -575,6 +1037,16 @@ class AggregationWorkflowRunner:
             self._report_aggregation_abort(failures, n_sgl)
             raise WorkflowError(msg)
 
+        # Stepwise boundary in the single-dataset phase: every dataset
+        # stopped cleanly at its boundary, so skip the aggregation workflow.
+        if stop_phase == "single":
+            logger.info(
+                "Stepwise boundary in the single-dataset phase reached; "
+                "skipping the aggregation workflow."
+            )
+            self.progress.finish(PAUSED)
+            return None
+
         # Then, run the aggregation workflow
         pce = ParameterCommandExecutor(
             self,
@@ -608,8 +1080,10 @@ class AggregationWorkflowRunner:
                         agg_reporter_config["report_name"]
                         + "_"
                         + self.postfix,
-                    )
+                    ),
+                    reporter_config=copy.deepcopy(agg_reporter_config),
                 )
+                wr.adopt_workflow_modules(parameters)
             except Exception:
                 logger.debug("loading did not work. creating from dict.")
                 wr = WorkflowRunner.config_from_dicts(
@@ -626,12 +1100,17 @@ class AggregationWorkflowRunner:
                 parameters,
                 postfix=self.postfix,
             )
+        if stop_phase == "aggregation":
+            wr.stop_after = stop_index
         self.cpage_names.append(wr.reporter_config["report_name"])
         self._agg_report_folder = wr.result_folder
         agg_success = wr.run()
         self.all_results["aggregation"] = wr.results
         self.save(self.result_folder)
-        self.progress.finish(DONE if agg_success else FAILED)
+        if agg_success and wr.paused:
+            self.progress.finish(PAUSED)
+        else:
+            self.progress.finish(DONE if agg_success else FAILED)
 
         # Refresh the HTML overview now that the aggregation report exists.
         self._write_html_overview(sgl_folders, self._agg_report_folder)
@@ -877,7 +1356,11 @@ class AggregationWorkflowRunner:
         if self.continue_workflow:
             try:
                 logger.debug(f"loading WorkflowRunner from {sgl_folders[i]}")
-                wr = WorkflowRunner.load(sgl_folders[i])
+                wr = WorkflowRunner.load(
+                    sgl_folders[i],
+                    reporter_config=copy.deepcopy(sgl_wkfl_reporter_config),
+                )
+                wr.adopt_workflow_modules(parameter_set)
             except Exception:
                 logger.debug("loading did not work. creating from dict.")
                 wr = WorkflowRunner.config_from_dicts(
@@ -894,6 +1377,10 @@ class AggregationWorkflowRunner:
                 parameter_set,
                 postfix=self.postfix,
             )
+        # stepwise development: a "single"-phase boundary applies to every
+        # per-dataset workflow (set here to also cover the loaded-runner path)
+        if self.stop_after is not None and self.stop_after[0] == "single":
+            wr.stop_after = self.stop_after[1]
         self.cpage_names.append(wr.reporter_config["report_name"])
         self.progress.dataset_update(i, RUNNING)
         # Never let an unhandled error escape before the completion marker is
@@ -906,7 +1393,10 @@ class AggregationWorkflowRunner:
             logger.error(f"Single dataset {i} ({tag}) failed: {e}")
             logger.error(traceback.format_exc())
             success = False
-        self.progress.dataset_update(i, DONE if success else FAILED)
+        if success and wr.paused:
+            self.progress.dataset_update(i, PAUSED)
+        else:
+            self.progress.dataset_update(i, DONE if success else FAILED)
         sgl_dataset_success[i] = success
         self.all_results["single_dataset"][i] = getattr(wr, "results", None)
         if self.rank == 0:
@@ -920,11 +1410,23 @@ class AggregationWorkflowRunner:
         """Return the completion-marker path for a single-dataset folder."""
         return os.path.join(folder, "_pwf_single_done.txt")
 
+    def _launch_token(self) -> str:
+        """Token identifying this launch (SLURM job id, else ``local``).
+
+        Shared by :meth:`_claim_dir` and the completion markers so both are
+        scoped to a single launch.
+        """
+        return os.getenv("SLURM_JOB_ID") or "local"
+
     def _write_single_marker(self, folder: str, success: bool) -> None:
         """Drop a completion marker for a finished single dataset.
 
         Lets rank 0 know the dataset is finished and whether it succeeded.
         Written atomically via a rank-specific temp file + ``os.replace``.
+        The marker is stamped with this launch's token (see
+        :meth:`_launch_token`) so a stale marker from a previous run in the
+        same (reused) result folder -- e.g. a stepwise step that paused its
+        datasets -- is not mistaken for this launch's completion.
 
         Parameters
         ----------
@@ -938,7 +1440,8 @@ class AggregationWorkflowRunner:
             marker = self._single_marker_path(folder)
             tmp = f"{marker}.{self.rank}.tmp"
             with open(tmp, "w") as f:
-                f.write("success" if success else "failed")
+                status = "success" if success else "failed"
+                f.write(f"{status} {self._launch_token()}")
             os.replace(tmp, marker)
         except Exception as e:
             logger.error(
@@ -946,7 +1449,12 @@ class AggregationWorkflowRunner:
             )
 
     def _read_single_marker(self, folder: str) -> str | None:
-        """Return a single dataset's marker contents, or None if absent.
+        """Return a single dataset's marker status for *this* launch, or None.
+
+        A marker stamped with a different launch token (a stale marker from a
+        previous run in the reused result folder) is treated as absent, so
+        rank 0's barrier waits for this launch's workers instead of adopting
+        the previous run's result.
 
         Parameters
         ----------
@@ -956,13 +1464,18 @@ class AggregationWorkflowRunner:
         Returns
         -------
         str or None
-            ``"success"`` / ``"failed"`` if the marker exists, else None.
+            ``"success"`` / ``"failed"`` if a marker for this launch exists,
+            else None (absent, stale, or legacy/unstamped).
         """
         try:
             with open(self._single_marker_path(folder)) as f:
-                return f.read().strip()
+                content = f.read().strip()
         except FileNotFoundError:
             return None
+        parts = content.split()
+        if len(parts) == 2 and parts[1] == self._launch_token():
+            return parts[0]
+        return None
 
     def _claim_dir(self) -> str:
         """Per-launch directory of dataset claims for dynamic scheduling.
@@ -979,8 +1492,9 @@ class AggregationWorkflowRunner:
         str
             The claim directory for this launch.
         """
-        job = os.getenv("SLURM_JOB_ID") or "local"
-        return os.path.join(self.result_folder, "_pwf_claims", str(job))
+        return os.path.join(
+            self.result_folder, "_pwf_claims", self._launch_token()
+        )
 
     def _claim_dataset(self, claim_dir: str, i: int) -> bool:
         """Atomically claim single dataset ``i`` for this rank.
@@ -1180,13 +1694,19 @@ class AggregationWorkflowRunner:
             yaml.dump(data, f)
 
     @classmethod
-    def load(cls, dirn: str = ".") -> "AggregationWorkflowRunner":
+    def load(
+        cls, dirn: str = ".", reporter_config: dict | None = None
+    ) -> "AggregationWorkflowRunner":
         """Load an instance from an ``AggregationWorkflowRunner.yaml`` file.
 
         Parameters
         ----------
         dirn : str, optional
             The directory to load from. Default is the current directory.
+        reporter_config : dict, optional
+            The caller's reporter configuration for a continued run: the
+            reporter backends follow it while the persisted run's
+            ``report_name`` is kept (see :meth:`WorkflowRunner.load`).
 
         Returns
         -------
@@ -1197,8 +1717,14 @@ class AggregationWorkflowRunner:
         with open(fp, "r") as f:
             data = yaml.load(f, Loader=yaml.FullLoader)
 
+        persisted_reporter_config = data["reporter_config"]
+        if reporter_config is not None:
+            adopted = copy.deepcopy(reporter_config)
+            adopted["report_name"] = persisted_reporter_config["report_name"]
+        else:
+            adopted = persisted_reporter_config
         instance = cls.config_from_dicts(
-            data["reporter_config"],
+            adopted,
             data["analysis_config"],
             data["aggregation_workflow"],
             data["postfix"],
@@ -1207,6 +1733,103 @@ class AggregationWorkflowRunner:
         instance.sgl_workflow_locations = data["sgl_workflow_locations"]
         instance.continue_workflow = True
         return instance
+
+    def _adopt_aggregation_workflow(
+        self, new_aggregation_workflow: dict
+    ) -> None:
+        """Adopt an edited aggregation workflow on resume.
+
+        Counterpart to :meth:`WorkflowRunner.adopt_workflow_modules` at the
+        aggregation level: takes over the caller's (possibly fixed)
+        parameters so they reach the tiled per-dataset and aggregation-stage
+        runners, where the per-module change detection happens. Only adopted
+        if the module-name sequences of both stages and the number of
+        dataset tiles are unchanged; otherwise the previous run's workflow
+        is kept (warned). Best-effort: an error here must not break the
+        resume, only disable adoption.
+
+        Parameters
+        ----------
+        new_aggregation_workflow : dict
+            The aggregation workflow as configured now (with
+            ``single_dataset_tileparameters``, ``single_dataset_modules``
+            and ``aggregation_modules``).
+        """
+        try:
+            self._do_adopt_aggregation_workflow(new_aggregation_workflow)
+        except Exception as e:
+            logger.warning(
+                f"Could not adopt the edited aggregation workflow on "
+                f"resume ({e!r}); keeping the previous run's workflow."
+            )
+
+    def _do_adopt_aggregation_workflow(
+        self, new_aggregation_workflow: dict
+    ) -> None:
+        """Implementation of :meth:`_adopt_aggregation_workflow`."""
+        if not new_aggregation_workflow:
+            return
+
+        def _names(workflow, key):
+            return [name for name, _ in (workflow.get(key) or [])]
+
+        for key in ("single_dataset_modules", "aggregation_modules"):
+            if _names(self.aggregation_workflow, key) != _names(
+                new_aggregation_workflow, key
+            ):
+                logger.warning(
+                    "Not adopting the edited aggregation workflow on "
+                    f"resume: the {key} module sequence changed; keeping "
+                    "the previous run's workflow."
+                )
+                return
+        tilepars = new_aggregation_workflow.get(
+            "single_dataset_tileparameters"
+        )
+        if not tilepars:
+            logger.warning(
+                "Not adopting the edited aggregation workflow on resume: "
+                "single_dataset_tileparameters missing."
+            )
+            return
+        new_tiler = ParameterTiler(self, tilepars)
+        if new_tiler.ntiles != self.parameter_tiler.ntiles:
+            logger.warning(
+                "Not adopting the edited aggregation workflow on resume: "
+                f"the number of datasets changed ({self.parameter_tiler.ntiles}"
+                f" -> {new_tiler.ntiles}); keeping the previous run's "
+                "workflow."
+            )
+            return
+        self.aggregation_workflow = new_aggregation_workflow
+        self.parameter_tiler = new_tiler
+
+
+def _progress_error_text(e: BaseException) -> str:
+    """Compact "type: message" plus traceback for a progress entry.
+
+    Trimmed to fit :meth:`ProgressManager.module_end`'s 2000-character cap,
+    keeping the traceback *tail* (where the raised error is) when the full
+    text is too long.
+
+    Parameters
+    ----------
+    e : BaseException
+        The exception that failed the module.
+
+    Returns
+    -------
+    str
+    """
+    header = f"{type(e).__name__}: {e}"
+    if e.__traceback__ is not None:
+        tb = "".join(traceback.format_exception(type(e), e, e.__traceback__))
+    else:
+        tb = traceback.format_exc()
+    budget = 2000 - len(header) - 10
+    if budget > 0 and len(tb) > budget:
+        tb = "...\n" + tb[-budget:]
+    return f"{header}\n{tb}"
 
 
 class WorkflowError(Exception):
@@ -1242,11 +1865,30 @@ class WorkflowRunner:
 
         self.parameter_command_executor = ParameterCommandExecutor(self)
         self.results = {}
+        # Pristine snapshot of the workflow modules as configured, taken
+        # before any $-command resolution or module write-back mutates the
+        # parameter dicts (both happen in place). Persisted to
+        # WorkflowRunner.yaml so a resume can compare the caller's
+        # parameters against what the previous run was configured with.
+        self.workflow_modules_pristine = None
+        # The previous run's modules (set by adopt_workflow_modules on
+        # resume); lets _plan_resume detect changed parameters. Consumed
+        # by run(). The legacy flag marks pre-snapshot yamls, whose
+        # mutated parameters need the conservative legacy comparison.
+        self._previous_workflow_modules = None
+        self._previous_modules_are_legacy = False
         # Progress tracking. ``progress`` is built lazily in run() (needs the
         # result folder and module list); ``_abort_requested`` supports a
         # cooperative in-process stop, complementing the on-disk abort flag.
         self.progress = None
         self._abort_requested = False
+        # Stepwise development runs: stop cleanly after this module index
+        # (None = run to the end). A per-launch directive, not persisted to
+        # WorkflowRunner.yaml; the next step is a resume with a later (or no)
+        # boundary. ``paused`` records that the last run() stopped at the
+        # boundary rather than completing.
+        self.stop_after = None
+        self.paused = False
 
     @classmethod
     def config_from_dicts(
@@ -1256,6 +1898,7 @@ class WorkflowRunner:
         workflow_modules: list[tuple],
         postfix: str | None = None,
         continue_previous_runner: bool = False,
+        stop_after: int | None = None,
     ) -> "WorkflowRunner":
         """Build a configured runner from plain config dicts.
 
@@ -1278,6 +1921,12 @@ class WorkflowRunner:
             Continue a previous analysis that aborted (e.g. at a manual step).
             If no previous analysis exists in that folder, a new one is
             created. Default is False.
+        stop_after : int, optional
+            Stop cleanly after the module with this index (stepwise
+            development runs). The boundary module saves its localizations
+            as a checkpoint, so the next step (a resume with a later
+            boundary) continues from there. Default is None (run to the
+            end).
 
         Returns
         -------
@@ -1286,15 +1935,35 @@ class WorkflowRunner:
         """
         if continue_previous_runner:
             folder = analysis_config["result_location"]
-            report_name = reporter_config["report_name"]
-            postfix = cls._check_previous_runner(folder, report_name)
-            if postfix is not None:
-                report_name = report_name + "_" + postfix
-                runner_folder = os.path.join(folder, report_name)
-                instance = cls.load(runner_folder)
-                return instance
+            # the coordinators stamp the report name per launch; a previous
+            # run is found by the stable, stamp-free base name
+            base_name = _strip_runstamp(reporter_config["report_name"])
+            found_postfix = cls._check_previous_runner(folder, base_name)
+            if found_postfix is not None:
+                runner_folder = os.path.join(
+                    folder, base_name + "_" + found_postfix
+                )
+                try:
+                    # adopt the caller's reporter choice: the persisted one
+                    # may reference reporters disabled since (see load())
+                    instance = cls.load(
+                        runner_folder, reporter_config=reporter_config
+                    )
+                except FileNotFoundError:
+                    # e.g. the previous run died before its first save():
+                    # the folder exists but holds no WorkflowRunner.yaml.
+                    # Fall through to creating a fresh runner.
+                    logger.debug(f"Could not load runner from {runner_folder}")
+                else:
+                    # take over the caller's (possibly fixed) parameters;
+                    # the previous run's pristine parameters are kept for
+                    # change detection on resume
+                    instance.adopt_workflow_modules(workflow_modules)
+                    instance.stop_after = stop_after
+                    return instance
 
         instance = cls(postfix)
+        instance.stop_after = stop_after
         # set date and time to report name
         report_name = reporter_config["report_name"] + "_" + instance.postfix
         reporter_config["report_name"] = report_name
@@ -1304,6 +1973,7 @@ class WorkflowRunner:
         instance._initialize_reporter(reporter_config)
         instance._initialize_analysis(analysis_config, report_name)
         instance.workflow_modules = workflow_modules
+        instance.workflow_modules_pristine = copy.deepcopy(workflow_modules)
         return instance
 
     @classmethod
@@ -1325,27 +1995,7 @@ class WorkflowRunner:
             The postfix of the latest previous runner in that location, or
             None if none are found.
         """
-        dirs = [
-            it
-            for it in os.listdir(folder)
-            if os.path.isdir(os.path.join(folder, it))
-        ]
-        dirs = [it for it in dirs if report_name in it]
-        # find the latest runner
-        latest_datetime = None
-        latest_postfix = None
-        for d in dirs:
-            try:
-                # cut out the postfix
-                postfix_start = len(report_name) + 1
-                postfix = d[postfix_start:]
-                dt = datetime.strptime(postfix, "%y%m%d-%H%M")
-            except Exception:
-                continue
-            if latest_datetime is None or latest_datetime < dt:
-                latest_datetime = dt
-                latest_postfix = postfix
-        return latest_postfix
+        return _find_previous_runner_postfix(folder, report_name)
 
     def _initialize_analysis(
         self, analysis_config: dict, report_name: str
@@ -1422,12 +2072,15 @@ class WorkflowRunner:
         """Run the analysis of the workflow modules in order.
 
         Already-succeeded modules from a previous run are skipped; execution
-        stops at the first module that fails.
+        stops at the first module that fails. With ``stop_after`` set
+        (stepwise development), execution also stops -- cleanly, with
+        ``paused`` set -- after that module.
 
         Returns
         -------
         bool
-            Whether all modules ran through successfully.
+            Whether all modules run so far succeeded (all of them, or, on a
+            stepwise run, all up to the ``stop_after`` boundary).
         """
         # pre-flight: validate dependencies/scope (warn-only, non-blocking)
         _log_workflow_validation(
@@ -1444,6 +2097,13 @@ class WorkflowRunner:
         available_modules = [
             name for name in available_modules if name != "__init__"
         ]
+        # picasso-set modules are not part of the AbstractModuleCollection
+        # contract; they are registered via modulespec instead.
+        available_modules += [
+            name
+            for name, spec in MODULE_REGISTRY.items()
+            if spec.module_set == "picasso"
+        ]
         logger.debug(f"Available modules: {str(available_modules)}")
         for module_name, module_parameters in self.workflow_modules:
             if module_name not in available_modules:
@@ -1455,36 +2115,59 @@ class WorkflowRunner:
         progress = self._ensure_progress()
         progress.start([name for name, _ in self.workflow_modules])
 
-        # now, run the modules
-        all_previously_succeeded = True
+        # now, run the modules. On a resumed run, skip up to the last
+        # checkpointed module, restore its saved locs, and re-run from there
+        # (see _plan_resume).
+        plan = self._plan_resume()
+        logger.info(f"Resume plan: {plan.description}")
+        # consume the previous-run diff: a second in-process run() must not
+        # re-fire a stale parameter-change frontier against post-run state
+        self._previous_workflow_modules = None
+        if plan.checkpoint is not None:
+            try:
+                self.autopicasso.load_checkpoint(plan.checkpoint)
+            except Exception as e:
+                logger.warning(
+                    "Could not restore checkpoint "
+                    f"{plan.checkpoint.get('module_id')}: {e}; "
+                    "re-running from scratch instead."
+                )
+                plan = ResumePlan(
+                    0, plan.frontier, None, "checkpoint restore failed"
+                )
         # Bind up front: a module raising on the very first iteration used
         # to leave this unbound and fail with UnboundLocalError below,
         # masking the real error.
         success = False
+        self.paused = False
         for i, (module_name, module_parameters) in enumerate(
             self.workflow_modules
         ):
-            # # check whether the next module has been analysed already
-            # if self.module_previously_analyzed(i + 1):
-            #     # if it has, skip this. This way an aborted module
-            #     # will be re-analyzed.
-            #     logger.debug(
-            #         f"""Module {i}, {module_name} has been previously
-            #         analyzed. Skipping."""
-            #     )
-            #     continue
-            if (
-                all_previously_succeeded
-                and self.module_previously_succeeded(i, module_name)
-            ) and self.module_previously_analyzed(i):
-                # if it has, skip this. This way an aborted module
-                # will be re-analyzed.
+            # Stepwise development: stop cleanly at the stop-after boundary.
+            # Checked first so modules beyond the boundary are neither run
+            # nor marked skipped, whatever the resume plan says. Reaching
+            # this point means nothing before the boundary failed (a failure
+            # breaks the loop below), so the partial run counts as a success.
+            if self.stop_after is not None and i > self.stop_after:
+                logger.info(
+                    f"Stepwise boundary: stopping before module {i:02d} "
+                    f"({module_name}); modules up to {self.stop_after:02d} "
+                    "are complete."
+                )
+                success = True
+                self.paused = True
+                break
+            if i < plan.start_index:
                 logger.debug(f"""Module {i}, {module_name} has been previously
                     analyzed. Skipping.""")
                 progress.module_skipped(i)
                 continue
-            else:
-                all_previously_succeeded = False
+            if i < plan.frontier:
+                logger.info(
+                    f"Re-running previously succeeded module {i:02d}_"
+                    f"{module_name}: its in-memory effects were lost on "
+                    "resume and are not covered by the checkpoint."
+                )
 
             # cooperative abort: stop cleanly at the next module boundary if
             # an abort was requested (in-process or via the on-disk flag).
@@ -1516,20 +2199,45 @@ class WorkflowRunner:
                         module_parameters, curr_rootidx=i
                     )
                 success = self.call_module(module_name, i, module_parameters)
-            except AutoPicassoError:
+            except AutoPicassoError as e:
                 success = False
-                progress.module_end(i, FAILED)
-            except Exception:
+                # record the error with the progress entry, so the monitor
+                # (local or over SSH) can show the traceback without access
+                # to WorkflowRunner.yaml or the logs
+                progress.module_end(i, FAILED, error=_progress_error_text(e))
+            except Exception as e:
                 # Any other exception used to escape before save(), so the
                 # failing module never reached WorkflowRunner.yaml. Record
                 # it, then let it propagate as before.
                 success = False
-                progress.module_end(i, FAILED)
+                progress.module_end(i, FAILED, error=_progress_error_text(e))
                 progress.finish(FAILED)
                 self.save(self.result_folder)
                 raise
             else:
-                progress.module_end(i, DONE if success else FAILED)
+                # a module may fail without raising (success=False in its
+                # results); surface its recorded error/message with the
+                # progress entry too, so the monitor can display it
+                err_text = None
+                if not success:
+                    err_text = self._module_failure_text(
+                        f"{i:02d}_{module_name}"
+                    )
+                progress.module_end(
+                    i, DONE if success else FAILED, error=err_text
+                )
+
+            # Stepwise boundary: ensure the boundary module leaves a resume
+            # checkpoint, so the next step continues from here instead of an
+            # earlier incidental checkpoint. Done at the runner level (not via
+            # a module-specific ``save_locs`` parameter, whose meaning differs
+            # per module -- e.g. ``localize`` reads it as a dict). Only when
+            # the module ran this session; a boundary skipped on resume keeps
+            # whatever checkpoint the previous run recorded.
+            if success and self.stop_after == i:
+                self.autopicasso.save_locs_checkpoint(
+                    self.results[f"{i:02d}_{module_name}"]
+                )
 
             self.save(self.result_folder)
             if not success:
@@ -1538,8 +2246,39 @@ class WorkflowRunner:
             success = True
 
         if progress.state["state"] == RUNNING:
-            progress.finish(DONE if success else FAILED)
+            if self.paused:
+                progress.finish(PAUSED)
+            else:
+                progress.finish(DONE if success else FAILED)
         return success
+
+    def _module_failure_text(self, key: str) -> str | None:
+        """Best-effort failure description from a module's recorded results.
+
+        Used for modules that fail without raising (``success: False`` in
+        their results): their ``error`` may be the structured dict written
+        by :meth:`_report_module_error`, a plain string set by the module,
+        or absent (then ``message`` is tried).
+
+        Parameters
+        ----------
+        key : str
+            Results key of the module, ``f"{i:02d}_{fun_name}"``.
+
+        Returns
+        -------
+        str or None
+        """
+        res = self.results.get(key) or {}
+        err = res.get("error")
+        if isinstance(err, dict):
+            return err.get("traceback") or (
+                f"{err.get('type', 'Error')}: {err.get('message', '')}"
+            )
+        if err:
+            return str(err)
+        msg = res.get("message")
+        return str(msg) if msg else None
 
     def _ensure_progress(self) -> ProgressManager:
         """Return the run's :class:`ProgressManager`, building it if needed.
@@ -1558,6 +2297,14 @@ class WorkflowRunner:
                 kind="single",
                 report_name=getattr(self, "report_name", None),
             )
+        # Record the Confluence report-page URL so the GUI monitor can link
+        # to it (best-effort; never let a reporter quirk abort the run).
+        reporter = getattr(self, "confluencereporter", None)
+        if reporter is not None:
+            try:
+                self.progress.set_report_url(reporter.report_page_url)
+            except Exception as e:
+                logger.debug(f"Could not record Confluence report URL: {e}")
         # Wire the analysis worker so long picasso calls can report
         # intra-module progress and honour aborts.
         if getattr(self, "autopicasso", None) is not None:
@@ -1617,6 +2364,9 @@ class WorkflowRunner:
             "reporter_config": pce.run(self.reporter_config),
             "analysis_config": pce.run(self.analysis_config),
             "workflow_modules": pce.run(self.workflow_modules),
+            "workflow_modules_pristine": pce.run(
+                self.workflow_modules_pristine
+            ),
         }
         # logger.debug("saving data:")
         # logger.debug(str(data))
@@ -1624,13 +2374,24 @@ class WorkflowRunner:
             yaml.dump(data, f)
 
     @classmethod
-    def load(cls, dirn: str = ".") -> "WorkflowRunner":
+    def load(
+        cls, dirn: str = ".", reporter_config: dict | None = None
+    ) -> "WorkflowRunner":
         """Load the results from a ``WorkflowRunner.yaml`` file.
 
         Parameters
         ----------
         dirn : str, optional
             The directory to load from. Default is the current directory.
+        reporter_config : dict, optional
+            The caller's reporter configuration for a continued run. When
+            given, the reporter *backends* (Confluence / HTML and their
+            settings) follow this configuration instead of the persisted
+            one, while the loaded run's ``report_name`` (its identity) is
+            kept. This keeps a resume from resurrecting a reporter the
+            caller has since disabled: building a ConfluenceReporter
+            contacts the server, so a stale persisted config can kill the
+            resume (e.g. with a 403) before any module runs.
 
         Returns
         -------
@@ -1642,10 +2403,20 @@ class WorkflowRunner:
             data = yaml.safe_load(f)
         instance = cls()
         instance.results = data["results"]
-        instance.reporter_config = data["reporter_config"]
+        persisted_reporter_config = data["reporter_config"]
+        if reporter_config is not None:
+            adopted = copy.deepcopy(reporter_config)
+            adopted["report_name"] = persisted_reporter_config["report_name"]
+            instance.reporter_config = adopted
+        else:
+            instance.reporter_config = persisted_reporter_config
         instance.analysis_config = data["analysis_config"]
         instance.analysis_config["result_location"] = os.path.join(dirn, "..")
         instance.workflow_modules = data["workflow_modules"]
+        # absent in yamls written before the pristine snapshot existed
+        instance.workflow_modules_pristine = data.get(
+            "workflow_modules_pristine"
+        )
         report_name = instance.reporter_config["report_name"]
         instance._initialize_analysis(instance.analysis_config, report_name)
         instance._initialize_reporter(instance.reporter_config)
@@ -1700,6 +2471,269 @@ class WorkflowRunner:
             str(self.results.get(module_id, {}).get("success", False))
         )
         return self.results.get(module_id, {}).get("success", False)
+
+    def adopt_workflow_modules(self, new_modules: list) -> None:
+        """Adopt an edited module list on resume, keeping the previous one.
+
+        The typical resume scenario is "fix a parameter and re-run": the
+        caller's (edited) modules must replace the previous run's, whose
+        *pristine* parameter snapshot (recorded before ``$``-command
+        resolution and module write-back mutated them) is kept in
+        ``self._previous_workflow_modules`` so that :meth:`_plan_resume`
+        can re-run from the first changed module. The edited list is only
+        adopted if its module-name sequence matches the previous run's;
+        otherwise the previous modules are kept (warned). Best-effort: an
+        error here must not break the resume, only disable adoption.
+
+        Parameters
+        ----------
+        new_modules : list of tuple
+            The workflow modules as configured now, as
+            ``(module_name, parameters)``.
+        """
+        try:
+            if not new_modules:
+                return
+            prev_pristine = self.workflow_modules_pristine
+            prev_names = [name for name, _ in self.workflow_modules]
+            new_names = [name for name, _ in new_modules]
+            if prev_names != new_names:
+                logger.warning(
+                    "Not adopting the edited workflow modules on resume: "
+                    f"the module sequence changed ({prev_names} -> "
+                    f"{new_names}); keeping the previous run's modules."
+                )
+                return
+            prev_modules = self.workflow_modules
+            self.workflow_modules = new_modules
+            self.workflow_modules_pristine = copy.deepcopy(new_modules)
+            if prev_pristine is not None:
+                # exact comparison against the pristine snapshot
+                self._previous_workflow_modules = prev_pristine
+                self._previous_modules_are_legacy = False
+            else:
+                # yamls recorded before the pristine snapshot existed only
+                # hold the mutated parameters (resolved $-commands, module
+                # write-backs); fall back to the conservative legacy
+                # comparison against those
+                logger.info(
+                    "The previous run has no pristine parameter snapshot "
+                    "(recorded by an older version); using a best-effort "
+                    "comparison -- module-estimated values may trigger "
+                    "extra re-runs, and a removed parameter is not "
+                    "detected."
+                )
+                self._previous_workflow_modules = prev_modules
+                self._previous_modules_are_legacy = True
+        except Exception as e:
+            logger.warning(
+                f"Could not adopt the edited workflow modules on resume "
+                f"({e!r}); keeping the previous run's modules."
+            )
+
+    def _memory_is_warm(self) -> bool:
+        """Whether the analysis worker still holds in-memory dataset state.
+
+        True for a live in-process re-run (the previous modules' effects are
+        still present); False for a resumed run built from disk, where a
+        checkpoint restore is needed.
+
+        Returns
+        -------
+        bool
+        """
+        ap = getattr(self, "autopicasso", None)
+        if ap is None:
+            return False
+        return any(
+            getattr(ap, attr, None) is not None
+            for attr in ("locs", "movie", "identifications", "channel_locs")
+        )
+
+    def _restart_conflicts(
+        self, restart_index: int, checkpoint: dict | None
+    ) -> tuple[list, list]:
+        """Conflicts of restarting at ``restart_index`` after a restore.
+
+        Wraps :func:`~picasso_workflow.modulespec.restart_conflicts` with
+        the capabilities actually lost given the (possibly partial)
+        checkpoint, and never lets the best-effort annotation layer break
+        a run.
+
+        Parameters
+        ----------
+        restart_index : int
+            Index of the first module that would execute.
+        checkpoint : dict or None
+            The checkpoint that would be restored, or None.
+
+        Returns
+        -------
+        hard : list of str
+        soft : list of str
+        """
+        try:
+            return restart_conflicts(
+                self.workflow_modules,
+                restart_index,
+                lost_capabilities=_checkpoint_lost_capabilities(checkpoint),
+            )
+        except Exception as e:  # never let the spec layer break a run
+            logger.debug(f"restart_conflicts skipped ({e!r}).")
+            return [], []
+
+    def _plan_resume(self) -> ResumePlan:
+        """Decide where to start this run and what state to restore.
+
+        The *frontier* is the first module that must re-run: the first one
+        that did not previously succeed (per saved results + module folder),
+        or the first one whose parameters changed since the previous run,
+        whichever comes first. If in-memory state is still warm (live
+        re-run with unchanged parameters), execution skips straight to the
+        frontier as before. Otherwise the latest previously-succeeded
+        module with a restorable locs checkpoint on disk (that does not
+        strand a needed in-memory dependency, see
+        :func:`~picasso_workflow.modulespec.restart_conflicts`) determines
+        the start: its locs are restored and the modules after it re-run.
+        With no checkpoint, execution still continues at the frontier if
+        the remaining modules need no lost in-memory state (file-mediated
+        workflows, e.g. after a manual step); otherwise it starts from
+        scratch.
+
+        Returns
+        -------
+        ResumePlan
+        """
+        n = len(self.workflow_modules)
+        frontier = n
+        # one listdir instead of one per module: which module indices have
+        # a result folder ("previously analyzed")
+        try:
+            found_prefixes = {
+                d.split("_", 1)[0]
+                for d in os.listdir(self.result_folder)
+                if "_" in d
+                and os.path.isdir(os.path.join(self.result_folder, d))
+            }
+        except FileNotFoundError:
+            found_prefixes = set()
+        for i, (module_name, _) in enumerate(self.workflow_modules):
+            if not (
+                self.module_previously_succeeded(i, module_name)
+                and f"{i:02d}" in found_prefixes
+            ):
+                frontier = i
+                break
+        params_changed = False
+        if self._previous_workflow_modules is not None:
+            for i, (module_name, module_parameters) in enumerate(
+                self.workflow_modules[:frontier]
+            ):
+                try:
+                    if self._previous_modules_are_legacy:
+                        changed = _module_parameters_changed_legacy(
+                            self._previous_workflow_modules[i][1],
+                            module_parameters,
+                            module_name,
+                        )
+                    else:
+                        changed = _module_parameters_changed(
+                            self._previous_workflow_modules[i][1],
+                            module_parameters,
+                        )
+                except Exception as e:
+                    logger.debug(
+                        f"Parameter comparison failed for module {i} "
+                        f"({module_name}): {e}; treating as changed."
+                    )
+                    changed = True
+                if changed:
+                    logger.info(
+                        f"Parameters of module {i:02d}_{module_name} "
+                        "changed since the previous run; re-running from "
+                        "there."
+                    )
+                    frontier = i
+                    params_changed = True
+                    break
+        if frontier == 0:
+            return ResumePlan(
+                0,
+                0,
+                None,
+                "no previous results to skip; running all "
+                "modules from scratch",
+            )
+        if frontier == n:
+            return ResumePlan(
+                n,
+                n,
+                None,
+                f"all {n} modules previously succeeded (unchanged "
+                "parameters); skipping everything",
+            )
+        # A live in-process re-run may continue on its warm state -- but
+        # not when a parameter change pulled the frontier back: the warm
+        # state then post-dates the module to re-run, so restore from a
+        # checkpoint (or re-run from scratch) instead.
+        if not params_changed and self._memory_is_warm():
+            return ResumePlan(
+                frontier,
+                frontier,
+                None,
+                "in-memory state still present; skipping to module "
+                f"{frontier} without restore",
+            )
+        for k in range(frontier - 1, -1, -1):
+            module_name = self.workflow_modules[k][0]
+            module_id = f"{k:02d}_{module_name}"
+            checkpoint = _checkpoint_from_module_results(
+                module_name, self.results.get(module_id, {})
+            )
+            if checkpoint is None:
+                continue
+            hard, soft = self._restart_conflicts(k + 1, checkpoint)
+            if hard:
+                for msg in hard:
+                    logger.info(f"Checkpoint at {module_id} not viable: {msg}")
+                continue
+            for msg in soft:
+                logger.warning(f"Resume advisory: {msg}")
+            checkpoint = dict(checkpoint)
+            checkpoint["module_index"] = k
+            checkpoint["module_id"] = module_id
+            return ResumePlan(
+                k + 1,
+                frontier,
+                checkpoint,
+                f"restoring locs saved by {module_id}, re-running "
+                f"modules {k + 1} to {n - 1}",
+            )
+        # No checkpoint. Continuing at the frontier without a restore is
+        # still valid when none of the remaining modules needs in-memory
+        # state from before it (file-mediated workflows) -- the behavior
+        # resumes relied on before checkpoints existed.
+        hard, soft = self._restart_conflicts(frontier, None)
+        if not hard:
+            for msg in soft:
+                logger.warning(f"Resume advisory: {msg}")
+            return ResumePlan(
+                frontier,
+                frontier,
+                None,
+                f"no locs checkpoint found, but modules {frontier} onward "
+                "need no in-memory state from before; continuing at "
+                f"module {frontier}",
+            )
+        for msg in hard:
+            logger.info(f"Continuing at module {frontier} not viable: {msg}")
+        return ResumePlan(
+            0,
+            frontier,
+            None,
+            f"module {frontier} must re-run but no restorable locs "
+            "checkpoint was found before it; re-running from scratch",
+        )
 
     def _report_module_error(self, e, fun_name, i, parameters, key):
         """Log, report and record a module failure.

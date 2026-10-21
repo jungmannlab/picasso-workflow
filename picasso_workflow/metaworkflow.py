@@ -24,7 +24,7 @@ from loguru import logger
 import time
 from datetime import datetime
 import hashlib
-from picasso import io
+from picasso_workflow._picasso_api import io
 import pathlib
 from functools import reduce
 import textwrap
@@ -495,7 +495,7 @@ def find_dnapaint_raw(working_folder: str) -> tuple[dict, str]:
         Path to the written ``src_loc.yaml`` describing the datasets.
     """
     from picasso_workflow import util
-    from picasso import io
+    from picasso_workflow._picasso_api import io
 
     datasets = util.find_raw_movies(working_folder)
 
@@ -938,7 +938,9 @@ class AbstractWorkflowCoordinator(abc.ABC):
         except Exception:
             pw_version = "unknown"
         try:
-            from picasso import __version__ as picasso_version
+            from picasso_workflow._picasso_api import (
+                __version__ as picasso_version,
+            )
         except Exception:
             picasso_version = "unknown"
 
@@ -1027,6 +1029,7 @@ class SingleWorkflowCoordinator(AbstractWorkflowCoordinator):
         self,
         workflow_modules: list[tuple],
         continue_previous_runners: bool = False,
+        stop_after: int | None = None,
     ) -> list[dict]:
         """Tile the workflow over datasets and build per-dataset runners.
 
@@ -1036,6 +1039,9 @@ class SingleWorkflowCoordinator(AbstractWorkflowCoordinator):
             The modules to run, as ``(module_name, parameters)``.
         continue_previous_runners : bool, optional
             Whether to continue previously aborted runners. Default is False.
+        stop_after : int, optional
+            Stepwise development runs: stop each runner cleanly after the
+            module with this index. Default is None (run to the end).
 
         Returns
         -------
@@ -1093,6 +1099,7 @@ class SingleWorkflowCoordinator(AbstractWorkflowCoordinator):
                 wkfl_mods,
                 continue_previous_runner=continue_previous_runners,
                 postfix="",
+                stop_after=stop_after,
             )
             run_wr_kwargs.append(
                 {
@@ -1106,6 +1113,7 @@ class SingleWorkflowCoordinator(AbstractWorkflowCoordinator):
         self,
         workflow_modules: list[tuple],
         continue_previous_runners: bool = False,
+        stop_after: int | None = None,
     ) -> None:
         """Prepare and run the per-dataset workflows handled by this rank.
 
@@ -1115,9 +1123,12 @@ class SingleWorkflowCoordinator(AbstractWorkflowCoordinator):
             The modules to run, as ``(module_name, parameters)``.
         continue_previous_runners : bool, optional
             Whether to continue previously aborted runners. Default is False.
+        stop_after : int, optional
+            Stepwise development runs: stop each runner cleanly after the
+            module with this index. Default is None (run to the end).
         """
         run_wr_kwargs = self.prepare_analysis(
-            workflow_modules, continue_previous_runners
+            workflow_modules, continue_previous_runners, stop_after=stop_after
         )
 
         # print(f'rank {self.rank}, size {self.size}: running {run_awr_kwargs}')
@@ -1209,6 +1220,7 @@ class AggregationWorkflowCoordinator(AbstractWorkflowCoordinator):
         workflow_modules_sgl: list[tuple],
         workflow_modules_agg: list[tuple],
         continue_previous_runners: bool = False,
+        stop_after: tuple | None = None,
     ) -> list[dict]:
         """Build the per-group aggregation runners for this rank.
 
@@ -1225,6 +1237,10 @@ class AggregationWorkflowCoordinator(AbstractWorkflowCoordinator):
             Modules run in the second stage (aggregation across rounds).
         continue_previous_runners : bool, optional
             Whether to continue previously aborted runners. Default is False.
+        stop_after : tuple, optional
+            Stepwise development boundary, as ``(phase, index)`` with phase
+            ``"single"`` or ``"aggregation"`` (see
+            :attr:`AggregationWorkflowRunner.stop_after`). Default is None.
 
         Returns
         -------
@@ -1352,6 +1368,7 @@ class AggregationWorkflowCoordinator(AbstractWorkflowCoordinator):
                 postfix=runstamp,
                 rank=runner_rank,
                 size=runner_size,
+                stop_after=stop_after,
             )
 
             # Write the run overview onto the dedicated aggregation page
@@ -1400,6 +1417,7 @@ class AggregationWorkflowCoordinator(AbstractWorkflowCoordinator):
         workflow_modules_sgl: list[tuple],
         workflow_modules_agg: list[tuple],
         continue_previous_runners: bool = False,
+        stop_after: tuple | None = None,
     ) -> None:
         """Prepare and run the aggregation workflows handled by this rank.
 
@@ -1411,11 +1429,16 @@ class AggregationWorkflowCoordinator(AbstractWorkflowCoordinator):
             Modules run in the second stage (aggregation across rounds).
         continue_previous_runners : bool, optional
             Whether to continue previously aborted runners. Default is False.
+        stop_after : tuple, optional
+            Stepwise development boundary, as ``(phase, index)`` with phase
+            ``"single"`` or ``"aggregation"`` (see
+            :attr:`AggregationWorkflowRunner.stop_after`). Default is None.
         """
         run_awr_kwargs = self.prepare_analysis(
             workflow_modules_sgl,
             workflow_modules_agg,
             continue_previous_runners,
+            stop_after=stop_after,
         )
 
         print(f"rank {self.rank}, size {self.size}: running {run_awr_kwargs}")

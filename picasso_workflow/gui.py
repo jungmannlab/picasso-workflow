@@ -11,6 +11,9 @@ from __future__ import annotations
 from picasso_workflow import util, CONFIG
 from picasso_workflow import progress as pwprogress
 from picasso_workflow.modulespec import MODULE_REGISTRY, Scope
+from picasso_workflow.picasso_set.params import (
+    docstring as picasso_set_docstring,
+)
 from picasso_workflow import workflow_references as wfref
 from loguru import logger
 import subprocess
@@ -30,7 +33,7 @@ import tempfile
 import functools
 import inspect
 import textwrap
-from picasso import lib
+from picasso_workflow._picasso_api import lib
 from PyQt6 import QtWidgets, QtCore, QtGui
 from PyQt6.QtCore import Qt, QEvent
 
@@ -369,6 +372,14 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             if not method.startswith("_") and method not in excluded_methods
         ]
 
+        # picasso-set modules are registry-backed (resolved via __getattr__),
+        # not methods of this class
+        module_methods += [
+            name
+            for name, spec in MODULE_REGISTRY.items()
+            if spec.module_set == "picasso"
+        ]
+
         # Sort alphabetically for consistent ordering
         return sorted(module_methods)
 
@@ -376,6 +387,31 @@ class ModuleDescriptor(util.AbstractModuleCollection):
         """Reads and returns the docstring of a module"""
         fun = getattr(self, module)
         return fun.__doc__
+
+    def __getattr__(self, name):
+        """Resolve picasso-set module names to their registry-backed specs.
+
+        The picasso-set modules have no hand-written descriptor methods;
+        their ``(parameters_spec, results_spec)`` tuples live in
+        ``ModuleSpec.params``. Any registry-listed picasso-set name resolves
+        to a zero-argument callable returning that tuple (with the GUI
+        docstring attached), exactly like the descriptor methods. Everything
+        else raises ``AttributeError`` as usual (``__getattr__`` is only
+        consulted after normal lookup fails).
+        """
+        if not name.startswith("_"):
+            spec = MODULE_REGISTRY.get(name)
+            if spec is not None and spec.module_set == "picasso":
+
+                def describe():
+                    return spec.params
+
+                describe.__name__ = name
+                describe.__doc__ = picasso_set_docstring(name)
+                return describe
+        raise AttributeError(
+            f"{type(self).__name__!r} object has no attribute {name!r}"
+        )
 
     def dummy_module(self):
         """A module that does nothing, for quickly removing
@@ -427,6 +463,84 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             "folder": {
                 "type": "str",
                 "description": "Output folder for module results",
+            },
+        }
+
+        return parameters_spec, results_spec
+
+    def plugin(self):
+        """Call an installed, enabled picasso API plugin export.
+
+        Parameters
+        ----------
+        parameters : dict
+            Required keys:
+                api_name : str
+                    Name of the PICASSO_API export to call.
+            Optional keys:
+                kwargs : dict
+                    Keyword arguments passed verbatim to the callable.
+                inject : list
+                    Workflow state to pass as keyword arguments
+                    (``locs``/``info``/``movie``).
+
+        Returns
+        -------
+        parameters : dict
+            as input, unchanged
+        results : dict
+            updated with plugin_api_name, plugin_callable, injected and
+            (depending on the callable's return) plugin_report, plugin_files
+            and plugin_result.
+        """
+        parameters_spec = {
+            "api_name": {
+                "type": "str",
+                "required": True,
+                "description": "Name of the PICASSO_API export to call.",
+            },
+            "kwargs": {
+                "type": "dict",
+                "required": False,
+                "description": "Keyword arguments passed to the callable.",
+            },
+            "inject": {
+                "type": "list",
+                "element_type": "str",
+                "required": False,
+                "description": (
+                    "Workflow state to pass as keyword arguments "
+                    "(locs/info/movie)."
+                ),
+            },
+        }
+
+        results_spec = {
+            "plugin_api_name": {
+                "type": "str",
+                "description": "The PICASSO_API export that was called.",
+            },
+            "plugin_callable": {
+                "type": "str",
+                "description": "Module and name of the resolved callable.",
+            },
+            "injected": {
+                "type": "list",
+                "element_type": "str",
+                "description": "Workflow state injected into the call.",
+            },
+            "plugin_report": {
+                "type": "str",
+                "description": "Report content returned by the plugin.",
+            },
+            "plugin_files": {
+                "type": "list",
+                "element_type": "str",
+                "description": "Output files reported by the plugin.",
+            },
+            "plugin_result": {
+                "type": "dict",
+                "description": "Remaining values returned by the plugin.",
             },
         }
 
@@ -635,8 +749,12 @@ class ModuleDescriptor(util.AbstractModuleCollection):
         parameters_spec = {
             "filename": {
                 "type": "path",
-                "description": "Path to the movie file to load",
+                "description": (
+                    "Path to the movie file to load. Defaults to the "
+                    "per-channel 'filepath' column of the tile parameters"
+                ),
                 "extensions": [".raw", ".tif", ".tiff", ".ome.tif"],
+                "default": ("$$map", "filepath"),
                 "required": True,
             },
             "sample_movie": {
@@ -652,6 +770,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                     "n_sample": {
                         "type": "int",
                         "description": "Number of frames to sample",
+                        "unit": "frames",
                         "min": 1,
                         "default": 40,
                     },
@@ -858,6 +977,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             "box_size": {
                 "type": "int",
                 "description": "Size of the detection box in pixels",
+                "unit": "px",
                 "min": 3,
                 "max": 21,
                 "step": 2,
@@ -947,6 +1067,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "median background filter applied before spot detection. "
                 "0 (or 1) disables it; >= 2 to filter. Re-tune min_gradient "
                 "when enabling.",
+                "unit": "frames",
                 "min": 0,
                 "required": False,
             },
@@ -954,6 +1075,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "type": "int",
                 "description": "Stride (frames) for the temporal-median "
                 "filter. Only used when the window is >= 2.",
+                "unit": "frames",
                 "min": 0,
                 "required": False,
             },
@@ -1507,6 +1629,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "type": "float",
                 "description": "Field of view of the zoom in rendering around \
                     the center of mass in nm",
+                "unit": "nm",
                 "min": 0,
                 "default": 10000,
                 "required": False,
@@ -1515,6 +1638,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "type": "float",
                 "description": "The rendered pixel size [nm] of the full FOV \
                     rendering",
+                "unit": "nm",
                 "min": 0,
                 "default": 130,
                 "required": False,
@@ -1523,6 +1647,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "type": "float",
                 "description": "The rendered pixel size [nm] of the zoom in \
                     rendering around the center of mass",
+                "unit": "nm",
                 "min": 0,
                 "default": 100,
                 "required": False,
@@ -1650,6 +1775,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             "segmentation": {
                 "type": "int",
                 "description": "the number of frames segmented for RCC",
+                "unit": "frames",
                 "min": 2,
                 "max": 1000,
                 "default": 50,
@@ -1755,6 +1881,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             "segmentation": {
                 "type": "int",
                 "description": "the number of frames segmented",
+                "unit": "frames",
                 "min": 2,
                 "max": 1000,
                 "default": 50,
@@ -1763,6 +1890,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             "intersect_d": {
                 "type": "float",
                 "description": "Intersect distance in nanometers.",
+                "unit": "nm",
                 "min": 0,
                 "required": True,
             },
@@ -1771,6 +1899,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "description": "Radius of the local search region in \
                 nanometers. Should be larger than the maximum expected drift \
                 wihtin segmentation.",
+                "unit": "nm",
                 "min": 0,
                 "required": True,
             },
@@ -2052,6 +2181,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             "radius": {
                 "type": "float",
                 "description": "Radius for local density calculation in nm",
+                "unit": "nm",
                 "min": 1.0,
                 "max": 1000.0,
                 "default": 50.0,
@@ -2151,6 +2281,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             "radius": {
                 "type": "float",
                 "description": "The DBSCAN radius parameter in nm",
+                "unit": "nm",
                 "min": 1.0,
                 "max": 1000.0,
                 "default": 50.0,
@@ -2328,6 +2459,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             "radius": {
                 "type": "float",
                 "description": "Clustering radius in nm",
+                "unit": "nm",
                 "min": 1.0,
                 "max": 1000.0,
                 "default": 20.0,
@@ -2410,6 +2542,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             "radius": {
                 "type": "float",
                 "description": "Clustering radius parameter [nm]",
+                "unit": "nm",
                 "min": 0.0,
                 "max": 1000.0,
                 "default": 50.0,
@@ -2429,6 +2562,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             "radius_z": {
                 "type": "float",
                 "description": "The smlm radius_z [nm]",
+                "unit": "nm",
                 "default": None,
                 "required": False,
             },
@@ -2910,7 +3044,14 @@ class ModuleDescriptor(util.AbstractModuleCollection):
         parameters_spec = {
             "filename": {
                 "type": "str",
-                "description": "Custom filename for saved data",
+                "description": (
+                    "Custom filename for saved data. Defaults to the "
+                    "dataset's tag from the tile parameters; the third "
+                    "tuple element is the fallback for single-dataset "
+                    "runs and tag-less aggregations (None = the "
+                    "module's locs.hdf5 default)"
+                ),
+                "default": ("$$map", "#tags", None),
                 "required": False,
             }
         }
@@ -2972,7 +3113,9 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "type": "list",
                 "description": "Custom tags for each dataset",
                 "element_type": "str",
-                "required": False,
+                # the module zips filepaths with tags, so this is
+                # de-facto required
+                "required": True,
             },
         }
 
@@ -3018,7 +3161,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                     the previously saved hdf5 files to be loaded and
                     aligned. if not given, the last processed data is used
                 align_pars : dict
-                    kwargs of picasso_outpost.align_channels
+                    kwargs of outpost.alignment.channels.align_channels
                         max_iterations, convergence
                 fp_fiducials : list of str
                     the previously saved hdf5 files of fiducial markers
@@ -3306,6 +3449,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "type": "str",
                 "description": "The column name for the IDs to the different \
                     datasets. Allows back-tracking locs to their origin.",
+                "default": "combine_id",
                 "required": False,
             },
         }
@@ -3609,6 +3753,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                     "targets (good value is e.g. 5). Used when "
                     "'labeling_uncertainty_screen' below is unchecked."
                 ),
+                "unit": "nm",
                 "default": 5.0,
                 "required": True,
             },
@@ -3625,12 +3770,14 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                     "min": {
                         "type": "float",
                         "description": "Range start [nm]",
+                        "unit": "nm",
                         "min": 0.0,
                         "default": 2.0,
                     },
                     "max": {
                         "type": "float",
                         "description": "Range end [nm] (inclusive)",
+                        "unit": "nm",
                         "min": 0.0,
                         "default": 12.0,
                     },
@@ -3639,6 +3786,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                         "description": (
                             "Step [nm]; defines the number of candidates"
                         ),
+                        "unit": "nm",
                         "min": 0.1,
                         "default": 2.0,
                     },
@@ -3660,12 +3808,14 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                     "min": {
                         "type": "float",
                         "description": "Smallest separation [nm]",
+                        "unit": "nm",
                         "min": 0.0,
                         "default": 5.0,
                     },
                     "max": {
                         "type": "float",
                         "description": "Largest separation [nm]",
+                        "unit": "nm",
                         "min": 0.0,
                         "default": 40.0,
                     },
@@ -3674,6 +3824,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                         "description": (
                             "Step [nm]; defines the number of candidates"
                         ),
+                        "unit": "nm",
                         "min": 0.1,
                         "default": 5.0,
                     },
@@ -3890,109 +4041,6 @@ class ModuleDescriptor(util.AbstractModuleCollection):
 
         return parameters_spec, results_spec
 
-    def ripleysk(self):
-        """Perforn Ripley's K analysis between the channels using
-        Magdalena's code.
-
-        Parameters
-        ----------
-        parameters:
-            ripleys_n_random_controls : int
-                number of random controls, default: 100
-            ripleys_rmax : int
-                the maximum radius, default 200
-            ripleys_dr : float
-                the radius interval, default 5
-            radii : 1D np array
-                the radius values. If given, ripleys_rmax and
-                ripleys_dr are ignored.
-            ripleys_threshold : float
-                the threshold of ripleys integrals above which the
-                interaction is deemed significant.
-            fp_combined_locs : str
-                filepath to the combined locs of all channel_locs
-            atype : str
-                the type of analysis: 'Ripleys' for the standard
-                Ripley's K analysis, or 'RDF' for calculation of the
-                radial distribution function instead of K, and random
-                controls by relocating each point by a random x/y in a
-                circle with the currently investigated r, which preserves
-                the density fluctuations (instead of CSR simulation)
-        """
-        parameters_spec = {
-            "radii": {
-                "type": "list",
-                "description": "List of analysis radii in nm",
-                "element_type": "float",
-                "min": 1.0,
-                "max": 1000.0,
-                "required": True,
-            },
-            "edge_correction": {
-                "type": "str",
-                "description": "Edge correction method",
-                "options": ["none", "translation", "isotropic"],
-                "default": "translation",
-                "required": False,
-            },
-            "ripleys_n_random_controls": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: number of random controls, default: 100
-                # Hint: type appears to be int
-            },
-            "ripleys_rmax": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the maximum radius, default 200
-                # Hint: type appears to be int
-            },
-            "ripleys_dr": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the radius interval, default 5
-                # Hint: type appears to be float
-            },
-            "ripleys_threshold": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the threshold of ripleys integrals above which the interaction is deemed significant.
-                # Hint: type appears to be float
-            },
-            "fp_combined_locs": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: filepath to the combined locs of all channel_locs
-                # Hint: type appears to be str
-            },
-            "atype": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the type of analysis: 'Ripleys' for the standard Ripley's K analysis, or 'RDF' for calculation of the radial distribution function instead of K, an...
-                # Hint: type appears to be str
-            },
-        }
-
-        results_spec = {
-            "start time": {
-                "type": "str",
-                "description": "Module execution start timestamp",
-            },
-            "end time": {
-                "type": "str",
-                "description": "Module execution end timestamp",
-            },
-            "duration": {
-                "type": "float",
-                "description": "Module execution duration in seconds",
-                "min": 0.0,
-            },
-            "folder": {
-                "type": "str",
-                "description": "Output folder for module results",
-            },
-            "ripley_k_values": {
-                "type": "numpy.ndarray",
-                "description": "Calculated Ripley's K values",
-            },
-        }
-
-        return parameters_spec, results_spec
-
     def ripleysk2(self):
         """Perforn Ripley's K analysis between the channels using
         Rafal's code.
@@ -4059,6 +4107,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             "radii": {
                 "type": "list",
                 "description": "List of analysis radii in nm",
+                "unit": "nm",
                 "element_type": "float",
                 "min": 1.0,
                 "max": 1000.0,
@@ -4177,106 +4226,6 @@ class ModuleDescriptor(util.AbstractModuleCollection):
 
         return parameters_spec, results_spec
 
-    def ripleysk_average(self):
-        """Average the results of multiple Ripley's K Analyses, analyse
-        the significant pairs after averaging, and save them into the
-        separate workflow manual folders (for further analysis there)
-
-        Parameters
-        ----------
-        parameters:
-            # fp_ripleys_integrals : list of str
-            #     the various single analyses to average, e.g. of
-            #     different workflows
-            fp_workflows : list of str
-                the paths to the folders of separate workflows
-                where the separate ripleys analyses have been done
-            report_names : list of str
-                the report names of those worklfows
-            ripleys_threshold : float
-                the threshold of ripleys integrals above which the
-                interaction is deemed significant.
-            atype : str
-                "Ripleys" or "RDF"
-            # output_folders : list of str
-            #     folders to write the significant pairs into. This can
-            #     e.g. be the 'manual' results folders of the
-            #     workflows, so these can proceed.
-        optional:
-            swkfl_ripleysk_key : str
-                the results key of the ripleysk module.
-                e.g. '05_ripleysk'
-            swkfl_manual_key : str
-                the results key of the manual module to save the
-                integrals to
-            if those two are not given, saving is not performed
-        """
-        parameters_spec = {
-            "weight_method": {
-                "type": "str",
-                "description": "Method for weighting individual analyses",
-                "options": ["equal", "by_nlocs", "by_area"],
-                "default": "equal",
-                "required": False,
-            },
-            "fp_workflows": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the paths to the folders of separate workflows where the separate ripleys analyses have been done
-                # Hint: type appears to be list
-            },
-            "report_names": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the report names of those worklfows
-                # Hint: type appears to be list
-            },
-            "ripleys_threshold": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the threshold of ripleys integrals above which the interaction is deemed significant.
-                # Hint: type appears to be float
-            },
-            "atype": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: # output_folders : list of str #     folders to write the significant pairs into. This can #     e.g. be the 'manual' results folders of the #     ...
-                # Hint: type appears to be str
-            },
-            "swkfl_ripleysk_key": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the results key of the ripleysk module. e.g. '05_ripleysk'
-                # Hint: type appears to be str
-            },
-            "swkfl_manual_key": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the results key of the manual module to save the integrals to if those two are not given, saving is not performed
-                # Hint: type appears to be str
-            },
-        }
-
-        results_spec = {
-            "start time": {
-                "type": "str",
-                "description": "Module execution start timestamp",
-            },
-            "end time": {
-                "type": "str",
-                "description": "Module execution end timestamp",
-            },
-            "duration": {
-                "type": "float",
-                "description": "Module execution duration in seconds",
-                "min": 0.0,
-            },
-            "folder": {
-                "type": "str",
-                "description": "Output folder for module results",
-            },
-            "average_ripley_k": {
-                "type": "numpy.ndarray",
-                "description": "Averaged Ripley's K values",
-            },
-        }
-
-        return parameters_spec, results_spec
-
     def ripleysk_average2(self):
         """Average the results of multiple Ripley's K Analyses, analyse
         the significant pairs after averaging, and save them into the
@@ -4316,8 +4265,8 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             #     workflows, so these can proceed.
         optional:
             swkfl_ripleysk_key : str
-                the results key of the ripleysk module.
-                e.g. '05_ripleysk'
+                the results key of the ripleysk2 module.
+                e.g. '05_ripleysk2'
             swkfl_manual_key : str
                 the results key of the manual module to save the
                 integrals to
@@ -4363,7 +4312,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             },
             "swkfl_ripleysk_key": {
                 # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the results key of the ripleysk module. e.g. '05_ripleysk'
+                # Hint: description: the results key of the ripleysk2 module. e.g. '05_ripleysk2'
                 # Hint: type appears to be str
             },
             "swkfl_manual_key": {
@@ -4446,6 +4395,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             "interaction_radius": {
                 "type": "float",
                 "description": "Maximum interaction distance in nm",
+                "unit": "nm",
                 "min": 1.0,
                 "max": 500.0,
                 "default": 50.0,
@@ -4655,12 +4605,14 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "required": False,
             },
             "fp_channel_map": {
+                "required": True,
                 # TODO: Add type, description, min, max, default, required, step, extensions, properties
                 # Hint: description: filepath to the map from 'combine_channels' module, which is a dict from channel name to ID int in the locs['combine_id']
                 # Hint: type appears to be str
                 # Hint: required = True
             },
             "fp_combined_locs": {
+                "required": True,
                 # TODO: Add type, description, min, max, default, required, step, extensions, properties
                 # Hint: description: filepath to the locs combined in 'combine_channels' module
                 # Hint: type appears to be str
@@ -4691,6 +4643,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 # Hint: required = True
             },
             "combine_col": {
+                "required": True,
                 # TODO: Add type, description, min, max, default, required, step, extensions, properties
                 # Hint: description: the name of the combine column, e.g. 'combine_id' or 'protein'. Same as used in 'combine_channels' module
                 # Hint: type appears to be str
@@ -4730,7 +4683,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
         3rd version of the DC Atlas. It is (mostly?) identical with an
         implementation of it in spinna, which will be integrated into
         picasso soon. Evaluate deprecation (or moving source from
-        outpost_modules/ripleys to picasso/spinna) at that time.
+        outpost/spatial_stats/ripleys to picasso/spinna) at that time.
 
         the locs must be protein positions at this stage.
 
@@ -4793,6 +4746,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             "binsize": {
                 "type": "float",
                 "description": "The bin size in nanometers.",
+                "unit": "nm",
                 "default": 20,
                 "min": 0,
                 "required": True,
@@ -4800,6 +4754,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             "blursize": {
                 "type": "float",
                 "description": "The gaussian blur to apply in nanometers.",
+                "unit": "nm",
                 "min": 0,
                 "default": 400,
                 "required": True,
@@ -4808,6 +4763,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "type": "float",
                 "description": "The pixelsize of the final mask, in \
                     nanometers.",
+                "unit": "nm",
                 "min": 0,
                 "required": True,
             },
@@ -4839,6 +4795,16 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "min": 1,
                 "required": True,
             },
+            "skip_if_missing_cell": {
+                "type": "bool",
+                "description": "If select_cell + nth_largest_cell: when the \
+                    requested cell does not exist (fewer cells than \
+                    nth_largest_cell), skip this branch instead of reusing the \
+                    smallest cell. Use inside a branch that over-requests \
+                    cells.",
+                "default": False,
+                "required": False,
+            },
             "fill_holes": {
                 "type": "bool",
                 "description": "Whether to fill holes in the cell mask",
@@ -4848,6 +4814,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "type": "float",
                 "description": "The nanometers to dilate the mask (useful \
                     if a large threshold has been used)",
+                "unit": "nm",
                 "required": True,
             },
             "apply_to_locs": {
@@ -5013,6 +4980,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "description": "The distance in nanometers to dilate and erode\
                     the mask. This can be useful to remove excessive holes and\
                     ragging in the mask due to the density thre...",
+                "unit": "nm",
                 "required": False,
             },
         }
@@ -5101,42 +5069,49 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "required": False,
             },
             "fp_channel_map": {
+                "required": True,
                 # TODO: Add type, description, min, max, default, required, step, extensions, properties
                 # Hint: description: filepath to the map from 'combine_channels' module, which is a dict from channel name to ID int in the locs['combine_id']
                 # Hint: type appears to be str
                 # Hint: required = True
             },
             "epsilon_nm": {
+                "required": True,
                 # TODO: Add type, description, min, max, default, required, step, extensions, properties
                 # Hint: description: dbscan epsilon in nm
                 # Hint: type appears to be float
                 # Hint: required = True
             },
             "minpts": {
+                "required": True,
                 # TODO: Add type, description, min, max, default, required, step, extensions, properties
                 # Hint: description: minimum number of points
                 # Hint: type appears to be int
                 # Hint: required = True
             },
             "sigma_linker": {
+                "required": True,
                 # TODO: Add type, description, min, max, default, required, step, extensions, properties
                 # Hint: description: ... in nm
                 # Hint: type appears to be float
                 # Hint: required = True
             },
             "fp_merge_mask": {
+                "required": True,
                 # TODO: Add type, description, min, max, default, required, step, extensions, properties
                 # Hint: description: filepath to the merge mask (generated in module
                 # Hint: type appears to be str
                 # Hint: required = True
             },
             "thresh_type": {
+                "required": True,
                 # TODO: Add type, description, min, max, default, required, step, extensions, properties
                 # Hint: description: ...
                 # Hint: type appears to be str
                 # Hint: required = True
             },
             "cell_name": {
+                "required": True,
                 # TODO: Add type, description, min, max, default, required, step, extensions, properties
                 # Hint: description: the name of the cell currently analyzed
                 # Hint: type appears to be str
@@ -5240,6 +5215,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             "epsilon_nm": {
                 "type": "float",
                 "description": "dbscan epsilon in nm",
+                "unit": "nm",
                 "required": True,
             },
             "minpts": {
@@ -5250,6 +5226,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             "sigma_linker": {
                 "type": "float",
                 "description": "... in nm",
+                "unit": "nm",
                 "required": True,
             },
             "fp_merge_mask": {
@@ -5675,6 +5652,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             "frame_window": {
                 "type": "int",
                 "description": "Frame window for kinetics analysis",
+                "unit": "frames",
                 "min": 10,
                 "max": 1000,
                 "default": 100,
@@ -6036,11 +6014,13 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             "min_rmsd": {
                 "type": "float",
                 "description": "Override the simulated min RMSD (camera px)",
+                "unit": "px",
                 "required": False,
             },
             "max_rmsd": {
                 "type": "float",
                 "description": "Override the simulated max RMSD (camera px)",
+                "unit": "px",
                 "required": False,
             },
             "allow_mirror": {
@@ -6058,6 +6038,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             "display_pixelsize": {
                 "type": "float",
                 "description": "Pixel size for display in nm, default: 1",
+                "unit": "nm",
                 "min": 0.0,
                 "default": 1.0,
                 "required": False,
@@ -6613,6 +6594,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             "max_distance": {
                 "type": "float",
                 "description": "Maximum linking distance in nm",
+                "unit": "nm",
                 "min": 1.0,
                 "max": 1000.0,
                 "default": 100.0,
@@ -6621,6 +6603,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             "max_frame_gap": {
                 "type": "int",
                 "description": "Maximum frame gap for linking",
+                "unit": "frames",
                 "min": 1,
                 "max": 100,
                 "default": 5,
@@ -6983,6 +6966,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             "pair_distance": {
                 "type": "int",
                 "description": "Target-Reference pair distance [nm]",
+                "unit": "nm",
                 "default": 10,
                 "required": True,
             },
@@ -6998,12 +6982,14 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                     "min": {
                         "type": "float",
                         "description": "Smallest distance [nm]",
+                        "unit": "nm",
                         "min": 0.0,
                         "default": 5.0,
                     },
                     "max": {
                         "type": "float",
                         "description": "Largest distance [nm]",
+                        "unit": "nm",
                         "min": 0.0,
                         "default": 20.0,
                     },
@@ -7012,6 +6998,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                         "description": (
                             "Step [nm]; defines the number of candidates"
                         ),
+                        "unit": "nm",
                         "min": 0.1,
                         "default": 2.5,
                     },
@@ -7021,6 +7008,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "type": "dict",
                 "description": "Dictionary mapping from target/reference (tag) "
                 "to labeling uncertainty [nm]",
+                "unit": "nm",
                 # "default": 5,
                 "required": True,
             },
@@ -7037,12 +7025,14 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                     "min": {
                         "type": "float",
                         "description": "Range start [nm]",
+                        "unit": "nm",
                         "min": 0.0,
                         "default": 2.0,
                     },
                     "max": {
                         "type": "float",
                         "description": "Range end [nm] (inclusive)",
+                        "unit": "nm",
                         "min": 0.0,
                         "default": 12.0,
                     },
@@ -7051,6 +7041,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                         "description": (
                             "Step [nm]; defines the number of candidates"
                         ),
+                        "unit": "nm",
                         "min": 0.1,
                         "default": 2.0,
                     },
@@ -7090,12 +7081,14 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             "NND_bin": {
                 "type": "int",
                 "description": "Bin size (nm). Auto-calculated if None or 0",
+                "unit": "nm",
                 "default": 0,
                 "required": False,
             },
             "NND_maxdist": {
                 "type": "int",
                 "description": "Maximum distance in histogram (nm). Auto-calculated if None or 0.",
+                "unit": "nm",
                 "default": 0,
                 "required": False,
             },
@@ -7253,9 +7246,11 @@ class ModuleDescriptor(util.AbstractModuleCollection):
 
         Runs a shared prefix once, then runs ``branch_modules`` once per
         branch and finally ``join_modules`` once with the per-branch results
-        pooled back together. ``branch_type="runtime"`` makes one branch per
-        connected component of a prior mask (one cell each); ``"screen"``
-        makes one branch per row of a config-time parameter grid.
+        pooled back together. ``branch_type="explicit"`` runs a fixed
+        ``n_branches`` (per-branch differences via ("$branch", [...])
+        overrides); ``"runtime"`` runs one branch per element of the list that
+        ``branch_over`` resolves to at run time, exposing each element to the
+        branch via the ("$branch_item", ...) token.
 
         Parameters
         ----------
@@ -7264,19 +7259,22 @@ class ModuleDescriptor(util.AbstractModuleCollection):
         parameters : dict
             with required keys:
                 branch_type : str
-                    "runtime" (split a prior mask into cells) or "screen"
-                    (one branch per parameter-grid row).
+                    "explicit" (fixed n_branches) or "runtime" (count from a
+                    resolved list).
                 branch_modules : list of tuples
                     (module_name, module_parameters) run once per branch.
             with keys required by branch_type:
-                split : dict
-                    for "runtime": {"method": "mask_components", "mask": <fp
-                    or command>, "min_area_um2": float, "max_branches": int,
-                    "label_template": str}
-                screen : dict
-                    for "screen": equal-length lists keyed by the $$map names
-                    used in branch_modules; optional "#tags" gives labels.
+                n_branches : int
+                    for "explicit": the number of branches.
+                branch_over : value or command
+                    for "runtime": resolves to a list L; one branch per
+                    element; each branch reads L[branch_id] via
+                    ("$branch_item", ...).
             with optional keys:
+                branch_labels : list
+                    explicit names for the branches.
+                label_template : str
+                    for "runtime": label format with {n} / {item}.
                 join_modules : list of tuples
                     (module_name, module_parameters) run once after all
                     branches; may pool per-branch results via
@@ -7302,10 +7300,12 @@ class ModuleDescriptor(util.AbstractModuleCollection):
         parameters_spec = {
             "branch_type": {
                 "type": "str",
+                "options": ["explicit", "runtime"],
+                "default": "explicit",
                 "description": (
                     'Either "explicit" (fixed n_branches with per-branch '
-                    '("$branch",[...]) overrides), "runtime" (one branch per '
-                    'mask component) or "screen" (one branch per grid row).'
+                    '("$branch",[...]) overrides) or "runtime" (one branch per '
+                    "element of the list branch_over resolves to)."
                 ),
                 "required": True,
             },
@@ -7318,6 +7318,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 ),
                 "required": False,
                 "min": 1,
+                "visible_if": {"branch_type": ["explicit"]},
             },
             "branch_labels": {
                 "type": "list",
@@ -7326,6 +7327,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                     '"explicit"), e.g. ["cell0", "cell1", "cell2"].'
                 ),
                 "required": False,
+                "visible_if": {"branch_type": ["explicit"]},
             },
             "branch_modules": {
                 "type": "list",
@@ -7335,23 +7337,26 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 ),
                 "required": True,
             },
-            "split": {
-                "type": "dict",
+            "branch_over": {
+                "type": "list",
                 "description": (
-                    'Runtime split spec (branch_type="runtime"): method '
-                    '("mask_components"), mask (filepath or command), '
-                    "min_area_um2, max_branches, label_template."
+                    'For branch_type="runtime": a value or command (build one '
+                    "with cmd) that resolves to a list at run time. The list "
+                    "length sets the number of branches; each branch reads its "
+                    'element via ("$branch_item",) in a sub-module parameter.'
                 ),
                 "required": False,
+                "visible_if": {"branch_type": ["runtime"]},
             },
-            "screen": {
-                "type": "dict",
+            "label_template": {
+                "type": "str",
                 "description": (
-                    'Parameter grid (branch_type="screen"): equal-length '
-                    "lists keyed by the $$map names used in branch_modules; "
-                    'optional "#tags" provides the branch labels.'
+                    'For branch_type="runtime": optional label format string, '
+                    'e.g. "cell{n:02d}" ({n} = branch index, {item} = the '
+                    "resolved element)."
                 ),
                 "required": False,
+                "visible_if": {"branch_type": ["runtime"]},
             },
             "join_modules": {
                 "type": "list",
@@ -7390,7 +7395,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             },
             "branch_type": {
                 "type": "str",
-                "description": 'The branch type ("runtime" or "screen").',
+                "description": 'The branch type ("explicit" or "runtime").',
             },
             "labels": {
                 "type": "list",
@@ -7427,15 +7432,17 @@ class ModuleDescriptor(util.AbstractModuleCollection):
         i : int
             the index of the module
         parameters : dict
-            with required keys:
+            with optional keys:
                 values : list or dict
                     one numeric value per branch (list), or a dict of
                     series-name -> list for several metrics on one figure.
                     Usually a ("$get_prior_result", "results, NN_branch,
-                    branches, $all, MM_module, key") command.
-            with optional keys:
+                    branches, $all, MM_module, key") command. Omit it as a
+                    branch join module to auto-summarize every numeric
+                    per-branch result (small multiples, one metric each).
                 labels : list
-                    per-branch labels for x ticks / annotations
+                    per-branch labels for x ticks / annotations (default: the
+                    branch labels when auto-summarizing)
                 x : list
                     per-branch argument values; enables "screen" mode
                 mode : one of "auto", "replicates", "screen"
@@ -7454,11 +7461,14 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             "values": {
                 "type": "str",
                 "description": (
-                    "One numeric value per branch (a list), or a dict of "
-                    "series-name -> list. Usually a $get_prior_result over "
-                    '"results, NN_branch, branches, $all, MM_module, key".'
+                    "Optional. Leave empty as a branch join module: it then "
+                    "auto-summarizes every numeric per-branch result (labels "
+                    "come from the branch labels). Otherwise: one numeric value "
+                    "per branch (a list), a dict of series-name -> list, or a "
+                    '$get_prior_result over "results, NN_branch, branches, '
+                    '$all, MM_module, key".'
                 ),
-                "required": True,
+                "required": False,
             },
             "labels": {
                 "type": "str",
@@ -7879,216 +7889,6 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 # Hint: type appears to be float
             },
             "fig_frc": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: type appears to be str
-            },
-        }
-
-        return parameters_spec, results_spec
-
-    def undrift_rsso(self):
-        """Undrift localized data using iterative RSSO-based drift correction
-
-        This method applies an iterative RSSO (Redundant Spot Shift
-        Overrepresentation) approach where each frame is compared against
-        the whole dataset to compute total drift for that frame. The process
-        is repeated iteratively with the undrifted dataset to improve accuracy.
-        Includes uncertainty analysis, confidence evaluation, windowing and
-        outlier detection.
-
-        Parameters
-        ----------
-        i : int
-            the module index in the protocol
-        parameters : dict
-            necessary items:
-                ton : float
-                    Half-life of localization in frames (how long a spot
-                    stays visible)
-                toff : float
-                    Time in frames for a spot to reappear after
-                    disappearing
-                max_shift : float
-                    Maximum expected drift per frame in pixels
-            optional items:
-                min_locs_per_frame : int
-                    Minimum localizations per frame for reliable drift
-                    estimation (default: 10)
-                max_iterations : int
-                    Maximum number of iterative refinement rounds (default: 5)
-                convergence_threshold : float
-                    RMS drift change threshold for convergence in nm (default: 0.1)
-                plot_drift : bool
-                    Whether to save drift plots (default: True)
-                save_locs : bool
-                    Whether to save undrifted localizations (default: True)
-                n_processes : int or None
-                    Number of processes for parallel computation (default: auto)
-                confidence_threshold : float
-                    Confidence threshold for windowing analysis (default: 0.8)
-                outlier_detection_enabled : bool
-                    Enable RSSO failure and outlier detection (default: True)
-                outlier_z_threshold : float
-                    Z-score threshold for temporal outlier detection (default: 3.5)
-                min_signal_to_noise : float
-                    Minimum signal-to-noise ratio for drift measurements (default: 0.5)
-                windowing_enabled : bool
-                    Enable adaptive windowing for low-confidence frames (default: True)
-                window_size_range : tuple
-                    Min and max window sizes for adaptive windowing (default: (3, 20))
-
-        Returns
-        -------
-        parameters : dict
-            as input, potentially changed values, for consistency
-        results : dict
-            the analysis results including:
-                success : bool
-                    whether drift correction succeeded
-                drift_x, drift_y : ndarray
-                    total drift trajectories in nm for each frame
-                uncertainty_x, uncertainty_y : ndarray
-                    uncertainty estimates for drift measurements
-                drift_quality : ndarray
-                    quality/confidence metrics per frame
-                n_iterations : int
-                    number of iterations performed
-                convergence_rms : float
-                    final RMS change indicating convergence
-                drift_plots : str
-                    path to drift visualization plots
-        """
-        parameters_spec = {
-            "xlabel": {
-                "type": "str",
-                "description": "Label for the x-axis of the test plot",
-                "required": True,
-            },
-            "ylabel": {
-                "type": "str",
-                "description": "Label for the y-axis of the test plot",
-                "required": True,
-            },
-            "ton": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: Half-life of localization in frames (how long a spot stays visible)
-                # Hint: type appears to be float
-            },
-            "toff": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: Time in frames for a spot to reappear after disappearing
-                # Hint: type appears to be float
-            },
-            "max_shift": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: Maximum expected drift per frame in pixels optional items:
-                # Hint: type appears to be float
-            },
-            "min_locs_per_frame": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: Minimum localizations per frame for reliable drift estimation (default: 10)
-                # Hint: type appears to be int
-            },
-            "max_iterations": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: Maximum number of iterative refinement rounds (default: 5)
-                # Hint: type appears to be int
-            },
-            "convergence_threshold": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: RMS drift change threshold for convergence in nm (default: 0.1)
-                # Hint: type appears to be float
-            },
-            "plot_drift": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: Whether to save drift plots (default: True)
-                # Hint: type appears to be bool
-            },
-            # "save_locs": {
-            #     # TODO: Add type, description, min, max, default, required, step, extensions, properties
-            #     # Hint: description: Whether to save undrifted localizations (default: True)
-            #     # Hint: type appears to be bool
-            # },
-            "n_processes": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: Number of processes for parallel computation (default: auto)
-                # Hint: type appears to be int or None
-            },
-            "confidence_threshold": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: Confidence threshold for windowing analysis (default: 0.8)
-                # Hint: type appears to be float
-            },
-            "outlier_detection_enabled": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: Enable RSSO failure and outlier detection (default: True)
-                # Hint: type appears to be bool
-            },
-            "outlier_z_threshold": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: Z-score threshold for temporal outlier detection (default: 3.5)
-                # Hint: type appears to be float
-            },
-            "min_signal_to_noise": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: Minimum signal-to-noise ratio for drift measurements (default: 0.5)
-                # Hint: type appears to be float
-            },
-            "windowing_enabled": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: Enable adaptive windowing for low-confidence frames (default: True)
-                # Hint: type appears to be bool
-            },
-            "window_size_range": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: Min and max window sizes for adaptive windowing (default: (3, 20))
-                # Hint: type appears to be tuple
-            },
-        }
-
-        results_spec = {
-            "start time": {
-                "type": "str",
-                "description": "Module execution start timestamp",
-            },
-            "end time": {
-                "type": "str",
-                "description": "Module execution end timestamp",
-            },
-            "duration": {
-                "type": "float",
-                "description": "Module execution duration in seconds",
-                "min": 0.0,
-            },
-            "folder": {
-                "type": "str",
-                "description": "Output folder for module results",
-            },
-            "random_val": {
-                "type": "float",
-                "description": "A random value between 0 and 1",
-            },
-            "fp_fig": {
-                "type": "str",
-                "description": "Filepath to the generated test figure",
-            },
-            "success": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: type appears to be bool
-            },
-            "drift_quality": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: type appears to be ndarray
-            },
-            "n_iterations": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: type appears to be int
-            },
-            "convergence_rms": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: type appears to be float
-            },
-            "drift_plots": {
                 # TODO: Add type, description, min, max, default, required, step, extensions, properties
                 # Hint: type appears to be str
             },
@@ -9266,6 +9066,7 @@ class ParameterWidgetInfo:
         param_name=None,
         has_default=False,
         default_value=None,
+        display_name=None,
     ):
         """Initialize parameter widget info.
 
@@ -9305,6 +9106,9 @@ class ParameterWidgetInfo:
         self.param_name = param_name
         self.has_default = has_default
         self.default_value = default_value
+        # Label text: the parameter name plus its unit when the spec
+        # declares one (e.g. "radius [px]").
+        self.display_name = display_name or param_name
         self.use_default = has_default
 
 
@@ -9399,7 +9203,13 @@ class ParameterCmdDialog(QtWidgets.QDialog):
         layout.addWidget(QtWidgets.QLabel("Command type:"))
         self.command_combo = QtWidgets.QComboBox()
         self.command_combo.addItems(
-            ["map", "index", "Previous Module Result", "Prior Result"]
+            [
+                "map",
+                "index",
+                "Previous Module Result",
+                "Prior Result",
+                "Branch item",
+            ]
         )  # , "sum", "max", "min"])
         self.command_combo.setItemDelegate(ToolTipDelegate(self.command_combo))
         self.command_combo.currentIndexChanged.connect(
@@ -9415,6 +9225,8 @@ class ParameterCmdDialog(QtWidgets.QDialog):
             "immediately before this one.",
             3: "Prior Result: reuse a result of any earlier module, or "
             "collect it across all single-dataset runs as a list.",
+            4: "Branch item: inside a runtime branch, insert this branch's "
+            "element of the branch_over list.",
         }
         _cmd_model = self.command_combo.model()
         for _i, _tip in _cmd_tips.items():
@@ -9554,6 +9366,20 @@ class ParameterCmdDialog(QtWidgets.QDialog):
         )
         self.index_spin.valueChanged.connect(self._on_index_spin)
 
+        # Branch-item command widgets (runtime branches).
+        self.branch_item_label = QtWidgets.QLabel(
+            "Key/index into the branch item (optional):"
+        )
+        self.branch_item_key = QtWidgets.QLineEdit()
+        self.branch_item_key.setPlaceholderText(
+            "empty = whole item; else a dict key or list index"
+        )
+        self.branch_item_key.setToolTip(
+            "Leave empty to use this branch's whole item. Give a dict key or "
+            "a list index to read one field of it."
+        )
+        self.branch_item_key.textChanged.connect(self._refresh_command)
+
         layout.addWidget(QtWidgets.QLabel("Assembled Command:"))
         self.command_result = QtWidgets.QLineEdit()
         layout.addSpacing(10)
@@ -9640,6 +9466,20 @@ class ParameterCmdDialog(QtWidgets.QDialog):
         command type and timing.
         """
         val = self.current_value
+        # $branch_item is a per-branch marker (not a $/$$ timing command) and
+        # may be a length-1 tuple, so handle it before the generic parse.
+        if (
+            isinstance(val, tuple)
+            and len(val) >= 1
+            and val[0] == "$branch_item"
+        ):
+            self._select_command("Branch item")
+            if len(val) >= 2:
+                self.branch_item_key.blockSignals(True)
+                self.branch_item_key.setText(str(val[1]))
+                self.branch_item_key.blockSignals(False)
+            self._refresh_command()
+            return
         if not (
             isinstance(val, tuple)
             and len(val) >= 2
@@ -9906,6 +9746,9 @@ class ParameterCmdDialog(QtWidgets.QDialog):
             # Populate results for previous module
             if self.current_module_index > 0:
                 self._on_module_selected(self.current_module_index - 1)
+        elif command_type == "Branch item":
+            self.dynamic_layout.addWidget(self.branch_item_label)
+            self.dynamic_layout.addWidget(self.branch_item_key)
         # For sum, max, min commands, also show module/result selection
         elif command_type in ["sum", "max", "min"]:
             self.dynamic_layout.addWidget(self.module_label)
@@ -10012,6 +9855,18 @@ class ParameterCmdDialog(QtWidgets.QDialog):
             if self.param_name
             else "this parameter"
         )
+        if command_type == "Branch item":
+            self.help_label.setText(
+                "<b>Branch item</b> inserts, for each branch of a "
+                '<code>branch_type="runtime"</code> branch, that branch\'s '
+                "element of the <code>branch_over</code> list. Leave the key "
+                "empty for the whole item, or give a dict key / list index to "
+                "read one field.<br><br>Example: "
+                "<code>('$branch_item',)</code> or "
+                "<code>('$branch_item', 'nth')</code><br>"
+                "Timing does not apply: it is resolved per branch."
+            )
+            return
         if command_type == "map":
             body = (
                 f"<b>Map</b> gives each channel its own value for {target}, "
@@ -10199,6 +10054,18 @@ class ParameterCmdDialog(QtWidgets.QDialog):
                 mod_str = ""
 
             command_string = f"('{timing_cmd}get_previous_module_result{mod_str}', '{result_name}')"
+        elif command_type == "Branch item":
+            # $branch_item is resolved by the branch module (per branch),
+            # independent of the $ / $$ timing, so it is not prefixed with one.
+            key = self.branch_item_key.text().strip()
+            if not key:
+                command_string = "('$branch_item',)"
+            else:
+                try:
+                    int(key)
+                    command_string = f"('$branch_item', {key})"
+                except ValueError:
+                    command_string = f"('$branch_item', '{key}')"
         return command_string
 
 
@@ -10393,7 +10260,7 @@ class PhaseSpacePreviewDialog(QtWidgets.QDialog):
 
     Simulates the expected ``(nlocs, rmsd)`` cloud for the current
     ``pick_origami`` geometry + kinetics (via
-    :func:`picasso_workflow.picasso_outpost.origami_phase_space_preview`),
+    :func:`picasso_workflow.origami.origami_phase_space_preview`),
     shows it with the suggested pick window, and lets the user write the
     suggested ``min/max_n_locs_per_frame`` (and RMSD) back into the module's
     parameter fields. The simulation is cheap (order 0.1 s), so this is
@@ -10527,7 +10394,7 @@ class PhaseSpacePreviewDialog(QtWidgets.QDialog):
             return default
 
     def _simulate(self):
-        from picasso_workflow import picasso_outpost
+        from picasso_workflow.outpost.origami import origami
 
         p = self._params
         geometry = p.get("geometry")
@@ -10553,7 +10420,7 @@ class PhaseSpacePreviewDialog(QtWidgets.QDialog):
             )
             return
         try:
-            preview = picasso_outpost.origami_phase_space_preview(
+            preview = origami.origami_phase_space_preview(
                 geometry,
                 n_frames=self.n_frames_spin.value(),
                 kinetics=kinetics,
@@ -10628,6 +10495,242 @@ class PhaseSpacePreviewDialog(QtWidgets.QDialog):
         self.accept()
 
 
+class GettingStartedDialog(QtWidgets.QDialog):
+    """First-run onboarding: explains where settings live and how to begin.
+
+    Shown automatically on first launch (a fresh install runs on built-in
+    default settings, which otherwise leaves a new user with no obvious next
+    step). Reopenable from the Help menu.
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Getting started with picasso-workflow")
+        self.setMinimumWidth(560)
+        layout = QtWidgets.QVBoxLayout(self)
+
+        cfg = self.user_config_path()
+        text = QtWidgets.QLabel(
+            "<h3>Welcome to picasso-workflow</h3>"
+            "<p>You're running with built-in <b>default settings</b>. To do "
+            "real work you'll want your own configuration.</p>"
+            "<p><b>Where settings live.</b> picasso-workflow reads a per-user "
+            "config file:<br><code>"
+            f"{cfg}</code><br>"
+            "Create and edit it to set your workflow <i>templates</i> and "
+            "(optionally) Confluence reporting. It overrides the built-in "
+            "defaults — you never edit the installed app itself.</p>"
+            "<p><b>Good to know.</b> The <b>Doctor</b> tab (top-right) shows "
+            "which config and <code>.env</code> files are loaded and from "
+            "where, so you can confirm your settings took effect.</p>"
+            "<p><b>First steps</b></p>"
+            "<ol>"
+            "<li>Create your settings file (button below) and edit it.</li>"
+            "<li>Pick a <b>Results Folder</b> at the top of the window.</li>"
+            "<li>Load a template or build a workflow, then <b>Run</b>.</li>"
+            "</ol>"
+        )
+        text.setTextFormat(Qt.TextFormat.RichText)
+        text.setWordWrap(True)
+        text.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextBrowserInteraction
+        )
+        layout.addWidget(text)
+
+        layout.addWidget(self._build_confluence_group())
+
+        btns = QtWidgets.QHBoxLayout()
+        create_btn = QtWidgets.QPushButton("Create my settings file…")
+        create_btn.clicked.connect(lambda: self.open_user_config(self))
+        btns.addWidget(create_btn)
+        btns.addStretch(1)
+        self.dont_show = QtWidgets.QCheckBox("Don't show this again")
+        self.dont_show.setChecked(True)
+        btns.addWidget(self.dont_show)
+        close_btn = QtWidgets.QPushButton("Close")
+        close_btn.clicked.connect(self.accept)
+        close_btn.setDefault(True)
+        btns.addWidget(close_btn)
+        layout.addLayout(btns)
+
+    def _build_confluence_group(self):
+        """Optional Confluence token entry, persisted to the per-user .env."""
+        box = QtWidgets.QGroupBox("Confluence reporting (optional)")
+        v = QtWidgets.QVBoxLayout(box)
+
+        info = QtWidgets.QLabel(
+            "To publish reports to Confluence, picasso-workflow needs a "
+            "personal access token in the <code>CONFLUENCE_TOKEN</code> "
+            "environment variable.<br>"
+            "<b>Get one:</b> in Confluence, open your profile → "
+            "<i>Settings → Personal Access Tokens</i> (Server/Data Center) or "
+            "<i>id.atlassian.com → Security → API tokens</i> (Cloud), create a "
+            "token, and paste it below.<br>"
+            "It is saved to your per-user <code>.env</code> and loaded on every "
+            "launch — never written to <code>config.yaml</code> or the logs."
+        )
+        info.setTextFormat(Qt.TextFormat.RichText)
+        info.setWordWrap(True)
+        info.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextBrowserInteraction
+        )
+        v.addWidget(info)
+
+        row = QtWidgets.QHBoxLayout()
+        self._token_edit = QtWidgets.QLineEdit()
+        self._token_edit.setEchoMode(QtWidgets.QLineEdit.EchoMode.Password)
+        self._token_edit.setPlaceholderText("paste your Confluence token")
+        row.addWidget(self._token_edit, 1)
+        show = QtWidgets.QCheckBox("Show")
+        show.toggled.connect(
+            lambda on: self._token_edit.setEchoMode(
+                QtWidgets.QLineEdit.EchoMode.Normal
+                if on
+                else QtWidgets.QLineEdit.EchoMode.Password
+            )
+        )
+        row.addWidget(show)
+        save = QtWidgets.QPushButton("Save token")
+        save.clicked.connect(self._save_token)
+        row.addWidget(save)
+        v.addLayout(row)
+
+        self._token_status = QtWidgets.QLabel()
+        self._refresh_token_status()
+        v.addWidget(self._token_status)
+        return box
+
+    @staticmethod
+    def _token_env_names():
+        """The Confluence token env vars, from confluence.py's single source."""
+        try:
+            from picasso_workflow.confluence import _CONFLUENCE_PROFILES
+
+            return _CONFLUENCE_PROFILES["Confluence"]["token_env"]
+        except Exception:  # pragma: no cover - defensive fallback
+            return ("CONFLUENCE_TOKEN", "CONFLUENCE_BEARER")
+
+    def _refresh_token_status(self):
+        is_set = any(os.environ.get(name) for name in self._token_env_names())
+        self._token_status.setText(
+            "A Confluence token is currently set."
+            if is_set
+            else "No Confluence token is set yet."
+        )
+
+    def _save_token(self):
+        token = self._token_edit.text().strip()
+        if not token:
+            QtWidgets.QMessageBox.information(
+                self, "No token", "Paste a token first, then click Save."
+            )
+            return
+        ok, message = self.save_confluence_token(token)
+        if ok:
+            self._token_edit.clear()
+            self._refresh_token_status()
+            QtWidgets.QMessageBox.information(self, "Token saved", message)
+        else:
+            QtWidgets.QMessageBox.warning(
+                self, "Could not save token", message
+            )
+
+    @staticmethod
+    def _config_dir():
+        from picasso_workflow import _user_config_dir
+
+        return _user_config_dir()
+
+    @staticmethod
+    def env_path():
+        return GettingStartedDialog._config_dir() / ".env"
+
+    @staticmethod
+    def save_confluence_token(token):
+        """Persist ``token`` as the Confluence token in the per-user .env.
+
+        Writes to ``~/.config/picasso_workflow/.env`` (loaded at every launch),
+        tightens its permissions, and sets the variable in the current process
+        so it takes effect immediately. The token value is never logged.
+        Returns ``(ok, message)``.
+        """
+        from dotenv import set_key
+
+        canonical = GettingStartedDialog._token_env_names()[0]
+        try:
+            env = GettingStartedDialog.env_path()
+            env.parent.mkdir(parents=True, exist_ok=True)
+            env.touch(exist_ok=True)
+            try:
+                os.chmod(env, 0o600)
+            except OSError:
+                pass  # best-effort (e.g. Windows)
+            set_key(str(env), canonical, token)
+            os.environ[canonical] = token  # effective this session
+        except Exception as e:
+            return False, str(e)
+        return True, f"Saved to {env}. It will be used on every launch."
+
+    @staticmethod
+    def user_config_path():
+        return GettingStartedDialog._config_dir() / "config.yaml"
+
+    @staticmethod
+    def marker_path():
+        return GettingStartedDialog._config_dir() / ".getting_started_shown"
+
+    @staticmethod
+    def open_user_config(parent=None):
+        """Seed the per-user config from the bundled template, then open it."""
+        import importlib.resources
+
+        cfg = GettingStartedDialog.user_config_path()
+        try:
+            cfg.parent.mkdir(parents=True, exist_ok=True)
+            if not cfg.exists():
+                tmpl = importlib.resources.files("picasso_workflow").joinpath(
+                    "config_template.yaml"
+                )
+                cfg.write_text(
+                    tmpl.read_text(encoding="utf-8"), encoding="utf-8"
+                )
+            QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(str(cfg)))
+        except Exception as e:
+            QtWidgets.QMessageBox.warning(
+                parent, "Could not create the settings file", str(e)
+            )
+
+    def accept(self):
+        if self.dont_show.isChecked():
+            try:
+                m = self.marker_path()
+                m.parent.mkdir(parents=True, exist_ok=True)
+                m.write_text("1", encoding="utf-8")
+            except Exception:
+                pass
+        super().accept()
+
+
+class _UpdateCheckWorker(QtCore.QObject):
+    """Runs the GitHub "is there a newer release?" check off the GUI thread."""
+
+    # Emits an update_check.UpdateInfo if a newer release exists, else None.
+    finished = QtCore.pyqtSignal(object)
+
+    def __init__(self, current_version: str) -> None:
+        super().__init__()
+        self._current_version = current_version
+
+    def run(self) -> None:
+        try:
+            from picasso_workflow.update_check import check_for_update
+
+            result = check_for_update(self._current_version)
+        except Exception:  # pragma: no cover - defensive; must never raise
+            result = None
+        self.finished.emit(result)
+
+
 class Window(QtWidgets.QMainWindow):
     """Main window for the picasso-workflow GUI application."""
 
@@ -10672,7 +10775,9 @@ class Window(QtWidgets.QMainWindow):
 
         workflow_template_combo = QtWidgets.QComboBox()
         workflow_template_combo.addItem("")
-        for template in CONFIG["Templates"].keys():
+        # Tolerate a missing / null / non-dict "Templates" in a user-edited
+        # config.yaml (same defensiveness as _refresh_template_combo).
+        for template in (CONFIG.get("Templates") or {}).keys():
             workflow_template_combo.addItem(template)
         workflow_template_combo.setEditable(False)
         workflow_template_combo.currentTextChanged.connect(
@@ -10680,6 +10785,9 @@ class Window(QtWidgets.QMainWindow):
         )
         workflow_template_combo.setToolTip("Load a template workflow")
         layout.addWidget(workflow_template_combo, 0, 0)
+        # kept as an attribute so it can be repopulated after a live config
+        # reload (Getting Started dialog / Help -> Reload settings).
+        self.workflow_template_combo = workflow_template_combo
         # Results folder selection
         results_folder_button = QtWidgets.QPushButton("Results Folder")
         results_folder_button.setToolTip(
@@ -10721,9 +10829,15 @@ class Window(QtWidgets.QMainWindow):
         )
         layout.addWidget(self.workflow_type, 0, 4)
 
+        # Update-available banner (hidden until the background check finds a
+        # newer release). Sits between the top controls and the tabs; takes no
+        # space while hidden.
+        self.update_banner = self._build_update_banner()
+        layout.addWidget(self.update_banner, 1, 0, 1, 5)
+
         # Create tab widget
         self.tabs = QtWidgets.QTabWidget()
-        layout.addWidget(self.tabs, 1, 0, 1, 5)
+        layout.addWidget(self.tabs, 2, 0, 1, 5)
 
         # Workflow Config tab
         config_tab = QtWidgets.QWidget()
@@ -11108,23 +11222,26 @@ class Window(QtWidgets.QMainWindow):
         )
         job_id_layout.addWidget(self.job_id_input, stretch=1)
 
-        # --- live progress monitor -----------------------------------------
-        self._build_progress_monitor(run_on_cluster_layout)
-
-        # Display area for job information
-        job_display_label = QtWidgets.QLabel("Job Information:")
-        run_on_cluster_layout.addWidget(job_display_label)
-
-        self.job_info_display = QtWidgets.QTextEdit()
-        self.job_info_display.setReadOnly(True)
-        self.job_info_display.setMaximumHeight(200)
-        run_on_cluster_layout.addWidget(self.job_info_display)
+        run_on_cluster_layout.addStretch(1)
 
         run_locally_tab = QtWidgets.QWidget()
         run_locally_layout = QtWidgets.QVBoxLayout(run_locally_tab)
         self.run_tabs.addTab(run_locally_tab, "Run locally")
-        self.run_tabs.setTabEnabled(1, False)  # in development
-        self.run_tabs.setTabToolTip(1, "Not Implemented yet")
+        self.run_tabs.setTabToolTip(
+            1,
+            "Run the workflow on this machine, in the GUI's Python "
+            "environment. Progress and run information appear below.",
+        )
+        local_info = QtWidgets.QLabel(
+            "Runs the generated start_workflow.py on this machine, with "
+            f"the GUI's Python environment:\n{sys.executable}\n"
+            "Output is logged to local_run.log in the results folder; "
+            "live progress and run information are shown below (shared "
+            "with cluster runs)."
+        )
+        local_info.setWordWrap(True)
+        local_info.setStyleSheet("color: #666;")
+        run_locally_layout.addWidget(local_info)
         local_buttons = QtWidgets.QHBoxLayout()
         self.local_buttons_widget = QtWidgets.QWidget()
         self.local_buttons_widget.setLayout(local_buttons)
@@ -11132,6 +11249,75 @@ class Window(QtWidgets.QMainWindow):
         start_locally_button = QtWidgets.QPushButton("Start Workflow locally")
         local_buttons.addWidget(start_locally_button)
         start_locally_button.clicked.connect(self.start_locally)
+        stop_local_button = QtWidgets.QPushButton("Stop after current module")
+        stop_local_button.setToolTip(
+            "Request a graceful stop: the local workflow finishes the "
+            "current module, saves its state, and exits cleanly at the "
+            "next module boundary. The run can be continued later with "
+            "'Continue previous run (resume)'."
+        )
+        local_buttons.addWidget(stop_local_button)
+        stop_local_button.clicked.connect(self.on_stop_local_run)
+        kill_local_button = QtWidgets.QPushButton("Kill local run")
+        kill_local_button.setToolTip(
+            "Terminate the local workflow process immediately (the current "
+            "module's results are lost; saved checkpoints remain usable "
+            "for a resume)."
+        )
+        local_buttons.addWidget(kill_local_button)
+        kill_local_button.clicked.connect(self.on_kill_local_run)
+        show_log_button = QtWidgets.QPushButton("Show log tail")
+        show_log_button.setToolTip(
+            "Append the last lines of local_run.log to the run "
+            "information below."
+        )
+        local_buttons.addWidget(show_log_button)
+        show_log_button.clicked.connect(self.on_show_local_log)
+        run_locally_layout.addStretch(1)
+
+        # Live progress and run information are shared between the cluster
+        # and local run modes (the monitor already fuses both sources), so
+        # they live below the run sub-tabs rather than inside one of them.
+        shared_run_widget = QtWidgets.QWidget()
+        shared_run_layout = QtWidgets.QVBoxLayout(shared_run_widget)
+        shared_run_layout.setContentsMargins(0, 0, 0, 0)
+        self._build_progress_monitor(shared_run_layout)
+        # Clickable link to the run's Confluence report page (populated by the
+        # monitor from progress.json's report_url; hidden until available).
+        self.confluence_link_label = QtWidgets.QLabel()
+        self.confluence_link_label.setOpenExternalLinks(True)
+        self.confluence_link_label.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextBrowserInteraction
+        )
+        self.confluence_link_label.setVisible(False)
+        shared_run_layout.addWidget(self.confluence_link_label)
+        info_row = QtWidgets.QHBoxLayout()
+        info_col = QtWidgets.QVBoxLayout()
+        info_col.addWidget(QtWidgets.QLabel("Run information:"))
+        self.job_info_display = QtWidgets.QTextEdit()
+        self.job_info_display.setReadOnly(True)
+        self.job_info_display.setMaximumHeight(200)
+        info_col.addWidget(self.job_info_display)
+        info_row.addLayout(info_col, 1)
+        # error details: failed modules' tracebacks, filled by the monitor
+        error_col = QtWidgets.QVBoxLayout()
+        error_col.addWidget(QtWidgets.QLabel("Error details:"))
+        self.error_details_display = QtWidgets.QTextEdit()
+        self.error_details_display.setReadOnly(True)
+        self.error_details_display.setMaximumHeight(200)
+        self.error_details_display.setLineWrapMode(
+            QtWidgets.QTextEdit.LineWrapMode.NoWrap
+        )
+        mono = QtGui.QFont("Monospace")
+        mono.setStyleHint(QtGui.QFont.StyleHint.TypeWriter)
+        self.error_details_display.setFont(mono)
+        self.error_details_display.setPlaceholderText(
+            "Tracebacks of failed modules appear here."
+        )
+        error_col.addWidget(self.error_details_display)
+        info_row.addLayout(error_col, 1)
+        shared_run_layout.addLayout(info_row)
+        run_layout.addWidget(shared_run_widget, 3, 0, 1, 4)
 
         # Results tab: browse a run folder, (re)generate its HTML report
         # from the saved state, and view/open it -- no Confluence needed.
@@ -11139,6 +11325,43 @@ class Window(QtWidgets.QMainWindow):
         QtWidgets.QVBoxLayout(results_tab)
         self.tabs.addTab(results_tab, "Results")
         self._build_results_tab(results_tab)
+
+        # Render tab: explore a run's saved localizations with the embedded
+        # picasso Render canvas. The embedded render window is created lazily
+        # (on first render), so building this tab is cheap.
+        from picasso_workflow.render_tab import RenderTab
+
+        self.render_tab = RenderTab(self)
+        self.tabs.addTab(self.render_tab, "Render")
+
+        # Doctor tab: read-only diagnostics (config/.env sources, logfile,
+        # versions, connection settings) plus opt-in Confluence connection
+        # tests. Entirely passive to build; makes no network calls on open.
+        from picasso_workflow.doctor_tab import DoctorTab
+
+        self.doctor_tab = DoctorTab(self)
+        self.tabs.addTab(self.doctor_tab, "Doctor")
+        # refresh the render tab's run list when it is first shown / selected
+        self.tabs.currentChanged.connect(self._on_main_tab_changed)
+
+        # Check (off-thread) whether a newer release is on GitHub; reveals the
+        # update banner if so. Fully passive and fail-soft -- never blocks
+        # startup or shows anything when offline / up to date.
+        self._update_thread = None
+        self._start_update_check()
+
+        # Help menu: re-openable onboarding + a shortcut to the settings file.
+        help_menu = self.menuBar().addMenu("Help")
+        help_menu.addAction("Getting Started…", self._show_getting_started)
+        help_menu.addAction(
+            "Open settings file…",
+            lambda: GettingStartedDialog.open_user_config(self),
+        )
+        help_menu.addAction(
+            "Reload settings file", self._reload_config_into_ui
+        )
+        # On first launch, show the onboarding guide once the window is up.
+        QtCore.QTimer.singleShot(0, self._maybe_show_getting_started)
 
         # select files to process
         # Single Workflow only: choose how input data is provided - an
@@ -11315,11 +11538,38 @@ class Window(QtWidgets.QMainWindow):
 
         self.module_combobox = QtWidgets.QComboBox()
         self.module_combobox.addItem("Select module")
+        # the set toggle (checkbox below) starts on the classic set;
+        # _refresh_module_palette rebuilds the palette when it is toggled
         self.module_combobox.addItems(
-            self.module_descriptor.get_module_names()
+            [
+                name
+                for name in self.module_descriptor.get_module_names()
+                if not self._is_hidden_by_module_set(name, False)
+                and not self._is_experimental(name)
+            ]
         )
         self.module_combobox.currentTextChanged.connect(self.on_module_changed)
         current_layout.addWidget(self.module_combobox)
+
+        # Toggle between the two module sets: unchecked = classic
+        # picasso-workflow modules, checked = the native-picasso set
+        # (picasso_* names) plus the data loaders and savers.
+        self.show_picasso_set_checkbox = QtWidgets.QCheckBox(
+            "Only show native-picasso (picasso_*) modules"
+        )
+        self.show_picasso_set_checkbox.setToolTip(
+            "Toggle the module palette between the classic picasso-workflow "
+            "modules and the native-picasso set, which mirrors the picasso "
+            "CLI/library operations with the exact picasso parameter names "
+            "and defaults (shown together with the data loaders and "
+            "savers). The sets can be mixed in one workflow by toggling "
+            "while building it."
+        )
+        self.show_picasso_set_checkbox.setChecked(False)
+        self.show_picasso_set_checkbox.toggled.connect(
+            lambda _checked: self._refresh_module_palette()
+        )
+        current_layout.addWidget(self.show_picasso_set_checkbox)
 
         # Branch-id selector: shown only when a branch sub-module is selected,
         # to choose which branch's per-branch ("$branch", [...]) parameter
@@ -11426,6 +11676,14 @@ class Window(QtWidgets.QMainWindow):
         self.single_workflow_list.currentRowChanged.connect(
             self._on_workflow_selection_changed
         )
+        self.single_workflow_list.setContextMenuPolicy(
+            Qt.ContextMenuPolicy.CustomContextMenu
+        )
+        self.single_workflow_list.customContextMenuRequested.connect(
+            lambda pos: self._show_workflow_context_menu(
+                self.single_workflow_list, "single", pos
+            )
+        )
         single_workflow_layout.addWidget(self.single_workflow_list)
 
         aggregation_workflow_tab = QtWidgets.QWidget()
@@ -11438,6 +11696,14 @@ class Window(QtWidgets.QMainWindow):
         self.aggregation_workflow_list = QtWidgets.QListWidget()
         self.aggregation_workflow_list.currentRowChanged.connect(
             self._on_workflow_selection_changed
+        )
+        self.aggregation_workflow_list.setContextMenuPolicy(
+            Qt.ContextMenuPolicy.CustomContextMenu
+        )
+        self.aggregation_workflow_list.customContextMenuRequested.connect(
+            lambda pos: self._show_workflow_context_menu(
+                self.aggregation_workflow_list, "aggregation", pos
+            )
         )
         aggregation_workflow_layout.addWidget(self.aggregation_workflow_list)
         # Add workflow tabs to the splitter below the current-module editor.
@@ -11495,6 +11761,43 @@ class Window(QtWidgets.QMainWindow):
             "Save localizations after every module."
         )
         self.addl_options_layout.addWidget(self.always_save)
+
+        self.continue_previous = QtWidgets.QCheckBox(
+            "Continue previous run (resume)."
+        )
+        self.continue_previous.setToolTip(
+            "Resume the latest run in the results folder instead of "
+            "starting from scratch: previously succeeded modules are "
+            "skipped, saved localizations are restored from the last "
+            "checkpoint, and modules with changed parameters re-run."
+        )
+        self.addl_options_layout.addWidget(self.continue_previous)
+
+        # Stepwise development: run the workflow only up to a chosen module,
+        # inspect the results, adjust parameters, then step on. Each step is
+        # a normal (local or cluster) launch that resumes the previous one,
+        # so "Continue previous run" is forced on while stepping.
+        self.stepwise_enable = QtWidgets.QCheckBox("Run only up to module:")
+        self.stepwise_enable.setToolTip(
+            "Stepwise workflow development: stop cleanly after the chosen "
+            "module instead of running the whole pipeline. The boundary "
+            "module saves its localizations as a checkpoint; inspect the "
+            "results, adjust parameters, pick a later module and start "
+            "again (locally or on the cluster) to continue from there. "
+            "Modules whose parameters you changed re-run automatically.\n"
+            "Tip: right-click a module in the workflow list to run up to "
+            "it directly."
+        )
+        self.addl_options_layout.addWidget(self.stepwise_enable)
+        self.stepwise_target = QtWidgets.QComboBox()
+        self.stepwise_target.setEnabled(False)
+        self.stepwise_target.setToolTip(
+            "The last module to run in this step. Everything after it stays "
+            "pending until a later step."
+        )
+        self.addl_options_layout.addWidget(self.stepwise_target)
+        self.stepwise_enable.toggled.connect(self._on_stepwise_toggled)
+        self._refresh_stepwise_targets()
 
         # resize the widgets
         # Keep a sensible minimum width, but let the splitters drive height.
@@ -12856,6 +13159,169 @@ class Window(QtWidgets.QMainWindow):
         self.files_table.setRowCount(0)
         self._log_workflow_config_event("files_table.clear")
 
+    # -- update-available banner -------------------------------------------
+
+    def _build_update_banner(self):
+        """Return the (initially hidden) "new version available" banner."""
+        banner = QtWidgets.QFrame()
+        banner.setStyleSheet(
+            "QFrame { background: #fff8e1; border: 1px solid #f0c000; "
+            "border-radius: 4px; }"
+        )
+        banner.setVisible(False)
+        row = QtWidgets.QHBoxLayout(banner)
+        row.setContentsMargins(8, 4, 8, 4)
+
+        self._update_banner_label = QtWidgets.QLabel()
+        self._update_banner_label.setTextFormat(Qt.TextFormat.RichText)
+        self._update_banner_label.setOpenExternalLinks(True)
+        self._update_banner_label.setStyleSheet("border: none;")
+        row.addWidget(self._update_banner_label, 1)
+
+        dismiss = QtWidgets.QPushButton("Dismiss")
+        dismiss.setStyleSheet("border: none;")
+        dismiss.clicked.connect(lambda: banner.setVisible(False))
+        row.addWidget(dismiss, 0)
+        return banner
+
+    def _start_update_check(self):
+        """Kick off the GitHub release check on a background thread.
+
+        Skipped in headless/test runs (``QT_QPA_PLATFORM=offscreen``) and when
+        the user opts out via ``PICASSO_WORKFLOW_NO_UPDATE_CHECK`` -- a network
+        thread spun up during construction would otherwise be torn down while
+        still blocked on the socket (QThread "destroyed while running" abort).
+        """
+        if os.environ.get("QT_QPA_PLATFORM") == "offscreen" or os.environ.get(
+            "PICASSO_WORKFLOW_NO_UPDATE_CHECK"
+        ):
+            return
+        try:
+            worker = _UpdateCheckWorker(__GUIVERSION__)
+            thread = QtCore.QThread(self)
+            worker.moveToThread(thread)
+            # Keep the worker alive for the thread's lifetime; otherwise PyQt
+            # may garbage-collect it before ``started`` fires (see doctor_tab).
+            thread._pw_worker = worker
+            thread.started.connect(worker.run)
+            worker.finished.connect(self._on_update_check_result)
+            worker.finished.connect(thread.quit)
+            worker.finished.connect(worker.deleteLater)
+            thread.finished.connect(thread.deleteLater)
+            thread.finished.connect(self._forget_update_thread)
+            self._update_thread = thread
+            app = QtWidgets.QApplication.instance()
+            if app is not None:
+                app.aboutToQuit.connect(self._stop_update_thread)
+            thread.start()
+        except Exception as e:  # pragma: no cover - defensive
+            logger.debug(f"Could not start the update check: {e}")
+
+    def _on_update_check_result(self, info):
+        """Reveal the banner if ``info`` is an UpdateInfo, else do nothing."""
+        if info is None:
+            return
+        try:
+            self._update_banner_label.setText(
+                f"A new version of picasso-workflow "
+                f"(<b>{info.latest}</b>) is available &mdash; "
+                f'<a href="{info.url}">download it here</a>.'
+            )
+            self.update_banner.setVisible(True)
+        except Exception as e:  # pragma: no cover - defensive
+            logger.debug(f"Could not show the update banner: {e}")
+
+    def _forget_update_thread(self):
+        self._update_thread = None
+
+    def _stop_update_thread(self):
+        """Quit/join the update-check thread on shutdown (destroying a live
+        QThread aborts the process).
+
+        Clears the reference first so closeEvent and aboutToQuit (which both
+        call this) can't double-join, and tolerates the thread's C++ object
+        already being torn down after normal completion.
+        """
+        thread = getattr(self, "_update_thread", None)
+        self._update_thread = None
+        if thread is None:
+            return
+        try:
+            thread.quit()
+            thread.wait()
+        except RuntimeError:
+            # The QThread already finished and was deleteLater'd -- nothing to
+            # join.
+            pass
+
+    def closeEvent(self, event):
+        """Join the update-check thread before the window is destroyed."""
+        self._stop_update_thread()
+        super().closeEvent(event)
+
+    # -- getting-started onboarding ----------------------------------------
+
+    def _maybe_show_getting_started(self):
+        """Show the onboarding guide on first launch only (fail-soft)."""
+        # Skip in headless/test runs so the modal dialog can't hang the suite.
+        if os.environ.get("QT_QPA_PLATFORM") == "offscreen":
+            return
+        try:
+            if GettingStartedDialog.marker_path().exists():
+                return
+        except Exception:
+            return
+        self._show_getting_started()
+
+    def _show_getting_started(self):
+        try:
+            GettingStartedDialog(self).exec()
+        except Exception as e:  # pragma: no cover - defensive
+            logger.debug(f"Getting Started dialog failed: {e}")
+            return
+        # Pick up a config the user just created/edited without a restart.
+        self._reload_config_into_ui()
+
+    def _reload_config_into_ui(self):
+        """Re-read the config files and refresh config-driven widgets."""
+        try:
+            from picasso_workflow import reload_config
+
+            reload_config()
+        except Exception as e:  # pragma: no cover - defensive
+            logger.debug(f"Could not reload config: {e}")
+            return
+        self._refresh_template_combo()
+
+    def _refresh_template_combo(self):
+        """Repopulate the template dropdown from the (reloaded) CONFIG."""
+        combo = getattr(self, "workflow_template_combo", None)
+        if combo is None:
+            return
+        current = combo.currentText()
+        combo.blockSignals(True)
+        combo.clear()
+        combo.addItem("")
+        for template in (CONFIG.get("Templates") or {}).keys():
+            combo.addItem(template)
+        idx = combo.findText(current)
+        combo.setCurrentIndex(idx if idx >= 0 else 0)
+        combo.blockSignals(False)
+
+    def _on_main_tab_changed(self, index):
+        """Refresh the Render / Doctor tabs when they are shown."""
+        widget = self.tabs.widget(index)
+        if widget is getattr(self, "render_tab", None):
+            try:
+                self.render_tab.refresh()
+            except Exception as e:
+                logger.debug(f"Could not refresh the Render tab: {e}")
+        elif widget is getattr(self, "doctor_tab", None):
+            try:
+                self.doctor_tab.refresh()
+            except Exception as e:
+                logger.debug(f"Could not refresh the Doctor tab: {e}")
+
     # ------------------------------------------------------------------
     # Results tab: HTML report viewer
     # ------------------------------------------------------------------
@@ -13167,7 +13633,7 @@ class Window(QtWidgets.QMainWindow):
     def on_template_changed(self, template_name):
         """Load a template"""
         try:
-            template_path = CONFIG["Templates"][template_name]
+            template_path = (CONFIG.get("Templates") or {})[template_name]
             if template_path[:2] == 'r"' or template_path[:2] == "r'":
                 template_path = template_path[2:-1]
 
@@ -14055,6 +14521,14 @@ class Window(QtWidgets.QMainWindow):
             if value is not None:
                 param_values[param_name] = value
 
+        # A new branch comes with a summarize_branches join by default: it
+        # auto-summarizes the branches' numeric results (no arguments needed).
+        # It appears as an indented join row the user can edit or delete.
+        if module_name == "branch":
+            param_values.setdefault(
+                "join_modules", [("summarize_branches", {})]
+            )
+
         # Add to the appropriate workflow list based on selected tab.
         current_tab_index = self.workflow_tabs.currentIndex()
         if current_tab_index == 0:  # Single Dataset Workflow
@@ -14072,7 +14546,7 @@ class Window(QtWidgets.QMainWindow):
         # branch's section (after the selected sub-module) instead of at the
         # top level.
         sel_node = self._selected_node(list_widget)
-        if sel_node is not None and sel_node.get("kind") == "sub":
+        if sel_node is not None and sel_node.get("kind") in ("sub", "sub_add"):
             self._add_into_branch(
                 list_widget, modules, sel_node, module_name, param_values, tab
             )
@@ -14180,10 +14654,21 @@ class Window(QtWidgets.QMainWindow):
             self.module_combobox.clear()
             self.module_combobox.addItem("Select module")
             model = self.module_combobox.model()
+            show_picasso_set = self.show_picasso_set_checkbox.isChecked()
             for name in self.module_descriptor.get_module_names():
                 spec = MODULE_REGISTRY.get(name)
                 if spec is not None and scope not in spec.scopes:
                     continue  # hide scope-inappropriate modules
+                # hide experimental modules, but keep the current selection
+                # visible so an existing row using one stays editable
+                if name != previous and self._is_experimental(name):
+                    continue
+                # keep the current selection visible even when its module
+                # set is toggled off (e.g. editing an existing row)
+                if name != previous and self._is_hidden_by_module_set(
+                    name, show_picasso_set
+                ):
+                    continue
                 self.module_combobox.addItem(name)
                 if spec is not None and not spec.requires <= available:
                     item = model.item(self.module_combobox.count() - 1)
@@ -14197,6 +14682,66 @@ class Window(QtWidgets.QMainWindow):
             self.module_combobox.setCurrentIndex(idx if idx >= 0 else 0)
         finally:
             self.module_combobox.blockSignals(False)
+
+    @staticmethod
+    def _is_hidden_by_module_set(name, show_picasso_set):
+        """True when the set toggle currently hides module ``name``.
+
+        The checkbox toggles the palette between the two module sets:
+        unchecked shows the classic picasso-workflow modules, checked shows
+        the native-picasso set (``picasso_*``) plus the data loaders and
+        savers (``role`` in loader/saver), without which a picasso-set
+        workflow could neither start nor persist its results. Both sets can
+        still be mixed in one workflow by toggling while building it.
+
+        Parameters
+        ----------
+        name : str
+            A module name from the palette.
+        show_picasso_set : bool
+            Current state of the picasso-set toggle.
+        """
+        spec = MODULE_REGISTRY.get(name)
+        if show_picasso_set:
+            if spec is None:
+                return True  # unregistered names belong to the classic set
+            return spec.module_set != "picasso" and spec.role not in (
+                "loader",
+                "saver",
+            )
+        return spec is not None and spec.module_set == "picasso"
+
+    @staticmethod
+    def _is_experimental(name):
+        """True when module ``name`` is flagged experimental (palette-hidden).
+
+        Experimental modules are functional and dispatchable from a workflow
+        but kept out of the palette until ready for users (see
+        :class:`~picasso_workflow.modulespec.ModuleSpec`). An existing
+        workflow row that uses one is still inserted on demand by
+        :meth:`_module_palette_index`, so it remains editable.
+
+        Parameters
+        ----------
+        name : str
+            A module name from the palette.
+        """
+        spec = MODULE_REGISTRY.get(name)
+        return spec is not None and spec.experimental
+
+    def _module_palette_index(self, module_name):
+        """Return the palette index of ``module_name``, inserting if hidden.
+
+        A module may be absent from the palette because the set toggle
+        currently hides its module set; insert it so an existing workflow
+        row using it can still be displayed and edited. Returns -1 for
+        genuinely unknown names.
+        """
+        index = self.module_combobox.findText(module_name)
+        if index < 0 and module_name in MODULE_REGISTRY:
+            self.module_combobox.addItem(module_name)
+            index = self.module_combobox.count() - 1
+        return index
 
     def _editing_existing_module(self):
         """True when an existing workflow item is selected for editing."""
@@ -14284,7 +14829,27 @@ class Window(QtWidgets.QMainWindow):
                             },
                         )
                         list_widget.addItem(sitem)
+                    if not submods:
+                        # Placeholder for an empty section so it can be built
+                        # up inline: selecting this row and adding a module
+                        # inserts the first sub-module here (sub=-1 -> at 0).
+                        label = f"        {idx:02d}.{tag}    + add {section} "
+                        label += "module"
+                        pitem = QtWidgets.QListWidgetItem(label)
+                        pitem.setData(
+                            role,
+                            {
+                                "kind": "sub_add",
+                                "top": idx,
+                                "section": section,
+                                "sub": -1,
+                            },
+                        )
+                        pitem.setForeground(QtGui.QColor("gray"))
+                        list_widget.addItem(pitem)
         list_widget.blockSignals(was_blocked)
+        # the stepwise target combo mirrors the workflow module lists
+        self._refresh_stepwise_targets()
 
     def _row_node(self, list_widget, row):
         """Return the node descriptor for a list row (or None)."""
@@ -14374,6 +14939,18 @@ class Window(QtWidgets.QMainWindow):
         # Resolve the selected row to a top-level module index and, if it is a
         # branch sub-row, to that sub-module within the branch.
         node = self._row_node(list_widget, current_row)
+
+        # A branch "+ add ... module" placeholder is an insertion affordance,
+        # not an editable item: put the editor in Add mode (so the action
+        # button adds into that branch section) and leave the row selected.
+        if node is not None and node.get("kind") == "sub_add":
+            self.editing_workflow_index = -1
+            self.editing_workflow_tab = -1
+            self.editing_workflow_subnode = None
+            self._clear_branch_context()
+            self._refresh_module_palette()
+            return
+
         top_index = node["top"] if node is not None else current_row
 
         modules = None
@@ -14404,7 +14981,7 @@ class Window(QtWidgets.QMainWindow):
         self._setup_branch_context(modules, node, top_index)
 
         # Update module combobox to show this module
-        index = self.module_combobox.findText(module_name)
+        index = self._module_palette_index(module_name)
         if index >= 0:
             # Block signals to prevent on_module_changed from firing
             self.module_combobox.blockSignals(True)
@@ -14705,7 +15282,11 @@ class Window(QtWidgets.QMainWindow):
         widget_info.use_default = bool(use_default)
         w = widget_info.widget
         lbl = getattr(widget_info, "label", None)
-        name = getattr(widget_info, "param_name", "") or ""
+        name = (
+            getattr(widget_info, "display_name", None)
+            or getattr(widget_info, "param_name", "")
+            or ""
+        )
         dv = widget_info.default_value
         cmd = getattr(widget_info, "cmd_button", None)
         pbc = getattr(widget_info, "per_branch_checkbox", None)
@@ -14728,9 +15309,15 @@ class Window(QtWidgets.QMainWindow):
                 # the label to just the name and put the hint in the tooltip
                 lbl.setText(name)
                 lbl.setStyleSheet("color: gray; font-style: italic;")
-                lbl.setToolTip(
-                    f"Using the code default ({dv}). Click to override."
-                )
+                if dv is None:
+                    lbl.setToolTip(
+                        "Unset - the module's own fallback applies. "
+                        "Click to set a value."
+                    )
+                else:
+                    lbl.setToolTip(
+                        f"Using the code default ({dv}). Click to override."
+                    )
         else:
             w.setEnabled(True)
             if cmd is not None:
@@ -14892,7 +15479,7 @@ class Window(QtWidgets.QMainWindow):
                 module_name, param_values = self.single_workflow_modules[
                     current_row
                 ]
-                index = self.module_combobox.findText(module_name)
+                index = self._module_palette_index(module_name)
                 if index >= 0:
                     # Block signals to prevent on_module_changed from firing
                     self.module_combobox.blockSignals(True)
@@ -14921,7 +15508,7 @@ class Window(QtWidgets.QMainWindow):
                 module_name, param_values = self.aggregation_workflow_modules[
                     current_row
                 ]
-                index = self.module_combobox.findText(module_name)
+                index = self._module_palette_index(module_name)
                 if index >= 0:
                     # Block signals to prevent on_module_changed from firing
                     self.module_combobox.blockSignals(True)
@@ -15007,6 +15594,143 @@ class Window(QtWidgets.QMainWindow):
             self.workflow_tabs.setTabEnabled(1, True)  # Aggregation: enabled
             self.workflow_tabs.setTabEnabled(2, True)  # Investigation: enabled
 
+        self._refresh_stepwise_targets()
+
+    def _on_stepwise_toggled(self, checked):
+        """Enable/disable stepwise mode.
+
+        Stepping is a sequence of resumed runs, so "Continue previous run"
+        is forced on (and locked) while stepwise mode is active; its
+        previous state is restored when stepping is switched off.
+        """
+        self.stepwise_target.setEnabled(checked)
+        if checked:
+            self._continue_previous_before_stepwise = (
+                self.continue_previous.isChecked()
+            )
+            self.continue_previous.setChecked(True)
+            self.continue_previous.setEnabled(False)
+        else:
+            self.continue_previous.setEnabled(True)
+            self.continue_previous.setChecked(
+                getattr(self, "_continue_previous_before_stepwise", False)
+            )
+
+    def _refresh_stepwise_targets(self):
+        """Rebuild the stepwise target combo from the current workflows.
+
+        Entries carry ``(phase, index)`` as item data -- phase ``"single"``
+        or ``"aggregation"``, matching the runners' ``stop_after``
+        convention. For Investigation workflows (stepwise not supported)
+        the controls are disabled.
+        """
+        combo = getattr(self, "stepwise_target", None)
+        if combo is None:
+            return  # widgets not built yet (early _on_workflow_type_changed)
+        # Identify the previous target by its label (phase + index + module
+        # name), not just (phase, index): inserting/removing/reordering
+        # modules keeps the index but changes which module it names, and we
+        # must not silently re-aim the boundary at a different module.
+        previous = combo.currentData()
+        previous_label = combo.currentText()
+        was_enabled = self.stepwise_enable.isChecked()
+        combo.blockSignals(True)
+        combo.clear()
+        type_index = self.workflow_type.currentIndex()
+        if type_index == 0:
+            for i, (name, _) in enumerate(self.single_workflow_modules):
+                combo.addItem(f"{i:02d}: {name}", ("single", i))
+        elif type_index == 1:
+            for i, (name, _) in enumerate(self.single_workflow_modules):
+                combo.addItem(f"single {i:02d}: {name}", ("single", i))
+            for i, (name, _) in enumerate(self.aggregation_workflow_modules):
+                combo.addItem(
+                    f"aggregation {i:02d}: {name}", ("aggregation", i)
+                )
+        # restore the previous target only if the same module is still at the
+        # same (phase, index) -- matched on both the data and the label
+        restored = False
+        if previous is not None:
+            for row in range(combo.count()):
+                if (
+                    combo.itemData(row) == previous
+                    and combo.itemText(row) == previous_label
+                ):
+                    combo.setCurrentIndex(row)
+                    restored = True
+                    break
+        combo.blockSignals(False)
+        supported = type_index in (0, 1) and combo.count() > 0
+        self.stepwise_enable.setEnabled(supported)
+        if type_index == 2:
+            self.stepwise_enable.setToolTip(
+                "Stepwise runs are not supported for Investigation workflows."
+            )
+        # Drop the stepwise selection rather than stop after the wrong module:
+        # the previously chosen boundary no longer maps to the same module
+        # (edited/removed/reordered), or the workflow type no longer supports
+        # stepping.
+        if self.stepwise_enable.isChecked() and (
+            not supported
+            or (was_enabled and previous is not None and not restored)
+        ):
+            self.stepwise_enable.setChecked(False)
+            if supported:
+                logger.info(
+                    "Stepwise target module no longer exists after the "
+                    "workflow edit; cleared the stepwise boundary -- re-select "
+                    "a module to run up to."
+                )
+
+    def _stepwise_stop_after(self):
+        """The configured stepwise boundary, or None when not stepping.
+
+        Returns
+        -------
+        tuple or None
+            ``(phase, index)`` with phase ``"single"`` or ``"aggregation"``.
+        """
+        if not getattr(self, "stepwise_enable", None):
+            return None
+        if not self.stepwise_enable.isChecked():
+            return None
+        return self.stepwise_target.currentData()
+
+    def _set_stepwise_target(self, phase, index):
+        """Point the stepwise controls at ``(phase, index)`` and enable them."""
+        self.stepwise_enable.setChecked(True)
+        combo = self.stepwise_target
+        for row in range(combo.count()):
+            if combo.itemData(row) == (phase, index):
+                combo.setCurrentIndex(row)
+                return
+
+    def _show_workflow_context_menu(self, list_widget, phase, pos):
+        """Context menu on a workflow module: run stepwise up to it."""
+        item = list_widget.itemAt(pos)
+        if item is None:
+            return
+        node = item.data(self._WF_NODE_ROLE)
+        if not node or node.get("kind") != "module":
+            return  # branch sub-modules are not stepwise targets
+        if not self.stepwise_enable.isEnabled():
+            return  # stepwise not supported (e.g. Investigation workflows)
+        menu = QtWidgets.QMenu(list_widget)
+        act_local = menu.addAction("Run up to this module locally")
+        act_cluster = menu.addAction("Run up to this module on cluster")
+        menu.addSeparator()
+        menu.addAction("Set as stepwise run target")
+        action = menu.exec(list_widget.mapToGlobal(pos))
+        if action is None:
+            return
+        # every action points the stepwise controls at this module; the run
+        # actions additionally launch ("set as target" only sets it)
+        self._set_stepwise_target(phase, node["top"])
+        if action == act_local:
+            self.start_locally()
+        elif action == act_cluster:
+            self.start_slurm()
+
     # def on_cluster_use_module_state_change(self, state):
     #     if not self.cluster_use_module.isChecked():
     #         QtWidgets.QMessageBox.warning(
@@ -15028,6 +15752,9 @@ class Window(QtWidgets.QMainWindow):
             return
 
         node = self._selected_node(list_widget)
+        # A branch "+ add ..." placeholder is not a real module.
+        if node is not None and node.get("kind") == "sub_add":
+            return
         # Remove a branch sub-module from its section.
         if node is not None and node.get("kind") == "sub":
             self._remove_from_branch(list_widget, modules, node, tabname)
@@ -15044,7 +15771,11 @@ class Window(QtWidgets.QMainWindow):
     def _add_into_branch(
         self, list_widget, modules, node, module_name, param_values, tabname
     ):
-        """Insert a new module into a branch's section after the selected sub."""
+        """Insert a new module into a branch's section after the selected sub.
+
+        ``node`` may be a ``"sub_add"`` placeholder (``sub == -1``), in which
+        case the module becomes the section's first sub-module.
+        """
         top = node["top"]
         section = node["section"]
         key = "branch_modules" if section == "branch" else "join_modules"
@@ -15233,6 +15964,9 @@ class Window(QtWidgets.QMainWindow):
 
         node = self._selected_node(list_widget)
         if node is None:
+            return
+        # A branch "+ add ..." placeholder is not a real module.
+        if node.get("kind") == "sub_add":
             return
 
         # Flush pending edits before restructuring the data model.
@@ -15715,8 +16449,14 @@ class Window(QtWidgets.QMainWindow):
 
         # Add coordinator creation based on workflow type
         always_save = self.always_save.isChecked()
+        continue_previous = self.continue_previous.isChecked()
         document_confluence = self.document_confluence_checkbox.isChecked()
         document_html = self.document_html_checkbox.isChecked()
+        # stepwise development boundary; stepping is a sequence of resumed
+        # runs, so it implies continue_previous (the UI enforces this too)
+        stop_after = self._stepwise_stop_after()
+        if stop_after is not None:
+            continue_previous = True
         if workflow_type_index == 0:  # Single Workflow
             # script_lines.extend([
             #     "    # Create single workflow runner",
@@ -15755,9 +16495,17 @@ class Window(QtWidgets.QMainWindow):
                     "    )",
                     "",
                     "    # Run workflow",
-                    "    coordinator.run_analysis(workflow_modules_sgl)",
+                    "    coordinator.run_analysis(",
+                    "        workflow_modules_sgl,",
+                    f"        continue_previous_runners={continue_previous},",
                 ]
             )
+            if stop_after is not None:
+                script_lines.append(
+                    f"        stop_after={stop_after[1]},"
+                    "  # stepwise run boundary"
+                )
+            script_lines.append("    )")
         elif workflow_type_index == 1:  # Aggregation Workflow
             script_lines.extend(
                 [
@@ -15774,9 +16522,18 @@ class Window(QtWidgets.QMainWindow):
                     "    )",
                     "",
                     "    # Run analysis",
-                    "    coordinator.run_analysis(workflow_modules_sgl, workflow_modules_agg)",
+                    "    coordinator.run_analysis(",
+                    "        workflow_modules_sgl,",
+                    "        workflow_modules_agg,",
+                    f"        continue_previous_runners={continue_previous},",
                 ]
             )
+            if stop_after is not None:
+                script_lines.append(
+                    f"        stop_after=({stop_after[0]!r}, "
+                    f"{stop_after[1]}),  # stepwise run boundary"
+                )
+            script_lines.append("    )")
         elif workflow_type_index == 2:  # Investigation Workflow
             script_lines.extend(
                 [
@@ -15933,6 +16690,9 @@ class Window(QtWidgets.QMainWindow):
         )
         self._monitor_busy = False
         self._local_process = None
+        # wall time of this session's local launch; used to scope progress
+        # states to the current run (None = no launch this session)
+        self._local_run_started_dt = None
 
         box = QtWidgets.QGroupBox("Live progress")
         box_layout = QtWidgets.QVBoxLayout(box)
@@ -16087,7 +16847,12 @@ class Window(QtWidgets.QMainWindow):
         if not results_folder:
             return
         job_id = self.job_id_input.text().strip()
-        if job_id:
+        proc = self._local_process
+        local_alive = proc is not None and proc.poll() is None
+        # While a local run this session is still alive, keep monitoring it:
+        # a stale cluster Job-ID left in the field must not flip the monitor
+        # back to cluster mode and hide the running local run.
+        if job_id and not local_alive:
             host_cluster = str(self.cluster_host_combo.currentText())
             if host_cluster and host_cluster in CONFIG.get(
                 "SlurmLoginNodes", {}
@@ -16101,7 +16866,18 @@ class Window(QtWidgets.QMainWindow):
                 except Exception as e:
                     logger.debug(f"monitor: could not connect cluster: {e}")
         elif os.path.isdir(results_folder):
-            # no job ID: monitor a local results folder directly
+            # no job ID: monitor a local results folder directly. If this is a
+            # different folder than the one launched this session (e.g. the
+            # user re-pointed the field and hit Refresh now), drop the
+            # launch-scoped state so the inspected folder's own runs show --
+            # otherwise launch-time scoping filters them all out and the dead
+            # previous process paints a false "failed" badge.
+            if (
+                not local_alive
+                and results_folder != self._monitor_local_folder
+            ):
+                self._local_run_started_dt = None
+                self._local_process = None
             self._monitor_local_folder = results_folder
 
     def _refresh_monitor(self):
@@ -16127,6 +16903,10 @@ class Window(QtWidgets.QMainWindow):
                 states = pwprogress.read_all_progress(
                     self._monitor_local_folder
                 )
+                # the folder accumulates progress files across runs; scope
+                # to the run launched this session (stale states from an
+                # earlier run otherwise show as e.g. "running" forever)
+                states = self._scope_states_to_local_launch(states)
             else:
                 comm = getattr(self, "slurm_communicator", None)
                 if job_id and comm is not None:
@@ -16143,12 +16923,15 @@ class Window(QtWidgets.QMainWindow):
             # The results folder accumulates one subfolder per run, so a poll
             # returns every past run's progress too. Scope to the current job
             # so a still-PENDING resubmission shows nothing rather than the
-            # previous run's (completed) progress.
-            states = self._scope_states_to_current_run(states, job_id)
+            # previous run's (completed) progress. Cluster runs only: local
+            # states carry no job id (a stale id left in the field would
+            # filter them all away); they are scoped by launch time above.
+            if not self._monitor_local_folder:
+                states = self._scope_states_to_current_run(states, job_id)
             self._update_monitor_display(slurm, states)
             self._maybe_stop_monitor(slurm, states)
         except Exception as e:
-            logger.debug(f"monitor refresh error: {e}")
+            logger.warning(f"monitor refresh error: {e}")
         finally:
             self._monitor_busy = False
 
@@ -16195,6 +16978,50 @@ class Window(QtWidgets.QMainWindow):
 
         return [s for s in states if _belongs(s)]
 
+    def _scope_states_to_local_launch(self, states):
+        """Keep only progress states written by this session's local run.
+
+        The results folder accumulates progress files across runs. States
+        whose last update predates this session's local launch belong to an
+        earlier run and are dropped. Without a launch this session (e.g.
+        inspecting a folder with 'Refresh now'), all states pass.
+
+        Parameters
+        ----------
+        states : list of dict
+            The progress states read from the folder tree.
+
+        Returns
+        -------
+        list of dict
+        """
+        from datetime import datetime, timedelta
+
+        started = getattr(self, "_local_run_started_dt", None)
+        if started is None:
+            return states
+        cutoff = started - timedelta(seconds=5)
+        kept = []
+        for s in states or []:
+            stamp = s.get("updated") or s.get("started")
+            try:
+                if datetime.fromisoformat(stamp) >= cutoff:
+                    kept.append(s)
+            except (TypeError, ValueError):
+                # unparsable timestamp: keep rather than hide
+                kept.append(s)
+        return kept
+
+    # progress-state colors for the local-run chip (palette as _SLURM_COLORS)
+    _LOCAL_STATE_COLORS = {
+        "pending": "#9e9e9e",
+        "running": "#1976d2",
+        "done": "#2e7d32",
+        "failed": "#c62828",
+        "aborted": "#f9a825",
+        "paused": "#1565c0",
+    }
+
     # dataset-state precedence for merging per-rank aggregation views
     _DATASET_STATE_RANK = {
         "pending": 0,
@@ -16203,6 +17030,7 @@ class Window(QtWidgets.QMainWindow):
         "failed": 2,
         "skipped": 3,
         "done": 3,
+        "paused": 3,
     }
 
     def _merged_aggregation_state(self, states):
@@ -16257,14 +17085,58 @@ class Window(QtWidgets.QMainWindow):
             self._stop_monitor()
             return
         if self._monitor_local_folder:
-            top = self._top_state(states)
-            if top and top.get("state") in ("done", "failed", "aborted"):
-                # local process finished (no SLURM authority to consult)
-                if (
-                    self._local_process is None
-                    or self._local_process.poll() is not None
+            proc = self._local_process
+            if proc is not None:
+                # A run we launched this session: its process exit is the
+                # authority on completion. Once it has exited, progress.json
+                # is final (written before exit), so stop polling -- even if
+                # the state is non-terminal because the process was killed or
+                # crashed (e.g. OOM) without writing a terminal state.
+                # Otherwise the monitor would poll forever after a kill.
+                if proc.poll() is not None:
+                    self._stop_monitor()
+            else:
+                # Attached to a folder we did not launch (Refresh now): no
+                # process to consult, so rely on the progress state.
+                top = self._top_state(states)
+                if top is not None and top.get("state") in (
+                    "done",
+                    "failed",
+                    "aborted",
+                    "paused",
                 ):
                     self._stop_monitor()
+
+    def _update_confluence_link(self, top, states):
+        """Show a clickable link to the run's Confluence report page.
+
+        The URL is recorded in each run's ``progress.json`` (``report_url``)
+        by the runner, so no live Confluence connection is needed. Prefers
+        the top-level (aggregation) page, falling back to the first stage
+        that recorded one. Hidden when the run is not documented to
+        Confluence.
+
+        Parameters
+        ----------
+        top : dict or None
+            The run's top-level progress state.
+        states : list of dict
+            All progress states read this refresh.
+        """
+        url = (top or {}).get("report_url")
+        if not url:
+            url = next(
+                (s.get("report_url") for s in states if s.get("report_url")),
+                None,
+            )
+        if url:
+            self.confluence_link_label.setText(
+                f'Confluence report: <a href="{url}">{url}</a>'
+            )
+            self.confluence_link_label.setVisible(True)
+        else:
+            self.confluence_link_label.clear()
+            self.confluence_link_label.setVisible(False)
 
     def _update_monitor_display(self, slurm, states):
         """Render the fused SLURM + multi-stage progress into the widgets."""
@@ -16272,6 +17144,9 @@ class Window(QtWidgets.QMainWindow):
         agg = self._merged_aggregation_state(states)
         singles = [s for s in states if s.get("kind") != "aggregation"]
         top = self._top_state(states)
+
+        # --- Confluence report link ---
+        self._update_confluence_link(top, states)
 
         # --- SLURM state chip (or local run state) ---
         if slurm and slurm.get("success"):
@@ -16293,6 +17168,14 @@ class Window(QtWidgets.QMainWindow):
                     text += "  (" + ", ".join(extra) + ")"
             elif (
                 status == "COMPLETED"
+                and top is not None
+                and top.get("state") == "paused"
+            ):
+                # intentional partial run: the stepwise boundary was reached
+                text = "Job state: COMPLETED (paused at stepwise boundary)"
+                color = "#1565c0"  # blue
+            elif (
+                status == "COMPLETED"
                 and states
                 and (self._overall_progress(agg, singles, states) < 0.999)
             ):
@@ -16311,8 +17194,29 @@ class Window(QtWidgets.QMainWindow):
                 f"background-color: {color};"
             )
         elif self._monitor_local_folder:
+            # fuse like the SLURM chip: the subprocess exit status is the
+            # authority on whether the run is alive; progress.json on where
+            # it got. A dead process with no terminal progress state means
+            # the run died outside module execution (e.g. at startup).
             run_state = (top or {}).get("state", "-")
-            self.monitor_state_label.setText(f"Local run: {run_state}")
+            proc = self._local_process
+            rc = proc.poll() if proc is not None else None
+            terminal = run_state in ("done", "failed", "aborted", "paused")
+            if proc is not None and rc is not None and not terminal:
+                if rc == 0:
+                    text = "Local run: finished"
+                    color = "#2e7d32"  # green
+                else:
+                    text = f"Local run: failed (exit {rc})"
+                    color = "#c62828"  # red
+            else:
+                text = f"Local run: {run_state}"
+                color = self._LOCAL_STATE_COLORS.get(run_state, "#616161")
+            self.monitor_state_label.setText(text)
+            self.monitor_state_label.setStyleSheet(
+                "padding: 2px 8px; border-radius: 4px; color: white; "
+                f"background-color: {color};"
+            )
         else:
             self.monitor_state_label.setText("Job state: -")
 
@@ -16344,6 +17248,173 @@ class Window(QtWidgets.QMainWindow):
             for s in self._sorted_singles(singles):
                 self.module_tree.addTopLevelItem(self._build_stage_item(s))
         self._apply_tree_expansion(prev_expansion)
+
+        # --- error details ---
+        self._update_error_details(states, slurm)
+
+    def _update_error_details(self, states, slurm=None):
+        """Fill the error-details pane with failed modules' tracebacks.
+
+        Error text comes from the progress states (recorded by the runner
+        for local and cluster runs alike). For local runs, a failed module
+        without a recorded error (runs from before the error was propagated
+        into ``progress.json``) falls back to the traceback recorded in the
+        run's ``WorkflowRunner.yaml``, and a run that died without any
+        recorded module failure (import error, config error, ...) falls
+        back to the tail of ``local_run.log``. A cluster job that SLURM
+        ended (OOM kill, timeout, cancel) leaves no Python traceback at
+        all, so the SLURM reason is shown instead.
+        """
+        texts = []
+        for s in states or []:
+            label = self._stage_label(s)
+            report_name = s.get("report_name") or ""
+            for m in s.get("modules") or []:
+                # include branch sub-modules (nested one level)
+                sub_modules = [
+                    x
+                    for g in m.get("subgroups") or []
+                    for x in g.get("modules") or []
+                ]
+                for sub in [m] + sub_modules:
+                    if sub.get("status") != "failed":
+                        continue
+                    header = (
+                        f"[{label}] module {sub.get('i')}: "
+                        f"{sub.get('name', '')}"
+                    )
+                    # isolate per module: one malformed entry (odd yaml,
+                    # unreadable share, ...) must not blank the whole pane
+                    try:
+                        err = sub.get("error")
+                        if not err and self._monitor_local_folder:
+                            err = self._local_yaml_error(
+                                report_name, sub.get("i"), sub.get("name")
+                            )
+                    except Exception as e:
+                        logger.warning(
+                            f"Could not collect error details for "
+                            f"{header}: {e}"
+                        )
+                        err = f"(error details could not be collected: {e})"
+                    if err:
+                        texts.append(f"{header}\n{err}")
+                    else:
+                        texts.append(f"{header} (no error details recorded)")
+        # a job SLURM ended (OOM kill, timeout, cancel) leaves no Python
+        # traceback anywhere -- the kill is uncatchable -- so show the
+        # SLURM reason with the module that was running
+        if (
+            not texts
+            and slurm
+            and slurm.get("success")
+            and slurm.get("status") in self._SLURM_TERMINAL
+            and slurm.get("status") != "COMPLETED"
+        ):
+            status = slurm.get("status")
+            details = slurm.get("details") or {}
+            msg = f"SLURM ended the job: {status}"
+            where = self._active_stage_module_label(states)
+            if where:
+                msg += f" during {where}"
+            extra = [
+                f"{label} {value}"
+                for label, value in (
+                    ("exit", details.get("exit_code")),
+                    ("MaxRSS", details.get("max_rss")),
+                )
+                if value
+            ]
+            if extra:
+                msg += "  (" + ", ".join(extra) + ")"
+            msg += (
+                "\nA killed job leaves no Python traceback; see the SLURM "
+                "error log in the results folder's logs/ directory."
+            )
+            if status == "OUT_OF_MEMORY":
+                msg += (
+                    "\nHint: increase 'Memory' in the cluster settings, or "
+                    "reduce the module's memory footprint."
+                )
+            texts.append(msg)
+        if not texts and self._monitor_local_folder:
+            proc = getattr(self, "_local_process", None)
+            rc = proc.poll() if proc is not None else None
+            died = rc not in (None, 0)
+            top_failed = bool(states) and (
+                (self._top_state(states) or {}).get("state") == "failed"
+            )
+            if died or top_failed:
+                note = ""
+                if rc is not None and rc < 0:
+                    note = (
+                        f"The local run was killed by signal {-rc} "
+                        "(often the operating system's out-of-memory "
+                        "killer).\n"
+                    )
+                tail = self._read_log_tail(self._monitor_local_folder)
+                if tail:
+                    texts.append(
+                        note
+                        + "The run failed without a recorded module error; "
+                        "tail of local_run.log:\n" + tail
+                    )
+                elif note:
+                    texts.append(note.rstrip())
+        text = "\n\n".join(texts)
+        # only rewrite on change, so the user's scroll position survives
+        # the 15 s refreshes
+        if text != self.error_details_display.toPlainText():
+            self.error_details_display.setPlainText(text)
+
+    def _local_yaml_error(self, report_name, module_index, module_name):
+        """A failed module's recorded error from a local WorkflowRunner.yaml.
+
+        Locates the run folder by its report name under the monitored
+        results folder (nested aggregation singles included) and returns the
+        recorded traceback (or ``type: message``), or None.
+        """
+        if module_index is None or not report_name:
+            return None
+        root = self._monitor_local_folder
+        run_dir = os.path.join(root, report_name)
+        if not os.path.isdir(run_dir):
+            run_dir = None
+            for parent, dirs, _files in os.walk(root):
+                if report_name in dirs:
+                    run_dir = os.path.join(parent, report_name)
+                    break
+        if run_dir is None:
+            return None
+        fp = os.path.join(run_dir, "WorkflowRunner.yaml")
+        try:
+            with open(fp) as f:
+                data = yaml.safe_load(f)
+            entry = data["results"][f"{module_index:02d}_{module_name}"]
+            err = entry.get("error")
+            # the structured form records a dict; modules that merely set
+            # success=False may leave a plain string (or only a message)
+            if isinstance(err, dict):
+                return err.get("traceback") or (
+                    f"{err.get('type', 'Error')}: {err.get('message', '')}"
+                )
+            if err:
+                return str(err)
+            msg = entry.get("message")
+            return str(msg) if msg else None
+        except Exception as e:
+            logger.debug(f"Could not read error details from {fp}: {e}")
+            return None
+
+    def _read_log_tail(self, folder, n_lines=40):
+        """The last ``n_lines`` of ``local_run.log`` in ``folder``, or None."""
+        log_path = os.path.join(folder, "local_run.log")
+        try:
+            with open(log_path, "r", errors="replace") as f:
+                lines = f.readlines()
+        except OSError:
+            return None
+        return "".join(lines[-n_lines:]).rstrip()
 
     # -- tree builders ------------------------------------------------------
 
@@ -16521,7 +17592,9 @@ class Window(QtWidgets.QMainWindow):
         """Build the aggregation root with one child per stage."""
         datasets = agg.get("datasets") or []
         n_done = sum(
-            1 for d in datasets if d.get("state") in ("done", "skipped")
+            1
+            for d in datasets
+            if d.get("state") in ("done", "skipped", "paused")
         )
         root = QtWidgets.QTreeWidgetItem(
             [
@@ -16602,7 +17675,8 @@ class Window(QtWidgets.QMainWindow):
             st = d.get("state")
             if st in ("done", "skipped"):
                 single_sum += 1.0
-            elif st == "running" and d.get("i") in idx_map:
+            elif st in ("running", "paused") and d.get("i") in idx_map:
+                # paused (stepwise) datasets count their partial fraction
                 single_sum += pwprogress.overall_fraction(idx_map[d["i"]])
         agg_stage = next(
             (s for s in singles if pwprogress.is_aggregation_stage(s)), None
@@ -16814,6 +17888,7 @@ class Window(QtWidgets.QMainWindow):
         # Store and display job ID
         if result["success"] and result["job_id"]:
             self.job_id_input.setText(str(result["job_id"]))
+            self.error_details_display.clear()
             self.job_info_display.append(
                 f"Job submitted successfully!\nJob ID: {result['job_id']}"
             )
@@ -16856,6 +17931,16 @@ class Window(QtWidgets.QMainWindow):
         launches it with the current interpreter in the results folder and
         points the live monitor at the local ``progress.json``.
         """
+        # one local run at a time: a second process would race the first on
+        # the same result folder and progress tree
+        proc = getattr(self, "_local_process", None)
+        if proc is not None and proc.poll() is None:
+            self.job_info_display.append(
+                f"A local run is already active (PID {proc.pid}); "
+                "stop or kill it first."
+            )
+            return
+
         results_folder = self.results_folder_display.text().strip()
         for q in ('"', "'"):
             if results_folder[:1] == q and results_folder[-1:] == q:
@@ -16880,6 +17965,13 @@ class Window(QtWidgets.QMainWindow):
         # clear any stale abort flag from a previous run in this folder
         pwprogress.clear_abort(results_folder)
         log_path = os.path.join(results_folder, "local_run.log")
+        # release the previous run's log handle before reusing the file
+        old_logfile = getattr(self, "_local_logfile", None)
+        if old_logfile is not None:
+            try:
+                old_logfile.close()
+            except OSError:
+                pass
         try:
             self._local_logfile = open(log_path, "w")
             self._local_process = subprocess.Popen(
@@ -16894,13 +17986,76 @@ class Window(QtWidgets.QMainWindow):
             logger.error(traceback.format_exc())
             return
 
+        self.error_details_display.clear()
         self.job_info_display.append(
             f"Started local workflow (PID {self._local_process.pid}).\n"
             f"Logging to {log_path}"
         )
-        # local run -> poll the local progress.json tree, not the cluster
+        # local run -> poll the local progress.json tree, not the cluster;
+        # the launch time scopes the polled states to this run. Clear any
+        # stale cluster Job-ID so the next refresh does not flip the monitor
+        # back to cluster mode (the live-process guard in
+        # _resolve_monitor_target also covers the running window).
+        from datetime import datetime
+
+        self.job_id_input.clear()
+        self._local_run_started_dt = datetime.now()
         self._monitor_local_folder = results_folder
         self._start_monitor()
+
+    def on_stop_local_run(self):
+        """Request a graceful stop of the local run (abort flag only).
+
+        The workflow finishes the current module, saves its state and exits
+        cleanly at the next module boundary; the run can then be continued
+        with the resume option.
+        """
+        folder = getattr(self, "_monitor_local_folder", None)
+        if not folder:
+            self.job_info_display.append("No local run to stop.")
+            return
+        pwprogress.request_abort(folder)
+        self.job_info_display.append(
+            "Abort requested; the local run stops cleanly after the "
+            "current module."
+        )
+
+    def on_kill_local_run(self):
+        """Terminate the local workflow subprocess immediately."""
+        proc = getattr(self, "_local_process", None)
+        if proc is None or proc.poll() is not None:
+            self.job_info_display.append("No running local process to kill.")
+            return
+        # drop the abort flag too, so any worker the script spawned also
+        # stops instead of orphaning
+        folder = getattr(self, "_monitor_local_folder", None)
+        if folder:
+            pwprogress.request_abort(folder)
+        proc.terminate()
+        self.job_info_display.append(f"Terminated local run (PID {proc.pid}).")
+        # termination is asynchronous; refresh the badge once it had time
+        # to exit
+        QtCore.QTimer.singleShot(1500, self._refresh_monitor)
+
+    def on_show_local_log(self):
+        """Append the tail of the local run's log to the run information."""
+        folder = getattr(self, "_monitor_local_folder", None)
+        if not folder:
+            folder = self.results_folder_display.text().strip()
+            for q in ('"', "'"):
+                if folder[:1] == q and folder[-1:] == q:
+                    folder = folder[1:-1]
+        if not folder:
+            self.job_info_display.append("No results folder set.")
+            return
+        log_path = os.path.join(folder, "local_run.log")
+        tail = self._read_log_tail(folder)
+        if tail is None:
+            self.job_info_display.append(f"Could not read {log_path}")
+            return
+        self.job_info_display.append(
+            f"--- tail of {log_path} ---\n{tail or '(log is empty)'}"
+        )
 
     def on_cancel_job(self):
         """Cancel the current run (graceful abort, then hard cancel).
@@ -17340,6 +18495,15 @@ class Window(QtWidgets.QMainWindow):
                         )
             # If value_data is None or not a dict, leave dict parameter unchecked/empty
 
+        elif value_data is None:
+            # "unset" (implicit None default of an optional parameter):
+            # clear text inputs; number widgets keep their display and are
+            # greyed/disabled by the default state
+            if isinstance(widget, QtWidgets.QLineEdit):
+                widget.setText("")
+            elif isinstance(widget, QtWidgets.QCheckBox):
+                widget.setChecked(False)
+
         elif isinstance(widget, QtWidgets.QLineEdit):
             widget.setText(str(value_data))
         elif isinstance(widget, QtWidgets.QComboBox):
@@ -17675,8 +18839,11 @@ class Window(QtWidgets.QMainWindow):
         # needs the field row, not the outer layout.
         row_widget.field_layout = row_layout
 
-        # Create label
-        label = QtWidgets.QLabel(param_name)
+        # Create label; a spec-declared unit becomes part of it,
+        # e.g. "radius [px]"
+        unit = param_metadata.get("unit")
+        display_name = f"{param_name} [{unit}]" if unit else param_name
+        label = QtWidgets.QLabel(display_name)
         if param_metadata.get("required", False):
             font = label.font()
             font.setBold(True)
@@ -17813,16 +18980,26 @@ class Window(QtWidgets.QMainWindow):
             per_branch_checkbox.setVisible(False)
             row_layout.addWidget(per_branch_checkbox, stretch=0)
 
-            # A top-level parameter with a spec default (and not required)
-            # gets a clickable label toggling default<->override (see
-            # _apply_param_default_state). Nested dict sub-parameters are
-            # excluded: a module reads its dict sub-schema as a whole (e.g.
-            # load_dataset_movie's sample_movie["filename"]), so omitting a
-            # defaulted sub-key would leave an incomplete dict and crash.
+            # A top-level optional parameter gets a clickable label toggling
+            # default<->override (see _apply_param_default_state). This
+            # includes optional parameters WITHOUT a spec default: their
+            # implicit default is None ("unset" - omitted from the workflow
+            # so the module's own fallback applies), which number widgets
+            # could not express otherwise. Excluded from the toggle:
+            # command-tuple defaults (e.g. ("$$map", "filepath")) are
+            # recommended arguments rather than code defaults - they
+            # pre-fill in override state and are written to the workflow;
+            # optional dict parameters keep their own enable-checkbox;
+            # nested dict sub-parameters, because a module reads its dict
+            # sub-schema as a whole (e.g. load_dataset_movie's
+            # sample_movie["filename"]), so omitting a defaulted sub-key
+            # would leave an incomplete dict and crash.
+            _default = param_metadata.get("default")
             has_default = (
                 indent_level == 0
-                and param_metadata.get("default") is not None
                 and not param_metadata.get("required", False)
+                and not self._is_command_value(_default)
+                and (_default is not None or original_type != "dict")
             )
             widget_info = ParameterWidgetInfo(
                 widget=widget,
@@ -17836,6 +19013,7 @@ class Window(QtWidgets.QMainWindow):
                 param_name=param_name,
                 has_default=has_default,
                 default_value=param_metadata.get("default"),
+                display_name=display_name,
             )
 
             # Capture the widget info itself, not just the name: nested
@@ -18207,12 +19385,32 @@ class Window(QtWidgets.QMainWindow):
             desc_fun = getattr(self.module_descriptor, text)
             module_params, _ = desc_fun()
 
+            # The branch module's sub-workflows (branch_modules / join_modules)
+            # are built as indented rows in the workflow list, not typed as raw
+            # argument text; hide them from the parameter form. The runner
+            # injects parameter_command_executor, so it is never user-set.
+            if text == "branch":
+                module_params = {
+                    k: v
+                    for k, v in module_params.items()
+                    if k
+                    not in (
+                        "branch_modules",
+                        "join_modules",
+                        "parameter_command_executor",
+                    )
+                }
+
             # Clear existing parameter widgets
             self._clear_parameter_layout()
             self.parameter_widgets.clear()
 
             # Populate new parameter widgets
             self._populate_parameter_widgets(module_params)
+
+            # branch: sub-workflows are edited inline as indented rows.
+            if text == "branch":
+                self._add_branch_inline_hint()
 
             # pick_origami: offer an interactive phase-space preview to set
             # the localizations-per-frame window from the geometry + kinetics.
@@ -18231,6 +19429,17 @@ class Window(QtWidgets.QMainWindow):
         )
         btn.clicked.connect(self._open_phasespace_preview)
         self.module_parameters_layout.addWidget(btn)
+
+    def _add_branch_inline_hint(self):
+        """Note that branch/join sub-modules are edited as indented rows."""
+        hint = QtWidgets.QLabel(
+            "Branch and join sub-modules are edited as indented rows in the "
+            "workflow list below: select a '+ add ... module' row and pick a "
+            "module to add it, just like a top-level module."
+        )
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color: gray; font-style: italic;")
+        self.module_parameters_layout.addWidget(hint)
 
     def _current_module_parameter_values(self):
         """Collect the current parameter values from the entry widgets."""

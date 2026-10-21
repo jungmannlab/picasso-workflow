@@ -12,8 +12,7 @@ Initial date: March 7, 2024
 from __future__ import annotations
 
 # from picasso_workflow.outpost_modules import g5m
-from picasso import g5m
-import picasso
+from picasso_workflow._picasso_api import g5m
 import copy
 import gc
 
@@ -29,7 +28,6 @@ import string
 import subprocess
 import sys
 import time
-from datetime import datetime
 from functools import wraps
 
 import matplotlib.pyplot as plt
@@ -41,9 +39,9 @@ import psutil
 import yaml
 from matplotlib import colormaps
 from memory_profiler import memory_usage
-from picasso import CONFIG as pCONFIG
-from picasso import __version__ as picassoversion
-from picasso import (
+from picasso_workflow._picasso_api import CONFIG as pCONFIG
+from picasso_workflow._picasso_api import __version__ as picassoversion
+from picasso_workflow._picasso_api import (
     aim,
     clusterer,
     # g5m,
@@ -101,15 +99,25 @@ except ImportError:
 
 
 from picasso_workflow import (
-    outpost_modules,
-    picasso_outpost,
     process_brightfield,
     util,
 )
 from picasso_workflow import __version__ as picassoworkflowversion
-from picasso_workflow.outpost_modules import render
+from picasso_workflow.module_runtime import module_decorator  # noqa: F401
+from picasso_workflow.outpost.clustering import molint as clustering_molint
+from picasso_workflow.outpost.masking.mask import CellMask
+from picasso_workflow.outpost.render import render
+from picasso_workflow.outpost.reporting import histograms as reporting_hist
+from picasso_workflow.outpost.origami import origami as origami_mod
+from picasso_workflow.outpost.picks import picks as picks_mod
+from picasso_workflow.outpost.spinna import wrappers as spinna_wrappers
+from picasso_workflow.picasso_set.analyse_calibration import (
+    PicassoSetCalibrationMixin,
+)
+from picasso_workflow.picasso_set.analyse_core import PicassoSetCoreMixin
+from picasso_workflow.picasso_set.analyse_io import PicassoSetIOMixin
+from picasso_workflow.picasso_set.analyse_picks import PicassoSetPicksMixin
 from picasso_workflow.progress import PicassoProgressProxy
-from picasso_workflow.ripleys_analysis import run_ripleysAnalysis
 
 # logger = logging.getLogger(__name__)
 
@@ -132,6 +140,30 @@ def generate_random_code(length):
     return random_code
 
 
+def _safe_filename_component(name):
+    """Make a per-channel tag safe to use as a single filename component.
+
+    A dataset's ``#tags`` value feeds the saved locs filename (e.g. the
+    ``("$$map", "#tags", None)`` default of ``save_single_dataset`` and the
+    ``tag + ".hdf5"`` of the aggregated saver). Replace path separators so
+    a tag such as ``"cell/A"`` cannot write into a missing subdirectory, and
+    a leading ``"/"`` cannot discard the target folder into an absolute path.
+
+    Parameters
+    ----------
+    name : str
+        The raw filename component (typically a channel tag).
+
+    Returns
+    -------
+    str
+        ``name`` with ``/`` and ``\\`` replaced by ``_``.
+    """
+    for sep in ("/", "\\"):
+        name = name.replace(sep, "_")
+    return name
+
+
 def _summarize_accepted_structures(geometry_table):
     """Aggregate per-structure geometry over the accepted structures.
 
@@ -142,7 +174,7 @@ def _summarize_accepted_structures(geometry_table):
     Parameters
     ----------
     geometry_table : list of dict
-        Per-structure geometry rows (see ``picasso_outpost.pick_origami``).
+        Per-structure geometry rows (see ``origami_mod.pick_origami``).
 
     Returns
     -------
@@ -253,7 +285,7 @@ def _recenter_on_com(picked_locs, centers):
     """Relocate each pick centre to the centre of mass of its localizations.
 
     ``picked_locs`` is grouped by ``group`` (the group id is the index into
-    ``centers``, as :func:`picasso_outpost.picked_locs` assigns them). Returns
+    ``centers``, as :func:`picks_mod.picked_locs` assigns them). Returns
     a new list of ``[x, y]`` centres; a group with no localizations keeps its
     original centre. ``pick_similar`` returns grid positions offset from the
     structure by up to half a grid step, so re-centring on the COM (and
@@ -1116,99 +1148,25 @@ def profile_resource_usage(method):
     return wrapper
 
 
-def module_decorator(method):
-    """Wrap a module to manage its result folder and timing.
-
-    Creates the module's result directory, seeds the ``results`` dict with
-    ``folder`` and ``start time``, runs the module, then fills in ``success``
-    (saving locs if requested), ``end time`` and ``duration``, and closes open
-    figures.
-
-    Parameters
-    ----------
-    method : callable
-        The module method to wrap.
-
-    Returns
-    -------
-    callable
-        The wrapped method.
-    """
-
-    def module_wrapper(
-        self, i, parameters, calling_module_dir=None, suffix=""
-    ):
-        # create the results direcotry
-        # method_name = get_caller_name(2)
-        method_name = method.__name__
-
-        if calling_module_dir is None:
-            module_result_dir = os.path.join(
-                self.results_folder, f"{i:02d}_" + method_name + suffix
-            )
-        else:
-            module_result_dir = os.path.join(
-                calling_module_dir, f"{i:02d}_" + method_name + suffix
-            )
-        os.makedirs(module_result_dir, exist_ok=True)
-
-        results = {
-            "folder": os.path.normpath(module_result_dir),
-            "start time": datetime.now().strftime("%y-%m-%d %H:%M:%S"),
-        }
-
-        # call the module. On failure, hand the partial results (folder and
-        # start time) to the error reporter: they are built here and would
-        # otherwise die with the stack frame, and the folder cannot be
-        # reconstructed by the caller, which does not see suffix /
-        # calling_module_dir.
-        try:
-            parameters, results = method(self, i, parameters, results)
-        except BaseException as exc:
-            exc._pwf_partial_results = results
-            # Persist whatever locs the module held when it failed, so the
-            # last data state can be inspected while debugging without
-            # re-running the workflow. Best-effort: never mask the real error.
-            self._save_state_on_error(results["folder"])
-            raise
-
-        # post-actions
-        # modules only need to specifically set an error.
-        if results.get("success") is None:
-            results["success"] = True
-            # save locs if desired
-            if parameters.get("save_locs") is True or self.analysis_config.get(
-                "always_save"
-            ):
-                if hasattr(self, "locs") and self.locs is not None:
-                    self._save_locs(
-                        os.path.join(results["folder"], "locs.hdf5")
-                    )
-                if (
-                    hasattr(self, "channel_locs")
-                    and self.channel_locs is not None
-                ):
-                    self._save_datasets_agg(results["folder"])
-        results["end time"] = datetime.now().strftime("%y-%m-%d %H:%M:%S")
-        td = datetime.strptime(
-            results["end time"], "%y-%m-%d %H:%M:%S"
-        ) - datetime.strptime(results["start time"], "%y-%m-%d %H:%M:%S")
-        results["duration"] = td.total_seconds()
-        # logger.debug(f"RESULTS: {results}")
-
-        # close all figures potentially still open
-        plt.close("all")
-        return parameters, results
-
-    return module_wrapper
+# module_decorator moved to picasso_workflow.module_runtime so the
+# picasso-set mixins can use it without importing this module; re-exported
+# here to keep `analyse.module_decorator` importable.
 
 
-class AutoPicasso(util.AbstractModuleCollection):
+class AutoPicasso(
+    PicassoSetCoreMixin,
+    PicassoSetPicksMixin,
+    PicassoSetCalibrationMixin,
+    PicassoSetIOMixin,
+    util.AbstractModuleCollection,
+):
     """Automatically evaluate datasets via the picasso pipeline.
 
     Implements every module of the
-    :class:`~picasso_workflow.util.AbstractModuleCollection` contract. Each
-    module that runs saves its results into a separate folder.
+    :class:`~picasso_workflow.util.AbstractModuleCollection` contract, plus
+    the picasso-set modules (``picasso_*``) contributed by the mixins from
+    :mod:`picasso_workflow.picasso_set`. Each module that runs saves its
+    results into a separate folder.
     """
 
     # for single-dataset analysis
@@ -1470,6 +1428,94 @@ class AutoPicasso(util.AbstractModuleCollection):
         """
         return parameters, results
 
+    @module_decorator
+    def plugin(self, i, parameters, results):
+        """Call an installed, enabled picasso API plugin export.
+
+        Generic bridge to the picasso plugin system: looks up ``api_name`` in
+        the merged ``PICASSO_API`` exports of the enabled plugins and calls it.
+        Workflow state named in ``inject`` is passed as keyword arguments, and
+        a dict return value may update ``self.locs`` / ``self.info`` and
+        contribute report content.
+
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters : dict
+            See :meth:`picasso_workflow.util.AbstractModuleCollection.plugin`.
+        results : dict
+            Module results (decorator-provided keys only).
+
+        Returns
+        -------
+        parameters : dict
+            Input parameters, unchanged.
+        results : dict
+            Results updated as documented on the contract method.
+        """
+        try:
+            from picasso_workflow._picasso_api import (
+                plugins as picasso_plugins,
+            )
+        except ImportError as exc:
+            raise AutoPicassoError(
+                "The installed picasso has no plugin system (needs picasso "
+                ">= 0.11). Cannot run the 'plugin' module."
+            ) from exc
+
+        api_name = parameters["api_name"]
+        exports = picasso_plugins.load_api_plugins()
+        if api_name not in exports:
+            raise AutoPicassoError(
+                f"picasso API plugin export {api_name!r} not found. Available "
+                f"(enabled) exports: {sorted(exports)}. Enable the plugin in "
+                "~/.picasso/plugins/ first."
+            )
+        fn = exports[api_name]
+
+        call_kwargs = dict(parameters.get("kwargs", {}))
+        inject = parameters.get("inject", [])
+        state = {"locs": self.locs, "info": self.info, "movie": self.movie}
+        for key in inject:
+            if key not in state:
+                raise AutoPicassoError(
+                    f"Cannot inject unknown workflow state {key!r}; allowed: "
+                    f"{sorted(state)}."
+                )
+            call_kwargs[key] = state[key]
+
+        ret = fn(**call_kwargs)
+
+        results["picasso version"] = picassoversion
+        results["plugin_api_name"] = api_name
+        results["plugin_callable"] = (
+            f"{getattr(fn, '__module__', '?')}."
+            f"{getattr(fn, '__name__', '?')}"
+        )
+        results["injected"] = list(inject)
+
+        if isinstance(ret, dict):
+            if "locs" in ret:
+                self.locs = ret["locs"]
+            if "info" in ret:
+                self.info = ret["info"]
+            if "report" in ret:
+                results["plugin_report"] = ret["report"]
+            if "files" in ret:
+                results["plugin_files"] = ret["files"]
+            extra = {
+                k: v
+                for k, v in ret.items()
+                if k not in ("locs", "info", "report", "files")
+            }
+            if extra:
+                results["plugin_result"] = extra
+        elif ret is not None:
+            results["plugin_result"] = ret
+
+        return parameters, results
+
     #    @profile_resource_usage
     @module_decorator
     def conditional_branch(self, i, parameters, results):
@@ -1634,34 +1680,35 @@ class AutoPicasso(util.AbstractModuleCollection):
         """Fan out into per-branch sub-workflows, then optionally re-join.
 
         See :meth:`picasso_workflow.util.AbstractModuleCollection.branch` for
-        the full parameter contract. Supports two ``branch_type``s:
-        ``"runtime"`` (one branch per connected component of a prior mask) and
-        ``"screen"`` (one branch per row of a config-time parameter grid).
+        the full parameter contract. Two ``branch_type``s: ``"explicit"`` (a
+        fixed ``n_branches`` with per-branch ``("$branch", [...])`` overrides)
+        and ``"runtime"`` (the branch count *and* per-branch item come from a
+        ``branch_over`` value/command that resolves to a list at run time; each
+        branch's sub-modules read their item via the ``("$branch_item", ...)``
+        token). A branch whose sub-module raises :class:`SkipBranch` (e.g. the
+        requested cell does not exist) is dropped: the join and the overall
+        pipeline proceed with the remaining branches.
         """
         pce = parameters.get("parameter_command_executor", None)
         branch_type = parameters["branch_type"]
         branch_modules = parameters["branch_modules"]
         join_modules = parameters.get("join_modules") or []
 
-        # 1. Determine the branches: a list of (label, tile_map, branch_state).
-        #    tile_map is the per-branch $$map dict for screens (else None);
-        #    branch_state is the per-branch analyzer state for runtime splits
-        #    (else None).
+        # 1. Determine the branches: a list of (label, branch_item). The item
+        #    is None for an explicit branch (per-branch differences come from
+        #    ("$branch", [...]) overrides) and this branch's element of the
+        #    resolved branch_over list for a runtime branch.
         if branch_type == "explicit":
             splits = self._make_explicit_branches(parameters)
-        elif branch_type == "screen":
-            splits = self._make_screen_branches(parameters)
         elif branch_type == "runtime":
             splits = self._make_runtime_branches(i, parameters, pce)
         else:
             raise ValueError(
                 f"Unknown branch_type '{branch_type}'. "
-                "Expected 'explicit', 'runtime' or 'screen'."
+                "Expected 'explicit' or 'runtime'."
             )
 
-        labels = [branch_label for branch_label, _, _ in splits]
         results["branch_type"] = branch_type
-        results["labels"] = labels
         if not splits:
             logger.warning(
                 f"branch (module {i:02d}): no branches produced "
@@ -1687,7 +1734,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         if nested:
             groups = [
                 (label, "branch", [name for name, _ in branch_modules])
-                for label, _, _ in splits
+                for label, _ in splits
             ]
             if join_modules:
                 groups.append(
@@ -1750,13 +1797,9 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         branch_results = []
         topology_branches = []
-        for branch_id, (branch_label, tile_map, branch_state) in enumerate(
-            splits
-        ):
+        skipped = []
+        for branch_id, (branch_label, branch_item) in enumerate(splits):
             util.BranchStateManager.restore(self, prefix_snapshot)
-            if branch_state is not None:
-                for attr, value in branch_state.items():
-                    setattr(self, attr, value)
 
             branch_dir = os.path.join(results["folder"], branch_label)
             os.makedirs(branch_dir, exist_ok=True)
@@ -1783,6 +1826,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             # $get_previous_module_result / $get_prior_result.
             branch_local = {}
             executed = []
+            skip_reason = None
             for sub_idx, (module_name, module_parameters) in enumerate(
                 branch_modules
             ):
@@ -1791,7 +1835,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                     module_parameters,
                     pce,
                     sub_idx,
-                    tile_map,
+                    branch_item,
                     branch_local,
                     branch_id,
                 )
@@ -1799,6 +1843,20 @@ class AutoPicasso(util.AbstractModuleCollection):
                     sub_results = self._run_branch_submodule(
                         module_name, sub_idx, sub_params, branch_dir
                     )
+                except SkipBranch as e:
+                    # This branch has no data to analyse (e.g. the requested
+                    # cell does not exist). Drop it and let the join / overall
+                    # pipeline continue with the remaining branches. Advance
+                    # the remaining sub-module units so progress still finishes.
+                    skip_reason = str(e) or module_name
+                    _branch_step_end(branch_id, sub_idx, "skipped")
+                    for rem in range(sub_idx + 1, len(branch_modules)):
+                        if nested:
+                            progress_mgr.branch_submodule_end(
+                                module_index, branch_id, rem, "skipped"
+                            )
+                        done_units[0] += 1
+                    break
                 except BaseException:
                     _branch_step_end(branch_id, sub_idx, "failed")
                     raise
@@ -1821,12 +1879,23 @@ class AutoPicasso(util.AbstractModuleCollection):
                             f"live branch report: {key} failed: {e}"
                         )
                 _branch_step_end(branch_id, sub_idx, "done")
+            if skip_reason is not None:
+                skipped.append({"label": branch_label, "reason": skip_reason})
+                logger.info(
+                    f"branch (module {i:02d}): skipped branch "
+                    f"'{branch_label}' ({skip_reason})."
+                )
+                continue
             branch_results.append(one_branch)
             topology_branches.append(
                 {"label": branch_label, "modules": executed}
             )
 
         results["branches"] = branch_results
+        # labels / skipped reflect only the branches that actually produced
+        # results, so the join's ("$all") pooling never sees a dropped branch.
+        results["labels"] = [b["label"] for b in branch_results]
+        results["skipped"] = skipped
 
         # 3. Restore the prefix state, then run the join/fan-in modules with
         #    the per-branch results pooled back together.
@@ -1850,6 +1919,13 @@ class AutoPicasso(util.AbstractModuleCollection):
                 # pool the per-branch results, so they resolve against the
                 # trunk runner's results (which now include this branch step).
                 jp = copy.deepcopy(module_parameters)
+                # A summarize_branches join with no explicit values defaults to
+                # auto-summarizing this branch's per-branch results: hand it the
+                # branches list (it flattens the numeric metrics) and the branch
+                # labels. This is what makes it a zero-config default join.
+                if module_name == "summarize_branches" and "values" not in jp:
+                    jp["values"] = results["branches"]
+                    jp.setdefault("labels", results["labels"])
                 if pce is not None:
                     original_rootidx = getattr(pce, "curr_rootidx", None)
                     pce.curr_rootidx = i
@@ -1859,6 +1935,16 @@ class AutoPicasso(util.AbstractModuleCollection):
                     sub_results = self._run_branch_submodule(
                         module_name, sub_idx, jp, join_dir
                     )
+                except SkipBranch as e:
+                    # A join module with no data (e.g. all branches skipped)
+                    # is dropped rather than failing the run, mirroring the
+                    # per-branch skip contract.
+                    logger.info(
+                        f"branch (module {i:02d}): skipped join module "
+                        f"'{module_name}' ({e})."
+                    )
+                    _branch_step_end(join_group, sub_idx, "skipped")
+                    continue
                 except BaseException:
                     _branch_step_end(join_group, sub_idx, "failed")
                     raise
@@ -1875,10 +1961,11 @@ class AutoPicasso(util.AbstractModuleCollection):
         results["topology"] = {
             "type": branch_type,
             "prefix_index": i,
-            "labels": labels,
+            "labels": results["labels"],
             "branch_modules": [name for name, _ in branch_modules],
             "join_modules": [name for name, _ in join_modules],
             "branches": topology_branches,
+            "skipped": [s["label"] for s in skipped],
         }
 
         logger.info(
@@ -1887,72 +1974,47 @@ class AutoPicasso(util.AbstractModuleCollection):
         )
         return parameters, results
 
-    def _make_screen_branches(self, parameters):
-        """Build config-time screen branches from a parameter grid.
-
-        Returns a list of ``(label, tile_map, None)``; ``tile_map`` is the
-        per-branch ``$$map`` lookup dict (one row of the grid).
-        """
-        screen = parameters["screen"]
-        tags = screen.get("#tags")
-        columns = [v for k, v in screen.items()]
-        if not columns:
-            return []
-        ntiles = len(columns[0])
-        splits = []
-        for j in range(ntiles):
-            tile_map = {k: v[j] for k, v in screen.items()}
-            branch_label = (
-                str(tags[j]) if tags is not None else f"screen{j:02d}"
-            )
-            splits.append((branch_label, tile_map, None))
-        return splits
-
     def _make_runtime_branches(self, i, parameters, pce):
-        """Build runtime branches by splitting a prior mask into components.
+        """Build runtime branches from a list resolved at run time.
 
-        Returns a list of ``(label, None, branch_state)``; ``branch_state``
-        injects the per-cell ``channel_locs`` (prefix locs filtered to the
-        component).
+        ``branch_over`` is a value (or ``$``/``$$map`` command) that resolves
+        to a list ``L``; there is one branch per element, and each branch's
+        sub-modules read their element ``L[branch_id]`` via the
+        ``("$branch_item", ...)`` token. Labels come from ``branch_labels``,
+        else ``label_template`` (``{n}`` / ``{item}``), else ``branch{n:02d}``.
+
+        Returns a list of ``(label, item)``.
         """
-        split = parameters["split"]
-        method = split.get("method", "mask_components")
-        if method != "mask_components":
-            raise NotImplementedError(
-                f"branch split method '{method}' is not supported "
-                "(only 'mask_components')."
-            )
-
-        fp_mask = split["mask"]
-        if pce is not None and isinstance(fp_mask, (tuple, list)):
-            fp_mask = pce.run(
-                {"mask": copy.deepcopy(fp_mask)}, curr_rootidx=i
-            )["mask"]
-
-        cell_mask = outpost_modules.mask.CellMask.load(fp_mask)
-        components = cell_mask.component_masks(
-            min_area_um2=split.get("min_area_um2", 0.0)
-        )
-        if (max_branches := split.get("max_branches")) is not None:
-            components = components[:max_branches]
-
-        label_template = split.get("label_template", "cell{n:02d}")
-        prefix_channel_locs = self.channel_locs
-        if prefix_channel_locs is None:
+        over = parameters.get("branch_over")
+        if over is None:
             raise AutoPicassoError(
-                "branch runtime split requires channel_locs; run "
-                "aggregation/mask modules before branching."
+                "branch_type 'runtime' needs 'branch_over' (a value or "
+                "command resolving to a list)."
+            )
+        if pce is not None:
+            over = pce.run(
+                {"branch_over": copy.deepcopy(over)}, curr_rootidx=i
+            )["branch_over"]
+        if not isinstance(over, (list, tuple)):
+            raise AutoPicassoError(
+                "branch_type 'runtime': 'branch_over' resolved to "
+                f"{type(over).__name__}, expected a list."
             )
 
+        labels = parameters.get("branch_labels")
+        label_template = parameters.get("label_template")
         splits = []
-        for n, component_mask in enumerate(components):
-            branch_label = label_template.format(n=n)
-            branch_channel_locs = [
-                component_mask.apply_to_locs(locs)
-                for locs in prefix_channel_locs
-            ]
-            branch_state = {"channel_locs": branch_channel_locs}
-            splits.append((branch_label, None, branch_state))
+        for n, item in enumerate(over):
+            if labels is not None and n < len(labels):
+                label = str(labels[n])
+            elif label_template is not None:
+                try:
+                    label = label_template.format(n=n, item=item)
+                except (KeyError, IndexError, ValueError):
+                    label = f"branch{n:02d}"
+            else:
+                label = f"branch{n:02d}"
+            splits.append((label, item))
         return splits
 
     def _make_explicit_branches(self, parameters):
@@ -1962,8 +2024,8 @@ class AutoPicasso(util.AbstractModuleCollection):
         ``branch_labels``); each branch runs the same modules and differs only
         through ``("$branch", [v0, v1, ...])`` per-branch parameter overrides
         (e.g. ``create_mask2`` selecting the ``branch_id``-th largest cell).
-        Returns a list of ``(label, None, None)`` -- each branch starts from
-        the shared-prefix state.
+        Returns a list of ``(label, None)`` -- each branch starts from the
+        shared-prefix state and carries no runtime item.
         """
         labels = parameters.get("branch_labels")
         n = parameters.get("n_branches")
@@ -1980,27 +2042,50 @@ class AutoPicasso(util.AbstractModuleCollection):
             label = (
                 str(labels[j])
                 if labels is not None and j < len(labels)
-                else f"cell{j:02d}"
+                else f"branch{j:02d}"
             )
-            splits.append((label, None, None))
+            splits.append((label, None))
         return splits
 
     @staticmethod
-    def _resolve_branch_overrides(obj, branch_id):
-        """Replace ``("$branch", [v0, v1, ...])`` with ``values[branch_id]``.
+    def _resolve_branch_overrides(obj, branch_id, branch_item=None):
+        """Resolve per-branch markers to this branch's value.
 
-        Walks a (possibly nested) parameter structure and resolves per-branch
-        override markers to this branch's value. If the branch index is past
-        the end of the list, the last value is reused. Runs *before* the ``$``
-        command resolution so the resolved value is a plain value (or a further
-        ``$``/``$$`` command to resolve next).
+        Two markers are handled while walking a (possibly nested) parameter
+        structure:
+
+        - ``("$branch", [v0, v1, ...])`` -> ``values[branch_id]`` (the last
+          value is reused if ``branch_id`` is past the end); used by explicit
+          branches.
+        - ``("$branch_item",)`` -> this branch's runtime item; ``("$branch_item",
+          key)`` -> ``item[key]``; the bare string ``"$branch_item"`` is also
+          accepted. Used by runtime branches to read their element of the
+          resolved ``branch_over`` list.
+
+        Runs *before* the ``$`` command resolution so the result is a plain
+        value (or a further ``$``/``$$`` command to resolve next).
         """
+        if isinstance(obj, str) and obj == "$branch_item":
+            return branch_item
         if isinstance(obj, dict):
             return {
-                k: AutoPicasso._resolve_branch_overrides(v, branch_id)
+                k: AutoPicasso._resolve_branch_overrides(
+                    v, branch_id, branch_item
+                )
                 for k, v in obj.items()
             }
         if isinstance(obj, (tuple, list)):
+            if (
+                isinstance(obj, tuple)
+                and len(obj) >= 1
+                and obj[0] == "$branch_item"
+            ):
+                if len(obj) >= 2 and branch_item is not None:
+                    try:
+                        return branch_item[obj[1]]
+                    except (KeyError, IndexError, TypeError):
+                        return branch_item
+                return branch_item
             if (
                 isinstance(obj, tuple)
                 and len(obj) >= 2
@@ -2012,7 +2097,9 @@ class AutoPicasso(util.AbstractModuleCollection):
                 idx = branch_id if branch_id < len(values) else -1
                 return values[idx]
             resolved = [
-                AutoPicasso._resolve_branch_overrides(v, branch_id)
+                AutoPicasso._resolve_branch_overrides(
+                    v, branch_id, branch_item
+                )
                 for v in obj
             ]
             return tuple(resolved) if isinstance(obj, tuple) else resolved
@@ -2023,21 +2110,19 @@ class AutoPicasso(util.AbstractModuleCollection):
         module_parameters,
         pce,
         sub_idx,
-        tile_map,
+        branch_item,
         branch_local,
         branch_id,
     ):
         """Resolve a branch sub-module's parameters.
 
-        Resolution happens in up to three passes:
+        Resolution happens in two passes:
 
-        1. Per-branch overrides: ``("$branch", [...])`` -> this branch's value
-           (see :meth:`_resolve_branch_overrides`). Run first so the result is
-           a plain value or a further command.
-        2. For screens, resolve ``$$map`` commands from the branch's row of the
-           grid (``tile_map``). (In aggregation workflows the ``$$`` commands
-           are already resolved one level up, so ``tile_map`` is ``None``.)
-        3. Resolve ordinary ``$`` commands against a *branch-local* results
+        1. Per-branch markers: ``("$branch", [...])`` -> this branch's value
+           and ``("$branch_item", ...)`` -> this branch's runtime item (see
+           :meth:`_resolve_branch_overrides`). Run first so the result is a
+           plain value or a further command.
+        2. Resolve ordinary ``$`` commands against a *branch-local* results
            view: ``branch_local`` (this branch's completed sub-modules, keyed
            ``NN_name``) shadowing the trunk runner's results. ``curr_rootidx``
            is the sub-module index, so ``$get_previous_module_result`` refers
@@ -2045,13 +2130,7 @@ class AutoPicasso(util.AbstractModuleCollection):
            ``$get_prior_result`` keys can still reach shared-prefix modules.
         """
         params = copy.deepcopy(module_parameters)
-        params = self._resolve_branch_overrides(params, branch_id)
-        if tile_map is not None:
-            parent = pce.parent_object if pce is not None else None
-            tiler_pce = util.ParameterCommandExecutor(
-                parent, dict(tile_map), command_sign="$$"
-            )
-            params = tiler_pce.run(params)
+        params = self._resolve_branch_overrides(params, branch_id, branch_item)
         if pce is not None:
             trunk_results = getattr(pce.parent_object, "results", {})
             proxy = util.ResultsProxy.merged(branch_local, trunk_results)
@@ -2086,7 +2165,12 @@ class AutoPicasso(util.AbstractModuleCollection):
         metric across branches (``"replicates"`` mode) or the metric against a
         per-branch argument (``"screen"`` mode), and records summary stats.
         """
-        raw_values = parameters["values"]
+        raw_values = parameters.get("values")
+        labels = parameters.get("labels")
+        x_values = parameters.get("x")
+        ylabel = parameters.get("ylabel", "value")
+        title = parameters.get("title", "branch summary")
+        plot_type = parameters.get("plot_type", "box")
 
         def _num_list(seq):
             """Coerce a sequence to floats, skipping non-numeric entries.
@@ -2107,7 +2191,20 @@ class AutoPicasso(util.AbstractModuleCollection):
                     )
             return out
 
-        if isinstance(raw_values, dict):
+        # Build the series to plot: metric-name -> list of per-branch values.
+        # For the autodetected path, series_labels[metric] holds the branch
+        # label for each *kept* value, so a metric missing in some branch stays
+        # correctly labelled (see _autodetect_branch_metrics).
+        autodetected = False
+        series_labels = {}
+        if self._is_branch_result_list(raw_values):
+            # A branch module's raw per-branch results list: flatten each
+            # branch to its numeric scalar metrics and pivot into one series
+            # per metric. This is what a zero-argument summarize_branches join
+            # receives.
+            series, series_labels = self._autodetect_branch_metrics(raw_values)
+            autodetected = True
+        elif isinstance(raw_values, dict):
             series = {
                 str(name): _num_list(vals) for name, vals in raw_values.items()
             }
@@ -2116,7 +2213,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             and raw_values
             and all(isinstance(v, dict) for v in raw_values)
         ):
-            # One dict per branch (e.g. labeling_efficiency is
+            # One flat dict per branch (e.g. labeling_efficiency is
             # {target: .., reference: ..}) -> pivot into one series per key.
             keys = []
             for per_branch in raw_values:
@@ -2128,20 +2225,16 @@ class AutoPicasso(util.AbstractModuleCollection):
                 for key in keys
             }
         else:
-            series = {
-                str(parameters.get("ylabel", "value")): _num_list(raw_values)
-            }
-        labels = parameters.get("labels")
-        x_values = parameters.get("x")
+            series = {str(ylabel): _num_list(raw_values)}
+
         mode = parameters.get("mode", "auto")
         if mode == "auto":
             mode = "screen" if x_values is not None else "replicates"
-        ylabel = parameters.get("ylabel", "value")
-        title = parameters.get("title", "branch summary")
 
-        fig, ax = plt.subplots()
         has_data = any(len(v) for v in series.values())
+        nonempty_metrics = [k for k, v in series.items() if v]
         if not has_data:
+            fig, ax = plt.subplots()
             ax.text(
                 0.5,
                 0.5,
@@ -2151,17 +2244,38 @@ class AutoPicasso(util.AbstractModuleCollection):
             )
             ax.set_axis_off()
         elif mode == "screen" and x_values is not None:
+            fig, ax = plt.subplots()
             xv = [float(x) for x in x_values]
             for name, vals in series.items():
                 n = min(len(xv), len(vals))
                 ax.plot(xv[:n], vals[:n], marker="o", label=name)
             ax.set_xlabel(parameters.get("xlabel", "argument"))
+            ax.set_ylabel(ylabel)
             if len(series) > 1:
                 ax.legend()
+            ax.set_title(title)
+        elif autodetected:
+            # Autodetected metrics can have very different scales, so give each
+            # its own subplot (small multiples) rather than mixing them on one
+            # y-axis. Each metric is drawn with its own kept-branch labels so a
+            # metric missing in some branch stays correctly labelled.
+            fig, axes = plt.subplots(
+                len(nonempty_metrics),
+                1,
+                figsize=(6.4, max(2.2, 2.0 * len(nonempty_metrics))),
+                squeeze=False,
+            )
+            for ax, name in zip(axes[:, 0], nonempty_metrics):
+                self._draw_replicates_axis(
+                    ax, series[name], series_labels.get(name), plot_type
+                )
+                ax.set_ylabel(name)
+            axes[-1, 0].set_xlabel(parameters.get("xlabel", "branch"))
+            fig.suptitle(title)
         else:  # replicates: distribution of the metric across branches
+            fig, ax = plt.subplots()
             names = list(series.keys())
             data = [series[name] for name in names]
-            plot_type = parameters.get("plot_type", "box")
             nonempty = [(k, d) for k, d in enumerate(data) if d]
             positions = [k for k, _ in nonempty]
             datasets = [d for _, d in nonempty]
@@ -2212,8 +2326,8 @@ class AutoPicasso(util.AbstractModuleCollection):
                         xytext=(6, 0),
                         fontsize=8,
                     )
-        ax.set_ylabel(ylabel)
-        ax.set_title(title)
+            ax.set_ylabel(ylabel)
+            ax.set_title(title)
         fig.tight_layout()
         results["fp_fig"] = os.path.join(
             results["folder"], parameters.get("filename", "branch_summary.png")
@@ -2237,6 +2351,146 @@ class AutoPicasso(util.AbstractModuleCollection):
                 stats[name] = {"n": 0}
         results["stats"] = stats
         return parameters, results
+
+    # bookkeeping keys present in every module's results -- never plotted as a
+    # branch metric when auto-summarizing.
+    _BRANCH_METRIC_SKIP = {
+        "duration",
+        "start time",
+        "end time",
+        "folder",
+        "label",
+        "success",
+    }
+
+    @staticmethod
+    def _is_branch_result_list(value):
+        """Whether ``value`` looks like a branch module's per-branch results.
+
+        That is, a non-empty list of dicts that each carry a ``"label"`` key
+        (which the branch module always stamps on a per-branch result). This is
+        what a zero-argument ``summarize_branches`` join is handed; it is
+        distinguished from a plain list of flat scalar dicts (e.g. one
+        ``{target, reference}`` per branch), which keeps the flat-pivot path.
+        """
+        if not (isinstance(value, (list, tuple)) and value):
+            return False
+        if not all(isinstance(v, dict) for v in value):
+            return False
+        # A branch module always stamps each per-branch dict with a "label"
+        # key; a plain list of flat metric dicts (e.g. one {target, reference}
+        # per branch) never does. Require it so explicitly-supplied values are
+        # not misrouted into the auto-summary path.
+        return all("label" in pb for pb in value)
+
+    @classmethod
+    def _autodetect_branch_metrics(cls, branches):
+        """Flatten per-branch results into one series per numeric metric.
+
+        Each branch dict is ``{"label": .., "NN_module": {..results..}, ..}``;
+        every numeric scalar leaf (skipping bookkeeping keys and booleans)
+        becomes a metric named ``"NN_module: key"`` (or ``"key"`` for a
+        top-level scalar), pivoted across branches. Metric order follows first
+        appearance.
+
+        Returns ``(series, series_labels)`` where ``series[metric]`` is the list
+        of numeric values (branches lacking the metric are omitted) and
+        ``series_labels[metric]`` is the matching branch label for each kept
+        value, so a metric present in only some branches stays correctly
+        labelled.
+        """
+
+        def flat(pb):
+            out = {}
+            for k, v in pb.items():
+                if k in cls._BRANCH_METRIC_SKIP:
+                    continue
+                if isinstance(v, dict):
+                    for kk, vv in v.items():
+                        if kk in cls._BRANCH_METRIC_SKIP:
+                            continue
+                        if isinstance(vv, bool):
+                            continue
+                        if isinstance(vv, (int, float)):
+                            out[f"{k}: {kk}"] = vv
+                elif isinstance(v, bool):
+                    continue
+                elif isinstance(v, (int, float)):
+                    out[k] = v
+            return out
+
+        flats = [flat(pb) for pb in branches]
+        branch_labels = [
+            str(pb.get("label", k)) for k, pb in enumerate(branches)
+        ]
+        metrics = []
+        for fb in flats:
+            for k in fb:
+                if k not in metrics:
+                    metrics.append(k)
+        series = {}
+        series_labels = {}
+        for m in metrics:
+            vals = []
+            labs = []
+            for fb, lab in zip(flats, branch_labels):
+                if m not in fb:
+                    continue
+                try:
+                    vals.append(float(fb[m]))
+                    labs.append(lab)
+                except (TypeError, ValueError):
+                    continue
+            series[m] = vals
+            series_labels[m] = labs
+        return series, series_labels
+
+    @staticmethod
+    def _draw_replicates_axis(ax, vals, labels, plot_type="box"):
+        """Draw one metric's per-branch values as a box/violin + labeled strip.
+
+        Used for the small-multiples layout when several metrics are
+        auto-summarized: each branch contributes one point, annotated with its
+        branch label.
+        """
+        if not vals:
+            ax.text(0.5, 0.5, "no data", ha="center", va="center")
+            ax.set_axis_off()
+            return
+        drawn = False
+        if plot_type == "violin" and len(vals) >= 2 and len(set(vals)) > 1:
+            try:
+                parts = ax.violinplot(
+                    [vals],
+                    positions=[0],
+                    widths=0.6,
+                    showmeans=True,
+                    showextrema=True,
+                )
+                for body in parts["bodies"]:
+                    body.set_alpha(0.4)
+                drawn = True
+            except (ValueError, np.linalg.LinAlgError):
+                pass
+        if not drawn:
+            ax.boxplot([vals], positions=[0], widths=0.5)
+        jitter = (np.random.rand(len(vals)) - 0.5) * 0.15
+        ax.scatter(jitter, vals, color="k", alpha=0.7, zorder=3)
+        ax.set_xticks([0])
+        ax.set_xticklabels([""])
+        for k, val in enumerate(vals):
+            lbl = (
+                str(labels[k])
+                if labels is not None and k < len(labels)
+                else str(k)
+            )
+            ax.annotate(
+                lbl,
+                (0, val),
+                textcoords="offset points",
+                xytext=(6, 0),
+                fontsize=8,
+            )
 
     ##########################################################################
     # Single dataset modules
@@ -2414,6 +2668,8 @@ class AutoPicasso(util.AbstractModuleCollection):
             Results updated with ``filepath_raw`` (full path) and
             ``filename_raw``.
         """
+        from picasso_workflow.outpost.formats import zeiss
+
         filepath_czi = parameters["filepath"]
         filename_raw = parameters.get("filename_raw")
         if filename_raw is None:
@@ -2421,7 +2677,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                 (os.path.splitext(filepath_czi)[0] + ".raw")
             )[1]
         filepath_raw = os.path.join(results["folder"], filename_raw)
-        picasso_outpost.convert_zeiss_file(
+        zeiss.convert_zeiss_file(
             filepath_czi, filepath_raw, parameters.get("info")
         )
 
@@ -2750,6 +3006,11 @@ class AutoPicasso(util.AbstractModuleCollection):
         results["picasso version"] = picassoversion
         self.locs, self.info = io.load_locs(parameters["filename"])
         results["nlocs"] = len(self.locs)
+        # the loaded file doubles as a restore point for resumed runs
+        results["filepath"] = parameters["filename"]
+        results["checkpoint"] = {
+            "single": {"filepath": parameters["filename"]}
+        }
 
         return parameters, results
 
@@ -2933,6 +3194,10 @@ class AutoPicasso(util.AbstractModuleCollection):
         ng_end : float
             The highest net gradient shown (lower-right spot).
         """
+        from picasso_workflow.outpost.spots import (
+            extraction as spot_extraction,
+        )
+
         n_spots = sample_spots_cols * sample_spots_rows
         sample_idxs = np.argsort(
             np.abs(identifications["net_gradient"] - estd_net_grad)
@@ -2947,7 +3212,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         ).reset_index(drop=True)
 
         # sample_spots = localize.get_spots(
-        sample_spots = picasso_outpost.get_spots(
+        sample_spots = spot_extraction.get_spots(
             self.movie,
             sample_identifications,
             box_size,
@@ -2971,7 +3236,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             piy = iy * (box_size + border_width)
             # logger.debug(f"drawing spot {i} at ({pix}, {piy}: {str(spot)}")
             canvas[pix : pix + box_size, piy : piy + box_size] = (
-                picasso_outpost.normalize_spot(spot)
+                spot_extraction.normalize_spot(spot)
             )
         return canvas, ng_start, ng_end
 
@@ -3456,7 +3721,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             ``fp_fig_zhist`` (z-distribution histogram).
         """
         import shutil
-        from picasso import zfit
+        from picasso_workflow._picasso_api import zfit
 
         # fp_cfg = os.path.join(results["folder"], "config.yaml")
         # with open(fp_cfg, "w") as config_file:
@@ -3660,7 +3925,9 @@ class AutoPicasso(util.AbstractModuleCollection):
             new_config = yaml.full_load(config_file)
 
         # if new_config is not None:
-        picasso.CONFIG = new_config
+        from picasso_workflow._picasso_api import set_config
+
+        set_config(new_config)  # mutate picasso's global CONFIG
         pCONFIG = new_config
         print(new_config)
 
@@ -4293,2294 +4560,6 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         return parameters, results
 
-    # Multiprocessing helper functions for undrift_rsso
-    @staticmethod
-    def _process_drift_block(args):
-        """Process one drift block in parallel (stateless helper).
-
-        Parameters
-        ----------
-        args : tuple
-            ``(locs_data, frames, block_start, block_end, toff_block_size,
-            max_shift, min_locs_per_block, save_all_rsso_plots, plot_dir)``.
-
-        Returns
-        -------
-        tuple or None
-            ``(block_start, block_end, shift_x, shift_y, quality,
-            uncertainty_x, uncertainty_y)``, or None for the reference block.
-        """
-        (
-            locs_data,
-            frames,
-            block_start,
-            block_end,
-            toff_block_size,
-            max_shift,
-            min_locs_per_block,
-            save_all_rsso_plots,
-            plot_dir,
-        ) = args
-
-        from picasso_workflow.picasso_outpost import _calculate_pairwise_shift
-
-        if block_start == 0:
-            return None  # Skip first block (reference)
-
-        # Get frame ranges for current and previous blocks
-        current_min_frame = frames[block_start]
-        current_max_frame = frames[block_end - 1]
-        prev_min_frame = frames[max(0, block_start - toff_block_size)]
-        prev_max_frame = (
-            frames[block_start - 1] if block_start > 0 else frames[0]
-        )
-
-        # Filter localizations efficiently
-        current_block_locs = locs_data[
-            (locs_data["frame"] >= current_min_frame)
-            & (locs_data["frame"] <= current_max_frame)
-        ]
-        prev_block_locs = locs_data[
-            (locs_data["frame"] >= prev_min_frame)
-            & (locs_data["frame"] <= prev_max_frame)
-        ]
-
-        # Estimate drift between blocks
-        if (
-            len(prev_block_locs) < min_locs_per_block
-            or len(current_block_locs) < min_locs_per_block
-        ):
-            return (block_start, block_end, None, None, 0, None, None)
-
-        shift_x, shift_y, _, uncertainty_info = _calculate_pairwise_shift(
-            prev_block_locs,
-            current_block_locs,
-            max_shift,
-            plot_histogram=save_all_rsso_plots,
-            plot_dir=plot_dir,
-        )
-        logger.debug(f"""
-            coarse undrift of block {current_min_frame} to {current_max_frame}
-            shift x: {shift_x}; shift y: {shift_y};
-            uncertainty info: {uncertainty_info}
-            """)
-
-        if shift_x is not None and shift_y is not None:
-            quality = len(prev_block_locs) + len(current_block_locs)
-            uncertainty_x = (
-                uncertainty_info["sigma_x"]
-                if uncertainty_info["fit_successful"]
-                else uncertainty_info["shift_x_error"]
-            )
-            uncertainty_y = (
-                uncertainty_info["sigma_y"]
-                if uncertainty_info["fit_successful"]
-                else uncertainty_info["shift_y_error"]
-            )
-            return (
-                block_start,
-                block_end,
-                shift_x,
-                shift_y,
-                quality,
-                uncertainty_x,
-                uncertainty_y,
-            )
-        else:
-            return (block_start, block_end, None, None, 0, None, None)
-
-    def _adaptive_drift_correction(
-        self,
-        frames,
-        max_shift,
-        min_locs_per_frame,
-        min_window_size,
-        max_window_size,
-        confidence_threshold,
-        outlier_detection_enabled,
-        outlier_z_threshold,
-        change_point_sensitivity,
-        min_signal_to_noise,
-        n_processes,
-        save_all_rsso_plots,
-        plot_dir,
-        use_spline_interpolation,
-    ):
-        """Adaptive drift correction with locally variable window sizes.
-
-        Uses time-series cross-validation principles to adaptively choose
-        window sizes -- larger in stable regions, smaller in rapidly changing
-        ones.
-
-        Parameters
-        ----------
-        frames : numpy.ndarray
-            The localization frame numbers.
-        max_shift : float
-            Maximum expected drift per step in pixels.
-        min_locs_per_frame : int
-            Minimum localizations per frame for a reliable estimate.
-        min_window_size, max_window_size : int
-            Bounds on the adaptive window size.
-        confidence_threshold : float
-            Confidence threshold for windowing.
-        outlier_detection_enabled : bool
-            Whether to detect and handle temporal outliers.
-        outlier_z_threshold : float
-            Z-score threshold for temporal outlier detection.
-        change_point_sensitivity : float
-            Sensitivity for change-point detection.
-        min_signal_to_noise : float
-            Minimum signal-to-noise ratio for drift measurements.
-        n_processes : int or None
-            Number of parallel processes.
-        save_all_rsso_plots : bool
-            Whether to save all RSSO diagnostic plots.
-        plot_dir : str
-            Directory for the plots.
-        use_spline_interpolation : bool
-            Whether to use spline (vs linear) interpolation.
-
-        Returns
-        -------
-        tuple
-            ``(drift_x_fine, drift_y_fine, uncertainty_x_fine,
-            uncertainty_y_fine, drift_quality)``.
-        """
-
-        n_frames = len(frames)
-
-        # Initialize drift arrays
-        drift_x_fine = np.zeros(n_frames)
-        drift_y_fine = np.zeros(n_frames)
-        uncertainty_x_fine = np.zeros(n_frames)
-        uncertainty_y_fine = np.zeros(n_frames)
-        drift_quality = np.zeros(n_frames)
-
-        logger.debug(
-            f"Adaptive drift correction: {n_frames} frames, "
-            f"window size range: {min_window_size}-{max_window_size}"
-        )
-
-        # Phase 1: Initial coarse estimation to detect change points
-        coarse_estimates = self._get_coarse_drift_estimates(
-            frames, max_shift, min_locs_per_frame, max_window_size
-        )
-
-        # Phase 2: Temporal outlier filtering
-        if outlier_detection_enabled:
-            coarse_estimates_filtered = self._filter_temporal_outliers(
-                coarse_estimates, outlier_z_threshold
-            )
-        else:
-            coarse_estimates_filtered = coarse_estimates
-
-        # Phase 3: Change point detection (on filtered data)
-        change_points = self._detect_change_points(
-            coarse_estimates_filtered, change_point_sensitivity
-        )
-
-        logger.debug(
-            f"Detected {len(change_points)} change points: {change_points}"
-        )
-
-        # Phase 4: Adaptive window sizing
-        optimal_windows = self._calculate_adaptive_windows(
-            frames,
-            change_points,
-            coarse_estimates_filtered,
-            min_window_size,
-            max_window_size,
-            confidence_threshold,
-        )
-
-        # Phase 5: High-precision drift estimation with optimal windows
-        (
-            drift_x_fine,
-            drift_y_fine,
-            uncertainty_x_fine,
-            uncertainty_y_fine,
-            drift_quality,
-        ) = self._estimate_drift_with_adaptive_windows(
-            frames,
-            optimal_windows,
-            max_shift,
-            min_locs_per_frame,
-            save_all_rsso_plots,
-            plot_dir,
-            outlier_detection_enabled,
-            min_signal_to_noise,
-        )
-
-        # Log performance statistics
-        avg_window_size = np.mean(optimal_windows[1:])  # Exclude first frame
-        avg_uncertainty_x = np.mean(uncertainty_x_fine[1:])
-        avg_uncertainty_y = np.mean(uncertainty_y_fine[1:])
-        avg_quality = np.mean(drift_quality[1:])
-
-        logger.info(
-            f"Adaptive drift correction completed: avg_window_size={avg_window_size:.1f}, "
-            f"avg_uncertainty=({avg_uncertainty_x:.3f}, {avg_uncertainty_y:.3f}), "
-            f"avg_quality={avg_quality:.0f}"
-        )
-
-        # Generate comprehensive drift analysis plot
-        if plot_dir:
-            self._plot_adaptive_drift_analysis(
-                frames,
-                drift_x_fine,
-                drift_y_fine,
-                uncertainty_x_fine,
-                uncertainty_y_fine,
-                drift_quality,
-                optimal_windows,
-                change_points,
-                coarse_estimates,
-                coarse_estimates_filtered,
-                plot_dir,
-                use_spline_interpolation,
-            )
-
-        return (
-            drift_x_fine,
-            drift_y_fine,
-            uncertainty_x_fine,
-            uncertainty_y_fine,
-            drift_quality,
-        )
-
-    def _get_coarse_drift_estimates(
-        self, frames, max_shift, min_locs_per_frame, window_size
-    ):
-        """Get initial coarse drift estimates for change-point detection.
-
-        Parameters
-        ----------
-        frames : numpy.ndarray
-            The localization frame numbers.
-        max_shift : float
-            Maximum expected drift per step in pixels.
-        min_locs_per_frame : int
-            Minimum localizations per window for an estimate.
-        window_size : int
-            Fixed sliding-window size for the coarse estimation.
-
-        Returns
-        -------
-        dict
-            Lists keyed by ``drift_x``, ``drift_y``, ``uncertainty_x``,
-            ``uncertainty_y``, ``quality`` and ``frame_indices``.
-        """
-        n_frames = len(frames)
-        coarse_estimates = {
-            "drift_x": [],
-            "drift_y": [],
-            "uncertainty_x": [],
-            "uncertainty_y": [],
-            "quality": [],
-            "frame_indices": [],
-        }
-
-        # Use sliding windows with fixed size for initial estimation
-        for center_idx in range(window_size // 2, n_frames - window_size // 2):
-            start_idx = max(0, center_idx - window_size // 2)
-            end_idx = min(n_frames, center_idx + window_size // 2)
-
-            # Aggregate localizations from window
-            ref_frames = frames[start_idx:center_idx]
-            target_frames = frames[center_idx:end_idx]
-
-            ref_locs = self.locs[np.isin(self.locs["frame"], ref_frames)]
-            target_locs = self.locs[np.isin(self.locs["frame"], target_frames)]
-
-            if (
-                len(ref_locs) < min_locs_per_frame
-                or len(target_locs) < min_locs_per_frame
-            ):
-                # Insufficient data, use nan
-                coarse_estimates["drift_x"].append(np.nan)
-                coarse_estimates["drift_y"].append(np.nan)
-                coarse_estimates["uncertainty_x"].append(np.nan)
-                coarse_estimates["uncertainty_y"].append(np.nan)
-                coarse_estimates["quality"].append(0)
-            else:
-                (
-                    shift_x,
-                    shift_y,
-                    quality,
-                    uncertainty_x,
-                    uncertainty_y,
-                ) = self._estimate_drift_between_frame_groups(
-                    ref_locs,
-                    target_locs,
-                    max_shift,
-                    min_locs_per_frame,
-                    outlier_detection_enabled=False,
-                    min_signal_to_noise=0.5,  # Disable for coarse estimates
-                )
-                coarse_estimates["drift_x"].append(
-                    shift_x if shift_x is not None else np.nan
-                )
-                coarse_estimates["drift_y"].append(
-                    shift_y if shift_y is not None else np.nan
-                )
-                coarse_estimates["uncertainty_x"].append(
-                    uncertainty_x if uncertainty_x is not None else np.nan
-                )
-                coarse_estimates["uncertainty_y"].append(
-                    uncertainty_y if uncertainty_y is not None else np.nan
-                )
-                coarse_estimates["quality"].append(quality)
-
-            coarse_estimates["frame_indices"].append(center_idx)
-
-        return coarse_estimates
-
-    def _filter_temporal_outliers(self, coarse_estimates, z_threshold=3.5):
-        """Filter temporal outliers from coarse drift estimates.
-
-        Identifies and removes drift measurements inconsistent with their
-        temporal neighbours (often from RSSO fit failures), using a local
-        moving-median consistency check.
-
-        Parameters
-        ----------
-        coarse_estimates : dict
-            Coarse estimates as returned by
-            :meth:`_get_coarse_drift_estimates`.
-        z_threshold : float, optional
-            Modified z-score threshold above which a point is an outlier.
-            Default is 3.5.
-
-        Returns
-        -------
-        dict
-            A copy of ``coarse_estimates`` with outliers set to NaN.
-        """
-        drift_x = np.array(coarse_estimates["drift_x"])
-        drift_y = np.array(coarse_estimates["drift_y"])
-
-        # Create filtered copy
-        filtered_estimates = {
-            key: coarse_estimates[key].copy() for key in coarse_estimates
-        }
-
-        # Find valid measurements
-        valid_mask = ~(np.isnan(drift_x) | np.isnan(drift_y))
-        if np.sum(valid_mask) < 3:  # Need at least 3 points for filtering
-            return filtered_estimates
-
-        # Method 1: Local consistency check using moving median
-        window_size = min(5, max(3, len(drift_x) // 4))
-
-        for i in range(len(drift_x)):
-            if not valid_mask[i]:
-                continue
-
-            # Define local window
-            start_idx = max(0, i - window_size // 2)
-            end_idx = min(len(drift_x), i + window_size // 2 + 1)
-
-            local_drift_x = drift_x[start_idx:end_idx]
-            local_drift_y = drift_y[start_idx:end_idx]
-            local_valid = valid_mask[start_idx:end_idx]
-
-            if np.sum(local_valid) < 2:
-                continue
-
-            # Calculate local statistics (excluding current point)
-            local_x_others = local_drift_x[
-                local_valid & (np.arange(start_idx, end_idx) != i)
-            ]
-            local_y_others = local_drift_y[
-                local_valid & (np.arange(start_idx, end_idx) != i)
-            ]
-
-            if len(local_x_others) < 2:
-                continue
-
-            # Use robust statistics (median and MAD)
-            median_x = np.median(local_x_others)
-            median_y = np.median(local_y_others)
-            mad_x = np.median(np.abs(local_x_others - median_x))
-            mad_y = np.median(np.abs(local_y_others - median_y))
-
-            # Convert MAD to approximate standard deviation
-            std_x = 1.4826 * mad_x if mad_x > 0 else np.std(local_x_others)
-            std_y = 1.4826 * mad_y if mad_y > 0 else np.std(local_y_others)
-
-            # Check if current measurement is an outlier (Modified Z-score > threshold)
-            z_score_x = abs(drift_x[i] - median_x) / (std_x + 1e-10)
-            z_score_y = abs(drift_y[i] - median_y) / (std_y + 1e-10)
-
-            is_outlier = (z_score_x > z_threshold) or (z_score_y > z_threshold)
-
-            # Additional check: inconsistent with local trend
-            if not is_outlier and len(local_x_others) >= 3:
-                # Check if measurement is inconsistent with local linear trend
-                trend_inconsistency = self._check_trend_inconsistency(
-                    i, start_idx, end_idx, drift_x, drift_y, valid_mask
-                )
-                is_outlier = is_outlier or trend_inconsistency
-
-            if is_outlier:
-                logger.debug(
-                    f"Filtering temporal outlier at frame {coarse_estimates['frame_indices'][i]}: "
-                    f"drift=({drift_x[i]:.3f}, {drift_y[i]:.3f}), "
-                    f"z_scores=({z_score_x:.2f}, {z_score_y:.2f})"
-                )
-
-                # Mark as invalid
-                filtered_estimates["drift_x"][i] = np.nan
-                filtered_estimates["drift_y"][i] = np.nan
-                filtered_estimates["uncertainty_x"][i] = np.nan
-                filtered_estimates["uncertainty_y"][i] = np.nan
-                filtered_estimates["quality"][i] = 0
-
-        return filtered_estimates
-
-    def _check_trend_inconsistency(
-        self, current_idx, start_idx, end_idx, drift_x, drift_y, valid_mask
-    ):
-        """Check whether a measurement is inconsistent with the local trend.
-
-        Parameters
-        ----------
-        current_idx : int
-            Index of the measurement being checked.
-        start_idx, end_idx : int
-            Bounds of the local window.
-        drift_x, drift_y : numpy.ndarray
-            The coarse drift estimates.
-        valid_mask : numpy.ndarray of bool
-            Which estimates are valid.
-
-        Returns
-        -------
-        bool
-            Whether the measurement deviates from the local linear trend.
-        """
-        try:
-            # Get local valid indices
-            local_indices = np.arange(start_idx, end_idx)
-            local_valid = valid_mask[start_idx:end_idx] & (
-                local_indices != current_idx
-            )
-
-            if np.sum(local_valid) < 2:
-                return False
-
-            # Extract local data (excluding current point)
-            local_x = drift_x[start_idx:end_idx][local_valid]
-            local_y = drift_y[start_idx:end_idx][local_valid]
-            local_frame_indices = local_indices[local_valid]
-
-            # Fit linear trend
-            if len(local_x) >= 2:
-                trend_x = np.polyfit(local_frame_indices, local_x, 1)
-                trend_y = np.polyfit(local_frame_indices, local_y, 1)
-
-                # Predict what current measurement should be
-                expected_x = np.polyval(trend_x, current_idx)
-                expected_y = np.polyval(trend_y, current_idx)
-
-                # Calculate residuals for trend fitting
-                residuals_x = local_x - np.polyval(
-                    trend_x, local_frame_indices
-                )
-                residuals_y = local_y - np.polyval(
-                    trend_y, local_frame_indices
-                )
-
-                # Estimate trend uncertainty
-                trend_std_x = (
-                    np.std(residuals_x) if len(residuals_x) > 1 else 0
-                )
-                trend_std_y = (
-                    np.std(residuals_y) if len(residuals_y) > 1 else 0
-                )
-
-                # Check if current measurement deviates significantly from trend
-                deviation_x = abs(drift_x[current_idx] - expected_x)
-                deviation_y = abs(drift_y[current_idx] - expected_y)
-
-                # Use 3-sigma rule for trend consistency
-                inconsistent_x = deviation_x > 3 * (trend_std_x + 1e-10)
-                inconsistent_y = deviation_y > 3 * (trend_std_y + 1e-10)
-
-                return inconsistent_x or inconsistent_y
-
-        except Exception as e:
-            logger.debug(f"Trend inconsistency check failed: {e}")
-            return False
-
-        return False
-
-    def _detect_change_points(self, coarse_estimates, sensitivity):
-        """Detect change points in the drift pattern.
-
-        Parameters
-        ----------
-        coarse_estimates : dict
-            Coarse estimates as returned by
-            :meth:`_get_coarse_drift_estimates`.
-        sensitivity : float
-            Detection sensitivity.
-
-        Returns
-        -------
-        list
-            Frame indices of the detected change points.
-        """
-        drift_x = np.array(coarse_estimates["drift_x"])
-        drift_y = np.array(coarse_estimates["drift_y"])
-        frame_indices = np.array(coarse_estimates["frame_indices"])
-
-        # Remove nan values
-        valid_mask = ~(np.isnan(drift_x) | np.isnan(drift_y))
-        if np.sum(valid_mask) < 5:  # Need at least 5 points
-            return []
-
-        drift_x_valid = drift_x[valid_mask]
-        drift_y_valid = drift_y[valid_mask]
-        frame_indices_valid = frame_indices[valid_mask]
-
-        change_points = []
-
-        # Method 1: Detect large changes in drift magnitude
-        drift_magnitude = np.sqrt(drift_x_valid**2 + drift_y_valid**2)
-        if len(drift_magnitude) > 3:
-            # Use moving average and standard deviation for change detection
-            window = min(5, len(drift_magnitude) // 3)
-            rolling_mean = np.convolve(
-                drift_magnitude, np.ones(window) / window, mode="same"
-            )
-            rolling_std = np.array(
-                [
-                    np.std(
-                        drift_magnitude[
-                            max(0, i - window // 2) : i + window // 2 + 1
-                        ]
-                    )
-                    for i in range(len(drift_magnitude))
-                ]
-            )
-
-            # Detect outliers (change points)
-            z_scores = np.abs(
-                (drift_magnitude - rolling_mean) / (rolling_std + 1e-10)
-            )
-            change_indices = np.where(z_scores > sensitivity)[0]
-
-            change_points.extend(frame_indices_valid[change_indices].tolist())
-
-        # Method 2: Confidence interval intersection analysis
-        uncertainties_x = np.array(coarse_estimates["uncertainty_x"])[
-            valid_mask
-        ]
-        uncertainties_y = np.array(coarse_estimates["uncertainty_y"])[
-            valid_mask
-        ]
-
-        if not np.any(np.isnan(uncertainties_x)) and not np.any(
-            np.isnan(uncertainties_y)
-        ):
-            for i in range(1, len(drift_x_valid)):
-                # Check if confidence intervals don't overlap (significant change)
-                prev_ci_x = [
-                    drift_x_valid[i - 1]
-                    - sensitivity * uncertainties_x[i - 1],
-                    drift_x_valid[i - 1]
-                    + sensitivity * uncertainties_x[i - 1],
-                ]
-                curr_ci_x = [
-                    drift_x_valid[i] - sensitivity * uncertainties_x[i],
-                    drift_x_valid[i] + sensitivity * uncertainties_x[i],
-                ]
-
-                prev_ci_y = [
-                    drift_y_valid[i - 1]
-                    - sensitivity * uncertainties_y[i - 1],
-                    drift_y_valid[i - 1]
-                    + sensitivity * uncertainties_y[i - 1],
-                ]
-                curr_ci_y = [
-                    drift_y_valid[i] - sensitivity * uncertainties_y[i],
-                    drift_y_valid[i] + sensitivity * uncertainties_y[i],
-                ]
-
-                # Check for non-overlapping confidence intervals
-                if (
-                    curr_ci_x[0] > prev_ci_x[1]
-                    or curr_ci_x[1] < prev_ci_x[0]
-                    or curr_ci_y[0] > prev_ci_y[1]
-                    or curr_ci_y[1] < prev_ci_y[0]
-                ):
-                    change_points.append(frame_indices_valid[i])
-
-        # Remove duplicates and sort
-        change_points = sorted(list(set(change_points)))
-
-        return change_points
-
-    def _calculate_adaptive_windows(
-        self,
-        frames,
-        change_points,
-        coarse_estimates,
-        min_window_size,
-        max_window_size,
-        confidence_threshold,
-    ):
-        """Calculate per-frame optimal window sizes from local stability.
-
-        Parameters
-        ----------
-        frames : numpy.ndarray
-            The localization frame numbers.
-        change_points : list
-            Frame indices of detected change points.
-        coarse_estimates : dict
-            Coarse estimates as returned by
-            :meth:`_get_coarse_drift_estimates`.
-        min_window_size, max_window_size : int
-            Bounds on the window size.
-        confidence_threshold : float
-            Confidence above which larger windows are used.
-
-        Returns
-        -------
-        numpy.ndarray
-            The optimal window size per frame.
-        """
-        n_frames = len(frames)
-        optimal_windows = np.full(n_frames, min_window_size)
-
-        # Convert change points to segments
-        segment_boundaries = [0] + change_points + [n_frames]
-        segments = [
-            (segment_boundaries[i], segment_boundaries[i + 1])
-            for i in range(len(segment_boundaries) - 1)
-        ]
-
-        for start, end in segments:
-            segment_length = end - start
-
-            # Analyze local noise level in this segment
-            local_uncertainties = []
-            local_qualities = []
-
-            for i, frame_idx in enumerate(coarse_estimates["frame_indices"]):
-                if start <= frame_idx < end:
-                    if not np.isnan(coarse_estimates["uncertainty_x"][i]):
-                        local_uncertainties.append(
-                            np.sqrt(
-                                coarse_estimates["uncertainty_x"][i] ** 2
-                                + coarse_estimates["uncertainty_y"][i] ** 2
-                            )
-                        )
-                    local_qualities.append(coarse_estimates["quality"][i])
-
-            if local_uncertainties:
-                # Calculate confidence metric for this segment
-                mean_uncertainty = np.mean(local_uncertainties)
-                mean_quality = (
-                    np.mean(local_qualities) if local_qualities else 0
-                )
-
-                # Normalize confidence (higher quality, lower uncertainty = higher confidence)
-                max_quality = (
-                    max(coarse_estimates["quality"])
-                    if coarse_estimates["quality"]
-                    else 1
-                )
-                confidence = (mean_quality / max_quality) / (
-                    1 + mean_uncertainty
-                )
-
-                # Determine optimal window size based on confidence
-                if confidence >= confidence_threshold:
-                    # High confidence: can use larger windows
-                    target_window_size = min(
-                        max_window_size, segment_length // 2
-                    )
-                else:
-                    # Low confidence: use smaller windows for better tracking
-                    target_window_size = max(
-                        min_window_size,
-                        min(max_window_size // 2, segment_length // 3),
-                    )
-
-                # Set window sizes for this segment
-                for frame_idx in range(start, end):
-                    optimal_windows[frame_idx] = target_window_size
-
-                logger.debug(
-                    f"Segment [{start}:{end}] - Confidence: {confidence:.3f}, "
-                    f"Window size: {target_window_size}"
-                )
-
-        return optimal_windows
-
-    def _estimate_drift_with_adaptive_windows(
-        self,
-        frames,
-        optimal_windows,
-        max_shift,
-        min_locs_per_frame,
-        save_all_rsso_plots,
-        plot_dir,
-        outlier_detection_enabled=True,
-        min_signal_to_noise=0.5,
-    ):
-        """Estimate drift per frame using the adaptive window sizes.
-
-        Parameters
-        ----------
-        frames : numpy.ndarray
-            The localization frame numbers.
-        optimal_windows : numpy.ndarray
-            Per-frame window sizes from :meth:`_calculate_adaptive_windows`.
-        max_shift : float
-            Maximum expected drift per step in pixels.
-        min_locs_per_frame : int
-            Minimum localizations per window for an estimate.
-        save_all_rsso_plots : bool
-            Whether to save all RSSO diagnostic plots.
-        plot_dir : str
-            Directory for the plots.
-        outlier_detection_enabled : bool, optional
-            Whether to detect outliers. Default is True.
-        min_signal_to_noise : float, optional
-            Minimum signal-to-noise ratio. Default is 0.5.
-
-        Returns
-        -------
-        tuple
-            ``(drift_x_fine, drift_y_fine, uncertainty_x_fine,
-            uncertainty_y_fine, drift_quality)``.
-        """
-        n_frames = len(frames)
-
-        drift_x_fine = np.zeros(n_frames)
-        drift_y_fine = np.zeros(n_frames)
-        uncertainty_x_fine = np.zeros(n_frames)
-        uncertainty_y_fine = np.zeros(n_frames)
-        drift_quality = np.zeros(n_frames)
-
-        for frame_idx in range(1, n_frames):
-            window_size = int(optimal_windows[frame_idx])
-
-            # Define reference and target windows
-            ref_start = max(0, frame_idx - window_size)
-            ref_end = frame_idx
-            target_start = frame_idx
-            target_end = min(n_frames, frame_idx + window_size)
-
-            # Get localizations for reference and target windows
-            ref_frame_range = frames[ref_start:ref_end]
-            target_frame_range = frames[target_start:target_end]
-
-            ref_locs = self.locs[np.isin(self.locs["frame"], ref_frame_range)]
-            target_locs = self.locs[
-                np.isin(self.locs["frame"], target_frame_range)
-            ]
-
-            # Estimate drift for this frame
-            (
-                shift_x,
-                shift_y,
-                quality,
-                uncertainty_x,
-                uncertainty_y,
-            ) = self._estimate_drift_between_frame_groups(
-                ref_locs,
-                target_locs,
-                max_shift,
-                min_locs_per_frame,
-                outlier_detection_enabled,
-                min_signal_to_noise,
-            )
-
-            if shift_x is not None and shift_y is not None:
-                # Scale by window overlap to get per-frame drift
-                overlap_factor = (
-                    min(window_size, target_end - target_start) / window_size
-                )
-                per_frame_shift_x = shift_x * overlap_factor / window_size
-                per_frame_shift_y = shift_y * overlap_factor / window_size
-
-                # Accumulate drift
-                drift_x_fine[frame_idx] = (
-                    drift_x_fine[frame_idx - 1] + per_frame_shift_x
-                )
-                drift_y_fine[frame_idx] = (
-                    drift_y_fine[frame_idx - 1] + per_frame_shift_y
-                )
-
-                # Scale uncertainties appropriately
-                scaled_uncertainty_x = (
-                    uncertainty_x * overlap_factor / window_size
-                    if uncertainty_x
-                    else 0
-                )
-                scaled_uncertainty_y = (
-                    uncertainty_y * overlap_factor / window_size
-                    if uncertainty_y
-                    else 0
-                )
-
-                uncertainty_x_fine[frame_idx] = np.sqrt(
-                    uncertainty_x_fine[frame_idx - 1] ** 2
-                    + scaled_uncertainty_x**2
-                )
-                uncertainty_y_fine[frame_idx] = np.sqrt(
-                    uncertainty_y_fine[frame_idx - 1] ** 2
-                    + scaled_uncertainty_y**2
-                )
-
-                drift_quality[frame_idx] = quality
-            else:
-                # Failed estimation - use previous values
-                drift_x_fine[frame_idx] = drift_x_fine[frame_idx - 1]
-                drift_y_fine[frame_idx] = drift_y_fine[frame_idx - 1]
-                uncertainty_x_fine[frame_idx] = uncertainty_x_fine[
-                    frame_idx - 1
-                ]
-                uncertainty_y_fine[frame_idx] = uncertainty_y_fine[
-                    frame_idx - 1
-                ]
-                drift_quality[frame_idx] = 0
-
-        return (
-            drift_x_fine,
-            drift_y_fine,
-            uncertainty_x_fine,
-            uncertainty_y_fine,
-            drift_quality,
-        )
-
-    def _estimate_drift_between_frame_groups(
-        self,
-        locs_ref,
-        locs_target,
-        max_shift,
-        min_locs,
-        outlier_detection_enabled=True,
-        min_signal_to_noise=0.5,
-    ):
-        """Estimate the drift between two groups of localizations via RSSO.
-
-        Enhanced with RSSO fit-failure detection and outlier filtering.
-
-        Parameters
-        ----------
-        locs_ref, locs_target : np.rec.array
-            The reference and target localizations.
-        max_shift : float
-            Maximum expected drift in pixels.
-        min_locs : int
-            Minimum localizations required in each group.
-        outlier_detection_enabled : bool, optional
-            Whether to apply failure/outlier detection. Default is True.
-        min_signal_to_noise : float, optional
-            Minimum signal-to-noise ratio. Default is 0.5.
-
-        Returns
-        -------
-        shift_x, shift_y : float or None
-            Drift measurements (None if failed or flagged as an outlier).
-        quality : int
-            Quality metric based on the number of localizations.
-        uncertainty_x, uncertainty_y : float or None
-            Estimated uncertainties in the shift measurements.
-        """
-        from picasso_workflow.picasso_outpost import _calculate_pairwise_shift
-
-        if len(locs_ref) < min_locs or len(locs_target) < min_locs:
-            return None, None, 0, None, None
-
-        shift_x, shift_y, _, uncertainty_info = _calculate_pairwise_shift(
-            locs_ref, locs_target, max_shift, plot_histogram=False
-        )
-
-        if shift_x is not None and shift_y is not None:
-            # Check for RSSO fit failure indicators
-            fit_successful = uncertainty_info.get("fit_successful", False)
-
-            # Extract uncertainty estimates
-            uncertainty_x = (
-                uncertainty_info["sigma_x"]
-                if fit_successful
-                else uncertainty_info.get("shift_x_error", np.inf)
-            )
-            uncertainty_y = (
-                uncertainty_info["sigma_y"]
-                if fit_successful
-                else uncertainty_info.get("shift_y_error", np.inf)
-            )
-
-            # Quality metrics for outlier detection
-            quality = len(locs_ref) + len(locs_target)
-            shift_magnitude = np.sqrt(shift_x**2 + shift_y**2)
-
-            # Detect RSSO failure and outliers
-            if outlier_detection_enabled:
-                is_outlier = self._detect_rsso_failure_and_outliers(
-                    shift_x,
-                    shift_y,
-                    uncertainty_x,
-                    uncertainty_y,
-                    shift_magnitude,
-                    max_shift,
-                    fit_successful,
-                    quality,
-                    min_signal_to_noise,
-                )
-            else:
-                is_outlier = False
-
-            if is_outlier:
-                logger.debug(
-                    f"Detected RSSO outlier/failure: shift=({shift_x:.3f}, {shift_y:.3f}), "
-                    f"magnitude={shift_magnitude:.3f}, fit_successful={fit_successful}, "
-                    f"uncertainty=({uncertainty_x:.3f}, {uncertainty_y:.3f})"
-                )
-                return None, None, 0, None, None
-
-            return shift_x, shift_y, quality, uncertainty_x, uncertainty_y
-        else:
-            return None, None, 0, None, None
-
-    def _detect_rsso_failure_and_outliers(
-        self,
-        shift_x,
-        shift_y,
-        uncertainty_x,
-        uncertainty_y,
-        shift_magnitude,
-        max_shift,
-        fit_successful,
-        quality,
-        min_signal_to_noise=0.5,
-    ):
-        """Detect RSSO fit failures and false drift outliers.
-
-        Parameters
-        ----------
-        shift_x, shift_y : float
-            Estimated drift values.
-        uncertainty_x, uncertainty_y : float
-            Uncertainty estimates.
-        shift_magnitude : float
-            Magnitude of the drift vector.
-        max_shift : float
-            Maximum expected drift per comparison.
-        fit_successful : bool
-            Whether the Gaussian fit succeeded.
-        quality : int
-            Quality metric (number of localizations).
-        min_signal_to_noise : float, optional
-            Minimum signal-to-noise ratio. Default is 0.5.
-
-        Returns
-        -------
-        bool
-            Whether the measurement should be treated as an outlier/failure.
-        """
-
-        # Criterion 1: Gaussian fit failure
-        if not fit_successful:
-            return True
-
-        # Criterion 2: Excessive shift magnitude (likely spurious correlation)
-        # Allow for accumulated drift but flag extreme outliers
-        if shift_magnitude > 3 * max_shift:  # 3x safety margin
-            return True
-
-        # Criterion 3: Excessive uncertainty relative to signal
-        if uncertainty_x is not None and uncertainty_y is not None:
-            # Flag if uncertainty is comparable to or larger than the shift
-            uncertainty_magnitude = np.sqrt(
-                uncertainty_x**2 + uncertainty_y**2
-            )
-            signal_to_noise = shift_magnitude / (uncertainty_magnitude + 1e-10)
-
-            if (
-                signal_to_noise < min_signal_to_noise
-            ):  # Signal less than minimum threshold
-                return True
-
-            # Flag if uncertainty is unrealistically large (fit instability)
-            if uncertainty_magnitude > 2 * max_shift:
-                return True
-
-        # Criterion 4: Very low quality (insufficient data for reliable estimation)
-        if quality < 20:  # Minimum threshold for reliable cross-correlation
-            return True
-
-        # Criterion 5: Detect common RSSO failure patterns
-        # Check for suspiciously round numbers (often artifacts)
-        if abs(shift_x) < 1e-10 and abs(shift_y) < 1e-10:  # Exactly zero drift
-            return True
-
-        # Check for extreme aspect ratios (likely spurious)
-        aspect_ratio = max(abs(shift_x), abs(shift_y)) / (
-            min(abs(shift_x), abs(shift_y)) + 1e-10
-        )
-        if aspect_ratio > 10:  # One direction dominates unrealistically
-            return True
-
-        return False
-
-    def _plot_adaptive_drift_analysis(
-        self,
-        frames,
-        drift_x_fine,
-        drift_y_fine,
-        uncertainty_x_fine,
-        uncertainty_y_fine,
-        drift_quality,
-        optimal_windows,
-        change_points,
-        coarse_estimates,
-        coarse_estimates_filtered,
-        plot_dir,
-        use_spline_interpolation,
-    ):
-        """Plot the adaptive drift analysis.
-
-        Shows the local drift trajectory, confidence intervals, adaptive window
-        sizes and detected change points across four stacked panels, and saves
-        the figure to ``plot_dir``.
-
-        Returns
-        -------
-        str
-            The filepath of the saved analysis figure.
-        """
-        import os
-
-        import matplotlib.pyplot as plt
-        from matplotlib.patches import Rectangle
-
-        fig, axes = plt.subplots(4, 1, figsize=(14, 12))
-        stage2_method = (
-            "Cubic Spline" if use_spline_interpolation else "Linear Blocks"
-        )
-        fig.suptitle(
-            f"Adaptive Drift Correction Analysis (Stage 2: {stage2_method})",
-            fontsize=16,
-            fontweight="bold",
-        )
-
-        frame_indices = np.arange(len(frames))
-
-        # Plot 1: Drift trajectory with confidence intervals
-        ax1 = axes[0]
-        ax1.plot(
-            frame_indices, drift_x_fine, "b-", label="Drift X", linewidth=1.5
-        )
-        ax1.plot(
-            frame_indices, drift_y_fine, "r-", label="Drift Y", linewidth=1.5
-        )
-
-        # Add confidence intervals
-        ax1.fill_between(
-            frame_indices,
-            drift_x_fine - uncertainty_x_fine,
-            drift_x_fine + uncertainty_x_fine,
-            alpha=0.3,
-            color="blue",
-            label="X uncertainty",
-        )
-        ax1.fill_between(
-            frame_indices,
-            drift_y_fine - uncertainty_y_fine,
-            drift_y_fine + uncertainty_y_fine,
-            alpha=0.3,
-            color="red",
-            label="Y uncertainty",
-        )
-
-        # # Mark change points
-        # for cp in change_points:
-        #     if cp < len(frames):
-        #         ax1.axvline(
-        #             x=cp,
-        #             color="orange",
-        #             linestyle="--",
-        #             alpha=0.7,
-        #             linewidth=2,
-        #         )
-
-        # Mark filtered outliers
-        coarse_frame_indices = np.array(coarse_estimates["frame_indices"])
-        original_drift_x = np.array(coarse_estimates["drift_x"])
-        original_drift_y = np.array(coarse_estimates["drift_y"])
-        filtered_drift_x = np.array(coarse_estimates_filtered["drift_x"])
-        filtered_drift_y = np.array(coarse_estimates_filtered["drift_y"])
-
-        # Find outliers (points that were valid originally but filtered out)
-        original_valid = ~(
-            np.isnan(original_drift_x) | np.isnan(original_drift_y)
-        )
-        filtered_valid = ~(
-            np.isnan(filtered_drift_x) | np.isnan(filtered_drift_y)
-        )
-        outliers = original_valid & ~filtered_valid
-
-        if np.any(outliers):
-            outlier_frames = coarse_frame_indices[outliers]
-            outlier_x = original_drift_x[outliers]
-            outlier_y = original_drift_y[outliers]
-            ax1.scatter(
-                outlier_frames,
-                outlier_x,
-                color="red",
-                marker="x",
-                s=50,
-                label=f"Filtered Outliers ({np.sum(outliers)})",
-                alpha=0.7,
-            )
-            ax1.scatter(
-                outlier_frames,
-                outlier_y,
-                color="red",
-                marker="x",
-                s=50,
-                alpha=0.7,
-            )
-
-        ax1.set_ylabel("Cumulative Drift (pixels)")
-        ax1.set_title("Drift Trajectory with Confidence Intervals")
-        ax1.legend()
-        ax1.grid(True, alpha=0.3)
-
-        # Plot 2: Local drift rate and quality
-        ax2 = axes[1]
-
-        # Calculate instantaneous drift rate
-        drift_rate_x = np.diff(drift_x_fine)
-        drift_rate_y = np.diff(drift_y_fine)
-        drift_rate_magnitude = np.sqrt(drift_rate_x**2 + drift_rate_y**2)
-
-        # Plot drift rate
-        ax2_twin = ax2.twinx()
-        ax2.plot(
-            frame_indices[1:],
-            drift_rate_magnitude,
-            "g-",
-            linewidth=1.5,
-            label="Drift Rate Magnitude",
-        )
-
-        # Plot quality as bars
-        quality_normalized = (
-            drift_quality / np.max(drift_quality)
-            if np.max(drift_quality) > 0
-            else drift_quality
-        )
-        ax2_twin.bar(
-            frame_indices,
-            quality_normalized,
-            alpha=0.4,
-            color="purple",
-            label="Normalized Quality",
-        )
-
-        ax2.set_ylabel("Drift Rate (pixels/frame)", color="g")
-        ax2_twin.set_ylabel("Normalized Quality", color="purple")
-        ax2.set_title("Local Drift Rate and Measurement Quality")
-        ax2.tick_params(axis="y", labelcolor="g")
-        ax2_twin.tick_params(axis="y", labelcolor="purple")
-        ax2.grid(True, alpha=0.3)
-
-        # Combined legend
-        lines1, labels1 = ax2.get_legend_handles_labels()
-        lines2, labels2 = ax2_twin.get_legend_handles_labels()
-        ax2.legend(lines1 + lines2, labels1 + labels2, loc="upper right")
-
-        # Plot 3: Adaptive window sizes and confidence
-        ax3 = axes[2]
-
-        # Plot window sizes as step function
-        ax3.step(
-            frame_indices,
-            optimal_windows,
-            where="mid",
-            linewidth=2,
-            color="navy",
-            label="Window Size",
-        )
-
-        # Add confidence metric overlay
-        ax3_twin = ax3.twinx()
-
-        # Calculate local confidence from coarse estimates
-        confidence_series = np.full(len(frames), np.nan)
-        coarse_frame_indices = np.array(coarse_estimates["frame_indices"])
-        coarse_uncertainties = np.array(coarse_estimates["uncertainty_x"])
-        coarse_qualities = np.array(coarse_estimates["quality"])
-
-        valid_coarse = ~np.isnan(coarse_uncertainties) & (coarse_qualities > 0)
-        if np.any(valid_coarse):
-            max_quality = np.max(coarse_qualities[valid_coarse])
-            for i, frame_idx in enumerate(coarse_frame_indices):
-                if valid_coarse[i] and frame_idx < len(frames):
-                    uncertainty_combined = (
-                        np.sqrt(
-                            coarse_estimates["uncertainty_x"][i] ** 2
-                            + coarse_estimates["uncertainty_y"][i] ** 2
-                        )
-                        if not np.isnan(coarse_estimates["uncertainty_y"][i])
-                        else coarse_uncertainties[i]
-                    )
-
-                    confidence = (coarse_qualities[i] / max_quality) / (
-                        1 + uncertainty_combined
-                    )
-                    confidence_series[frame_idx] = confidence
-
-        # Interpolate confidence for plotting
-        valid_conf_mask = ~np.isnan(confidence_series)
-        if np.any(valid_conf_mask):
-            conf_interp = np.interp(
-                frame_indices,
-                frame_indices[valid_conf_mask],
-                confidence_series[valid_conf_mask],
-            )
-            ax3_twin.plot(
-                frame_indices,
-                conf_interp,
-                "orange",
-                linewidth=1.5,
-                label="Local Confidence",
-                alpha=0.8,
-            )
-
-        # Add segments with different window sizes
-        segment_boundaries = [0] + change_points + [len(frames)]
-        colors = plt.cm.Set3(np.linspace(0, 1, len(segment_boundaries) - 1))
-
-        for i, (start, end) in enumerate(
-            zip(segment_boundaries[:-1], segment_boundaries[1:])
-        ):
-            if end > start:
-                rect = Rectangle(
-                    (start, 0),
-                    end - start,
-                    np.max(optimal_windows),
-                    alpha=0.1,
-                    color=colors[i % len(colors)],
-                )
-                ax3.add_patch(rect)
-
-        ax3.set_ylabel("Window Size (frames)", color="navy")
-        ax3_twin.set_ylabel("Confidence", color="orange")
-        ax3.set_title("Adaptive Window Sizes and Local Confidence")
-        ax3.tick_params(axis="y", labelcolor="navy")
-        ax3_twin.tick_params(axis="y", labelcolor="orange")
-        ax3.grid(True, alpha=0.3)
-
-        # Legend
-        lines3, labels3 = ax3.get_legend_handles_labels()
-        lines3_twin, labels3_twin = ax3_twin.get_legend_handles_labels()
-        ax3.legend(
-            lines3 + lines3_twin, labels3 + labels3_twin, loc="upper right"
-        )
-
-        # Plot 4: Uncertainty evolution
-        ax4 = axes[3]
-
-        total_uncertainty = np.sqrt(
-            uncertainty_x_fine**2 + uncertainty_y_fine**2
-        )
-        ax4.plot(
-            frame_indices,
-            uncertainty_x_fine,
-            "b-",
-            linewidth=1.5,
-            label="X Uncertainty",
-            alpha=0.7,
-        )
-        ax4.plot(
-            frame_indices,
-            uncertainty_y_fine,
-            "r-",
-            linewidth=1.5,
-            label="Y Uncertainty",
-            alpha=0.7,
-        )
-        ax4.plot(
-            frame_indices,
-            total_uncertainty,
-            "k-",
-            linewidth=2,
-            label="Total Uncertainty",
-        )
-
-        # # Mark change points
-        # for cp in change_points:
-        #     if cp < len(frames):
-        #         ax4.axvline(x=cp, color="orange", linestyle="--", alpha=0.7)
-
-        ax4.set_ylabel("Uncertainty (pixels)")
-        ax4.set_xlabel("Frame Index")
-        ax4.set_title("Cumulative Uncertainty Evolution")
-        ax4.legend()
-        ax4.grid(True, alpha=0.3)
-
-        # Adjust layout and save
-        plt.tight_layout(rect=[0, 0.03, 1, 0.95])
-
-        plot_path = os.path.join(plot_dir, "adaptive_drift_analysis.png")
-        plt.savefig(plot_path, dpi=300, bbox_inches="tight", facecolor="white")
-        plt.close()
-
-        logger.debug(f"Saved adaptive drift analysis plot: {plot_path}")
-
-        # Additional summary statistics plot
-        self._plot_drift_statistics_summary(
-            frames,
-            drift_x_fine,
-            drift_y_fine,
-            uncertainty_x_fine,
-            uncertainty_y_fine,
-            optimal_windows,
-            change_points,
-            plot_dir,
-        )
-
-    def _plot_drift_statistics_summary(
-        self,
-        frames,
-        drift_x,
-        drift_y,
-        uncertainty_x,
-        uncertainty_y,
-        window_sizes,
-        change_points,
-        plot_dir,
-    ):
-        """Plot summary statistics of drift-correction performance.
-
-        Saves a 2x2 panel of drift-magnitude, uncertainty and window-size
-        summaries to ``plot_dir``.
-
-        Returns
-        -------
-        str
-            The filepath of the saved summary figure.
-        """
-        import os
-
-        import matplotlib.pyplot as plt
-
-        fig, axes = plt.subplots(2, 2, figsize=(12, 10))
-        fig.suptitle(
-            "Drift Correction Performance Summary",
-            fontsize=14,
-            fontweight="bold",
-        )
-
-        # Plot 1: Drift magnitude histogram
-        ax1 = axes[0, 0]
-        drift_magnitude = np.sqrt(drift_x**2 + drift_y**2)
-        ax1.hist(
-            drift_magnitude[1:],
-            bins=30,
-            alpha=0.7,
-            color="skyblue",
-            edgecolor="black",
-        )
-        ax1.set_xlabel("Total Drift Magnitude (pixels)")
-        ax1.set_ylabel("Frequency")
-        ax1.set_title("Distribution of Cumulative Drift")
-        ax1.grid(True, alpha=0.3)
-
-        # Plot 2: Window size distribution
-        ax2 = axes[0, 1]
-        window_counts, window_bins = np.histogram(window_sizes[1:], bins=20)
-        ax2.bar(
-            window_bins[:-1],
-            window_counts,
-            width=np.diff(window_bins),
-            alpha=0.7,
-            color="lightgreen",
-            edgecolor="black",
-        )
-        ax2.set_xlabel("Window Size (frames)")
-        ax2.set_ylabel("Frequency")
-        ax2.set_title("Distribution of Adaptive Window Sizes")
-        ax2.grid(True, alpha=0.3)
-
-        # Plot 3: Uncertainty vs Window Size
-        ax3 = axes[1, 0]
-        total_uncertainty = np.sqrt(uncertainty_x**2 + uncertainty_y**2)
-        ax3.scatter(
-            window_sizes[1:],
-            total_uncertainty[1:],
-            alpha=0.6,
-            c=np.arange(1, len(window_sizes)),
-            cmap="viridis",
-        )
-        ax3.set_xlabel("Window Size (frames)")
-        ax3.set_ylabel("Total Uncertainty (pixels)")
-        ax3.set_title("Uncertainty vs Window Size")
-        ax3.grid(True, alpha=0.3)
-
-        # Plot 4: Change point analysis
-        ax4 = axes[1, 1]
-        if change_points:
-            # Calculate inter-change-point intervals
-            intervals = []
-            prev_cp = 0
-            for cp in change_points:
-                intervals.append(cp - prev_cp)
-                prev_cp = cp
-            intervals.append(len(frames) - prev_cp)
-
-            ax4.hist(
-                intervals,
-                bins=min(15, len(intervals)),
-                alpha=0.7,
-                color="orange",
-                edgecolor="black",
-            )
-            ax4.set_xlabel("Segment Length (frames)")
-            ax4.set_ylabel("Frequency")
-            ax4.set_title(
-                f"Stable Segment Lengths ({len(change_points)} change points)"
-            )
-        else:
-            ax4.text(
-                0.5,
-                0.5,
-                "No Change Points Detected",
-                transform=ax4.transAxes,
-                ha="center",
-                va="center",
-                fontsize=12,
-            )
-            ax4.set_title("Change Point Analysis")
-
-        ax4.grid(True, alpha=0.3)
-
-        plt.tight_layout(rect=[0, 0.03, 1, 0.95])
-
-        summary_path = os.path.join(plot_dir, "drift_correction_summary.png")
-        plt.savefig(
-            summary_path, dpi=300, bbox_inches="tight", facecolor="white"
-        )
-        plt.close()
-
-        logger.debug(f"Saved drift correction summary plot: {summary_path}")
-
-    def _spline_based_drift_correction(
-        self,
-        frames,
-        toff,
-        max_shift,
-        min_locs_per_block,
-        n_processes,
-        save_all_rsso_plots,
-        plot_dir,
-        smoothing_factor,
-        min_blocks_for_spline,
-    ):
-        """Cubic-spline long-timescale drift correction from block centers.
-
-        Estimates drift at the center of each ``toff``-sized time block, then
-        cubic-spline-interpolates a smooth drift trajectory over all frames.
-
-        Parameters
-        ----------
-        frames : numpy.ndarray
-            The localization frame numbers.
-        toff : float
-            Time-block size in frames (anchor spacing).
-        max_shift : float
-            Maximum expected drift per block in pixels.
-        min_locs_per_block : int
-            Minimum localizations per block for an anchor.
-        n_processes : int or None
-            Number of parallel processes.
-        save_all_rsso_plots : bool
-            Whether to save all RSSO diagnostic plots.
-        plot_dir : str
-            Directory for the plots.
-        smoothing_factor : float
-            Spline smoothing factor.
-        min_blocks_for_spline : int
-            Minimum number of anchor blocks required to fit a spline.
-
-        Returns
-        -------
-        tuple
-            ``(drift_x_coarse, drift_y_coarse, uncertainty_x_coarse,
-            uncertainty_y_coarse)``.
-        """
-        from scipy.interpolate import UnivariateSpline
-
-        n_frames = len(frames)
-        toff_block_size = int(toff)
-
-        # Initialize arrays
-        drift_x_coarse = np.zeros(n_frames)
-        drift_y_coarse = np.zeros(n_frames)
-        uncertainty_x_coarse = np.zeros(n_frames)
-        uncertainty_y_coarse = np.zeros(n_frames)
-
-        # Calculate block centers and estimate drift at each center
-        block_centers = []
-        block_center_frames = []
-        block_drifts_x = []
-        block_drifts_y = []
-        block_uncertainties_x = []
-        block_uncertainties_y = []
-        block_weights = []
-
-        logger.debug(
-            f"Processing {int(np.ceil(n_frames / toff_block_size))} time blocks for spline anchors"
-        )
-
-        # Process blocks to get anchor points
-        block_args = []
-        for block_start in range(0, n_frames, toff_block_size):
-            block_end = min(block_start + toff_block_size, n_frames)
-
-            # Calculate block center frame
-            center_frame_idx = (block_start + block_end) // 2
-            center_frame = frames[center_frame_idx]
-
-            block_args.append(
-                (
-                    self.locs,
-                    frames,
-                    block_start,
-                    block_end,
-                    toff_block_size,
-                    max_shift,
-                    min_locs_per_block,
-                    save_all_rsso_plots,
-                    plot_dir,
-                )
-            )
-            block_centers.append(center_frame_idx)
-            block_center_frames.append(center_frame)
-
-        # Process blocks in parallel to get drift estimates at centers
-        try:
-            if n_processes == 1 or len(block_args) <= 1:
-                logger.debug(
-                    "Using single-threaded processing for spline anchor points"
-                )
-                block_results = [
-                    self._process_drift_block(args) for args in block_args
-                ]
-            else:
-                logger.debug(
-                    f"Using {n_processes} processes for spline anchor points "
-                    + f"({len(block_args)} blocks)"
-                )
-                from multiprocessing import Pool
-
-                with Pool(processes=n_processes) as pool:
-                    block_results = pool.map(
-                        self._process_drift_block, block_args
-                    )
-        except Exception as e:
-            logger.warning(
-                "Multiprocessing failed for spline anchor points, falling back to "
-                + f"single-threaded: {e}"
-            )
-            block_results = [
-                self._process_drift_block(args) for args in block_args
-            ]
-
-        # Extract valid anchor points for spline fitting
-        valid_anchors = []
-        cumulative_drift_x = 0
-        cumulative_drift_y = 0
-
-        for i, result in enumerate(block_results):
-            if result is None:
-                continue  # Skip first block (no comparison possible)
-
-            (
-                block_start,
-                block_end,
-                shift_x,
-                shift_y,
-                quality,
-                uncertainty_x,
-                uncertainty_y,
-            ) = result
-
-            if shift_x is not None and shift_y is not None and quality > 0:
-                # Accumulate drift to get absolute position
-                cumulative_drift_x += shift_x
-                cumulative_drift_y += shift_y
-
-                # Store anchor point data
-                center_idx = block_centers[i]
-                block_drifts_x.append(cumulative_drift_x)
-                block_drifts_y.append(cumulative_drift_y)
-                block_uncertainties_x.append(
-                    uncertainty_x if uncertainty_x else 1.0
-                )
-                block_uncertainties_y.append(
-                    uncertainty_y if uncertainty_y else 1.0
-                )
-
-                # Weight based on quality and inverse uncertainty
-                weight_x = quality / (block_uncertainties_x[-1] ** 2 + 1e-10)
-                weight_y = quality / (block_uncertainties_y[-1] ** 2 + 1e-10)
-                block_weights.append((weight_x, weight_y))
-
-                valid_anchors.append(center_idx)
-
-                logger.debug(
-                    f"Anchor point at frame {center_idx}: drift=({cumulative_drift_x:.3f}, {cumulative_drift_y:.3f}), "
-                    f"quality={quality:.0f}"
-                )
-
-        # Check if we have enough anchor points for spline fitting
-        if len(valid_anchors) < min_blocks_for_spline:
-            logger.warning(
-                f"Only {len(valid_anchors)} valid anchor points, need at least {min_blocks_for_spline}. "
-                "Using linear interpolation instead."
-            )
-            return self._linear_interpolation_fallback(
-                valid_anchors,
-                block_drifts_x,
-                block_drifts_y,
-                block_uncertainties_x,
-                block_uncertainties_y,
-                n_frames,
-            )
-
-        # Fit cubic splines to anchor points
-        anchor_frames = np.array(valid_anchors)
-        drifts_x = np.array(block_drifts_x)
-        drifts_y = np.array(block_drifts_y)
-        weights_x = np.array([w[0] for w in block_weights])
-        weights_y = np.array([w[1] for w in block_weights])
-
-        # Determine smoothing factor if not specified
-        if smoothing_factor is None:
-            # Auto-calculate based on data quality and number of points
-            mean_uncertainty_x = np.mean(block_uncertainties_x)
-            mean_uncertainty_y = np.mean(block_uncertainties_y)
-            smoothing_factor = (
-                len(valid_anchors)
-                * (mean_uncertainty_x + mean_uncertainty_y)
-                / 2
-            )
-            logger.debug(
-                f"Auto-calculated smoothing factor: {smoothing_factor:.3f}"
-            )
-
-        try:
-            # Fit univariate splines for X and Y drift
-            spline_x = UnivariateSpline(
-                anchor_frames, drifts_x, w=weights_x, s=smoothing_factor
-            )
-            spline_y = UnivariateSpline(
-                anchor_frames, drifts_y, w=weights_y, s=smoothing_factor
-            )
-
-            # Interpolate drift for all frames
-            frame_indices = np.arange(n_frames)
-            drift_x_coarse = spline_x(frame_indices)
-            drift_y_coarse = spline_y(frame_indices)
-
-            # Estimate uncertainties from spline residuals and propagation
-            spline_residuals_x = drifts_x - spline_x(anchor_frames)
-            spline_residuals_y = drifts_y - spline_y(anchor_frames)
-
-            # Calculate uncertainty estimates
-            base_uncertainty_x = (
-                np.std(spline_residuals_x)
-                if len(spline_residuals_x) > 1
-                else np.mean(block_uncertainties_x)
-            )
-            base_uncertainty_y = (
-                np.std(spline_residuals_y)
-                if len(spline_residuals_y) > 1
-                else np.mean(block_uncertainties_y)
-            )
-
-            # Interpolate uncertainties (conservative approach)
-            uncertainty_x_coarse = np.full(n_frames, base_uncertainty_x)
-            uncertainty_y_coarse = np.full(n_frames, base_uncertainty_y)
-
-            # Adjust uncertainties based on distance from anchor points
-            for frame_idx in range(n_frames):
-                # Find closest anchor points
-                distances = np.abs(anchor_frames - frame_idx)
-                closest_idx = np.argmin(distances)
-                min_distance = distances[closest_idx]
-
-                # Increase uncertainty for frames far from anchor points
-                distance_factor = 1 + min_distance / toff_block_size
-                uncertainty_x_coarse[frame_idx] *= distance_factor
-                uncertainty_y_coarse[frame_idx] *= distance_factor
-
-            logger.info(
-                f"Spline fitting successful: {len(valid_anchors)} anchor points, "
-                f"smoothing={smoothing_factor:.3f}, "
-                f"residual_std=({base_uncertainty_x:.3f}, {base_uncertainty_y:.3f})"
-            )
-
-            # Save spline diagnostics if plotting is enabled
-            if plot_dir:
-                self._plot_spline_diagnostics(
-                    anchor_frames,
-                    drifts_x,
-                    drifts_y,
-                    spline_x,
-                    spline_y,
-                    frame_indices,
-                    drift_x_coarse,
-                    drift_y_coarse,
-                    block_uncertainties_x,
-                    block_uncertainties_y,
-                    plot_dir,
-                )
-
-            return (
-                drift_x_coarse,
-                drift_y_coarse,
-                uncertainty_x_coarse,
-                uncertainty_y_coarse,
-            )
-
-        except Exception as e:
-            logger.warning(
-                f"Spline fitting failed: {e}. Using linear interpolation fallback."
-            )
-            return self._linear_interpolation_fallback(
-                valid_anchors,
-                block_drifts_x,
-                block_drifts_y,
-                block_uncertainties_x,
-                block_uncertainties_y,
-                n_frames,
-            )
-
-    def _linear_interpolation_fallback(
-        self,
-        anchor_frames,
-        drifts_x,
-        drifts_y,
-        uncertainties_x,
-        uncertainties_y,
-        n_frames,
-    ):
-        """Interpolate drift linearly as a fallback when spline fitting fails.
-
-        Parameters
-        ----------
-        anchor_frames : numpy.ndarray
-            Frame indices of the anchor points.
-        drifts_x, drifts_y : numpy.ndarray
-            Drift values at the anchors.
-        uncertainties_x, uncertainties_y : numpy.ndarray
-            Uncertainties at the anchors.
-        n_frames : int
-            Total number of frames to interpolate over.
-
-        Returns
-        -------
-        tuple
-            ``(drift_x, drift_y, uncertainty_x, uncertainty_y)`` over all
-            frames.
-        """
-        from scipy.interpolate import interp1d
-
-        logger.debug("Using linear interpolation fallback")
-
-        if len(anchor_frames) == 0:
-            # No valid data - return zeros
-            return (
-                np.zeros(n_frames),
-                np.zeros(n_frames),
-                np.ones(n_frames),
-                np.ones(n_frames),
-            )
-
-        if len(anchor_frames) == 1:
-            # Single point - constant drift
-            drift_x = np.full(n_frames, drifts_x[0])
-            drift_y = np.full(n_frames, drifts_y[0])
-            uncertainty_x = np.full(n_frames, uncertainties_x[0])
-            uncertainty_y = np.full(n_frames, uncertainties_y[0])
-        else:
-            # Linear interpolation/extrapolation
-            frame_indices = np.arange(n_frames)
-
-            interp_x = interp1d(
-                anchor_frames,
-                drifts_x,
-                kind="linear",
-                fill_value="extrapolate",
-                bounds_error=False,
-            )
-            interp_y = interp1d(
-                anchor_frames,
-                drifts_y,
-                kind="linear",
-                fill_value="extrapolate",
-                bounds_error=False,
-            )
-            interp_unc_x = interp1d(
-                anchor_frames,
-                uncertainties_x,
-                kind="linear",
-                fill_value="extrapolate",
-                bounds_error=False,
-            )
-            interp_unc_y = interp1d(
-                anchor_frames,
-                uncertainties_y,
-                kind="linear",
-                fill_value="extrapolate",
-                bounds_error=False,
-            )
-
-            drift_x = interp_x(frame_indices)
-            drift_y = interp_y(frame_indices)
-            uncertainty_x = interp_unc_x(frame_indices)
-            uncertainty_y = interp_unc_y(frame_indices)
-
-        return drift_x, drift_y, uncertainty_x, uncertainty_y
-
-    def _plot_spline_diagnostics(
-        self,
-        anchor_frames,
-        anchor_drifts_x,
-        anchor_drifts_y,
-        spline_x,
-        spline_y,
-        frame_indices,
-        drift_x_interpolated,
-        drift_y_interpolated,
-        anchor_uncertainties_x,
-        anchor_uncertainties_y,
-        plot_dir,
-    ):
-        """Plot diagnostics for the spline-fit drift correction.
-
-        Saves a 2x2 panel comparing the spline fit to the anchor points to
-        ``plot_dir``.
-
-        Returns
-        -------
-        str
-            The filepath of the saved diagnostics figure.
-        """
-        import os
-
-        import matplotlib.pyplot as plt
-
-        fig, axes = plt.subplots(2, 2, figsize=(14, 10))
-        fig.suptitle(
-            "Cubic Spline Drift Correction Diagnostics",
-            fontsize=14,
-            fontweight="bold",
-        )
-
-        # Plot 1: X-direction spline fit
-        ax1 = axes[0, 0]
-        ax1.plot(
-            frame_indices,
-            drift_x_interpolated,
-            "b-",
-            linewidth=2,
-            label="Spline Fit",
-        )
-        ax1.errorbar(
-            anchor_frames,
-            anchor_drifts_x,
-            yerr=anchor_uncertainties_x,
-            fmt="ro",
-            markersize=6,
-            capsize=3,
-            label="Anchor Points",
-        )
-        ax1.set_xlabel("Frame Index")
-        ax1.set_ylabel("Cumulative Drift X (pixels)")
-        ax1.set_title("X-Direction Spline Interpolation")
-        ax1.legend()
-        ax1.grid(True, alpha=0.3)
-
-        # Plot 2: Y-direction spline fit
-        ax2 = axes[0, 1]
-        ax2.plot(
-            frame_indices,
-            drift_y_interpolated,
-            "r-",
-            linewidth=2,
-            label="Spline Fit",
-        )
-        ax2.errorbar(
-            anchor_frames,
-            anchor_drifts_y,
-            yerr=anchor_uncertainties_y,
-            fmt="ro",
-            markersize=6,
-            capsize=3,
-            label="Anchor Points",
-        )
-        ax2.set_xlabel("Frame Index")
-        ax2.set_ylabel("Cumulative Drift Y (pixels)")
-        ax2.set_title("Y-Direction Spline Interpolation")
-        ax2.legend()
-        ax2.grid(True, alpha=0.3)
-
-        # Plot 3: Spline residuals
-        ax3 = axes[1, 0]
-        residuals_x = anchor_drifts_x - spline_x(anchor_frames)
-        residuals_y = anchor_drifts_y - spline_y(anchor_frames)
-
-        ax3.scatter(
-            anchor_frames,
-            residuals_x,
-            c="blue",
-            alpha=0.6,
-            label="X Residuals",
-        )
-        ax3.scatter(
-            anchor_frames, residuals_y, c="red", alpha=0.6, label="Y Residuals"
-        )
-        ax3.axhline(y=0, color="black", linestyle="--", alpha=0.5)
-        ax3.set_xlabel("Frame Index")
-        ax3.set_ylabel("Spline Residual (pixels)")
-        ax3.set_title(
-            f"Fit Residuals (RMS: X={np.std(residuals_x):.3f}, Y={np.std(residuals_y):.3f})"
-        )
-        ax3.legend()
-        ax3.grid(True, alpha=0.3)
-
-        # Plot 4: Drift trajectory comparison
-        ax4 = axes[1, 1]
-        drift_magnitude = np.sqrt(
-            drift_x_interpolated**2 + drift_y_interpolated**2
-        )
-        anchor_magnitude = np.sqrt(
-            np.array(anchor_drifts_x) ** 2 + np.array(anchor_drifts_y) ** 2
-        )
-
-        ax4.plot(
-            frame_indices,
-            drift_magnitude,
-            "g-",
-            linewidth=2,
-            label="Spline Magnitude",
-        )
-        ax4.scatter(
-            anchor_frames,
-            anchor_magnitude,
-            c="orange",
-            s=50,
-            label="Anchor Magnitude",
-            zorder=5,
-        )
-        ax4.set_xlabel("Frame Index")
-        ax4.set_ylabel("Total Drift Magnitude (pixels)")
-        ax4.set_title("Drift Magnitude Trajectory")
-        ax4.legend()
-        ax4.grid(True, alpha=0.3)
-
-        plt.tight_layout(rect=[0, 0.03, 1, 0.95])
-
-        spline_path = os.path.join(plot_dir, "spline_drift_diagnostics.png")
-        plt.savefig(
-            spline_path, dpi=300, bbox_inches="tight", facecolor="white"
-        )
-        plt.close()
-
-        logger.debug(f"Saved spline diagnostics plot: {spline_path}")
-
-    def _process_linear_block_results(
-        self, block_results, n_frames, toff_block_size, drift_quality
-    ):
-        """Accumulate per-block drift results into per-frame trajectories.
-
-        Uses the original linear-distribution approach.
-
-        Parameters
-        ----------
-        block_results : list
-            Per-block results from :meth:`_process_drift_block`.
-        n_frames : int
-            Total number of frames.
-        toff_block_size : int
-            Block size in frames.
-        drift_quality : numpy.ndarray
-            Per-frame quality array to fill.
-
-        Returns
-        -------
-        tuple
-            ``(drift_x_coarse, drift_y_coarse, uncertainty_x_coarse,
-            uncertainty_y_coarse)``.
-        """
-        # Initialize arrays
-        drift_x_coarse = np.zeros(n_frames)
-        drift_y_coarse = np.zeros(n_frames)
-        uncertainty_x_coarse = np.zeros(n_frames)
-        uncertainty_y_coarse = np.zeros(n_frames)
-
-        # Process results from parallel computation (original implementation)
-        for result in block_results:
-            if result is None:
-                continue  # Skip first block
-
-            (
-                block_start,
-                block_end,
-                shift_x,
-                shift_y,
-                quality,
-                uncertainty_x,
-                uncertainty_y,
-            ) = result
-
-            if shift_x is not None and shift_y is not None:
-                # Distribute block drift across frames in the block
-                block_drift_x = shift_x / toff_block_size  # Per-frame drift
-                block_drift_y = shift_y / toff_block_size
-                # Uncertainty also scales with block size
-                block_uncertainty_x = (
-                    uncertainty_x / toff_block_size
-                    if uncertainty_x is not None
-                    else 0
-                )
-                block_uncertainty_y = (
-                    uncertainty_y / toff_block_size
-                    if uncertainty_y is not None
-                    else 0
-                )
-
-                for frame_idx in range(block_start, block_end):
-                    if frame_idx > 0:
-                        drift_x_coarse[frame_idx] = (
-                            drift_x_coarse[frame_idx - 1] + block_drift_x
-                        )
-                        drift_y_coarse[frame_idx] = (
-                            drift_y_coarse[frame_idx - 1] + block_drift_y
-                        )
-                        # Accumulate uncertainties (assuming independence)
-                        uncertainty_x_coarse[frame_idx] = np.sqrt(
-                            uncertainty_x_coarse[frame_idx - 1] ** 2
-                            + block_uncertainty_x**2
-                        )
-                        uncertainty_y_coarse[frame_idx] = np.sqrt(
-                            uncertainty_y_coarse[frame_idx - 1] ** 2
-                            + block_uncertainty_y**2
-                        )
-                    else:
-                        uncertainty_x_coarse[frame_idx] = block_uncertainty_x
-                        uncertainty_y_coarse[frame_idx] = block_uncertainty_y
-                    drift_quality[frame_idx] += quality / (
-                        block_end - block_start
-                    )
-            else:
-                # Use previous block's drift rate if estimation failed
-                for frame_idx in range(block_start, block_end):
-                    if frame_idx > 0:
-                        drift_x_coarse[frame_idx] = drift_x_coarse[
-                            frame_idx - 1
-                        ]
-                        drift_y_coarse[frame_idx] = drift_y_coarse[
-                            frame_idx - 1
-                        ]
-                        uncertainty_x_coarse[frame_idx] = uncertainty_x_coarse[
-                            frame_idx - 1
-                        ]
-                        uncertainty_y_coarse[frame_idx] = uncertainty_y_coarse[
-                            frame_idx - 1
-                        ]
-
-        return (
-            drift_x_coarse,
-            drift_y_coarse,
-            uncertainty_x_coarse,
-            uncertainty_y_coarse,
-        )
-
-    @staticmethod
-    def _process_fine_drift_chunk(args):
-        """Process a chunk of fine (per-frame) drift estimates in parallel.
-
-        Parameters
-        ----------
-        args : tuple
-            ``(locs_data, frames, chunk_frames, max_shift,
-            min_locs_per_frame, save_all_rsso_plots, plot_dir, ...)``.
-
-        Returns
-        -------
-        list
-            Per-frame fine drift estimates for the chunk.
-        """
-        (
-            locs_data,
-            frames,
-            chunk_frames,
-            max_shift,
-            min_locs_per_frame,
-            save_all_rsso_plots,
-            plot_dir,
-        ) = args
-        logger.debug(
-            f"undrifting chunk {min(chunk_frames)} to {max(chunk_frames)}"
-        )
-
-        from picasso_workflow.picasso_outpost import _calculate_pairwise_shift
-
-        results = []
-
-        for frame_idx in chunk_frames:
-            if frame_idx == 0:
-                continue  # Skip first frame
-
-            current_frame = frames[frame_idx]
-            prev_frame = frames[frame_idx - 1]
-
-            # Get localizations for current and previous frame
-            current_locs = locs_data[locs_data["frame"] == current_frame]
-            prev_locs = locs_data[locs_data["frame"] == prev_frame]
-
-            # Estimate fine drift between consecutive frames
-            if (
-                len(prev_locs) < min_locs_per_frame
-                or len(current_locs) < min_locs_per_frame
-            ):
-                results.append((frame_idx, None, None, 0, None, None))
-                continue
-
-            shift_x, shift_y, _, uncertainty_info = _calculate_pairwise_shift(
-                prev_locs,
-                current_locs,
-                max_shift,
-                plot_histogram=save_all_rsso_plots,
-                plot_dir=plot_dir,
-            )
-
-            if shift_x is not None and shift_y is not None:
-                quality = len(prev_locs) + len(current_locs)
-                uncertainty_x = (
-                    uncertainty_info["sigma_x"]
-                    if uncertainty_info["fit_successful"]
-                    else uncertainty_info["shift_x_error"]
-                )
-                uncertainty_y = (
-                    uncertainty_info["sigma_y"]
-                    if uncertainty_info["fit_successful"]
-                    else uncertainty_info["shift_y_error"]
-                )
-                results.append(
-                    (
-                        frame_idx,
-                        shift_x,
-                        shift_y,
-                        quality,
-                        uncertainty_x,
-                        uncertainty_y,
-                    )
-                )
-            else:
-                results.append((frame_idx, None, None, 0, None, None))
-
-        return results
-
-    #    @profile_resource_usage
-    @module_decorator
-    def undrift_rsso(self, i, parameters, results):
-        """Undrift localized data using iterative RSSO drift correction.
-
-        Applies an iterative RSSO (Redundant Spot Shift Overrepresentation)
-        approach in which each frame is compared against the whole dataset to
-        compute that frame's total drift, repeated on the undrifted dataset to
-        improve accuracy. Includes uncertainty analysis, confidence evaluation,
-        windowing and outlier detection.
-
-        Parameters
-        ----------
-        i : int
-            Index of the module in the workflow.
-        parameters : dict
-            Required keys:
-
-            ``ton`` : float
-                Half-life of a localization in frames.
-            ``toff`` : float
-                Frames for a spot to reappear after disappearing.
-            ``max_shift`` : float
-                Maximum expected drift per frame in pixels.
-
-            Optional keys (defaults in parentheses):
-
-            ``min_locs_per_frame`` : int
-                Min localizations per frame for a reliable estimate (10).
-            ``max_iterations`` : int
-                Max iterative refinement rounds (5).
-            ``convergence_threshold`` : float
-                RMS drift-change convergence threshold in nm (0.1).
-            ``plot_drift`` : bool
-                Whether to save drift plots (True).
-            ``save_locs`` : bool
-                Whether to save undrifted localizations (True).
-            ``n_processes`` : int or None
-                Processes for parallel computation (auto).
-            ``confidence_threshold`` : float
-                Confidence threshold for windowing analysis (0.8).
-            ``outlier_detection_enabled`` : bool
-                Enable RSSO failure and outlier detection (True).
-            ``outlier_z_threshold`` : float
-                Z-score threshold for temporal outlier detection (3.5).
-            ``min_signal_to_noise`` : float
-                Min signal-to-noise ratio for drift measurements (0.5).
-            ``windowing_enabled`` : bool
-                Enable adaptive windowing for low-confidence frames (True).
-            ``window_size_range`` : tuple
-                Min and max window sizes for adaptive windowing ((3, 20)).
-        results : dict
-            Module results (see
-            :class:`~picasso_workflow.util.AbstractModuleCollection`).
-
-        Returns
-        -------
-        parameters : dict
-            Input parameters, possibly updated for consistency.
-        results : dict
-            Results updated with ``success``, ``drift_x``/``drift_y`` (total
-            drift trajectories in nm), ``uncertainty_x``/``uncertainty_y``,
-            ``drift_quality``, ``n_iterations``, ``convergence_rms`` and
-            ``drift_plots``.
-        """
-        from picasso_workflow.outpost_modules.undrift_rsso import (
-            compute_undrift_rsso,
-        )
-
-        # Call external computation function
-        self.locs, self.drift, results_data = compute_undrift_rsso(
-            locs=self.locs,
-            pixelsize=self.pixelsize,
-            info=self.info,
-            parameters=parameters,
-            results_folder=results["folder"],
-        )
-
-        # Merge results from computation into results dict
-        results.update(results_data)
-
-        return parameters, results
-
     def _plot_drift_with_confidence(
         self,
         filename,
@@ -7181,16 +5160,23 @@ class AutoPicasso(util.AbstractModuleCollection):
         """
         folder_in, file_in = os.path.split(parameters["fp_locs"])
         file_nameonly, _ = os.path.splitext(file_in)
-        Meas = outpost_modules.binding_event_analysis.Measurement(
+        # Lazy import: needs the optional ``[binding-events]`` extra (lmfit,
+        # pandarallel), so importing analyse.py stays cheap and dependency-free.
+        from picasso_workflow.outpost.binding_events.analysis import (
+            Measurement,
+        )
+        from picasso_workflow.outpost.binding_events.plotting import Plotting
+
+        Meas = Measurement(
             in_path=parameters["fp_locs"],
             save_path=results["folder"],
-            saving_path=file_nameonly,
+            saving_name=file_nameonly,
             total_n_frames=self.frames,
         )
         Meas.Begin()
         Meas.FileSaver()
 
-        Plotter = outpost_modules.binding_event_plotting.Plotting(
+        Plotter = Plotting(
             table_g=Meas.table_g,
             table_k=Meas.table_k,
             show=False,
@@ -7206,13 +5192,13 @@ class AutoPicasso(util.AbstractModuleCollection):
         results["fig_sbr"] = fp
         _, fp = Plotter.Plot_tb()
         results["fig_tb"] = fp
-        _, fp = Plotter.plot_td()
+        _, fp = Plotter.Plot_td()
         results["fig_td"] = fp
-        _, fp = Plotter.plot_r()
+        _, fp = Plotter.Plot_r()
         results["fig_r"] = fp
         _, fp = Plotter.Plot_locs()
         results["fig_locs"] = fp
-        config = Plotter.saveAllResults()
+        config = Plotter.SaveAllResults()
         for k, v in config.items():
             results[k] = v
 
@@ -7260,7 +5246,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             ``resolution_dblradial`` (double-Gaussian FWHM), ``fig_resolution``
             and ``fig_radial``.
         """
-        from picasso_workflow.picasso_outpost import (
+        from picasso_workflow.outpost.resolution.resolution_ppac import (
             analyse_resolution_ppac,
             resolution_ppac,
         )
@@ -7600,7 +5586,9 @@ class AutoPicasso(util.AbstractModuleCollection):
             ``(frame_idx, shift_x, shift_y, uncertainty_x, uncertainty_y,
             confidence, quality)``.
         """
-        from picasso_workflow.picasso_outpost import _calculate_pairwise_shift
+        from picasso_workflow.outpost.alignment.shift_kernel import (
+            _calculate_pairwise_shift,
+        )
 
         (
             frame_idx,
@@ -7692,7 +5680,9 @@ class AutoPicasso(util.AbstractModuleCollection):
         """
         import numpy as np
 
-        from picasso_workflow.picasso_outpost import _calculate_pairwise_shift
+        from picasso_workflow.outpost.alignment.shift_kernel import (
+            _calculate_pairwise_shift,
+        )
 
         (
             frame_idx,
@@ -8466,7 +6456,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             ``threshold``, ``fig_frc`` and ``fig_images`` (if ``n_splits`` ==
             1).
         """
-        from picasso_workflow.outpost_modules.resolution_frc import (
+        from picasso_workflow.outpost.resolution.resolution_frc import (
             compute_frc_averaged,
             compute_frc_resolution,
         )
@@ -8706,7 +6696,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             ``cutoff_frequency`` (1/nm), ``frc_curve_mean``, ``frc_curve_std``,
             ``spatial_frequencies``, ``threshold`` and ``fig_frc``.
         """
-        from picasso_workflow.outpost_modules.resolution_frc import (
+        from picasso_workflow.outpost.resolution.resolution_frc import (
             compute_frc_spatial,
         )
 
@@ -8751,7 +6741,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         ]
 
         # Create plot using external function
-        from picasso_workflow.outpost_modules.resolution_frc import (
+        from picasso_workflow.outpost.resolution.resolution_frc import (
             create_frc_plot,
         )
 
@@ -8808,7 +6798,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             ``decorr_curve_mean``, ``decorr_curve_std``, ``r_values`` and
             ``fig_decorr``.
         """
-        from picasso_workflow.outpost_modules.resolution_decorrelation import (
+        from picasso_workflow.outpost.resolution.resolution_decorrelation import (
             compute_decorr_spatial,
         )
 
@@ -9796,6 +7786,8 @@ class AutoPicasso(util.AbstractModuleCollection):
             ``wasserstein_distances_per_k``, ``mean_wasserstein_distance`` and
             ``ks_pvalues_per_k``.
         """
+        from picasso_workflow.outpost.spatial_stats import csr_knn
+
         if isinstance(parameters["nneighbors"], str):
             nneighbor_list = [np.loadtxt(parameters["nneighbors"])]
             tags = ["locs"]
@@ -9865,9 +7857,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                 (
                     rho_mle,
                     fitresult,
-                ) = picasso_outpost.estimate_density_from_neighbordists(
-                    **kwargs
-                )
+                ) = csr_knn.estimate_density_from_neighbordists(**kwargs)
                 lo = rho_init / bound_factor
                 hi = rho_init * bound_factor
                 at_bound = rho_mle <= lo * (1 + 1e-3) or rho_mle >= hi * (
@@ -9927,7 +7917,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                         )
 
                         # Get theoretical CSR probability distribution
-                        csr_pdf = picasso_outpost.nndistribution_from_csr(
+                        csr_pdf = csr_knn.nndistribution_from_csr(
                             r_theory,
                             k,
                             rho_mle,
@@ -9961,7 +7951,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                         # Calculate Kolmogorov-Smirnov test
                         # Use CDF function from picasso_outpost
                         def csr_cdf(x):
-                            return picasso_outpost.csr_cdf_for_ks_test(
+                            return csr_knn.csr_cdf_for_ks_test(
                                 x,
                                 k,
                                 rho_mle,
@@ -10088,17 +8078,14 @@ class AutoPicasso(util.AbstractModuleCollection):
                 frac_in_window = (
                     float(np.mean(in_window)) if in_window.size else 0.0
                 )
-                nnhist_an = (
-                    frac_in_window
-                    * picasso_outpost.nndistribution_from_csr(
-                        rvals,
-                        k,
-                        rho_mle,
-                        d=d,
-                        min_dist=fit_min_dist,
-                        max_dist=fit_max_dist,
-                        renormalize=True,
-                    )
+                nnhist_an = frac_in_window * csr_knn.nndistribution_from_csr(
+                    rvals,
+                    k,
+                    rho_mle,
+                    d=d,
+                    min_dist=fit_min_dist,
+                    max_dist=fit_max_dist,
+                    renormalize=True,
                 )
                 if i == 0:
                     lbl = f"rho_init {1E6*rho_init:.1f} um^-2"
@@ -10257,14 +8244,18 @@ class AutoPicasso(util.AbstractModuleCollection):
             Required keys:
 
             ``filename`` : str
-                The name of the dataset.
+                The name of the dataset. Optional; defaults to
+                ``locs.hdf5`` (e.g. when the per-channel
+                ``("$$map", "#tags", None)`` default resolves to None in
+                a tag-less run).
         results : dict
             Module results (see
             :class:`~picasso_workflow.util.AbstractModuleCollection`).
         """
-        results["filepath"] = os.path.join(
-            results["folder"], parameters["filename"]
+        filename = _safe_filename_component(
+            parameters.get("filename") or "locs"
         )
+        results["filepath"] = os.path.join(results["folder"], filename)
         root, ext = os.path.splitext(results["filepath"])
         if ext != ".hdf5":
             results["filepath"] = root + ".hdf5"
@@ -10273,10 +8264,21 @@ class AutoPicasso(util.AbstractModuleCollection):
         res = self._save_locs(results["filepath"])
         for k, v in res.items():
             results[k] = v
+        results["checkpoint"] = {"single": {"filepath": results["filepath"]}}
         return parameters, results
 
     def _save_locs(self, filename):
         """Save ``self.locs``/``self.info`` to an HDF5 file.
+
+        ``io.save_locs`` writes the *sanitized* table
+        (``lib.ensure_sanity`` drops rows with NaN/inf, e.g. failed GPU
+        fits with NaN localization precision). Adopt that sanitized table
+        as the current dataset, so in-memory and on-disk data stay
+        identical -- like picasso's own save/load boundaries. Otherwise
+        downstream modules see rows the saved file does not have (a NaN
+        ``lpx`` makes render's median blur NaN and crash), and a resumed
+        run (which loads the file) behaves differently from a
+        straight-through one.
 
         Parameters
         ----------
@@ -10290,6 +8292,15 @@ class AutoPicasso(util.AbstractModuleCollection):
         """
         t00 = time.time()
 
+        n_before = len(self.locs)
+        self.locs = lib.ensure_sanity(self.locs, self.info)
+        n_dropped = n_before - len(self.locs)
+        if n_dropped:
+            logger.info(
+                f"Sanitized localizations before saving: dropped "
+                f"{n_dropped} of {n_before} rows with NaN/inf or "
+                "out-of-bounds values (picasso lib.ensure_sanity)."
+            )
         io.save_locs(filename, self.locs, self.info)
         # # when the paths get long, the hdf5 library throws an error, so chdir
         # # but apparently, the issue is the length of the filename itself
@@ -10302,6 +8313,41 @@ class AutoPicasso(util.AbstractModuleCollection):
         dt = np.round(time.time() - t00, 2)
         results_save = {"duration": dt}
         return results_save
+
+    def save_locs_checkpoint(self, results):
+        """Save the current locs into ``results["folder"]`` as a checkpoint.
+
+        Writes ``self.locs`` (and/or ``self.channel_locs``) to the module's
+        result folder and records a restore point under
+        ``results["checkpoint"]`` for resumed runs. Idempotent: a module
+        that already recorded a ``single`` checkpoint (e.g. the picasso-set
+        modules, ``save_single_dataset``) is not saved again.
+
+        Shared by :func:`~picasso_workflow.module_runtime.module_decorator`
+        (the ``save_locs``/``always_save`` path) and by the stepwise-boundary
+        checkpoint in :meth:`WorkflowRunner.run`, so both record checkpoints
+        identically without going through a module-specific ``save_locs``
+        parameter (whose meaning differs per module -- e.g. ``localize``
+        reads it as a dict).
+
+        Parameters
+        ----------
+        results : dict
+            The module's results dict; must contain ``folder``.
+        """
+        if (
+            getattr(self, "locs", None) is not None
+            and results.get("checkpoint", {}).get("single") is None
+        ):
+            fp = os.path.join(results["folder"], "locs.hdf5")
+            self._save_locs(fp)
+            results.setdefault("checkpoint", {})["single"] = {"filepath": fp}
+        if getattr(self, "channel_locs", None) is not None:
+            allfps = self._save_datasets_agg(results["folder"])
+            results.setdefault("checkpoint", {})["channels"] = {
+                "filepaths": allfps,
+                "tags": list(self.channel_tags),
+            }
 
     def _save_state_on_error(self, folder):
         """Best-effort dump of the current locs when a module fails.
@@ -10338,6 +8384,58 @@ class AutoPicasso(util.AbstractModuleCollection):
                 "Could not save the current localizations to "
                 f"{error_dir} after a module error: {save_exc}"
             )
+
+    def load_checkpoint(self, checkpoint):
+        """Restore locs state from a checkpoint descriptor on resume.
+
+        Counterpart to the ``checkpoint`` entries the modules record in
+        their results: re-populates the in-memory localization state that a
+        resumed run (fresh :class:`AutoPicasso`) has lost, so the modules
+        after the checkpoint can re-run.
+
+        Parameters
+        ----------
+        checkpoint : dict
+            Descriptor with one or both of:
+
+            ``single`` : dict
+                With key ``filepath`` (hdf5 file); loaded into ``self.locs``
+                and ``self.info``.
+            ``channels`` : dict
+                With keys ``filepaths`` and optionally ``tags``; loaded into
+                ``self.channel_locs``, ``self.channel_info`` and
+                ``self.channel_tags``.
+
+        Raises
+        ------
+        Exception
+            Whatever ``picasso.io.load_locs`` raises on unreadable files;
+            the caller falls back to running from scratch.
+        """
+        restored = []
+        if checkpoint.get("single"):
+            fp = checkpoint["single"]["filepath"]
+            self.locs, self.info = io.load_locs(fp)
+            restored.append(f"{len(self.locs)} locs from {fp}")
+        if checkpoint.get("channels"):
+            part = checkpoint["channels"]
+            self._load_channels_from_filepaths(
+                part["filepaths"], tags=part.get("tags")
+            )
+            for i, locs in enumerate(self.channel_locs):
+                # stamp the channel column as load_datasets_to_aggregate
+                # does; files saved by _save_datasets_agg already carry it,
+                # making this an idempotent overwrite. Best-effort: files
+                # from other sources may lack the column.
+                try:
+                    locs["channel"] = i * np.ones(len(locs), dtype=np.int8)
+                except (KeyError, ValueError):
+                    pass
+            nlocs = [len(locs) for locs in self.channel_locs]
+            restored.append(
+                f"{len(self.channel_locs)} channels with {nlocs} locs"
+            )
+        logger.info(f"Restored checkpoint: {'; '.join(restored)}")
 
     ##########################################################################
     # Aggregation workflow modules
@@ -10384,29 +8482,50 @@ class AutoPicasso(util.AbstractModuleCollection):
         print(self.channel_info)
         results["filepaths"] = parameters["filepaths"]
         results["tags"] = parameters["tags"]
+        results["checkpoint"] = {
+            "channels": {
+                "filepaths": list(parameters["filepaths"]),
+                "tags": list(parameters["tags"]),
+            }
+        }
         return parameters, results
 
-    def _load_channels_from_filepaths(self, filepaths):
+    def _load_channels_from_filepaths(self, filepaths, tags=None):
         """Load per-channel localizations from hdf5 files into channel state.
 
         Populates ``self.channel_locs``, ``self.channel_info`` and
         ``self.channel_tags`` from the given files, one entry per channel.
         Shared by the channel aggregation modules (``align_channels``,
-        ``register_channels``).
+        ``register_channels``) and by :meth:`load_checkpoint`.
 
         Parameters
         ----------
         filepaths : list of str
             hdf5 localization files, one per channel, in channel order.
+        tags : list of str, optional
+            The tags naming the channels. If None, the filenames are used.
+
+        Raises
+        ------
+        ValueError
+            If ``tags`` is given but does not match ``filepaths`` in length
+            (zip would silently drop channels).
         """
+        if tags is None:
+            tags = [os.path.split(fp)[1] for fp in filepaths]
+        elif len(tags) != len(filepaths):
+            raise ValueError(
+                f"Got {len(filepaths)} channel filepaths but {len(tags)} "
+                "tags."
+            )
         self.channel_locs = []
         self.channel_info = []
         self.channel_tags = []
-        for fp in filepaths:
+        for fp, tag in zip(filepaths, tags):
             locs, info = io.load_locs(fp)
             self.channel_locs.append(locs)
             self.channel_info.append(info)
-            self.channel_tags.append(os.path.split(fp)[1])
+            self.channel_tags.append(tag)
 
     #    @profile_resource_usage
     @module_decorator
@@ -10424,7 +8543,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                 Previously saved hdf5 files to load and align. If omitted, the
                 last processed data is used.
             ``align_pars`` : dict
-                Kwargs of ``picasso_outpost.align_channels``
+                Kwargs of ``outpost.alignment.channels.align_channels``
                 (``max_iterations``, ``convergence``).
             ``fp_fiducials`` : list of str
                 Previously saved hdf5 files of fiducial markers to load and
@@ -10442,6 +8561,8 @@ class AutoPicasso(util.AbstractModuleCollection):
             Module results (see
             :class:`~picasso_workflow.util.AbstractModuleCollection`).
         """
+        from picasso_workflow.outpost.alignment import channels
+
         pixelsize = self.pixelsize
         rcode = generate_random_code(6)
         if parameters.get("filepaths"):
@@ -10490,7 +8611,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             algo_used,
             fp_figs,
             shift_uncertainties,
-        ) = picasso_outpost.align_channels(
+        ) = channels.align_channels(
             self.channel_locs,
             self.channel_info,
             self.channel_tags,
@@ -10536,7 +8657,7 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         if fn := parameters.get("fig_filename", "fig_align.png"):
             fig_filepath = os.path.join(results["folder"], fn)
-            picasso_outpost.plot_shift(shifts, cum_shifts, fig_filepath)
+            channels.plot_shift(shifts, cum_shifts, fig_filepath)
             results["fig_filepath"] = fig_filepath
 
             # Add confidence interval plotting for RSSO method
@@ -10659,8 +8780,9 @@ class AutoPicasso(util.AbstractModuleCollection):
             non-reference channel), and ``fp_calibration`` (the saved
             calibration file).
         """
-        from picasso import registration
-        from picasso.registration import tform
+        from picasso_workflow._picasso_api import registration
+
+        tform = registration.tform
 
         if parameters.get("filepaths"):
             self._load_channels_from_filepaths(parameters["filepaths"])
@@ -10798,10 +8920,18 @@ class AutoPicasso(util.AbstractModuleCollection):
         parameters : dict
             Input parameters, unchanged.
         results : dict
-            Results updated with ``filepaths`` (all saved file paths).
+            Results updated with ``filepaths`` (all saved file paths),
+            ``tags`` and a ``checkpoint`` descriptor.
         """
         allfps = self._save_datasets_agg(results["folder"])
         results["filepaths"] = allfps
+        results["tags"] = list(self.channel_tags)
+        results["checkpoint"] = {
+            "channels": {
+                "filepaths": allfps,
+                "tags": list(self.channel_tags),
+            }
+        }
 
         return parameters, results
 
@@ -10825,7 +8955,9 @@ class AutoPicasso(util.AbstractModuleCollection):
         for locs, info, tag in zip(
             self.channel_locs, self.channel_info, self.channel_tags
         ):
-            filepath = os.path.join(folder, tag + ".hdf5")
+            filepath = os.path.join(
+                folder, _safe_filename_component(tag) + ".hdf5"
+            )
             io.save_locs(filepath, locs, info)
             allfps.append(filepath)
         return allfps
@@ -10985,7 +9117,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             depth = z_range
             # d = 3
 
-        structures, targets = picasso_outpost.load_structures_from_dict(
+        structures, targets = spinna_wrappers.load_structures_from_dict(
             structures
         )
 
@@ -11024,7 +9156,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                 fitted_label_unc,
                 best_distance,
                 best_score,
-            ) = picasso_outpost.single_spinna_fit_le_run(
+            ) = spinna_wrappers.single_spinna_fit_le_run(
                 target_a=target_a,
                 target_b=target_b,
                 exp_data=exp_data,
@@ -11054,7 +9186,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             return parameters, results
 
         # N_structures = spinna.generate_N_structures(
-        N_structures = picasso_outpost.generate_N_structures(
+        N_structures = spinna.generate_N_structures(
             structures, n_sim_targets, parameters["granularity"]
         )
 
@@ -11066,7 +9198,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                 labeling_uncertainty,
                 labeling_uncertainty_scan,
                 labelunc_scan_figs,
-            ) = picasso_outpost.screen_label_uncertainty(
+            ) = spinna_wrappers.screen_label_uncertainty(
                 structures=structures,
                 label_unc=labeling_uncertainty,
                 le=parameters["labeling_efficiency"],
@@ -11110,7 +9242,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             "n_simulated": n_sim_targets,
         }
 
-        spinna_results, fp_figs = picasso_outpost.single_spinna_run(
+        spinna_results, fp_figs = spinna_wrappers.single_spinna_run(
             **spinna_pars
         )
         plt.close("all")
@@ -11260,7 +9392,7 @@ class AutoPicasso(util.AbstractModuleCollection):
     #     else:
     #         # kick off SPINNA analysis
     #         print("starting spinna batch analysis")
-    #         result_dir, fp_summary, fp_fig = picasso_outpost.spinna_batch(
+    #         result_dir, fp_summary, fp_fig = spinna_wrappers.spinna_batch(
     #             cfg_fp
     #         )
 
@@ -11364,7 +9496,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         # directory lands inside the module folder.
         cfg_fp_used = os.path.join(results["folder"], os.path.basename(cfg_fp))
         spinna_config.to_csv(cfg_fp_used, index=False)
-        result_dir, fp_summary, fp_figs = picasso_outpost.spinna_batch(
+        result_dir, fp_summary, fp_figs = spinna_wrappers.spinna_batch(
             cfg_fp_used
         )
 
@@ -11425,311 +9557,6 @@ class AutoPicasso(util.AbstractModuleCollection):
                 }
                 spinna_structs.append(struct)
         return spinna_structs
-
-    #    @profile_resource_usage
-    @module_decorator
-    def ripleysk(self, i, parameters, results):
-        """Perform a Ripley's K analysis between the channels.
-
-        Parameters
-        ----------
-        i : int
-            Index of the module in the workflow.
-        parameters : dict
-            Keys:
-
-            ``ripleys_n_random_controls`` : int
-                Number of random controls (default 100).
-            ``ripleys_rmax`` : int
-                The maximum radius (default 200).
-            ``ripleys_dr`` : float
-                The radius interval (default 5).
-            ``radii`` : 1D np.ndarray
-                The radius values; if given, ``ripleys_rmax`` and
-                ``ripleys_dr`` are ignored.
-            ``ripleys_threshold`` : float
-                Threshold on the Ripley's integrals above which the
-                interaction is deemed significant.
-            ``fp_combined_locs`` : str
-                Filepath to the combined locs of all ``channel_locs``.
-            ``atype`` : str
-                Analysis type: ``'Ripleys'`` for standard Ripley's K, or
-                ``'RDF'`` to compute the radial distribution function instead
-                and generate controls by relocating each point within a
-                circle of the current radius (preserving density
-                fluctuations rather than simulating CSR).
-        results : dict
-            Module results (see
-            :class:`~picasso_workflow.util.AbstractModuleCollection`).
-        """
-        nRandomControls = parameters.get("ripleys_n_random_controls", 100)
-        # radii = np.concatenate(
-        #     (
-        #         np.arange(0, 100, 2),
-        #         np.arange(100, parameters.get("ripleys_rmax", 200), 12),
-        #     )
-        # )
-        if (radii := parameters.get("radii")) is not None:
-            radii = np.array(radii)
-        else:
-            radii = np.concatenate(
-                (
-                    np.arange(
-                        0,
-                        parameters.get("ripleys_rmax", 200),
-                        parameters.get("ripleys_dr", 5),
-                    ),
-                )
-            )
-
-        if isinstance(parameters["fp_combined_locs"], list):
-            fp_combined_locs = parameters["fp_combined_locs"][0]
-        else:
-            fp_combined_locs = parameters["fp_combined_locs"]
-        combined_locs, _ = io.load_locs(fp_combined_locs)
-
-        (
-            ripleysResults,
-            ripleysIntegrals,
-            ripleysMeanVal,
-        ) = run_ripleysAnalysis.performRipleysMultiAnalysis(
-            path=results["folder"],
-            filename="",
-            fileIDs=self.channel_tags,
-            radii=radii,
-            nRandomControls=nRandomControls,
-            channel_locs=self.channel_locs,
-            combined_locs=combined_locs,
-            pixelsize=self.pixelsize,
-            atype=parameters["atype"],
-        )
-
-        results["fp_ripleys_meanval"] = os.path.join(
-            results["folder"], "Ripleys_IntegralsMean.txt"
-        )
-        np.savetxt(results["fp_ripleys_meanval"], ripleysMeanVal)
-
-        results["fp_fig_ripleys_meanval"] = self._plot_ripleys_integrals(
-            ripleysMeanVal,
-            results["folder"],
-            self.channel_tags,
-            parameters["atype"],
-        )
-        results["fp_fig_unnormalized"] = os.path.join(
-            results["folder"], f"{parameters['atype']}_unnormalized.png"
-        )
-        results["fp_fig_normalized"] = os.path.join(
-            results["folder"], f"{parameters['atype']}_normalized.png"
-        )
-
-        results["ripleys_significant"] = self._find_ripleys_significant(
-            ripleysMeanVal,
-            parameters["ripleys_threshold"],
-            self.channel_tags,
-        )
-
-        return parameters, results
-
-    # @module_decorator
-    # def ripleysk_rafal(self, i, parameters, results):
-    #     """Exactly along Rafal's code"""
-    #     from picasso_workflow.outpost_modules.ripley_dcatlas_analysis \
-    #         import analyze as analyze_whole_cell
-    #     from picasso_workflow.outpost_modules.ripley_dcatlas_analysis \
-    #         import postprocess_ripley_matrix
-
-    #     rcode = generate_random_code(6)
-
-    #     R_MAX = 200  # nm, maximum radius for Ripley's K analysis
-    #     RADII = np.concatenate(
-    #         (np.arange(4, 80, 2), np.arange(80, R_MAX + 1, 12))
-    #     )
-    #     # boundaries for plotting final ripley matrices (as described in
-    #     # methods)
-    #     VMIN, VMAX = [
-    #         -2000,
-    #         2000,
-    #     ]
-
-    #     # first: binary
-    #     ripley_matrix, mask, area, fig_u, fig_n = analyze_whole_cell(
-    #         self.channel_locs, RADII, binary=True
-    #     )
-    #     postprocessed = postprocess_ripley_matrix(ripley_matrix, RADII)
-    #     path_save_integral_raw = os.path.join(
-    #         results["folder"],
-    #         f"raw_ripley_integral_binary-{rcode}.npy",
-    #     )
-    #     path_save_integral_postprocessed = os.path.join(
-    #         results["folder"],
-    #         f"postprocessed_ripley_integral_binary-{rcode}.npy",
-    #     )
-    #     np.save(path_save_integral_raw, ripley_matrix)
-    #     # save in excel format
-    #     df_raw = pd.DataFrame(
-    #         ripley_matrix, index=self.channel_tags, columns=self.channel_tags
-    #     )
-    #     df_raw.to_excel(path_save_integral_raw.replace(".npy", ".xlsx"))
-    #     df_pp = pd.DataFrame(
-    #         postprocessed,
-    #         index=self.channel_tags,
-    #         columns=self.channel_tags,
-    #     )
-    #     df_pp.to_excel(
-    #         path_save_integral_postprocessed.replace(".npy", ".xlsx")
-    #     )
-
-    #     def plot_and_save(matrix, savepath, vmin, vmax):
-    #         plt.figure()
-    #         plt.imshow(matrix, cmap="bwr_r", vmin=vmin, vmax=vmax)
-    #         plt.xticks(range(6), self.channel_tags)
-    #         plt.yticks(range(6), self.channel_tags)
-    #         plt.colorbar()
-    #         plt.savefig(savepath, dpi=150)
-    #         plt.close()
-
-    #     results["ripley_matrix_raw_binary"] = ripley_matrix
-    #     results["mask area_binary"] = area
-    #     results["fp_fig_mask_binary"] = os.path.join(
-    #         results["folder"], f"mask_binary-{rcode}.png"
-    #     )
-    #     fig, ax = plt.subplots()
-    #     ax.set_box_aspect(1)
-    #     ax.set_title("mask")
-    #     cmap = "hot"
-    #     ax.imshow(
-    #         mask,
-    #         extent=[
-    #             0,
-    #             mask.shape[0] * 10 / 1000,  # 10 nm mask pixel size
-    #             0,
-    #             mask.shape[1] * 10 / 1000,
-    #         ],
-    #         cmap=cmap,
-    #         origin="lower",
-    #     )
-    #     ax.set_xlabel("x [µm]")
-    #     ax.set_ylabel("y [µm]")
-    #     fig.savefig(results["fp_fig_mask_binary"])
-
-    #     results["fp_fig_unnormalized_binary"] = os.path.join(
-    #         results["folder"], f"unnormalized_binary-{rcode}.png"
-    #     )
-    #     fig_u.savefig(results["fp_fig_unnormalized_binary"])
-    #     results["fp_fig_normalized_binary"] = os.path.join(
-    #         results["folder"], f"normalized_binary-{rcode}.png"
-    #     )
-    #     fig_n.savefig(results["fp_fig_normalized_binary"])
-
-    #     results["fp_fig_raw_binary"] = path_save_integral_raw.replace(
-    #         ".npy", ".png"
-    #     )
-    #     plot_and_save(
-    #         matrix=ripley_matrix,
-    #         savepath=results["fp_fig_raw_binary"],
-    #         vmin=-np.max(np.abs(ripley_matrix)),
-    #         vmax=np.max(np.abs(ripley_matrix)),
-    #     )
-    #     results["fp_fig_postprocessed_binary"] = (
-    #         path_save_integral_postprocessed.replace(".npy", ".png")
-    #     )
-    #     plot_and_save(
-    #         matrix=postprocessed,
-    #         savepath=results["fp_fig_postprocessed_binary"],
-    #         vmin=VMIN,
-    #         vmax=VMAX,
-    #     )
-
-    #     # second: density
-    #     ripley_matrix, mask, area, fig_u, fig_n = analyze_whole_cell(
-    #         self.channel_locs, RADII, binary=False
-    #     )
-    #     postprocessed = postprocess_ripley_matrix(ripley_matrix, RADII)
-    #     path_save_integral_raw = os.path.join(
-    #         results["folder"],
-    #         f"raw_ripley_integral_density-{rcode}.npy",
-    #     )
-    #     path_save_integral_postprocessed = os.path.join(
-    #         results["folder"],
-    #         f"postprocessed_ripley_integral_density-{rcode}.npy",
-    #     )
-    #     np.save(path_save_integral_raw, ripley_matrix)
-    #     # save in excel format
-    #     df_raw = pd.DataFrame(
-    #         ripley_matrix, index=self.channel_tags, columns=self.channel_tags
-    #     )
-    #     df_raw.to_excel(path_save_integral_raw.replace(".npy", ".xlsx"))
-    #     df_pp = pd.DataFrame(
-    #         postprocessed,
-    #         index=self.channel_tags,
-    #         columns=self.channel_tags,
-    #     )
-    #     df_pp.to_excel(
-    #         path_save_integral_postprocessed.replace(".npy", ".xlsx")
-    #     )
-
-    #     def plot_and_save(matrix, savepath, vmin, vmax):
-    #         plt.figure()
-    #         plt.imshow(matrix, cmap="bwr_r", vmin=vmin, vmax=vmax)
-    #         plt.xticks(range(6), self.channel_tags)
-    #         plt.yticks(range(6), self.channel_tags)
-    #         plt.colorbar()
-    #         plt.savefig(savepath, dpi=150)
-    #         plt.close()
-
-    #     results["ripley_matrix_raw_density"] = ripley_matrix
-    #     results["mask area_density"] = area
-    #     results["fp_fig_mask_density"] = os.path.join(
-    #         results["folder"], f"mask_density-{rcode}.png"
-    #     )
-    #     fig, ax = plt.subplots()
-    #     ax.set_box_aspect(1)
-    #     ax.set_title("mask")
-    #     cmap = "hot"
-    #     ax.imshow(
-    #         mask,
-    #         extent=[
-    #             0,
-    #             mask.shape[0] / 1000,
-    #             0,
-    #             mask.shape[1] / 1000,
-    #         ],
-    #         cmap=cmap,
-    #         origin="lower",
-    #     )
-    #     ax.set_xlabel("x [µm]")
-    #     ax.set_ylabel("y [µm]")
-    #     fig.savefig(results["fp_fig_mask_density"])
-
-    #     results["fp_fig_unnormalized_density"] = os.path.join(
-    #         results["folder"], f"unnormalized_density-{rcode}.png"
-    #     )
-    #     fig_u.savefig(results["fp_fig_unnormalized_density"])
-    #     results["fp_fig_normalized_density"] = os.path.join(
-    #         results["folder"], f"normalized_density-{rcode}.png"
-    #     )
-    #     fig_n.savefig(results["fp_fig_normalized_density"])
-
-    #     results["fp_fig_raw_density"] = path_save_integral_raw.replace(
-    #         ".npy", ".png"
-    #     )
-    #     plot_and_save(
-    #         matrix=ripley_matrix,
-    #         savepath=results["fp_fig_raw_density"],
-    #         vmin=-np.max(np.abs(ripley_matrix)),
-    #         vmax=np.max(np.abs(ripley_matrix)),
-    #     )
-    #     results["fp_fig_postprocessed_density"] = (
-    #         path_save_integral_postprocessed.replace(".npy", ".png")
-    #     )
-    #     plot_and_save(
-    #         matrix=postprocessed,
-    #         savepath=results["fp_fig_postprocessed_density"],
-    #         vmin=VMIN,
-    #         vmax=VMAX,
-    #     )
-
-    #     return parameters, results
 
     #    @profile_resource_usage
     @module_decorator
@@ -11810,6 +9637,8 @@ class AutoPicasso(util.AbstractModuleCollection):
                 )
             )
 
+        from picasso_workflow.outpost.spatial_stats import ripleys
+
         # if isinstance(parameters["fp_combined_locs"], list):
         #     fp_combined_locs = parameters["fp_combined_locs"][0]
         # else:
@@ -11819,7 +9648,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         if fp_mask := parameters.get("fp_mask"):
             # mask = np.load(fp_mask)
             # mask = mask / np.sum(mask)
-            mask = outpost_modules.mask.CellMask.load(fp_mask)
+            mask = CellMask.load(fp_mask)
             area = mask.area * 1e6  # in nm^2
             mask_pixel_size = mask._upsample
         else:
@@ -11843,7 +9672,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             locs_used = self.channel_locs
 
         mol_coords = [
-            outpost_modules.ripleys.convert_picasso_to_coords(mol, pixelsize)
+            ripleys.convert_picasso_to_coords(mol, pixelsize)
             for mol in locs_used
         ]
 
@@ -11854,7 +9683,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                 fig_n,
                 curves,
                 curves_norm,
-            ) = outpost_modules.ripleys.typefraction_all_channels(
+            ) = ripleys.typefraction_all_channels(
                 mol_coords,
                 radii,
                 nRandomControls,
@@ -11878,7 +9707,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                 fig_n,
                 curves,
                 curves_norm,
-            ) = outpost_modules.ripleys.analyze_all_channels(
+            ) = ripleys.analyze_all_channels(
                 mol_coords,
                 mask,
                 mask_pixel_size,
@@ -11903,7 +9732,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         )
         np.save(results["fp_curves_norm"], curves_norm)
 
-        # ripley_matrix = outpost_modules.ripleys.postprocess_ripley_matrix(
+        # ripley_matrix = ripleys.postprocess_ripley_matrix(
         #     ripley_matrix, radii
         # )
 
@@ -12067,165 +9896,6 @@ class AutoPicasso(util.AbstractModuleCollection):
 
     #    @profile_resource_usage
     @module_decorator
-    def ripleysk_average(self, i, parameters, results):
-        """Average multiple Ripley's K analyses and find significant pairs.
-
-        Averages the integrals across analyses, finds the significant pairs
-        and (optionally) saves them into the separate workflows' manual
-        folders for further analysis there.
-
-        Parameters
-        ----------
-        i : int
-            Index of the module in the workflow.
-        parameters : dict
-            Required keys:
-
-            ``fp_workflows`` : list of str
-                Paths to the folders of the separate workflows where the
-                individual Ripley's analyses were done.
-            ``report_names`` : list of str
-                The report names of those workflows.
-            ``ripleys_threshold`` : float
-                Threshold above which an interaction is significant.
-            ``atype`` : str
-                ``"Ripleys"`` or ``"RDF"``.
-
-            Optional keys:
-
-            ``swkfl_ripleysk_key`` : str
-                Results key of the ripleysk module (e.g. ``'05_ripleysk'``).
-            ``swkfl_manual_key`` : str
-                Results key of the manual module to save the integrals to.
-                If these two are absent, saving is not performed.
-        results : dict
-            Module results (see
-            :class:`~picasso_workflow.util.AbstractModuleCollection`).
-        """
-        # from picasso_workflow.workflow import WorkflowRunner
-
-        # all_integrals = np.concat(
-        #     [np.loadtxt(fp) for fp in parameters["fp_ripleys_integrals"]])
-        # averaged_integrals = np.mean(all_integrals, axis=0)
-
-        # check single intregals based on workflow file
-        fp_ripleys_meanvals = []  # [""] * len(parameters["fp_workflows"])
-        output_folders = []  # [""] * len(parameters["fp_workflows"])
-
-        channel_tags = None
-        search_dict = {
-            (
-                parameters["swkfl_ripleysk_key"],
-                "fp_ripleys_meanval",
-            ): fp_ripleys_meanvals,
-            (parameters["swkfl_manual_key"], "folder"): output_folders,
-        }
-        for folder, name in zip(
-            parameters["fp_workflows"], parameters["report_names"]
-        ):
-            loaded_data, wf_channel_tags = self._load_other_workflow_data(
-                folder, name, search_dict.keys()
-            )
-            for key, res in loaded_data.items():
-                search_dict[key].append(res)
-
-            # make sure all channel tags (e.g. protein names)
-            # are the same across workflows to be merged
-            if channel_tags is None:
-                channel_tags = wf_channel_tags
-            else:
-                if channel_tags != wf_channel_tags:
-                    raise KeyError(
-                        "Loaded datasets have different channel tags!"
-                    )
-
-        # for i, (wkflfolder, report_name) in enumerate(
-        #     zip(parameters["fp_workflows"], parameters["report_names"])
-        # ):
-        #     # find analysis folder
-        #     postfix = WorkflowRunner._check_previous_runner(
-        #         wkflfolder, report_name
-        #     )
-        #     # find aggregation WorkflowRunner config
-        #     fp_wr_cfg = os.path.join(
-        #         wkflfolder,
-        #         report_name + "_" + postfix,
-        #         report_name + "_aggregation_" + postfix,
-        #         "WorkflowRunner.yaml",
-        #     )
-        #     with open(fp_wr_cfg, "r") as f:
-        #         data = yaml.load(f, Loader=yaml.FullLoader)
-        #     # check for results of 'ripleysk' module
-        #     for mod_key, mod_res in data["results"].items():
-        #         if mod_key == parameters.get("swkfl_ripleysk_key"):
-        #             print(mod_key, mod_res)
-        #             print(parameters.get("swkfl_ripleysk_key"))
-        #             fp_ripleys_integrals[i] = mod_res["fp_ripleys_integrals"]
-        #         elif mod_key == parameters.get("swkfl_manual_key"):
-        #             print(mod_key, mod_res)
-        #             print(parameters.get("swkfl_manual_key"))
-        #             output_folders[i] = mod_res["folder"]
-        #     # find AggregationWorkflowRunner config
-        #     fp_wr_cfg = os.path.join(
-        #         wkflfolder,
-        #         report_name + "_" + postfix,
-        #         "AggregationWorkflowRunner.yaml",
-        #     )
-        #     with open(fp_wr_cfg, "r") as f:
-        #         data = yaml.load(f, Loader=yaml.FullLoader)
-        #     channel_tags = data["aggregation_workflow"][
-        #         "single_dataset_tileparameters"
-        #     ]["#tags"]
-        # fp_ripleys_integrals = [
-        #     fp for fp in fp_ripleys_integrals if fp != ""
-        # ]
-        # output_folders = [fp for fp in output_folders if fp != ""]
-        results["output_folders"] = output_folders
-
-        # load and average the integrals
-        all_integrals = np.stack(
-            [np.loadtxt(fp) for fp in fp_ripleys_meanvals]
-        )
-        averaged_integrals = np.nanmean(all_integrals, axis=0)
-        std_integrals = np.nanstd(all_integrals, axis=0)
-
-        # save into own results folder
-        results["fp_ripleys_meanvals"] = os.path.join(
-            results["folder"], "Ripleys_MeanVals.txt"
-        )
-        np.savetxt(results["fp_ripleys_meanvals"], averaged_integrals)
-
-        results["fp_figmeanvals"] = self._plot_ripleys_integrals(
-            averaged_integrals,
-            results["folder"],
-            channel_tags,
-            parameters["atype"],
-            std=std_integrals,
-        )
-
-        significant_pairs = self._find_ripleys_significant(
-            averaged_integrals, parameters["ripleys_threshold"], channel_tags
-        )
-        results["ripleys_significant"] = significant_pairs
-
-        # save significant pairs into given folders
-        results["fp_ripleys_significant"] = os.path.join(
-            results["folder"], "significant_pairs.txt"
-        )
-        save_fp = [
-            os.path.join(fol, "significant_pairs.yaml")
-            for fol in output_folders
-        ]
-        save_fp.append(results["fp_ripleys_significant"])
-        for fp in save_fp:
-            with open(fp, "w") as f:
-                yaml.dump(significant_pairs, f)
-            # np.savetxt(fp, significant_pairs)
-
-        return parameters, results
-
-    #    @profile_resource_usage
-    @module_decorator
     def ripleysk_average2(self, i, parameters, results):
         """Average multiple Ripley's K analyses (Rafal's variant).
 
@@ -12259,7 +9929,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             Optional keys:
 
             ``swkfl_ripleysk_key`` : str
-                Results key of the ripleysk module (e.g. ``'05_ripleysk'``).
+                Results key of the ripleysk2 module (e.g. ``'05_ripleysk2'``).
             ``swkfl_manual_key`` : str
                 Results key of the manual module to save the integrals to.
                 If these two are absent, saving is not performed.
@@ -12377,15 +10047,17 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         significance_threshold = significance_thresholds[0]
 
+        from picasso_workflow.outpost.spatial_stats import ripleys
+
         # load and plot the single curves
-        fig_curves, ax_curves = outpost_modules.ripleys.init_plot(
+        fig_curves, ax_curves = ripleys.init_plot(
             len(channel_tags),
             "un-normalized",
             ripleys_controltype,
             ripleys_metric,
             figsize_per_target=5,
         )
-        fig_curves_norm, ax_curves_norm = outpost_modules.ripleys.init_plot(
+        fig_curves_norm, ax_curves_norm = ripleys.init_plot(
             len(channel_tags),
             "normalized",
             ripleys_controltype,
@@ -12399,7 +10071,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             curves_norm = np.load(fp_curve_norm)
             for i, name1 in enumerate(channel_tags):
                 for j, name2 in enumerate(channel_tags):
-                    outpost_modules.ripleys.plot_ripleys(
+                    ripleys.plot_ripleys(
                         ripleys_radii,
                         curves[i, j, :],
                         None,
@@ -12413,7 +10085,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                         label_data=reportname,
                         showControlEnvelope=False,
                     )
-                    outpost_modules.ripleys.plot_ripleys(
+                    ripleys.plot_ripleys(
                         ripleys_radii,
                         curves_norm[i, j, :],
                         None,
@@ -12569,7 +10241,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         # pixelsize = self.analysis_config["camera_info"].get("Pixelsize")
         # structures = self._create_spinna_structure(
         #     self.channel_tags, [1, 2], distance=parameters["distance"])
-        # N_structures = picasso_outpost.generate_N_structures(
+        # N_structures = spinna.generate_N_structures(
         #     structures, n_sim_targets, parameters["res_factor"]
         # )
         # # bin size: more than Nyquist subsampling
@@ -12712,11 +10384,11 @@ class AutoPicasso(util.AbstractModuleCollection):
                 compound_density = density_gt[A]
                 area = parameters["n_simulate"] / (density_gt[A] * 1e6)
                 n_sim_targets = {A: int(parameters["n_simulate"])}
-            structures, targets = picasso_outpost.load_structures_from_dict(
+            structures, targets = spinna_wrappers.load_structures_from_dict(
                 structures
             )
 
-            N_structures = picasso_outpost.generate_N_structures(
+            N_structures = spinna.generate_N_structures(
                 structures, n_sim_targets, parameters["res_factor"]
             )
 
@@ -12753,7 +10425,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                 "n_simulated": n_sim_targets,
             }
 
-            result, fp_fig = picasso_outpost.single_spinna_run(
+            result, fp_fig = spinna_wrappers.single_spinna_run(
                 spinna_parameters
             )
             plt.close("all")
@@ -12997,7 +10669,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             Module results (see
             :class:`~picasso_workflow.util.AbstractModuleCollection`).
         """
-        from picasso_workflow.dbscan_molint import mask
+        from picasso_workflow.outpost.clustering.dbscan_molint import mask
 
         # get map
         with open(parameters["fp_channel_map"], "r") as f:
@@ -13080,8 +10752,8 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         Largely identical to an implementation in spinna that will be
         integrated into picasso; evaluate deprecation (or moving the source
-        from ``outpost_modules/ripleys`` to ``picasso/spinna``) at that time.
-        The locs must be protein positions at this stage.
+        from ``outpost/spatial_stats/ripleys`` to ``picasso/spinna``) at that
+        time. The locs must be protein positions at this stage.
 
         Parameters
         ----------
@@ -13110,6 +10782,16 @@ class AutoPicasso(util.AbstractModuleCollection):
                 Whether to drop localizations outside the area.
 
             Optional keys:
+
+            ``nth_largest_cell`` : int
+                With ``select_cell``, keep the ``nth`` largest connected
+                component (1 = largest). Default keeps the largest.
+            ``skip_if_missing_cell`` : bool
+                With ``select_cell`` + ``nth_largest_cell``, raise
+                :class:`SkipBranch` when the requested cell does not exist
+                (fewer components than ``nth_largest_cell``) instead of reusing
+                the smallest. Lets a ``branch`` over-request cells and drop the
+                empty branches. Default False.
 
             ``fp_combined_locs`` : str
                 Filepath to the locs combined in the ``combine_channels``
@@ -13160,7 +10842,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             mols = [locs for locs in self.channel_locs]
 
         # mol_coords = [
-        #     outpost_modules.ripleys.convert_picasso_to_coords(mol, pixelsize)
+        #     ripleys.convert_picasso_to_coords(mol, pixelsize)
         #     for mol in mols
         # ]
         binsize = parameters["binsize"]
@@ -13169,7 +10851,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         threshold = parameters["threshold"]
         mask_pixel_size = parameters["mask_pixel_size"]
         # binary = parameters["binary"]
-        cell_mask = outpost_modules.mask.CellMask.from_mol_coords(
+        cell_mask = CellMask.from_mol_coords(
             mols,
             pixelsize,
             binsize,
@@ -13185,7 +10867,17 @@ class AutoPicasso(util.AbstractModuleCollection):
                 # nth_largest_cell is 1-based (1 = largest); filter_mask
                 # uses a 0-based rank internally.
                 kwargs["nth_largest"] = nth - 1
-            cell_mask.filter_mask(**kwargs)
+            if parameters.get("skip_if_missing_cell"):
+                # Used inside a ``branch``: turn "requested cell absent" into a
+                # SkipBranch so this branch is dropped instead of failing (or
+                # silently reusing another cell).
+                kwargs["raise_if_missing"] = True
+                try:
+                    cell_mask.filter_mask(**kwargs)
+                except IndexError as e:
+                    raise SkipBranch(f"create_mask2: {e}")
+            else:
+                cell_mask.filter_mask(**kwargs)
         if dilate_nm := parameters.get("dilate_nm"):
             cell_mask.dilate(dilate_nm)
         if parameters.get("apply_to_locs"):
@@ -13212,7 +10904,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             logger.debug(f"max locs y vals [px] are {ymax}")
         area = cell_mask.area
 
-        # mask, area = outpost_modules.ripleys.get_cell_mask(
+        # mask, area = ripleys.get_cell_mask(
         #     mol_coords,
         #     pixelsize,
         #     binsize=binsize,
@@ -13222,7 +10914,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         #     binary=binary,
         # )
         # if parameters.get("select_cell"):
-        #     mask = outpost_modules.ripleys.filter_mask(mask)
+        #     mask = ripleys.filter_mask(mask)
 
         results["area"] = area
         # results["fp_mask"] = os.path.join(
@@ -13236,7 +10928,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         # results["fp_fig_mask"] = os.path.join(
         #     results["folder"], f"mask_binary-{binary}_{rcode}.png"
         # )
-        # outpost_modules.ripleys.plot_mask(
+        # ripleys.plot_mask(
         #     mask, mask_pixel_size, results["fp_fig_mask"]
         # )
         results["fp_fig_mask_binary"] = os.path.join(
@@ -13291,7 +10983,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         # nth_largest is 1-based (1 = largest); converted to a 0-based
         # rank at the component-selection step below.
         nth_largest = parameters.get("nth_largest", 1)
-        mask = outpost_modules.mask.CellMask.load(parameters["fp_mask"])
+        mask = CellMask.load(parameters["fp_mask"])
         mask_pixel_area = mask._upsample**2
         densities = mask.densities
 
@@ -13519,7 +11211,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             Module results (see
             :class:`~picasso_workflow.util.AbstractModuleCollection`).
         """
-        # from picasso_workflow.dbscan_molint import dbscan
+        # from picasso_workflow.outpost.clustering.dbscan_molint import dbscan
         # get map
         with open(parameters["fp_channel_map"], "r") as f:
             channel_map = yaml.safe_load(f)
@@ -13528,7 +11220,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         epsilon_nm = parameters["epsilon_nm"]
         df_mask = pd.read_hdf(parameters["fp_merge_mask"], key="locs")
         fp_out_base = os.path.join(results["folder"], "dbscan.hdf5")
-        filepaths = picasso_outpost._do_dbscan_molint(
+        filepaths = clustering_molint._do_dbscan_molint(
             results["folder"],
             fp_out_base,
             df_mask,
@@ -13662,9 +11354,9 @@ class AutoPicasso(util.AbstractModuleCollection):
             Module results (see
             :class:`~picasso_workflow.util.AbstractModuleCollection`).
         """
-        from picasso_workflow.dbscan_molint import mask
+        from picasso_workflow.outpost.clustering.dbscan_molint import mask
 
-        # from picasso_workflow.dbscan_molint import dbscan
+        # from picasso_workflow.outpost.clustering.dbscan_molint import dbscan
 
         pixelsize = self.pixelsize
         epsilon_nm = parameters["epsilon_nm"]
@@ -13698,7 +11390,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                 plot_figures=True,
             )
             fp_out_base = os.path.join(results["folder"], f"dbscan_{s}.hdf5")
-            filepaths = picasso_outpost._do_dbscan_molint(
+            filepaths = clustering_molint._do_dbscan_molint(
                 results["folder"],
                 fp_out_base,
                 df_CSR_mask,
@@ -14071,7 +11763,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         origin_colors = ["blue", "gray"]
 
         # plot degree of clustering
-        fp_figs = picasso_outpost.degree_of_clustering(
+        fp_figs = clustering_molint.degree_of_clustering(
             cluster_info_exp,
             cluster_info_csr,
             origin_colors,
@@ -14114,7 +11806,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         (
             significant_barcodes,
             p_values,
-        ) = picasso_outpost._plot_and_compare_barcodes(
+        ) = clustering_molint._plot_and_compare_barcodes(
             barcode_numbers,
             origin_colors,
             targets,
@@ -14153,7 +11845,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         (
             significant_barcodes,
             p_values,
-        ) = picasso_outpost._plot_and_compare_barcodes(
+        ) = clustering_molint._plot_and_compare_barcodes(
             barcode_areas,
             origin_colors,
             targets,
@@ -14174,7 +11866,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             fp_fig = os.path.join(
                 results["folder"], f"ntargets_barcode_{bc[2:]}.png"
             )
-            picasso_outpost._plot_and_compare_ntargets_in_barcodes(
+            clustering_molint._plot_and_compare_ntargets_in_barcodes(
                 df, bc, origin_colors, targets, fp_fig
             )
             fp_fig_ntargets.append(fp_fig)
@@ -14254,7 +11946,7 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         targets = channel_tags
         meanvals = np.loadtxt(parameters["fp_ripleys_meanvals"])
-        fig, ax = picasso_outpost._plot_interaction_graph(
+        fig, ax = clustering_molint._plot_interaction_graph(
             densities * parameters["node_factor"],
             meanvals * parameters["edge_factor"],
             parameters["channel_colors"],
@@ -14299,7 +11991,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         for prop in ["diameter", "std_range", "mean_rmsd"]:
             if val := parameters.get(prop):
                 kwargs[prop] = val
-        gold_picks = picasso_outpost.pick_gold(self.locs, self.info, **kwargs)
+        gold_picks = picks_mod.pick_gold(self.locs, self.info, **kwargs)
 
         results["n_gold"] = len(gold_picks)
         logger.debug(f"# gold particles found: {len(gold_picks)}")
@@ -14318,7 +12010,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         else:
             # function needs to return the locs in a r radius around the gold
             # coordinates
-            gold_locs, nongold_locs = picasso_outpost.picked_locs(
+            gold_locs, nongold_locs = picks_mod.picked_locs(
                 self.locs,
                 self.info,
                 gold_picks,
@@ -14393,16 +12085,22 @@ class AutoPicasso(util.AbstractModuleCollection):
         """
         logger.debug(f"# locs: {len(self.locs)}")
         # search for xy positions that look like gold ('pick similar')
-        diameter = parameters["diameter"]
+        # the override keys are optional: unset ones fall back to
+        # picks_mod.pick_similar's own defaults
         kwargs = {
-            "diameter": diameter,
-            "min_n_locs_per_frame": parameters["min_n_locs_per_frame"],
-            "max_n_locs_per_frame": parameters["max_n_locs_per_frame"],
-            "min_rmsd": parameters["min_rmsd"],
-            "max_rmsd": parameters["max_rmsd"],
+            key: parameters[key]
+            for key in (
+                "diameter",
+                "min_n_locs_per_frame",
+                "max_n_locs_per_frame",
+                "min_rmsd",
+                "max_rmsd",
+            )
+            if parameters.get(key) is not None
         }
+        diameter = kwargs.get("diameter", 2)
         # print(self.locs.dtype)
-        picks, nlocs, rmsds, labels = picasso_outpost.pick_similar(
+        picks, nlocs, rmsds, labels = picks_mod.pick_similar(
             self.locs, self.info, **kwargs
         )
         # print(self.locs.dtype)
@@ -14459,7 +12157,7 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         # all xy coords found for the picks
         if len(picks) > 2:
-            picked_locs = picasso_outpost.picked_locs(
+            picked_locs = picks_mod.picked_locs(
                 self.locs,
                 self.info,
                 picks,
@@ -14592,7 +12290,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             rmsds,
             labels,
             newlabels,
-        ) = picasso_outpost.find_structures(self.locs, self.info, **kwargs)
+        ) = picks_mod.find_structures(self.locs, self.info, **kwargs)
 
         results["n_clusters"] = len(cluster_picks)
         results["n_picks"] = [len(picks) for picks in cluster_picks]
@@ -14652,7 +12350,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         for cluster_id, picks in enumerate(cluster_picks):
             # all xy coords found for this cluster of structure
             if len(picks) > 2:
-                cluster_locs = picasso_outpost.picked_locs(
+                cluster_locs = picks_mod.picked_locs(
                     self.locs,
                     self.info,
                     picks,
@@ -14775,7 +12473,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             raise ValueError(
                 "pick_origami needs a 'design_file' or a 'geometry' spec"
             )
-        template = picasso_outpost.load_origami_template(template_spec)
+        template = origami_mod.load_origami_template(template_spec)
         results["n_sites_expected"] = template.n_sites_expected
         results["grid_spacing_nm"] = template.grid_spacing_nm
 
@@ -14784,7 +12482,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         # min/max_n_locs_per_frame (the "Preview phase space" GUI dialog
         # simulates the expected origami cloud to suggest those bounds); the
         # module itself no longer simulates.
-        pick_result = picasso_outpost.pick_origami(
+        pick_result = origami_mod.pick_origami(
             self.locs,
             self.info,
             template,
@@ -14825,7 +12523,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         # centre of mass, then re-pick once around the new centres so the
         # saved picks and locs are all consistent with the actual structures.
         if len(accepted_centers) > 0:
-            picked_origami_locs = picasso_outpost.picked_locs(
+            picked_origami_locs = picks_mod.picked_locs(
                 self.locs,
                 self.info,
                 accepted_centers,
@@ -14835,7 +12533,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             accepted_centers = _recenter_on_com(
                 picked_origami_locs, accepted_centers
             )
-            picked_origami_locs = picasso_outpost.picked_locs(
+            picked_origami_locs = picks_mod.picked_locs(
                 self.locs,
                 self.info,
                 accepted_centers,
@@ -14890,7 +12588,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         results["fp_picks_dockingsites"] = fp_picks_dockingsites
 
         if len(docking_centers) > 0:
-            docking_site_locs = picasso_outpost.picked_locs(
+            docking_site_locs = picks_mod.picked_locs(
                 self.locs,
                 self.info,
                 docking_centers,
@@ -15069,7 +12767,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         """Cluster accepted origami by resolved geometry and emit outputs.
 
         Builds the invariant site-graph descriptor for each accepted
-        structure (:func:`picasso_outpost.cluster_structure_patterns`) and
+        structure (:func:`origami_mod.cluster_structure_patterns`) and
         writes, per discovered pattern cluster, a picasso pick ``.yaml`` and
         a grouped ``.hdf5``, plus a ``pattern_table.csv`` summary, a
         representative render per cluster, and a phase-space scatter coloured
@@ -15119,7 +12817,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                 lattice_kwargs["defect_grouping"] = str(
                     parameters["pattern_defect_grouping"]
                 )
-            cl = picasso_outpost.cluster_lattice_defects(
+            cl = origami_mod.cluster_lattice_defects(
                 structures_xy_nm,
                 template.sites_nm,
                 template.grid_spacing_nm,
@@ -15127,7 +12825,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                 **lattice_kwargs,
             )
         else:
-            cl = picasso_outpost.cluster_structure_patterns(
+            cl = origami_mod.cluster_structure_patterns(
                 structures_xy_nm,
                 expected_spacing_nm=template.grid_spacing_nm,
                 **sub_kwargs,
@@ -15517,7 +13215,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                     f"{fp_picked}: pick-region yaml needs a 'Diameter (nm)' "
                     "or 'Diameter' entry"
                 )
-            picked_df = picasso_outpost.picked_locs(
+            picked_df = picks_mod.picked_locs(
                 self.locs,
                 self.info,
                 centers,
@@ -15553,7 +13251,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             )
         # print(result)
         # picked_locs, picked_info = io.load_locs(parameters["fp_picked_locs"])
-        self.locs, self.info, drift = picasso_outpost._undrift_from_picked(
+        self.locs, self.info, drift = picks_mod._undrift_from_picked(
             self.locs, self.info, picked_locs
         )
         drift = pd.DataFrame(drift)
@@ -15773,14 +13471,14 @@ class AutoPicasso(util.AbstractModuleCollection):
         """
         if len(fields) == 1:
             fig, ax = plt.subplots()
-            picasso_outpost.plot_1dhist(self.locs, fields[0], fig, ax)
+            reporting_hist.plot_1dhist(self.locs, fields[0], fig, ax)
         else:
             fig, ax = plt.subplots(
                 nrows=len(fields) - 1, ncols=len(fields) - 1, squeeze=False
             )
             for i, field_x in enumerate(fields[:-1]):
                 for j, field_y in enumerate(fields[i + 1 :]):
-                    picasso_outpost.plot_2dhist(
+                    reporting_hist.plot_2dhist(
                         self.locs, field_x, field_y, fig, ax[i, j]
                     )
                 # if i > 0:
@@ -16217,7 +13915,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             fit_NND_maxdist = 4 * parameters["nn_nth"] * expected_1stNN_peak
 
         # NND figures (simulated vs experimental) for the fitted model
-        fp_fig = picasso_outpost.plot_spinna_nnd(
+        fp_fig = spinna_wrappers.plot_spinna_nnd(
             mixer=best_mixer,
             targets=[target, reference],
             exp_data=exp_data,
@@ -16267,7 +13965,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             # fit_le does not bootstrap; run one bootstrap stoichiometry fit
             # on the fitted mixer to recover proportion uncertainties.
             # best_mixer.structures order is [monomer_A, monomer_B, het].
-            N_structures = picasso_outpost.generate_N_structures(
+            N_structures = spinna.generate_N_structures(
                 best_mixer.structures,
                 n_exp,
                 parameters["granularity"],
@@ -16330,3 +14028,16 @@ class ManualInputLackingError(AutoPicassoError):
 
 class PicassoConfigError(AutoPicassoError):
     """Raised when the picasso configuration is missing or invalid."""
+
+
+class SkipBranch(Exception):
+    """Signal that the current ``branch`` sub-workflow has no data to run.
+
+    A branch sub-module raises this (rather than a hard error) when the branch
+    is legitimately empty -- e.g. ``create_mask2`` was asked for a cell that
+    does not exist. The :meth:`AutoPicasso.branch` module catches it, drops the
+    branch (so the join and the overall pipeline proceed with the remaining
+    branches) and records it under ``results["skipped"]``. It deliberately does
+    *not* subclass :class:`AutoPicassoError`, so genuine analysis errors are
+    never mistaken for an empty branch.
+    """

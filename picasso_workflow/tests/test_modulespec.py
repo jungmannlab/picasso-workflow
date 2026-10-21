@@ -12,10 +12,15 @@ import unittest
 
 from picasso_workflow.modulespec import (
     CAPABILITIES,
+    LOCS_STATE_CAPABILITIES,
+    MEMORY_ONLY_CAPABILITIES,
     MODULE_REGISTRY,
     ModuleSpec,
     PicassoRelation,
+    RUNTIME_PARAMETER_WRITE_BACKS,
     Scope,
+    SINGLE_LOCS_CAPABILITIES,
+    restart_conflicts,
     validate_workflow,
 )
 from picasso_workflow.util import AbstractModuleCollection
@@ -39,7 +44,14 @@ def _contract_module_names():
 class TestModuleSpecRegistry(unittest.TestCase):
     def test_every_module_has_a_spec_and_no_orphans(self):
         contract = _contract_module_names()
-        specced = set(MODULE_REGISTRY)
+        # picasso-set modules live outside the AbstractModuleCollection
+        # contract (they are reconciled against the mixins in
+        # test_picasso_set.py), so the no-orphans check covers natives only.
+        specced = {
+            name
+            for name, spec in MODULE_REGISTRY.items()
+            if spec.module_set == "native"
+        }
         missing = contract - specced  # contract module without a ModuleSpec
         orphan = specced - contract  # spec for a non-existent module
         self.assertEqual(
@@ -77,6 +89,19 @@ class TestModuleSpecRegistry(unittest.TestCase):
                     f"{spec.name}: WRAPS module must record a picasso_symbol",
                 )
 
+    def test_experimental_defaults_false(self):
+        # Only deliberately-parked modules are hidden; everything else must
+        # stay visible in the palette.
+        experimental = {
+            name for name, spec in MODULE_REGISTRY.items() if spec.experimental
+        }
+        self.assertEqual(
+            {"plugin"},
+            experimental,
+            "unexpected experimental (palette-hidden) modules: "
+            f"{sorted(experimental - {'plugin'})}",
+        )
+
 
 class TestModuleSpecValidation(unittest.TestCase):
     def test_unknown_token_rejected(self):
@@ -90,6 +115,62 @@ class TestModuleSpecValidation(unittest.TestCase):
     def test_wraps_without_symbol_rejected(self):
         with self.assertRaises(ValueError):
             ModuleSpec(name="x", relation=PicassoRelation.WRAPS)
+
+    def test_unknown_module_set_rejected(self):
+        with self.assertRaises(ValueError):
+            ModuleSpec(name="x", module_set="other")
+
+    def test_picasso_set_requires_prefix(self):
+        with self.assertRaises(ValueError):
+            ModuleSpec(
+                name="density",
+                module_set="picasso",
+                relation=PicassoRelation.WRAPS,
+                picasso_symbol="picasso.postprocess.compute_local_density",
+            )
+
+    def test_picasso_set_requires_wraps(self):
+        with self.assertRaises(ValueError):
+            ModuleSpec(name="picasso_density", module_set="picasso")
+
+
+class TestPicassoSetSpecs(unittest.TestCase):
+    """Registry-level invariants of the picasso-set entries."""
+
+    def _picasso_specs(self):
+        return [
+            spec
+            for spec in MODULE_REGISTRY.values()
+            if spec.module_set == "picasso"
+        ]
+
+    def test_picasso_set_present(self):
+        self.assertTrue(self._picasso_specs())
+
+    def test_names_prefixed_and_wrapping(self):
+        for spec in self._picasso_specs():
+            self.assertTrue(spec.name.startswith("picasso_"), spec.name)
+            self.assertIs(spec.relation, PicassoRelation.WRAPS, spec.name)
+            self.assertTrue(spec.picasso_symbol, spec.name)
+
+    def test_params_schema_shape(self):
+        # params carries the GUI (parameters_spec, results_spec) pair; every
+        # leaf must at least name its widget type.
+        for spec in self._picasso_specs():
+            self.assertIsInstance(spec.params, tuple, spec.name)
+            self.assertEqual(2, len(spec.params), spec.name)
+            parameters_spec, results_spec = spec.params
+            for section in (parameters_spec, results_spec):
+                self.assertIsInstance(section, dict, spec.name)
+                for key, leaf in section.items():
+                    self.assertIn(
+                        "type", leaf, f"{spec.name}.{key}: missing type"
+                    )
+
+    def test_native_specs_unaffected(self):
+        for spec in MODULE_REGISTRY.values():
+            if spec.module_set == "native":
+                self.assertFalse(spec.name.startswith("picasso_"), spec.name)
 
 
 class TestValidateWorkflow(unittest.TestCase):
@@ -115,6 +196,42 @@ class TestValidateWorkflow(unittest.TestCase):
     def test_accepts_scope_as_string(self):
         steps = [("load_dataset_movie", {}), ("identify", {})]
         self.assertEqual([], validate_workflow(steps, "single"))
+
+    def test_golden_picasso_set_workflow_passes(self):
+        # picasso-set modules validate like natives and can mix with them.
+        steps = [
+            ("load_dataset_localizations", {}),
+            ("picasso_density", {"radius": 1.5}),
+        ]
+        self.assertEqual([], validate_workflow(steps, Scope.SINGLE))
+
+    def test_picasso_native_template_validates(self):
+        from picasso_workflow import standard_singledataset_workflows as ssw
+
+        steps = ssw.picasso_native("movie.tif")
+        self.assertEqual([], validate_workflow(steps, Scope.SINGLE))
+
+    def test_golden_picasso_set_picks_workflow_passes(self):
+        steps = [
+            ("load_dataset_localizations", {}),
+            ("picasso_pick_similar", {"picks_file": "seed_picks.yaml"}),
+            ("picasso_picked_locs", {"picks_file": "picks.yaml"}),
+            ("picasso_pick_properties", {"picks_file": "picks.yaml"}),
+            ("picasso_nena", {}),
+        ]
+        self.assertEqual([], validate_workflow(steps, Scope.SINGLE))
+
+    def test_golden_picasso_set_pipeline_passes(self):
+        # the full picasso-set core chain validates end-to-end
+        steps = [
+            ("load_dataset_movie", {}),
+            ("picasso_localize", {}),
+            ("picasso_undrift_rcc", {}),
+            ("picasso_dbscan", {"radius": 0.5, "density": 4}),
+            ("picasso_nneighbor", {"files": "clusters.hdf5"}),
+            ("picasso_render", {}),
+        ]
+        self.assertEqual([], validate_workflow(steps, Scope.SINGLE))
 
     def test_unknown_module_reported(self):
         errors = validate_workflow([("not_a_module", {})], Scope.SINGLE)
@@ -192,6 +309,60 @@ class TestValidateWorkflow(unittest.TestCase):
         errors = validate_workflow([("export_brightfield", {})], Scope.SINGLE)
         self.assertEqual([], errors)
 
+    def test_branch_type_missing_or_unknown_rejected(self):
+        # Missing branch_type is rejected (would KeyError at run time).
+        errors = validate_workflow(
+            [("branch", {"n_branches": 2, "branch_modules": []})],
+            Scope.AGGREGATION,
+        )
+        self.assertTrue(any("branch_type must be" in e for e in errors))
+        # An unknown/removed branch_type (e.g. "screen") is rejected.
+        errors = validate_workflow(
+            [("branch", {"branch_type": "screen", "branch_modules": []})],
+            Scope.AGGREGATION,
+        )
+        self.assertTrue(any("branch_type must be" in e for e in errors))
+
+    def test_branch_runtime_requires_branch_over(self):
+        errors = validate_workflow(
+            [("branch", {"branch_type": "runtime", "branch_modules": []})],
+            Scope.AGGREGATION,
+        )
+        self.assertTrue(any("requires 'branch_over'" in e for e in errors))
+        # With branch_over present it validates (no branch_type error).
+        errors = validate_workflow(
+            [
+                (
+                    "branch",
+                    {
+                        "branch_type": "runtime",
+                        "branch_over": [1, 2],
+                        "branch_modules": [],
+                    },
+                )
+            ],
+            Scope.AGGREGATION,
+        )
+        self.assertFalse(any("branch" in e for e in errors))
+
+    def test_branch_explicit_accepts_zero_n_branches(self):
+        # n_branches=0 is present (not None), so it must not trip the
+        # "requires n_branches" error (truthiness bug guard).
+        errors = validate_workflow(
+            [
+                (
+                    "branch",
+                    {
+                        "branch_type": "explicit",
+                        "n_branches": 0,
+                        "branch_modules": [],
+                    },
+                )
+            ],
+            Scope.AGGREGATION,
+        )
+        self.assertFalse(any("explicit branch requires" in e for e in errors))
+
     def test_every_module_validates_alone_in_one_of_its_scopes(self):
         # Sanity check that the registry's own requires/provides are internally
         # consistent: each module preceded by producers of all its requires
@@ -224,6 +395,112 @@ class TestValidateWorkflow(unittest.TestCase):
                 f"{spec.name}: unsatisfiable requires "
                 f"{sorted(spec.requires)}",
             )
+
+
+class TestRestartConflicts(unittest.TestCase):
+    """restart_conflicts: in-memory state lost by a mid-workflow restart."""
+
+    STEPS = [
+        ("load_dataset_movie", {}),
+        ("identify", {}),
+        ("localize", {}),
+        ("undrift_rcc", {}),
+    ]
+
+    def test_capability_sets_are_subsets_of_vocabulary(self):
+        self.assertEqual(set(), MEMORY_ONLY_CAPABILITIES - CAPABILITIES)
+        self.assertEqual(set(), LOCS_STATE_CAPABILITIES - CAPABILITIES)
+
+    def test_write_back_map_names_registered_modules(self):
+        self.assertEqual(
+            set(),
+            set(RUNTIME_PARAMETER_WRITE_BACKS) - set(MODULE_REGISTRY),
+        )
+
+    def test_restart_at_zero_never_conflicts(self):
+        hard, soft = restart_conflicts(self.STEPS, 0)
+        self.assertEqual([], hard)
+        self.assertEqual([], soft)
+
+    def test_memory_only_conflict_is_hard(self):
+        # restarting at localize: identifications (from identify at [1]) and
+        # raw_movie (from load at [0]) are memory-only and lost.
+        hard, soft = restart_conflicts(self.STEPS, 2)
+        self.assertTrue(any("identifications" in msg for msg in hard))
+        self.assertTrue(any("raw_movie" in msg for msg in hard))
+
+    def test_conflicts_after_restart_module_are_also_hard(self):
+        # restarting at identify: localize (later in the re-run) also misses
+        # raw_movie -- it WILL execute in this run, so it is hard too.
+        hard, soft = restart_conflicts(self.STEPS, 1)
+        self.assertTrue(any("[1] identify" in msg for msg in hard))
+        self.assertTrue(any("[2] localize" in msg for msg in hard))
+
+    def test_producer_inside_rerun_range_is_fine(self):
+        # restarting at identify: identifications for localize are
+        # re-produced by identify inside the re-run range.
+        hard, soft = restart_conflicts(self.STEPS, 1)
+        self.assertFalse(any("identifications" in msg for msg in hard + soft))
+
+    def test_lost_locs_state_is_hard_unless_restored(self):
+        # undrift_rcc requires 'locs' produced by localize at [2]. Without a
+        # restore, restarting at [3] is not viable; with the single-locs
+        # state restored (checkpoint), it is.
+        hard, _ = restart_conflicts(self.STEPS, 3)
+        self.assertTrue(any("'locs'" in msg for msg in hard))
+        hard, _ = restart_conflicts(
+            self.STEPS,
+            3,
+            lost_capabilities=(
+                MEMORY_ONLY_CAPABILITIES
+                | (LOCS_STATE_CAPABILITIES - SINGLE_LOCS_CAPABILITIES)
+            ),
+        )
+        self.assertEqual([], hard)
+
+    def test_unknown_module_is_soft(self):
+        steps = self.STEPS + [("not_a_module", {})]
+        hard, soft = restart_conflicts(steps, 4)
+        self.assertEqual([], hard)
+        self.assertTrue(any("cannot verify" in msg for msg in soft))
+
+    def test_optional_memory_only_is_soft(self):
+        steps = [
+            ("load_picassoconfig", {}),
+            ("load_dataset_movie", {}),
+            ("identify", {}),
+        ]
+        # restart at load_dataset_movie: identify's optional picasso_config
+        # (from [0]) is lost, but only advisory; raw_movie is re-produced.
+        hard, soft = restart_conflicts(steps, 1)
+        self.assertEqual([], hard)
+        self.assertTrue(any("picasso_config" in msg for msg in soft))
+
+    def test_branch_submodule_requirements_are_seen(self):
+        # the branch step itself requires nothing memory-only, but its
+        # sub-workflow contains localize, which needs raw_movie and
+        # identifications from the trunk -- lost at the restart point.
+        steps = [
+            ("load_dataset_movie", {}),
+            ("identify", {}),
+            ("localize", {}),
+            ("save_single_dataset", {}),
+            (
+                "branch",
+                {"branch_modules": [("localize", {})]},
+            ),
+        ]
+        hard, soft = restart_conflicts(steps, 4)
+        self.assertTrue(any("[4] branch" in msg for msg in hard))
+        self.assertTrue(any("raw_movie" in msg for msg in hard))
+        # a branch whose sub-modules are self-sufficient is fine
+        steps[4] = ("branch", {"branch_modules": [("dummy_module", {})]})
+        hard, soft = restart_conflicts(
+            steps,
+            4,
+            lost_capabilities=MEMORY_ONLY_CAPABILITIES,
+        )
+        self.assertEqual([], hard)
 
 
 if __name__ == "__main__":

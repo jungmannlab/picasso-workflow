@@ -10,7 +10,7 @@ import logging
 
 import numpy as np
 
-from picasso_workflow.outpost_modules import mask
+from picasso_workflow.outpost.masking import mask
 from picasso import io
 import matplotlib.pyplot as plt
 

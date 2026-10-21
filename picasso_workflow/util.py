@@ -70,6 +70,55 @@ class AbstractModuleCollection(abc.ABC):
         """
 
     @abc.abstractmethod
+    def plugin(self, i, parameters, results):
+        """Call an installed, enabled picasso API plugin export.
+
+        Generic bridge to the picasso plugin system: looks up a name exported
+        by an enabled plugin's ``PICASSO_API`` mapping
+        (``picasso.plugins.load_api_plugins``) and calls it. Workflow state is
+        passed in as opt-in keyword arguments and a structured return value may
+        update the pipeline. Only plugins already enabled in picasso
+        (``~/.picasso/plugins/``) are available; this module never enables a
+        plugin itself.
+
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters : dict
+            Required keys:
+
+            ``api_name`` : str
+                Name of the ``PICASSO_API`` export to call.
+
+            Optional keys:
+
+            ``kwargs`` : dict
+                Keyword arguments passed verbatim to the plugin callable.
+                Default is ``{}``.
+            ``inject`` : list of str
+                Which workflow state to pass to the callable as extra keyword
+                arguments; allowed values ``"locs"``, ``"info"`` and
+                ``"movie"`` map to ``locs=self.locs`` / ``info=self.info`` /
+                ``movie=self.movie``. Opt-in (default ``[]``) so a callable
+                that does not accept those keywords is not forced to.
+        results : dict
+            Module results (decorator-provided keys only; see class docstring).
+
+        Returns
+        -------
+        parameters : dict
+            Input parameters, unchanged.
+        results : dict
+            Results updated with ``plugin_api_name``, ``plugin_callable`` and
+            ``injected``. If the callable returns a dict, its reserved keys are
+            consumed: ``locs``/``info`` update the pipeline state, ``report``
+            is stored as ``plugin_report``, ``files`` as ``plugin_files`` and
+            any remaining keys as ``plugin_result``. A non-dict return value is
+            stored as ``plugin_result``.
+        """
+
+    @abc.abstractmethod
     def analysis_documentation(self, i, parameters, results):
         """Document where and how the analysis is being performed.
 
@@ -145,7 +194,7 @@ class AbstractModuleCollection(abc.ABC):
         N-way fan-out. The shared prefix (all modules before this one) is run
         once; this module then runs ``branch_modules`` once per branch on a
         snapshot of the prefix state, and finally runs ``join_modules`` once
-        with the per-branch results pooled back together. Three branch types:
+        with the per-branch results pooled back together. Two branch types:
 
         - ``"explicit"``: a fixed number of branches (``n_branches`` or
           ``branch_labels``). All branches run the same modules and differ only
@@ -153,34 +202,36 @@ class AbstractModuleCollection(abc.ABC):
           ``("$branch", [v0, v1, ...])``, resolved to ``values[branch_id]``
           (e.g. ``create_mask2`` with ``nth_largest_cell=("$branch",[1,2,3])``
           to select a different cell per branch).
-        - ``"runtime"``: the number of branches is discovered at run time by
-          splitting a prior mask into its connected components (one branch per
-          cell). Each branch's ``channel_locs`` are the prefix localizations
-          filtered to that component.
-        - ``"screen"``: the number of branches is fixed at config time by a
-          parameter grid; each branch resolves ``$$map`` commands from its row
-          of the grid (reusing :class:`ParameterTiler` semantics).
+        - ``"runtime"``: the number of branches is discovered at run time. A
+          ``branch_over`` value or command resolves to a list ``L``; there is
+          one branch per element and the branch count is ``len(L)``. Each
+          branch's sub-modules read their element ``L[branch_id]`` via the
+          ``("$branch_item",)`` token (``("$branch_item", key)`` indexes into
+          the element). E.g. ``branch_over`` = a list of cell ranks, and each
+          branch's ``create_mask2`` uses ``nth_largest_cell=("$branch_item",)``.
 
-        In all types, ``("$branch", [...])`` per-branch overrides are resolved
-        first, so any branch type can vary a parameter by branch id.
+        A branch whose sub-module raises
+        :class:`~picasso_workflow.analyse.SkipBranch` (e.g. the requested cell
+        does not exist) is dropped: it is excluded from ``branches`` /
+        ``labels`` (so the join's ``("$all")`` pooling never sees it) and the
+        overall pipeline is not failed. Both types resolve ``("$branch", [...])``
+        overrides, so either can vary a parameter by branch id.
 
         Parameters
         ----------
         i : int
             Index of the module in the workflow.
         parameters : dict
-            Required keys: ``branch_type`` (``"runtime"`` or ``"screen"``) and
-            ``branch_modules`` (list of ``(module_name, module_parameters)``
-            tuples run once per branch). For ``"runtime"``, a ``split`` dict
-            (``method`` -- only ``"mask_components"`` --, ``mask`` filepath or
-            command, optional ``min_area_um2``, ``max_branches``,
-            ``label_template``). For ``"screen"``, a ``screen`` dict of
-            equal-length lists keyed by the ``$$map`` names used in
-            ``branch_modules`` (optional ``"#tags"`` gives branch labels).
-            Optional ``join_modules`` (run once after all branches, may pool
-            per-branch results via ``("$get_prior_result", "results,
-            NN_branch, branches, $all, MM_module, key")``) and
-            ``parameter_command_executor`` (injected by the runner).
+            Required keys: ``branch_type`` (``"explicit"`` or ``"runtime"``)
+            and ``branch_modules`` (list of ``(module_name, module_parameters)``
+            tuples run once per branch). For ``"explicit"``, ``n_branches`` (or
+            ``branch_labels``). For ``"runtime"``, ``branch_over`` (a value or
+            ``$``/``$$map`` command resolving to a list; optional
+            ``label_template`` with ``{n}`` / ``{item}``). Optional
+            ``join_modules`` (run once after all branches, may pool per-branch
+            results via ``("$get_prior_result", "results, NN_branch, branches,
+            $all, MM_module, key")``) and ``parameter_command_executor``
+            (injected by the runner).
         results : dict
             Module results (see class docstring).
 
@@ -189,10 +240,12 @@ class AbstractModuleCollection(abc.ABC):
         parameters : dict
             Input parameters, possibly updated for consistency.
         results : dict
-            Results updated with ``branch_type`` (str), ``labels`` (list),
-            ``branches`` (list of per-branch result dicts, each keyed
-            ``MM_module``), ``join`` (dict of join-module results) and
-            ``topology`` (the executed module-path tree).
+            Results updated with ``branch_type`` (str), ``labels`` (list of the
+            branches that produced results), ``branches`` (list of per-branch
+            result dicts, each keyed ``MM_module``), ``skipped`` (list of
+            ``{"label", "reason"}`` for dropped branches), ``join`` (dict of
+            join-module results) and ``topology`` (the executed module-path
+            tree).
         """
 
     @abc.abstractmethod
@@ -202,7 +255,7 @@ class AbstractModuleCollection(abc.ABC):
         A general-purpose plotting/summary module, typically used as a
         ``branch`` join module: it renders a scalar result collected across
         branches (via ``("$get_prior_result", "results, NN_branch, branches,
-        $all, MM_module, key")``) into a single figure. Two display modes:
+        $all, MM_module, key")``) into a figure. Two display modes:
 
         - ``"replicates"``: branches are repeats of the same analysis (e.g.
           different cells) -- draw a box/strip plot of the metric across
@@ -210,18 +263,24 @@ class AbstractModuleCollection(abc.ABC):
         - ``"screen"``: branches vary a parameter -- plot the metric against
           the per-branch argument values (``x``).
 
+        As a branch join module it needs **no arguments**: when ``values`` is
+        omitted the ``branch`` module hands it the per-branch results list, and
+        it auto-summarizes every numeric per-branch metric (one small-multiple
+        subplot each), with ``labels`` defaulting to the branch labels.
+
         Parameters
         ----------
         i : int
             Index of the module in the workflow.
         parameters : dict
-            Required keys:
+            Optional keys:
 
             ``values`` : list or dict
                 One numeric value per branch (a list), or a dict mapping series
-                names to such lists (several metrics on one figure).
-
-            Optional keys:
+                names to such lists (several metrics on one figure). Omit it as
+                a branch join module to auto-summarize all numeric per-branch
+                results (the branch module injects its per-branch results
+                list).
 
             ``labels`` : list
                 Per-branch labels for the x ticks / point annotations.
@@ -620,70 +679,6 @@ class AbstractModuleCollection(abc.ABC):
         results : dict
             Results updated with ``success``, ``message`` and, only if
             undrifting succeeded, ``filepath_driftfile`` and ``filepath_plot``.
-        """
-
-    @abc.abstractmethod
-    def undrift_rsso(self):
-        """Undrift localized data using iterative RSSO drift correction.
-
-        Applies an iterative RSSO (Redundant Spot Shift Overrepresentation)
-        approach in which each frame is compared against the whole dataset to
-        compute that frame's total drift, repeated on the undrifted dataset to
-        improve accuracy. Includes uncertainty analysis, confidence evaluation,
-        windowing and outlier detection.
-
-        Parameters
-        ----------
-        i : int
-            Index of the module in the workflow.
-        parameters : dict
-            Required keys:
-
-            ``ton`` : float
-                Half-life of a localization in frames (how long a spot stays
-                visible).
-            ``toff`` : float
-                Frames for a spot to reappear after disappearing.
-            ``max_shift`` : float
-                Maximum expected drift per frame in pixels.
-
-            Optional keys (defaults in parentheses):
-
-            ``min_locs_per_frame`` : int
-                Min localizations per frame for reliable estimation (10).
-            ``max_iterations`` : int
-                Max iterative refinement rounds (5).
-            ``convergence_threshold`` : float
-                RMS drift-change convergence threshold in nm (0.1).
-            ``plot_drift`` : bool
-                Whether to save drift plots (True).
-            ``save_locs`` : bool
-                Whether to save undrifted localizations (True).
-            ``n_processes`` : int or None
-                Processes for parallel computation (auto).
-            ``confidence_threshold`` : float
-                Confidence threshold for windowing analysis (0.8).
-            ``outlier_detection_enabled`` : bool
-                Enable RSSO failure and outlier detection (True).
-            ``outlier_z_threshold`` : float
-                Z-score threshold for temporal outlier detection (3.5).
-            ``min_signal_to_noise`` : float
-                Min signal-to-noise ratio for drift measurements (0.5).
-            ``windowing_enabled`` : bool
-                Enable adaptive windowing for low-confidence frames (True).
-            ``window_size_range`` : tuple
-                Min and max window sizes for adaptive windowing ((3, 20)).
-
-        Returns
-        -------
-        parameters : dict
-            Input parameters, possibly updated for consistency.
-        results : dict
-            Results updated with ``success``, ``drift_x``/``drift_y`` (total
-            drift trajectories in nm per frame), ``uncertainty_x``/
-            ``uncertainty_y``, ``drift_quality`` (per-frame confidence),
-            ``n_iterations``, ``convergence_rms`` and ``drift_plots`` (path to
-            the visualization).
         """
 
     @abc.abstractmethod
@@ -1233,7 +1228,7 @@ class AbstractModuleCollection(abc.ABC):
                 Previously saved hdf5 files to load and align. If omitted, the
                 last processed data is used.
             ``align_pars`` : dict
-                Kwargs of ``picasso_outpost.align_channels``
+                Kwargs of ``outpost.alignment.channels.align_channels``
                 (``max_iterations``, ``convergence``).
             ``fp_fiducials`` : list of str
                 Previously saved hdf5 files of fiducial markers to load and
@@ -1484,20 +1479,8 @@ class AbstractModuleCollection(abc.ABC):
         """
 
     @abc.abstractmethod
-    def ripleysk(self):
-        """Compute Ripley's K spatial statistics for the dataset."""
-
-    # @abc.abstractmethod
-    # def ripleysk_rafal(self):
-    #     pass
-
-    @abc.abstractmethod
     def ripleysk2(self):
         """Compute Ripley's K statistics (second implementation)."""
-
-    @abc.abstractmethod
-    def ripleysk_average(self):
-        """Average Ripley's K curves across datasets."""
 
     @abc.abstractmethod
     def ripleysk_average2(self):
@@ -1552,7 +1535,8 @@ class AbstractModuleCollection(abc.ABC):
 
         Largely identical to an implementation in spinna that will be
         integrated into picasso; evaluate deprecation (or moving the source
-        from ``outpost_modules/ripleys`` to ``picasso/spinna``) at that time.
+        from ``outpost/spatial_stats/ripleys`` to ``picasso/spinna``) at that
+        time.
         The locs must be protein positions at this stage.
 
         Parameters
@@ -1920,7 +1904,7 @@ class AbstractModuleCollection(abc.ABC):
         report's "Lattice filter" panels show each gate's metric distribution
         and threshold; thresholds beyond the exposed knobs are calibrated
         defaults, tunable via
-        :func:`picasso_outpost.cluster_lattice_defects`.
+        :func:`picasso_workflow.outpost.origami.origami.cluster_lattice_defects`.
 
         Parameters
         ----------
@@ -1983,7 +1967,7 @@ class AbstractModuleCollection(abc.ABC):
                 Lattice method: min matched sites as a fraction of the design
                 nodes to count as on-lattice (default 0.66). The remaining
                 on-lattice gate thresholds use calibrated defaults (tune via
-                :func:`picasso_outpost.cluster_lattice_defects`).
+                :func:`picasso_workflow.outpost.origami.origami.cluster_lattice_defects`).
         results : dict
             Module results (see class docstring). With ``cluster_patterns``
             also ``n_pattern_clusters``, ``pattern_summary``,
@@ -2456,6 +2440,26 @@ class ParameterCommandExecutor(DictSimpleTyper):
             else:
                 cmd = t[0]
                 aritexp = None
+            doubled = self.command_sign * 2
+            if len(self.command_sign) == 1 and cmd[:2] == doubled:
+                # A per-channel command ("$$...") reached the single-dataset
+                # executor; only the aggregation ParameterTiler (command
+                # sign "$$") resolves these. A spec-level default (third
+                # element of $$map / $$index) lets a reusable spec also run
+                # standalone; without one, fail with an actionable message
+                # instead of the generic undefined-command error.
+                if cmd in (f"{doubled}map", f"{doubled}index") and len(t) > 2:
+                    return {
+                        "parsed": t[2],
+                        "original": tuple([t[0][2:], *t[1:]]),
+                    }
+                raise ValueError(
+                    f"The parameter command {t} maps per-channel values "
+                    "and is only resolved by an aggregation workflow's "
+                    "tile parameters. For a single-dataset workflow, "
+                    "replace it with a concrete value (or add a default "
+                    "as the third tuple element)."
+                )
             if cmd == f"{self.command_sign}get_prior_result":
                 logger.debug(f"Getting prior result from {t[1]}.")
                 res = self.get_prior_result(t[1])

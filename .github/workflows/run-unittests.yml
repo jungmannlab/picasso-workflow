@@ -55,39 +55,41 @@ jobs:
 
       - name: Set up Python
         run: |
-          Invoke-WebRequest -Uri https://github.com/actions/python-versions/releases/download/3.10.11-4626646535/python-3.10.11-win32-x64.zip -OutFile python-3.10.zip
-          Expand-Archive -Path 'python-3.10.zip' -DestinationPath 'python3-10' -Force
+          # Self-hosted Windows runner: install Python from the actions/python-versions
+          # tool-cache asset. 3.11 baseline (C46); non-required (workflow_dispatch only).
+          Invoke-WebRequest -Uri https://github.com/actions/python-versions/releases/download/3.11.9-9947079978/python-3.11.9-win32-x64.zip -OutFile python-3.11.zip
+          Expand-Archive -Path 'python-3.11.zip' -DestinationPath 'python3-11' -Force
           dir
-          cd python3-10
+          cd python3-11
           dir
           .\setup.ps1
-          $Env:Path += ";C:\actions-runner\_work\_tool\Python\3.10.11\x64"
-          dir C:\actions-runner\_work\_tool\Python\3.10.11\x64
+          $Env:Path += ";C:\actions-runner\_work\_tool\Python\3.11.9\x64"
+          dir C:\actions-runner\_work\_tool\Python\3.11.9\x64
           # python3 --version
           # New-Item -ItemType SymbolicLink -Path "python" -Target "python3"
           python --version
           python -m pip install --upgrade pip
-          dir c:\actions-runner\_work\_tool\python\3.10.11\x64\lib\site-packages
+          dir c:\actions-runner\_work\_tool\python\3.11.9\x64\lib\site-packages
 
       # - name: Set up Python B
       #   uses: actions/setup-python@v6
       #   with:
-      #     python-version: '3.10'
+      #     python-version: '3.11'
 
       - name: Install dependencies
         run: |
-          $Env:Path += ";C:\actions-runner\_work\_tool\Python\3.10.11\x64"
-          $Env:Path += ";C:\actions-runner\_work\_tool\python\3.10.11\x64\lib\site-packages"
-          $Env:Path += ";C:\actions-runner\_work\_tool\Python\3.10.11\x64\Scripts"
+          $Env:Path += ";C:\actions-runner\_work\_tool\Python\3.11.9\x64"
+          $Env:Path += ";C:\actions-runner\_work\_tool\python\3.11.9\x64\lib\site-packages"
+          $Env:Path += ";C:\actions-runner\_work\_tool\Python\3.11.9\x64\Scripts"
           python --version
           # python -m pip install -r requirements.txt
-          python -m pip install -e .
+          python -m pip install -e ".[dev]"
 
       - name: Run unit tests
         run: |
-          $Env:Path += ";C:\actions-runner\_work\_tool\Python\3.10.11\x64"
-          $Env:Path += ";C:\actions-runner\_work\_tool\python\3.10.11\x64\lib\site-packages"
-          $Env:Path += ";C:\actions-runner\_work\_tool\Python\3.10.11\x64\Scripts"
+          $Env:Path += ";C:\actions-runner\_work\_tool\Python\3.11.9\x64"
+          $Env:Path += ";C:\actions-runner\_work\_tool\python\3.11.9\x64\lib\site-packages"
+          $Env:Path += ";C:\actions-runner\_work\_tool\Python\3.11.9\x64\Scripts"
           $envFileContent = Get-Content -Path "C:\\actions-runner\\.env"
           $key, $TEST_CONFLUENCE_URL = $envFileContent[0] -split '=', 2
           $key, $TEST_CONFLUENCE_TOKEN = $envFileContent[1] -split '=', 2
@@ -97,9 +99,9 @@ jobs:
 
       - name: Generate coverage report
         run: |
-          $Env:Path += ";C:\actions-runner\_work\_tool\Python\3.10.11\x64"
-          $Env:Path += ";C:\actions-runner\_work\_tool\python\3.10.11\x64\lib\site-packages"
-          $Env:Path += ";C:\actions-runner\_work\_tool\Python\3.10.11\x64\Scripts"
+          $Env:Path += ";C:\actions-runner\_work\_tool\Python\3.11.9\x64"
+          $Env:Path += ";C:\actions-runner\_work\_tool\python\3.11.9\x64\lib\site-packages"
+          $Env:Path += ";C:\actions-runner\_work\_tool\Python\3.11.9\x64\Scripts"
           $envFileContent = Get-Content -Path "C:\\actions-runner\\.env"
           $key, $TEST_CONFLUENCE_URL = $envFileContent[0] -split '=', 2
           $key, $TEST_CONFLUENCE_TOKEN = $envFileContent[1] -split '=', 2
@@ -109,9 +111,9 @@ jobs:
 
       - name: Print coverage report
         run: |
-          $Env:Path += ";C:\actions-runner\_work\_tool\Python\3.10.11\x64"
-          $Env:Path += ";C:\actions-runner\_work\_tool\python\3.10.11\x64\lib\site-packages"
-          $Env:Path += ";C:\actions-runner\_work\_tool\Python\3.10.11\x64\Scripts"
+          $Env:Path += ";C:\actions-runner\_work\_tool\Python\3.11.9\x64"
+          $Env:Path += ";C:\actions-runner\_work\_tool\python\3.11.9\x64\lib\site-packages"
+          $Env:Path += ";C:\actions-runner\_work\_tool\Python\3.11.9\x64\Scripts"
           $envFileContent = Get-Content -Path "C:\\actions-runner\\.env"
           $key, $TEST_CONFLUENCE_URL = $envFileContent[0] -split '=', 2
           $key, $TEST_CONFLUENCE_TOKEN = $envFileContent[1] -split '=', 2

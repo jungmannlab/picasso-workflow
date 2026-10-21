@@ -22,12 +22,14 @@ import os
 import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor
+from functools import partial
 
 import numpy as np
 import yaml
 from atlassian import Confluence as con
 from requests.exceptions import ConnectionError, HTTPError
 
+from picasso_workflow.modulespec import MODULE_REGISTRY
 from picasso_workflow.util import AbstractModuleCollection
 
 # logger = logging.getLogger(__name__)
@@ -60,6 +62,9 @@ def _yaml_safe(value):
 # Parameter keys that must never be rendered or serialized: the workflow
 # runner injects a live ParameterCommandExecutor under this name.
 _PARAM_BLACKLIST = ("parameter_command_executor",)
+
+# File suffixes the generic picasso-set reporter embeds as images.
+_IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg", ".svg")
 
 
 def _format_val(v):
@@ -560,6 +565,11 @@ class ConfluenceReporter(AbstractModuleCollection):
             logger.debug(f"""Failed to create page {self.report_page_name}.
                 Continuing on the pre-existing page""")
 
+    @property
+    def report_page_url(self):
+        """Browser URL of this report's Confluence page (or None)."""
+        return self.ci.page_url(getattr(self, "report_page_id", None))
+
     def _emit(self, text, postpone_report):
         """Post ``text`` to the report page, or return it when deferred.
 
@@ -588,6 +598,114 @@ class ConfluenceReporter(AbstractModuleCollection):
             self.report_page_name, self.report_page_id, text
         )
         return None
+
+    def __getattr__(self, name):
+        """Resolve picasso-set module names to the generic reporter.
+
+        The picasso-set modules have no hand-written reporter methods; any
+        registry-listed ``picasso_*`` module name resolves to
+        :meth:`_report_picasso_set_module` bound to that name, so the
+        name-based reporter dispatch (``getattr(reporter, module_name)``)
+        works unchanged. Everything else -- in particular underscore names
+        probed by copy/pickle/abc machinery -- raises ``AttributeError`` as
+        usual (``__getattr__`` is only consulted after normal lookup fails).
+        """
+        if not name.startswith("_"):
+            spec = MODULE_REGISTRY.get(name)
+            if spec is not None and spec.module_set == "picasso":
+                return partial(self._report_picasso_set_module, name)
+        raise AttributeError(
+            f"{type(self).__name__!r} object has no attribute {name!r}"
+        )
+
+    def _report_picasso_set_module(
+        self, module_name, i, parameters, results, postpone_report=False
+    ):
+        """Generic report for a picasso-set module.
+
+        Documents the module's summary, wrapped picasso symbol, parameters
+        and results, embeds every image found in the results (paths in the
+        ``results`` dict plus images inside the module's result folder), and
+        lists the other output files by name.
+
+        Parameters
+        ----------
+        module_name : str
+            The picasso-set module name (bound via :meth:`__getattr__`).
+        i : int
+            Index of the module in the workflow.
+        parameters, results : dict
+            The module's parameters and results.
+        postpone_report : bool, optional
+            If True, return the report text instead of posting it. Default is
+            False.
+        """
+        logger.debug(f"Reporting {module_name} (generic picasso-set report).")
+        spec = MODULE_REGISTRY[module_name]
+        parameter_text = _expand_macro(
+            "Parameters", parameters, skip_keys=_PARAM_BLACKLIST
+        )
+        result_text = _expand_macro("Results", results)
+        duration = results.get("duration") or 0
+        text = f"""
+        <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
+        <p><strong>Module {i:02d}: {html.escape(module_name)}</strong></p>
+        <p>{html.escape(spec.summary)}</p>
+        <ul>
+        <li>Native picasso: {html.escape(str(spec.picasso_symbol))}</li>
+        <li>Duration: {duration // 60:.0f} min {(duration % 60):.2f} s</li>
+        </ul>
+        {parameter_text}
+        {result_text}
+        """
+
+        # collect figures: image paths in the results dict, then any images
+        # in the result folder not already referenced there. The stored
+        # (possibly stale) paths are handed to upload_attachment unchecked,
+        # like the hand-written reporters do: the HTML interface re-resolves
+        # moved result folders by basename (see HTMLInterface._resolve_source),
+        # which an os.path.isfile pre-check here would defeat.
+        figures = [
+            v
+            for v in results.values()
+            if isinstance(v, str) and v.lower().endswith(_IMAGE_SUFFIXES)
+        ]
+        figure_names = {os.path.basename(fp) for fp in figures}
+        folder = results.get("folder")
+        other_files = []
+        if folder and os.path.isdir(folder):
+            for fn in sorted(os.listdir(folder)):
+                fp = os.path.join(folder, fn)
+                if not os.path.isfile(fp):
+                    continue
+                if fn.lower().endswith(_IMAGE_SUFFIXES):
+                    if fn not in figure_names:
+                        figures.append(fp)
+                        figure_names.add(fn)
+                else:
+                    other_files.append(fn)
+        for fp in figures:
+            try:
+                self.ci.upload_attachment(self.report_page_id, fp)
+            except (ConfluenceInterfaceError, OSError):
+                pass
+            _, fn = os.path.split(fp)
+            text += (
+                "<ul><ac:image><ri:attachment "
+                + f'ri:filename="{fn}" />'
+                + "</ac:image></ul>"
+            )
+        if other_files:
+            text += (
+                "<p>Output files:</p><ul>"
+                + "".join(f"<li>{html.escape(fn)}</li>" for fn in other_files)
+                + "</ul>"
+            )
+
+        text += """
+        </ac:layout-cell></ac:layout-section></ac:layout>
+        """
+        return self._emit(text, postpone_report)
 
     def report_error(
         self,
@@ -735,6 +853,76 @@ class ConfluenceReporter(AbstractModuleCollection):
         <li>Duration: {results["duration"] // 60:.0f} min
         {(results["duration"] % 60):.02f} s</li>
         </ul>"""
+
+        text += """
+        </ac:layout-cell></ac:layout-section></ac:layout>
+        """
+        return self._emit(text, postpone_report)
+
+    def plugin(self, i, parameters, results, postpone_report=False):
+        """Report the generic ``plugin`` module to Confluence.
+
+        Documents which picasso API plugin export was called, the state
+        injected into it, and a best-effort summary of what it returned
+        (``plugin_report`` / ``plugin_result``); uploads any files the plugin
+        reported under ``plugin_files``.
+
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters : dict
+            The module's parameters (see
+            :class:`~picasso_workflow.util.AbstractModuleCollection`).
+        results : dict
+            The module's results (see
+            :class:`~picasso_workflow.util.AbstractModuleCollection`).
+        postpone_report : bool, optional
+            If True, build the report text but defer posting it. Default is
+            False.
+        """
+        logger.debug(f"Reporting plugin module {i:02d}")
+        injected = results.get("injected", [])
+        text = f"""
+        <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
+        <p><strong>Module {i:02d}: Plugin</strong></p>
+        <ul>
+        <li>API export: {html.escape(str(results.get('plugin_api_name', '')))}
+        </li>
+        <li>Callable: {html.escape(str(results.get('plugin_callable', '')))}
+        </li>
+        <li>Injected state: {html.escape(str(injected) if injected else '-')}
+        </li>
+        <li>Start Time: {results['start time']}</li>
+        <li>Duration: {results["duration"] // 60:.0f} min
+        {(results["duration"] % 60):.02f} s</li>
+        </ul>"""
+
+        if (report := results.get("plugin_report")) is not None:
+            text += (
+                "<p><strong>Plugin report</strong></p>"
+                f"<pre>{html.escape(str(report))}</pre>"
+            )
+        if (result := results.get("plugin_result")) is not None:
+            text += (
+                "<p><strong>Plugin result</strong></p>"
+                f"<pre>{html.escape(str(result))}</pre>"
+            )
+
+        files = results.get("plugin_files", [])
+        if files:
+            text += "<p><strong>Plugin files</strong></p><ul>"
+            for fp in files:
+                try:
+                    self.ci.upload_attachment(self.report_page_id, fp)
+                except Exception as e:  # noqa: BLE001
+                    logger.error(f"Could not upload plugin file {fp}: {e}")
+                fn = os.path.split(fp)[1]
+                text += (
+                    "<li><ac:link><ri:attachment "
+                    f'ri:filename="{html.escape(fn)}" /></ac:link></li>'
+                )
+            text += "</ul>"
 
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
@@ -1006,12 +1194,26 @@ class ConfluenceReporter(AbstractModuleCollection):
         join_results = results.get("join", {})
         branch_modules = parameters.get("branch_modules", [])
         join_modules = parameters.get("join_modules", []) or []
+        skipped = results.get("skipped", []) or []
+        skipped_text = (
+            "<li><strong>Skipped branches:</strong> "
+            + html.escape(
+                ", ".join(
+                    f"{s.get('label', '?')} ({s.get('reason', '')})"
+                    for s in skipped
+                )
+            )
+            + "</li>"
+            if skipped
+            else ""
+        )
 
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
         <p><strong>Module {i:02d}: Branch ({html.escape(str(branch_type))})</strong></p>
         <ul>
         <li><strong>Branches:</strong> {len(labels)} ({html.escape(', '.join(map(str, labels)) or 'none')})</li>
+        {skipped_text}
         <li><strong>Join modules:</strong> {html.escape(', '.join(m for m, _ in join_modules) if join_modules else 'None')}</li>
         <li><strong>Start Time:</strong> {html.escape(str(results.get('start time', 'N/A')))}</li>
         <li><strong>Total Duration:</strong> {results.get("duration", 0) // 60:.0f} min {(results.get("duration", 0) % 60):.02f} s</li>
@@ -2056,165 +2258,6 @@ class ConfluenceReporter(AbstractModuleCollection):
                 self.report_page_id,
                 os.path.split(driftimg_fn)[1],
             )
-
-    @module_decorator
-    def undrift_rsso(
-        self,
-        i,
-        parameters,
-        results,
-        parameter_text,
-        result_text,
-        postpone_report=False,
-    ):
-        """Report the ``undrift_rsso`` module to Confluence.
-
-        Documents the iterative RSSO drift correction (magnitudes, confidence
-        intervals, iterations) and uploads the drift plots.
-
-        Parameters
-        ----------
-        i : int
-            Index of the module in the workflow.
-        parameters, results : dict
-            The module's parameters and results (see the matching
-            :class:`~picasso_workflow.util.AbstractModuleCollection` method).
-        parameter_text, result_text : str
-            Pre-rendered parameter/result macros from the decorator.
-        postpone_report : bool, optional
-            If True, return the report text instead of posting it. Default is
-            False.
-        """
-        logger.debug("Reporting undrift_rsso.")
-
-        drift_mag_x = results.get("drift_magnitude_x", np.nan)
-        drift_mag_y = results.get("drift_magnitude_y", np.nan)
-        total_drift = results.get("total_drift", np.nan)
-        drift_quality = results.get("mean_drift_quality", np.nan)
-
-        # Confidence interval metrics
-        mean_uncertainty_x = results.get("mean_uncertainty_x", np.nan)
-        mean_uncertainty_y = results.get("mean_uncertainty_y", np.nan)
-
-        # Get iterative RSSO specific metrics
-        n_iterations = results.get("n_iterations", 1)
-        converged = results.get("converged", False)
-        convergence_rms = results.get("convergence_rms", np.nan)
-        subsampling_fraction = results.get("subsampling_fraction", 1.0)
-        mean_uncertainty_x_new = results.get(
-            "uncertainty_x-mean", mean_uncertainty_x
-        )
-        mean_uncertainty_y_new = results.get(
-            "uncertainty_y-mean", mean_uncertainty_y
-        )
-
-        text = f"""
-        <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
-        <p><strong>Module {i:02d}: Undrifting via Iterative RSSO</strong></p>
-        Summary:
-        <ul>
-        <li>t<sub>on</sub>: {parameters.get('ton')} frames</li>
-        <li>t<sub>off</sub>: {parameters.get('toff')} frames</li>
-        <li>Max shift per frame: {parameters.get('max_shift')} pixels</li>
-        <li>Processing chunk size: {parameters.get('chunk_size', 100)} frames</li>
-        <li>Min locs per frame: {parameters.get('min_locs_per_frame', 10)}</li>
-        <li>Max iterations: {parameters.get('max_iterations', 5)}</li>
-        <li>Subsampling fraction: {subsampling_fraction:.1%}</li>
-        <li>Numba optimization: {parameters.get('enable_numba_optimization', True)}</li>
-        </ul>
-
-        <p><strong>Convergence Results:</strong></p>
-        <ul>
-        <li><strong>Iterations performed:</strong> {n_iterations}</li>
-        <li><strong>Converged:</strong> {'Yes' if converged else 'No'}</li>
-        <li><strong>Final RMS change:</strong> {convergence_rms:.3f} nm</li>
-        </ul>
-
-        <p><strong>Drift Results:</strong></p>
-        <ul>
-        <li><strong>Total drift X:</strong> {drift_mag_x:.2f} nm</li>
-        <li><strong>Total drift Y:</strong> {drift_mag_y:.2f} nm</li>
-        <li><strong>Total drift magnitude:</strong> {total_drift:.2f} nm</li>
-        <li>Mean drift quality: {drift_quality:.1f} measurements/frame</li>
-        </ul>
-
-        <p><strong>Uncertainty Analysis:</strong></p>
-        <ul>
-        <li><strong>Mean uncertainty X:</strong> {mean_uncertainty_x_new:.3f} nm</li>
-        <li><strong>Mean uncertainty Y:</strong> {mean_uncertainty_y_new:.3f} nm</li>
-        </ul>
-
-        <ul>
-        <li>Duration: {results["duration"] // 60:.0f} min
-        {(results["duration"] % 60):.2f} s</li>
-        </ul>
-        {parameter_text}
-        {result_text}
-        """
-
-        # Add drift plot if available
-        # Try new key first, fall back to legacy key for compatibility
-        drift_plot = results.get("drift_plot") or results.get("fp_fig")
-        if drift_plot:
-            try:
-                self.ci.upload_attachment(self.report_page_id, drift_plot)
-            except ConfluenceInterfaceError:
-                pass
-            _, drift_plot_name = os.path.split(drift_plot)
-            text += f"""
-            <p><strong>Drift Trajectory:</strong></p>
-            <ac:image ac:align="center" ac:layout="center">
-            <ri:attachment ri:filename="{drift_plot_name}" />
-            </ac:image>
-            """
-
-        # Add convergence plot if available (for iterative RSSO)
-        if convergence_plot := results.get("convergence_plot"):
-            try:
-                self.ci.upload_attachment(
-                    self.report_page_id, convergence_plot
-                )
-            except ConfluenceInterfaceError:
-                pass
-            _, convergence_plot_name = os.path.split(convergence_plot)
-            text += f"""
-            <p><strong>Convergence Analysis:</strong></p>
-            <ac:image ac:align="center" ac:layout="center">
-            <ri:attachment ri:filename="{convergence_plot_name}" />
-            </ac:image>
-            """
-
-        # Add robustness plot if available (for iterative RSSO)
-        if robustness_plot := results.get("robustness_plot"):
-            try:
-                self.ci.upload_attachment(self.report_page_id, robustness_plot)
-            except ConfluenceInterfaceError:
-                pass
-            _, robustness_plot_name = os.path.split(robustness_plot)
-            text += f"""
-            <p><strong>Robustness Assessment:</strong></p>
-            <ac:image ac:align="center" ac:layout="center">
-            <ri:attachment ri:filename="{robustness_plot_name}" />
-            </ac:image>
-            """
-
-        text += """
-        </ac:layout-cell></ac:layout-section></ac:layout>
-        """
-
-        if postpone_report:
-            return text
-        else:
-            try:
-                self.ci.update_page_content(
-                    self.report_page_name, self.report_page_id, text
-                )
-            except Exception as e:
-                logger.error(
-                    f"Error updating Confluence page {self.report_page_name}, {self.report_page_id}"
-                )
-                logger.debug(text)
-                raise e
 
     @module_decorator
     def undrift_aim(
@@ -3531,193 +3574,6 @@ class ConfluenceReporter(AbstractModuleCollection):
         """
         return self._emit(text, postpone_report)
 
-    def ripleysk(self, i, parameters, results, postpone_report=False):
-        logger.debug("Reporting ripleysk.")
-        text = f"""
-        <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
-        <p><strong>Module {i:02d}: Ripley's K Analysis</strong></p>
-        <ul>
-        <p>Ripley's K analyis investigates pair-wise clustering or dispersing
-        organization between different channels. It is currently implemented
-        in two different modes: "Ripleys"-mode is the analysis based on
-        Ripley's K curves. To correct for finite-size and border effects,
-        Ripley's K curves are normalized to mean and variance of
-        completely spatially random simulations. "RDF"-mode is inspired by
-        the above but calculates the radial distribution function (i.e.
-        density at annulus of radius r instead of whole circle of radius r),
-        and normalizes to a randomized version of the original data: for the
-        evaluation of each radius r, each spot in the original data is moved by
-        a random vector in a circle around it with radius r, to level out
-        density fluctuations during normalization, in addition to the border
-        effects. RDF is not Ripleys, it just uses the same infrastructure for
-        testing.</p>
-        <li>Start Time: {results['start time']}</li>
-        <li>Duration: {results["duration"] // 60:.0f} min
-        {(results["duration"] % 60):.02f} s</li>
-        <li>Type of analysis:
-        {str(parameters["atype"])}</li>
-        <li>Integral significance threshold:
-        {parameters["ripleys_threshold"]}</li>
-        <li>Ripleys Integrals location: {results["fp_ripleys_meanval"]}</li>
-        <li>Significantly interacting pairs:
-        {str(results["ripleys_significant"])}</li>
-        </ul>"""
-
-        if fp_fig := results.get("fp_fig_normalized"):
-            text += "<ul><table>"
-            text += "<tr><td><b>Normalized Curves</b></td>"
-            text += "<td><b>Un-normalized Curves</b></td></tr>"
-            text += "<tr><td>"
-            try:
-                self.ci.upload_attachment(self.report_page_id, fp_fig)
-            except ConfluenceInterfaceError:
-                pass
-            _, fp_fig = os.path.split(fp_fig)
-            text += f"""
-                <ac:image ac:width="750"><ri:attachment
-                ri:filename="{fp_fig}" />
-                </ac:image>"""
-            text += "</td><td>"
-            fp_fig = results.get("fp_fig_unnormalized")
-            try:
-                self.ci.upload_attachment(self.report_page_id, fp_fig)
-            except ConfluenceInterfaceError:
-                pass
-            _, fp_fig = os.path.split(fp_fig)
-            text += f"""
-                <ac:image ac:width="750"><ri:attachment
-                ri:filename="{fp_fig}" />
-                </ac:image>"""
-            text += "</td></tr></table></ul>"
-        if fp_fig := results.get("fp_fig_ripleys_meanval"):
-            try:
-                self.ci.upload_attachment(self.report_page_id, fp_fig)
-            except ConfluenceInterfaceError:
-                pass
-            _, fp_fig = os.path.split(fp_fig)
-            text += (
-                "<ul><ac:image><ri:attachment "
-                + f'ri:filename="{fp_fig}" />'
-                + "</ac:image></ul>"
-            )
-            text += (
-                "The Ripley's mean value is the Ripley's K integral"
-                + ", divided by the maximum integration distance."
-            )
-
-        text += """
-        </ac:layout-cell></ac:layout-section></ac:layout>
-        """
-        return self._emit(text, postpone_report)
-
-    # @module_decorator
-    # def ripleysk_rafal(
-    #     self, i, parameters, results, parameter_text, result_text
-    # ):
-    #     logger.debug("Reporting ripleysk_rafal.")
-    #     text = f"""
-    #     <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
-    #     <p><strong>Module {i:02d}: Rafal's Ripley's K Analysis</strong></p>
-    #     Summary:
-    #     <ul>
-    #     <li>Duration: {results["duration"] // 60:.0f} min
-    #     {(results["duration"] % 60):.02f} s</li>
-    #     </ul>
-    #     {parameter_text}
-    #     {result_text}
-    #     """
-
-    #     fig_fps = []
-    #     titles = []
-    #     if fp_fig := results.get("fp_fig_raw_binary"):
-    #         fig_fps.append(fp_fig)
-    #         titles.append("Raw Matrix_binary")
-    #     if fp_fig := results.get("fp_fig_postprocessed_binary"):
-    #         fig_fps.append(fp_fig)
-    #         titles.append("Postprocessed Matrix_binary")
-    #     if fp_fig := results.get("fp_fig_unnormalized_binary"):
-    #         fig_fps.append(fp_fig)
-    #         titles.append("raw Ripley's K curves_binary")
-    #     if fp_fig := results.get("fp_fig_mask_binary"):
-    #         fig_fps.append(fp_fig)
-    #         titles.append("mask used_binary")
-    #     if fp_fig := results.get("fp_fig_normalized_binary"):
-    #         fig_fps.append(fp_fig)
-    #         titles.append("normalized Ripley's K curves_binary")
-
-    #     if len(fig_fps) > 1:
-    #         fn_figs = []
-    #         for fp in fig_fps:
-    #             try:
-    #                 self.ci.upload_attachment(self.report_page_id, fp)
-    #             except ConfluenceInterfaceError:
-    #                 pass
-    #             fn_figs.append(os.path.split(fp)[1])
-
-    #         text += "<table><tr>"
-    #         for tit in titles:
-    #             text += f"<td><b>{tit}</b></td>"
-    #         text += "</tr>"
-    #         text += "<tr>"
-    #         for fn in fn_figs:
-    #             text += f"""
-    #                 <td>
-    #                       <ac:image ac:height="350">
-    #                       <ri:attachment ri:filename="{fn}" />
-    #                       </ac:image>
-    #                 </td>"""
-    #         text += "</tr>"
-    #         text += "</table>"
-
-    #     fig_fps = []
-    #     titles = []
-    #     if fp_fig := results.get("fp_fig_raw_density"):
-    #         fig_fps.append(fp_fig)
-    #         titles.append("Raw Matrix_density")
-    #     if fp_fig := results.get("fp_fig_postprocessed_density"):
-    #         fig_fps.append(fp_fig)
-    #         titles.append("Postprocessed Matrix_density")
-    #     if fp_fig := results.get("fp_fig_unnormalized_density"):
-    #         fig_fps.append(fp_fig)
-    #         titles.append("raw Ripley's K curves_density")
-    #     if fp_fig := results.get("fp_fig_mask_density"):
-    #         fig_fps.append(fp_fig)
-    #         titles.append("mask used_density")
-    #     if fp_fig := results.get("fp_fig_normalized_density"):
-    #         fig_fps.append(fp_fig)
-    #         titles.append("normalized Ripley's K curves_density")
-
-    #     if len(fig_fps) > 1:
-    #         fn_figs = []
-    #         for fp in fig_fps:
-    #             try:
-    #                 self.ci.upload_attachment(self.report_page_id, fp)
-    #             except ConfluenceInterfaceError:
-    #                 pass
-    #             fn_figs.append(os.path.split(fp)[1])
-
-    #         text += "<table><tr>"
-    #         for tit in titles:
-    #             text += f"<td><b>{tit}</b></td>"
-    #         text += "</tr>"
-    #         text += "<tr>"
-    #         for fn in fn_figs:
-    #             text += f"""
-    #                 <td>
-    #                       <ac:image ac:height="350">
-    #                       <ri:attachment ri:filename="{fn}" />
-    #                       </ac:image>
-    #                 </td>"""
-    #         text += "</tr>"
-    #         text += "</table>"
-
-    #     text += """
-    #     </ac:layout-cell></ac:layout-section></ac:layout>
-    #     """
-    #     self.ci.update_page_content(
-    #         self.report_page_name, self.report_page_id, text
-    #     )
-
     @module_decorator
     def ripleysk2(
         self,
@@ -3796,46 +3652,6 @@ class ConfluenceReporter(AbstractModuleCollection):
             "The Ripley's mean value is the Ripley's K integral"
             + ", divided by the maximum integration distance."
         )
-        text += """
-        </ac:layout-cell></ac:layout-section></ac:layout>
-        """
-        return self._emit(text, postpone_report)
-
-    def ripleysk_average(self, i, parameters, results, postpone_report=False):
-        logger.debug("Reporting ripleysk_average.")
-        text = f"""
-        <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
-        <p><strong>Module {i:02d}: Averaging of Repley's K Integrals</strong></p>
-        <ul>
-        <li>Start Time: {results['start time']}</li>
-        <li>Duration: {results["duration"] // 60:.0f} min
-        {(results["duration"] % 60):.02f} s</li>
-        <li>Integral significance threshold:
-        {parameters["ripleys_threshold"]}</li>
-        <li>Loaded from workflows:
-        {parameters["report_names"]}</li>
-        <li>in folders:
-        {parameters["fp_workflows"]}</li>
-        <li>Folders to save significant pairs:
-        {results["output_folders"]}</li>
-        <li>Ripleys Integrals location:
-        {results["fp_ripleys_significant"]}</li>
-        <li>Significantly interacting pairs:
-        {str(results["ripleys_significant"])}</li>
-        </ul>"""
-
-        if fp_fig := results.get("fp_figmeanvals"):
-            try:
-                self.ci.upload_attachment(self.report_page_id, fp_fig)
-            except ConfluenceInterfaceError:
-                pass
-            _, fp_fig = os.path.split(fp_fig)
-            text += (
-                "<ul><ac:image><ri:attachment "
-                + f'ri:filename="{fp_fig}" />'
-                + "</ac:image></ul>"
-            )
-
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
@@ -5816,6 +5632,28 @@ class ConfluenceInterface:
             self.parent_page_id, _ = self.get_page_properties(
                 parent_page_title
             )
+
+    def page_url(self, page_id):
+        """Return a browser URL for a page id.
+
+        Uses the ``pages/viewpage.action?pageId=`` form, which both
+        Confluence Cloud (``.../wiki/...``) and Server/Data Center resolve
+        (Cloud redirects it to the modern page URL). Built from ``base_url``
+        + ``page_id`` alone, so no extra API round-trip is needed.
+
+        Parameters
+        ----------
+        page_id : str
+            The page id.
+
+        Returns
+        -------
+        str or None
+            The page URL, or None if ``page_id`` is falsy.
+        """
+        if not page_id:
+            return None
+        return f"{self.base_url.rstrip('/')}/pages/viewpage.action?pageId={page_id}"
 
     def connect(self):
         """Connect to confluence (cloud or server) by authentification depending

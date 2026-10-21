@@ -343,3 +343,52 @@ class TestAbortFlag(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestOverallFractionPaused(unittest.TestCase):
+    """A paused (stepwise-boundary) run must not read as 0% progress."""
+
+    def test_paused_modules_count_as_done(self):
+        state = {
+            "modules": [
+                {"status": "done", "fraction": 1.0},
+                {"status": "paused", "fraction": 0.0},
+            ]
+        }
+        self.assertEqual(1.0, p.overall_fraction(state))
+
+    def test_paused_datasets_count_as_done(self):
+        state = {
+            "datasets": [
+                {"i": 0, "state": "paused"},
+                {"i": 1, "state": "paused"},
+            ]
+        }
+        self.assertEqual(1.0, p.overall_fraction(state))
+
+
+class TestReportUrl(unittest.TestCase):
+    """set_report_url records a report page URL into the progress state."""
+
+    def setUp(self):
+        self.folder = tempfile.mkdtemp()
+
+    def tearDown(self):
+        shutil.rmtree(self.folder, ignore_errors=True)
+
+    def test_sets_string_url_and_persists(self):
+        pm = p.ProgressManager(self.folder, sinks=None)
+        pm.set_report_url("https://x/wiki/pages/viewpage.action?pageId=1")
+        self.assertEqual(
+            "https://x/wiki/pages/viewpage.action?pageId=1",
+            pm.state["report_url"],
+        )
+        state = p.read_progress(self.folder)
+        self.assertEqual(pm.state["report_url"], state["report_url"])
+
+    def test_ignores_non_string(self):
+        pm = p.ProgressManager(self.folder, sinks=[])
+        pm.set_report_url(None)
+        pm.set_report_url(object())  # non-serializable, must be ignored
+        pm.set_report_url("")
+        self.assertIsNone(pm.state["report_url"])

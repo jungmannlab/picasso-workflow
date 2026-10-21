@@ -16,7 +16,8 @@ import numpy as np
 import pandas as pd
 from unittest.mock import patch, MagicMock
 
-from picasso_workflow import analyse, util, picasso_outpost
+from picasso_workflow import analyse, util
+from picasso_workflow.outpost.spinna import wrappers as spinna_wrappers
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +32,22 @@ class MockPicassoMovie:
 
     def __getitem__(self, index):
         return np.random.randint(0, 1000, size=self.shape[1:], dtype=np.uint16)
+
+
+class TestSafeFilenameComponent(unittest.TestCase):
+    """A per-channel tag must stay a single, folder-local filename part."""
+
+    def test_replaces_path_separators(self):
+        # a "/" tag would otherwise write into a missing subdirectory, and a
+        # leading "/" would discard the folder into an absolute path
+        self.assertEqual(analyse._safe_filename_component("cell/A"), "cell_A")
+        self.assertEqual(analyse._safe_filename_component("/abs"), "_abs")
+        self.assertEqual(analyse._safe_filename_component("a\\b"), "a_b")
+
+    def test_leaves_plain_tags_unchanged(self):
+        self.assertEqual(
+            analyse._safe_filename_component("channel 0"), "channel 0"
+        )
 
 
 # @unittest.skip("")
@@ -225,7 +242,7 @@ class TestAnalyseModules(unittest.TestCase):
             assert os.path.exists(fp)
             os.remove(fp)
 
-    @patch("picasso_workflow.analyse.picasso_outpost.pick_gold")
+    @patch("picasso_workflow.outpost.picks.picks.pick_gold")
     def test_find_gold_empty_saves(self, mock_pick_gold):
         """With no gold found, the empty gold file still saves: the empty
         frame keeps self.locs's numeric dtypes rather than object dtype, which
@@ -851,6 +868,9 @@ class TestAnalyseModules(unittest.TestCase):
         parameters, results = self.ap.save_single_dataset(0, parameters)
 
         assert results["res_a"] == 7
+        assert results["checkpoint"] == {
+            "single": {"filepath": results["filepath"]}
+        }
 
         # clean up
         shutil.rmtree(
@@ -864,6 +884,11 @@ class TestAnalyseModules(unittest.TestCase):
         self.ap.channel_tags = []
         parameters, results = self.ap.save_datasets_aggregated(0, parameters)
 
+        assert results["tags"] == []
+        assert results["checkpoint"] == {
+            "channels": {"filepaths": [], "tags": []}
+        }
+
         # clean up
         shutil.rmtree(
             os.path.join(self.results_folder, "00_save_datasets_aggregated")
@@ -876,6 +901,8 @@ class TestAnalyseModules(unittest.TestCase):
         parameters, results = self.ap.load_dataset_localizations(0, parameters)
 
         assert "picasso version" in results.keys()
+        assert results["filepath"] == "locs.hdf5"
+        assert results["checkpoint"] == {"single": {"filepath": "locs.hdf5"}}
 
         # clean up
         shutil.rmtree(
@@ -908,14 +935,20 @@ class TestAnalyseModules(unittest.TestCase):
         parameters, results = self.ap.load_datasets_to_aggregate(0, parameters)
 
         assert "filepaths" in results.keys()
+        assert results["checkpoint"] == {
+            "channels": {
+                "filepaths": parameters["filepaths"],
+                "tags": ["1", "2"],
+            }
+        }
 
         # clean up
         shutil.rmtree(
             os.path.join(self.results_folder, "00_load_datasets_to_aggregate")
         )
 
-    @patch("picasso_workflow.outpost_modules.render.plot_scene")
-    @patch("picasso_workflow.analyse.picasso_outpost.align_channels")
+    @patch("picasso_workflow.outpost.render.render.plot_scene")
+    @patch("picasso_workflow.outpost.alignment.channels.align_channels")
     def align_channels(self, mock_align_channels, mock_plot_scene):
         mock_align_channels.return_value = (
             [[3], [2]],
@@ -969,7 +1002,7 @@ class TestAnalyseModules(unittest.TestCase):
         shutil.rmtree(os.path.join(self.results_folder, "00_combine_channels"))
 
     @patch(
-        "picasso_workflow.analyse.picasso_outpost.convert_zeiss_file",
+        "picasso_workflow.outpost.formats.zeiss.convert_zeiss_file",
         MagicMock,
     )
     def convert_zeiss_movie(self):
@@ -1276,6 +1309,44 @@ class TestAnalyseModules(unittest.TestCase):
         finally:
             shutil.rmtree(folder, ignore_errors=True)
 
+    @patch("picasso_workflow.analyse.io.load_locs")
+    def test_load_checkpoint_single(self, mock_load):
+        """load_checkpoint restores self.locs/self.info from a single part."""
+        locs = pd.DataFrame({"x": [1.0, 2.0]})
+        mock_load.return_value = (locs, [{"info": 1}])
+        self.ap.load_checkpoint({"single": {"filepath": "/some/locs.hdf5"}})
+        mock_load.assert_called_once_with("/some/locs.hdf5")
+        self.assertEqual(2, len(self.ap.locs))
+        self.assertEqual([{"info": 1}], self.ap.info)
+
+    @patch("picasso_workflow.analyse.io.load_locs")
+    def test_load_checkpoint_channels(self, mock_load):
+        """load_checkpoint restores channel state, honoring tags and
+        stamping the channel column."""
+        locs = pd.DataFrame({"x": [1.0, 2.0, 3.0]})
+        mock_load.side_effect = lambda fp: (locs.copy(), [{"info": 1}])
+        self.ap.load_checkpoint(
+            {
+                "channels": {
+                    "filepaths": ["/a/t1.hdf5", "/b/t2.hdf5"],
+                    "tags": ["t1", "t2"],
+                }
+            }
+        )
+        self.assertEqual(["t1", "t2"], self.ap.channel_tags)
+        self.assertEqual(2, len(self.ap.channel_locs))
+        self.assertEqual([1, 1, 1], list(self.ap.channel_locs[1]["channel"]))
+
+    @patch("picasso_workflow.analyse.io.load_locs")
+    def test_load_checkpoint_channels_derives_tags(self, mock_load):
+        """Without tags in the descriptor, filenames are used as tags."""
+        locs = pd.DataFrame({"x": [1.0]})
+        mock_load.side_effect = lambda fp: (locs.copy(), [{"info": 1}])
+        self.ap.load_checkpoint(
+            {"channels": {"filepaths": ["/a/t1.hdf5", "/b/t2.hdf5"]}}
+        )
+        self.assertEqual(["t1.hdf5", "t2.hdf5"], self.ap.channel_tags)
+
     @patch("picasso_workflow.analyse.distance.cdist")
     def nneighbor(self, mock_cdist):
         mock_cdist.return_value = np.random.rand(len(self.ap.movie), 4)
@@ -1328,7 +1399,9 @@ class TestAnalyseModules(unittest.TestCase):
 
         shutil.rmtree(os.path.join(self.results_folder, "00_fit_csr"))
 
-    @patch("picasso_workflow.analyse.picasso_outpost.nndistribution_from_csr")
+    @patch(
+        "picasso_workflow.outpost.spatial_stats.csr_knn.nndistribution_from_csr"
+    )
     def test_fit_csr_plot_max_dist_controls_display_range(self, mock_nnd):
         """plot_max_dist sets the plotting range, independent of the fit.
 
@@ -1370,7 +1443,7 @@ class TestAnalyseModules(unittest.TestCase):
         self.assertLess(default_max, 100)
         self.assertAlmostEqual(plot_max, 500.0, places=6)
 
-    @patch("picasso_workflow.analyse.picasso_outpost.single_spinna_run")
+    @patch("picasso_workflow.outpost.spinna.wrappers.single_spinna_run")
     def spinna(self, mock_sptmp):
         mock_sptmp.return_value = (0, [])
         info = [{"Width": 1000, "Height": 1000, "Frames": 10000}]
@@ -1428,8 +1501,8 @@ class TestAnalyseModules(unittest.TestCase):
 
         shutil.rmtree(os.path.join(self.results_folder, "00_spinna"))
 
-    @patch("picasso_workflow.analyse.picasso_outpost.single_spinna_run")
-    @patch("picasso_workflow.analyse.picasso_outpost.screen_label_uncertainty")
+    @patch("picasso_workflow.outpost.spinna.wrappers.single_spinna_run")
+    @patch("picasso_workflow.outpost.spinna.wrappers.screen_label_uncertainty")
     def test_spinna_label_uncertainty_screen(self, mock_screen, mock_sptmp):
         """Screening routes to screen_label_uncertainty, feeds the
         best-fit value into single_spinna_run and prepends the scan
@@ -1518,9 +1591,9 @@ class TestAnalyseModules(unittest.TestCase):
 
         shutil.rmtree(os.path.join(self.results_folder, "00_spinna"))
 
-    @patch("picasso_workflow.picasso_outpost._plot_label_unc_scan")
+    @patch("picasso_workflow.outpost.spinna.wrappers._plot_label_unc_scan")
     @patch(
-        "picasso_workflow.picasso_outpost.spinna."
+        "picasso_workflow.outpost.spinna.wrappers.spinna."
         "compare_models_given_label_unc"
     )
     def test_screen_label_uncertainty_selects_best(
@@ -1529,7 +1602,7 @@ class TestAnalyseModules(unittest.TestCase):
         """screen_label_uncertainty scans multi-candidate targets, keeps
         the lowest-scoring value and leaves single-candidate targets
         untouched."""
-        Structure = picasso_outpost.spinna.Structure
+        Structure = spinna_wrappers.spinna.Structure
         mono_a = Structure("mono_A")
         mono_a.define_coordinates("A", [0.0], [0.0], [0.0])
         mono_b = Structure("mono_B")
@@ -1546,7 +1619,7 @@ class TestAnalyseModules(unittest.TestCase):
             "B": np.random.rand(20, 2) * 100,
         }
 
-        best, scan, figs = picasso_outpost.screen_label_uncertainty(
+        best, scan, figs = spinna_wrappers.screen_label_uncertainty(
             structures=structures,
             label_unc=label_unc,
             le={"A": 0.5, "B": 0.5},
@@ -1572,8 +1645,8 @@ class TestAnalyseModules(unittest.TestCase):
         self.assertNotIn("B", scan)
         self.assertEqual(figs, ["scan_A.png"])
 
-    @patch("picasso_workflow.analyse.picasso_outpost.single_spinna_run")
-    @patch("picasso_workflow.analyse.picasso_outpost.single_spinna_fit_le_run")
+    @patch("picasso_workflow.outpost.spinna.wrappers.single_spinna_run")
+    @patch("picasso_workflow.outpost.spinna.wrappers.single_spinna_fit_le_run")
     def test_spinna_pair_distance_screen(self, mock_fitle, mock_sptmp):
         """pair_distance_screen routes to fit_le (not single_spinna_run),
         passing the distance grid and per-target label_unc lists, and
@@ -1668,8 +1741,8 @@ class TestAnalyseModules(unittest.TestCase):
 
         shutil.rmtree(os.path.join(self.results_folder, "00_spinna"))
 
-    @patch("picasso_workflow.picasso_outpost.plot_spinna_nnd")
-    @patch("picasso_workflow.picasso_outpost.spinna.fit_le")
+    @patch("picasso_workflow.outpost.spinna.wrappers.plot_spinna_nnd")
+    @patch("picasso_workflow.outpost.spinna.wrappers.spinna.fit_le")
     def test_single_spinna_fit_le_run(self, mock_fit_le, mock_plot):
         """single_spinna_fit_le_run forwards the screen inputs to
         spinna.fit_le, plots the best-fit mixer and returns the fitted
@@ -1693,7 +1766,7 @@ class TestAnalyseModules(unittest.TestCase):
 
         tmpdir = tempfile.mkdtemp()
         try:
-            out = picasso_outpost.single_spinna_fit_le_run(
+            out = spinna_wrappers.single_spinna_fit_le_run(
                 target_a="A",
                 target_b="B",
                 exp_data=exp_data,
@@ -1745,7 +1818,7 @@ class TestAnalyseModules(unittest.TestCase):
         mock_plot.assert_called_once()
         self.assertIs(mock_plot.call_args.kwargs["mixer"], best_mixer)
 
-    @patch("picasso_workflow.analyse.picasso_outpost.plot_spinna_nnd")
+    @patch("picasso_workflow.outpost.spinna.wrappers.plot_spinna_nnd")
     @patch("picasso_workflow.analyse.spinna.fit_le")
     def test_labeling_efficiency_analysis_screen(self, mock_fit_le, mock_plot):
         """pair_distance_screen and labeling_uncertainty_screen expand
@@ -1834,7 +1907,7 @@ class TestAnalyseModules(unittest.TestCase):
             )
         )
 
-    @patch("picasso_workflow.analyse.picasso_outpost.spinna_batch")
+    @patch("picasso_workflow.outpost.spinna.wrappers.spinna_batch")
     @patch("picasso_workflow.analyse.io.save_locs")
     def spinna_batch(self, mock_save_locs, mock_spinna_batch):
         # a minimal spinna batch config with two analysis rows; the
@@ -1903,7 +1976,7 @@ class TestAnalyseModules(unittest.TestCase):
         os.remove(cfg_fp)
         shutil.rmtree(os.path.join(self.results_folder, "00_spinna_batch"))
 
-    @patch("picasso_workflow.analyse.picasso_outpost.spinna_batch")
+    @patch("picasso_workflow.outpost.spinna.wrappers.spinna_batch")
     @patch("picasso_workflow.analyse.io.save_locs")
     def test_spinna_batch_single_dataset(
         self, mock_save_locs, mock_spinna_batch
@@ -1961,7 +2034,7 @@ class TestAnalyseModules(unittest.TestCase):
             }
         },
     )
-    @patch("picasso_workflow.analyse.picasso_outpost.spinna_batch")
+    @patch("picasso_workflow.outpost.spinna.wrappers.spinna_batch")
     @patch("picasso_workflow.analyse.io.save_locs")
     def test_spinna_batch_converts_paths(
         self, mock_save_locs, mock_spinna_batch, mock_node
@@ -2077,6 +2150,77 @@ class TestAnalyseModules(unittest.TestCase):
         return
         shutil.rmtree(os.path.join(self.results_folder, "00_random_val"))
 
+    def plugin(self):
+        """Test the generic picasso-plugin bridge module."""
+        import picasso.plugins as pplugins
+
+        captured = {}
+
+        def fake_api(**kwargs):
+            captured.update(kwargs)
+            return {
+                "locs": "NEWLOCS",
+                "info": [{"from": "plugin"}],
+                "report": "did a thing",
+                "count": 3,
+            }
+
+        fake_api.__name__ = "fake_api"
+
+        # self.ap is shared across all module tests in test_modules; restore
+        # the pipeline state we clobber so later module tests are unaffected.
+        orig_locs = self.ap.locs
+        orig_info = self.ap.info
+        try:
+            # --- happy path: inject state, consume structured return ---
+            with patch.object(
+                pplugins,
+                "load_api_plugins",
+                return_value={"myfunc": fake_api},
+            ):
+                self.ap.locs = "OLDLOCS"
+                self.ap.info = []
+                _, results = self.ap.plugin(
+                    0,
+                    {
+                        "api_name": "myfunc",
+                        "kwargs": {"threshold": 5},
+                        "inject": ["locs", "info"],
+                    },
+                )
+
+            # injected state and explicit kwargs reached the callable
+            self.assertEqual(captured["locs"], "OLDLOCS")
+            self.assertEqual(captured["info"], [])
+            self.assertEqual(captured["threshold"], 5)
+            # structured return updated the pipeline
+            self.assertEqual(self.ap.locs, "NEWLOCS")
+            self.assertEqual(self.ap.info, [{"from": "plugin"}])
+            # results recorded report / leftover result / provenance
+            self.assertEqual(results["plugin_report"], "did a thing")
+            self.assertEqual(results["plugin_result"], {"count": 3})
+            self.assertEqual(results["plugin_api_name"], "myfunc")
+            self.assertEqual(results["injected"], ["locs", "info"])
+            self.assertTrue(results["success"])
+
+            # --- unknown export raises a clear AutoPicassoError ---
+            self.ap.locs = None  # keep _save_state_on_error a no-op
+            with patch.object(pplugins, "load_api_plugins", return_value={}):
+                with self.assertRaises(analyse.AutoPicassoError):
+                    self.ap.plugin(1, {"api_name": "does_not_exist"})
+        finally:
+            self.ap.locs = orig_locs
+            self.ap.info = orig_info
+
+        shutil.rmtree(
+            os.path.join(self.results_folder, "00_plugin"),
+            ignore_errors=True,
+        )
+        shutil.rmtree(
+            os.path.join(self.results_folder, "01_plugin"),
+            ignore_errors=True,
+        )
+
     def render(self):
         return
         shutil.rmtree(os.path.join(self.results_folder, "00_render"))
@@ -2085,8 +2229,8 @@ class TestAnalyseModules(unittest.TestCase):
         return
         shutil.rmtree(os.path.join(self.results_folder, "00_find_structures"))
 
-    @patch("picasso_workflow.analyse.picasso_outpost.pick_origami")
-    @patch("picasso_workflow.analyse.picasso_outpost.picked_locs")
+    @patch("picasso_workflow.outpost.origami.origami.pick_origami")
+    @patch("picasso_workflow.outpost.picks.picks.picked_locs")
     @patch("picasso_workflow.analyse.render.plot_scene")
     @patch("picasso_workflow.analyse.io.save_locs")
     def pick_origami(
@@ -2246,11 +2390,11 @@ class TestAnalyseModules(unittest.TestCase):
         shutil.rmtree(os.path.join(self.results_folder, "00_pick_origami"))
 
     @patch(
-        "picasso_workflow.analyse.picasso_outpost."
+        "picasso_workflow.outpost.origami.origami."
         "cluster_structure_patterns"
     )
-    @patch("picasso_workflow.analyse.picasso_outpost.pick_origami")
-    @patch("picasso_workflow.analyse.picasso_outpost.picked_locs")
+    @patch("picasso_workflow.outpost.origami.origami.pick_origami")
+    @patch("picasso_workflow.outpost.picks.picks.picked_locs")
     @patch("picasso_workflow.analyse.render.plot_scene")
     @patch("picasso_workflow.analyse.io.save_locs")
     def test_pick_origami_cluster_patterns(
@@ -2414,9 +2558,9 @@ class TestAnalyseModules(unittest.TestCase):
 
         shutil.rmtree(os.path.join(self.results_folder, "00_pick_origami"))
 
-    @patch("picasso_workflow.analyse.picasso_outpost.cluster_lattice_defects")
-    @patch("picasso_workflow.analyse.picasso_outpost.pick_origami")
-    @patch("picasso_workflow.analyse.picasso_outpost.picked_locs")
+    @patch("picasso_workflow.outpost.origami.origami.cluster_lattice_defects")
+    @patch("picasso_workflow.outpost.origami.origami.pick_origami")
+    @patch("picasso_workflow.outpost.picks.picks.picked_locs")
     @patch("picasso_workflow.analyse.render.plot_scene")
     @patch("picasso_workflow.analyse.io.save_locs")
     def test_pick_origami_cluster_patterns_lattice(
@@ -2604,17 +2748,9 @@ class TestAnalyseModules(unittest.TestCase):
             os.path.join(self.results_folder, "00_pairwise_module_executor")
         )
 
-    def ripleysk(self):
-        return
-        shutil.rmtree(os.path.join(self.results_folder, "00_ripleysk"))
-
     def ripleysk2(self):
         return
         shutil.rmtree(os.path.join(self.results_folder, "00_ripleysk2"))
-
-    def ripleysk_average(self):
-        return
-        shutil.rmtree(os.path.join(self.results_folder, "00_ripleysk"))
 
     def ripleysk_average2(self):
         return
@@ -2695,8 +2831,8 @@ class TestAnalyseModules(unittest.TestCase):
             )
         )
 
-    @patch("picasso_workflow.analyse.picasso_outpost.pick_gold")
-    @patch("picasso_workflow.analyse.picasso_outpost.picked_locs")
+    @patch("picasso_workflow.outpost.picks.picks.pick_gold")
+    @patch("picasso_workflow.outpost.picks.picks.picked_locs")
     @patch("picasso_workflow.analyse.io.save_locs")
     def find_gold(self, mock_save_locs, mock_picked_locs, mock_pick_gold):
         parameters = {}
@@ -2706,8 +2842,8 @@ class TestAnalyseModules(unittest.TestCase):
 
         shutil.rmtree(os.path.join(self.results_folder, "00_find_gold"))
 
-    @patch("picasso_workflow.analyse.picasso_outpost.picked_locs")
-    @patch("picasso_workflow.analyse.picasso_outpost._undrift_from_picked")
+    @patch("picasso_workflow.outpost.picks.picks.picked_locs")
+    @patch("picasso_workflow.outpost.picks.picks._undrift_from_picked")
     @patch("picasso_workflow.analyse.io.save_locs")
     @patch("picasso_workflow.analyse.io.load_locs")
     def undrift_from_picked(
@@ -2851,7 +2987,7 @@ class TestAnalyseModules(unittest.TestCase):
 
         shutil.rmtree(os.path.join(self.results_folder, "00_link_locs"))
 
-    @patch("picasso_workflow.analyse.picasso_outpost.plot_spinna_nnd")
+    @patch("picasso_workflow.outpost.spinna.wrappers.plot_spinna_nnd")
     @patch("picasso_workflow.analyse.spinna.fit_le")
     def labeling_efficiency_analysis(self, mock_fit_le, mock_plot_nnd):
         parameters = {
@@ -2974,80 +3110,36 @@ class TestAnalyseModules(unittest.TestCase):
         )
 
     def branch(self):
-        """Test the branch module (screen and runtime types)."""
-        from picasso_workflow.outpost_modules import mask as maskmod
+        """Test the branch module (explicit and runtime types)."""
 
-        # --- screen type: two branches over a parameter grid ----------------
+        # --- runtime type: branch count + per-branch item from a list -------
         parameters = {
-            "branch_type": "screen",
-            "screen": {"val": [1, 2, 3], "#tags": ["a", "b", "c"]},
+            "branch_type": "runtime",
+            "branch_over": [1, 2, 3],
+            "label_template": "cell{n:02d}",
             "branch_modules": [("dummy_module", {})],
             "join_modules": [("dummy_module", {})],
         }
         parameters, results = self.ap.branch(0, parameters)
-        assert results["branch_type"] == "screen"
-        assert results["labels"] == ["a", "b", "c"]
+        assert results["branch_type"] == "runtime"
+        assert results["labels"] == ["cell00", "cell01", "cell02"]
         assert len(results["branches"]) == 3
-        assert results["branches"][0]["label"] == "a"
+        assert results["branches"][0]["label"] == "cell00"
         assert "00_dummy_module" in results["branches"][0]
         assert "00_dummy_module" in results["join"]
-        assert results["topology"]["type"] == "screen"
+        assert results["topology"]["type"] == "runtime"
         assert len(results["topology"]["branches"]) == 3
+        assert results["skipped"] == []
         # per-branch and join folders exist
         assert os.path.isdir(
             os.path.join(
-                self.results_folder, "00_branch", "a", "00_dummy_module"
+                self.results_folder, "00_branch", "cell00", "00_dummy_module"
             )
         )
         assert os.path.isdir(
             os.path.join(self.results_folder, "00_branch", "join")
         )
         shutil.rmtree(os.path.join(self.results_folder, "00_branch"))
-
-        # --- runtime type: one branch per mask component --------------------
-        # Build a trivial single-component CellMask and save it.
-        cell_mask = maskmod.CellMask()
-        cell_mask._pixelsize = 1
-        cell_mask._binsize = 1
-        cell_mask._upsample = 1
-        cell_mask._offset = (0.0, 0.0)
-        cell_mask._blursize = 1
-        cell_mask._threshold = 1 / 3
-        binary = np.ones((20, 20), dtype=bool)
-        cell_mask._initial_density = binary.astype(float)
-        cell_mask._binary_mask = binary
-        cell_mask._recalc_density_mask_from_binary()
-        fp_mask = os.path.join(self.results_folder, "test_mask.pkl")
-        cell_mask.save(fp_mask)
-
-        locs = np.rec.array(
-            [(0, 3.0, 3.0), (1, 5.0, 5.0), (2, 2.0, 8.0)],
-            dtype=[("frame", "u4"), ("x", "f4"), ("y", "f4")],
-        )
-        self.ap.channel_locs = [locs]
-        self.ap.channel_info = [[{"Pixelsize": 1}]]
-        self.ap.channel_tags = ["ch0"]
-
-        parameters = {
-            "branch_type": "runtime",
-            "split": {
-                "method": "mask_components",
-                "mask": fp_mask,
-                "label_template": "cell{n:02d}",
-            },
-            "branch_modules": [("dummy_module", {})],
-        }
-        parameters, results = self.ap.branch(1, parameters)
-        assert results["branch_type"] == "runtime"
-        assert results["labels"] == ["cell00"]
-        assert len(results["branches"]) == 1
-        assert "00_dummy_module" in results["branches"][0]
-        assert results["join"] == {}
-        # prefix channel_locs restored (not left as a branch subset)
-        assert len(self.ap.channel_locs[0]) == 3
-
-        os.remove(fp_mask)
-        shutil.rmtree(os.path.join(self.results_folder, "01_branch"))
 
         # --- explicit type: fixed n_branches with a per-branch override -----
         parameters = {
@@ -3062,7 +3154,7 @@ class TestAnalyseModules(unittest.TestCase):
         self.ap._progress_callback = lambda frac, msg=None: progress.append(
             (frac, msg)
         )
-        parameters, results = self.ap.branch(2, parameters)
+        parameters, results = self.ap.branch(1, parameters)
         # restore the default (None) rather than deleting the attribute:
         # test_modules reuses one self.ap across every module test, so a
         # deleted _progress_callback would break later modules (e.g. identify).
@@ -3077,13 +3169,20 @@ class TestAnalyseModules(unittest.TestCase):
         assert fracs == sorted(fracs)
         assert any("a:" in (m or "") for _, m in progress)
         assert any("join:" in (m or "") for _, m in progress)
-        shutil.rmtree(os.path.join(self.results_folder, "02_branch"))
+        shutil.rmtree(os.path.join(self.results_folder, "01_branch"))
 
         # $branch overrides resolve to the branch id's value
         resolved = analyse.AutoPicasso._resolve_branch_overrides(
             {"k": ("$branch", [10, 20, 30]), "s": 1}, 1
         )
         assert resolved == {"k": 20, "s": 1}
+
+        # $branch_item resolves to this branch's runtime item -- the whole
+        # item, or a key/index into it
+        item = {"nth": 7, "name": "x"}
+        assert analyse.AutoPicasso._resolve_branch_overrides(
+            {"a": ("$branch_item",), "b": ("$branch_item", "nth")}, 0, item
+        ) == {"a": item, "b": 7}
 
     def test_branch_streams_submodules_live(self):
         """A reporter with the live hooks gets one open_branch_page per branch
@@ -3157,6 +3256,135 @@ class TestAnalyseModules(unittest.TestCase):
         self.ap.branch(2, parameters)
         assert calls == []  # opted-out reporter never streamed to
         shutil.rmtree(os.path.join(self.results_folder, "02_branch"))
+
+    def test_branch_skips_empty_branches(self):
+        """A sub-module raising SkipBranch drops that branch; the join and the
+        remaining branches proceed and the pipeline is not failed."""
+        from picasso_workflow.analyse import SkipBranch
+
+        def skipper(sub_idx, params, calling_module_dir=None, suffix=""):
+            if params.get("boom"):
+                raise SkipBranch("no data here")
+            return params, {"ok": True}
+
+        self.ap.skipper = skipper
+        parameters = {
+            "branch_type": "explicit",
+            "n_branches": 3,
+            "branch_labels": ["a", "b", "c"],
+            "branch_modules": [
+                ("skipper", {"boom": ("$branch", [False, True, False])})
+            ],
+            "join_modules": [],
+        }
+        _, results = self.ap.branch(2, parameters)
+        # branch "b" is dropped; only a and c produce results
+        assert results["labels"] == ["a", "c"]
+        assert len(results["branches"]) == 2
+        assert [s["label"] for s in results["skipped"]] == ["b"]
+        assert results["topology"]["skipped"] == ["b"]
+        del self.ap.skipper
+        shutil.rmtree(os.path.join(self.results_folder, "02_branch"))
+
+    def test_branch_default_summarize_join(self):
+        """A summarize_branches join with no explicit values auto-summarizes
+        the branch module's per-branch numeric results."""
+
+        def metric(sub_idx, params, calling_module_dir=None, suffix=""):
+            return params, {"val": float(params.get("v", 0))}
+
+        self.ap.metric = metric
+        parameters = {
+            "branch_type": "explicit",
+            "n_branches": 3,
+            "branch_labels": ["a", "b", "c"],
+            "branch_modules": [("metric", {"v": ("$branch", [1, 2, 3])})],
+            "join_modules": [("summarize_branches", {})],
+        }
+        _, results = self.ap.branch(2, parameters)
+        summ = results["join"]["00_summarize_branches"]
+        assert summ["mode"] == "replicates"
+        assert "00_metric: val" in summ["stats"]
+        assert abs(summ["stats"]["00_metric: val"]["mean"] - 2.0) < 1e-9
+        assert os.path.isfile(summ["fp_fig"])
+        del self.ap.metric
+        shutil.rmtree(os.path.join(self.results_folder, "02_branch"))
+
+    def test_branch_item_resolution_tolerates_array_params(self):
+        """_resolve_branch_overrides must not choke on array-valued params
+        (a bare ``obj == "$branch_item"`` would raise on an ndarray)."""
+        params = {
+            "roi": np.array([1.0, 2.0, 3.0]),
+            "nth": ("$branch_item",),
+            "keyed": ("$branch_item", "k"),
+        }
+        out = analyse.AutoPicasso._resolve_branch_overrides(
+            params, 0, {"k": 7}
+        )
+        assert np.array_equal(out["roi"], np.array([1.0, 2.0, 3.0]))
+        assert out["nth"] == {"k": 7}
+        assert out["keyed"] == 7
+
+    def test_summarize_branches_autodetect_label_alignment(self):
+        """A metric present in only some branches keeps its values aligned to
+        the correct branch labels (no positional mislabel)."""
+        branches = [
+            {"label": "a", "00_m": {"only_bc": None}},
+            {"label": "b", "00_m": {"only_bc": 2.0}},
+            {"label": "c", "00_m": {"only_bc": 3.0}},
+        ]
+        series, series_labels = analyse.AutoPicasso._autodetect_branch_metrics(
+            branches
+        )
+        # branch "a" has no numeric value -> dropped from both, b/c kept aligned
+        assert series["00_m: only_bc"] == [2.0, 3.0]
+        assert series_labels["00_m: only_bc"] == ["b", "c"]
+
+    def test_branch_skips_join_module_on_skipbranch(self):
+        """A join module raising SkipBranch is dropped, the run continues."""
+        from picasso_workflow.analyse import SkipBranch
+
+        def joinskip(sub_idx, params, calling_module_dir=None, suffix=""):
+            raise SkipBranch("empty join")
+
+        self.ap.joinskip = joinskip
+        parameters = {
+            "branch_type": "explicit",
+            "n_branches": 2,
+            "branch_labels": ["a", "b"],
+            "branch_modules": [("dummy_module", {})],
+            "join_modules": [("joinskip", {})],
+        }
+        _, results = self.ap.branch(2, parameters)
+        assert results["join"] == {}  # skipped, not fatal
+        assert len(results["branches"]) == 2
+        del self.ap.joinskip
+        shutil.rmtree(os.path.join(self.results_folder, "02_branch"))
+
+    def test_summarize_branches_autodetects_metrics(self):
+        """Given a per-branch results list, summarize_branches flattens the
+        numeric metrics (skipping bookkeeping keys) and labels by branch."""
+        branches = [
+            {
+                "label": "a",
+                "00_nn": {"nn": 1.0, "duration": 5.0},
+                "01_x": {"m": 10.0},
+            },
+            {
+                "label": "b",
+                "00_nn": {"nn": 3.0, "duration": 6.0},
+                "01_x": {"m": 20.0},
+            },
+        ]
+        _, results = self.ap.summarize_branches(0, {"values": branches})
+        stats = results["stats"]
+        assert set(stats) == {"00_nn: nn", "01_x: m"}  # duration skipped
+        assert abs(stats["00_nn: nn"]["mean"] - 2.0) < 1e-9
+        assert stats["01_x: m"]["n"] == 2
+        assert os.path.isfile(results["fp_fig"])
+        shutil.rmtree(
+            os.path.join(self.results_folder, "00_summarize_branches")
+        )
 
     def summarize_branches(self):
         """Test the summarize_branches plotting module."""
@@ -3259,190 +3487,8 @@ class TestAnalyseModules(unittest.TestCase):
     def resolution_analysis(self):
         pass
 
-    # @unittest.skip("")
-    def undrift_rsso(self):
-        """Test the undrift_rsso module with synthetic drift data"""
-        import numpy as np
-
-        # Create synthetic data with known drift
-        np.random.seed(42)
-        n_frames = 50  # Fewer frames for faster test
-        n_locs_per_frame = 200  # More locs per frame for better statistics
-        true_drift_rate_x = 0.05  # Smaller drift rate (pixels per frame)
-        true_drift_rate_y = 0.03  # Smaller drift rate (pixels per frame)
-
-        # Generate synthetic localizations with drift
-        all_locs = []
-        true_drift_x = []
-        true_drift_y = []
-
-        for frame in range(n_frames):
-            # Calculate cumulative drift
-            drift_x = true_drift_rate_x * frame
-            drift_y = true_drift_rate_y * frame
-            true_drift_x.append(drift_x)
-            true_drift_y.append(drift_y)
-
-            # Generate random localizations with added drift
-            x_base = np.random.uniform(10, 50, n_locs_per_frame)
-            y_base = np.random.uniform(10, 50, n_locs_per_frame)
-
-            frame_locs = np.rec.array(
-                [
-                    (
-                        frame,
-                        x + drift_x,
-                        y + drift_y,
-                        1000,
-                        1.0,
-                        1.0,
-                        100,
-                        0.1,
-                        0.1,
-                        0.5,
-                        50,
-                        1,
-                    )
-                    for x, y in zip(x_base, y_base)
-                ],
-                dtype=self.locs_dtype,
-            )
-            frame_locs = pd.DataFrame(frame_locs)
-
-            all_locs.append(frame_locs)
-
-        # Combine all localizations
-        # synthetic_locs = np.lib.recfunctions.stack_arrays(
-        #     all_locs, asrecarray=True, usemask=False
-        # )
-        synthetic_locs = pd.concat(all_locs, ignore_index=True)
-
-        # Create AutoPicasso instance with synthetic data
-        analysis_config = {
-            "camera_info": {
-                "Gain": 1,
-                "Sensitivity": 0.45,
-                "Baseline": 100,
-                "Qe": 0.82,
-                "Pixelsize": 130,  # nm
-            },
-            "gpufit_installed": False,
-        }
-        ap = analyse.AutoPicasso(self.results_folder, analysis_config)
-        ap.locs = synthetic_locs
-        ap.info = [
-            {"Frames": n_frames, "Width": 64, "Height": 64, "Pixelsize": 100}
-        ]  # 100 nm pixels
-
-        # Test parameters
-        parameters = {
-            "ton": 3.0,  # 3 frame half-life
-            "toff": 10.0,  # 10 frame reappearance time
-            "max_shift": 0.5,  # 0.5 pixel max shift per frame
-            "processing_chunk_size": 25,  # Processing chunk size
-            "min_locs_per_frame": 20,  # Ensure sufficient data for frame-level
-            "min_locs_per_block": 100,  # Ensure sufficient data for block-level
-            "plot_drift": True,
-            "save_locs": False,
-        }
-
-        # Run undrift_rsso
-        parameters, results = ap.undrift_rsso(0, parameters)
-
-        # Verify results - check for essential outputs
-        # The function should complete and create plots
-
-        # Check that drift plot was created
-        # assert "fp_fig" in results, "Should create drift plot"
-        # assert os.path.exists(
-        #     results["fp_fig"]
-        # ), "Drift plot file should exist"
-
-        # # Verify that drift arrays are stored in AutoPicasso instance
-        # assert hasattr(ap, "drift"), "Should store drift in ap.drift"
-        # assert hasattr(ap.drift, "shape"), "Drift should be array-like"
-        # assert len(ap.drift.shape) == 2, "Drift should be 2D array"
-        # assert ap.drift.shape[1] == 2, "Should have x and y drift dimensions"
-        # assert (
-        #     ap.drift.shape[0] == n_frames
-        # ), "Drift array should match number of frames"
-
-        # # Verify drift was detected (should be non-zero since we added artificial drift)
-        # drift_magnitude = np.sqrt(np.sum(ap.drift**2, axis=1)).mean()
-        # assert drift_magnitude > 0, f"Should detect non-zero drift, got {drift_magnitude}"
-
-        # Clean up plots
-        import glob
-
-        undrift_folder = os.path.join(self.results_folder, "00_undrift_rsso")
-        if os.path.exists(undrift_folder):
-            for pattern in [
-                "drift_*.png",
-                "convergence_*.png",
-                "robustness_*.png",
-            ]:
-                for file in glob.glob(os.path.join(undrift_folder, pattern)):
-                    try:
-                        os.remove(file)
-                    except Exception:
-                        pass
-
-    @unittest.skip("")
-    def test_16_undrift_rsso_edge_cases(self):
-        """Test undrift_rsso with edge cases and error conditions"""
-        # Test with insufficient data
-        analysis_config = {
-            "camera_info": {
-                "Gain": 1,
-                "Sensitivity": 0.45,
-                "Baseline": 100,
-                "Qe": 0.82,
-                "Pixelsize": 130,  # nm
-            },
-            "gpufit_installed": False,
-        }
-        ap = analyse.AutoPicasso(self.results_folder, analysis_config)
-
-        # Create minimal dataset (too few localizations)
-        minimal_locs = np.rec.array(
-            [
-                (0, 10.0, 10.0, 1000, 1.0, 1.0, 100, 0.1, 0.1, 0.5, 50, 1),
-                (1, 10.1, 10.1, 1000, 1.0, 1.0, 100, 0.1, 0.1, 0.5, 50, 1),
-            ],
-            dtype=self.locs_dtype,
-        )
-        minimal_locs = pd.DataFrame(minimal_locs)
-
-        ap.locs = minimal_locs
-        ap.info = [{"Frames": 2, "Width": 64, "Height": 64, "Pixelsize": 100}]
-
-        parameters = {
-            "ton": 5.0,
-            "toff": 20.0,
-            "max_shift": 1.0,
-            "min_locs_per_frame": 100,  # Impossibly high threshold
-            "plot_drift": False,
-            "save_locs": False,
-        }
-
-        # Should handle gracefully
-        parameters, results = ap.undrift_rsso(0, parameters)
-
-        # Should still succeed even with insufficient data
-        assert results["success"]
-        assert "total_drift" in results
-
-        # Test with no localizations
-        empty_locs = np.array([], dtype=self.locs_dtype).view(np.recarray)
-        empty_locs = pd.DataFrame(empty_locs)
-        ap.locs = empty_locs
-
-        parameters, results = ap.undrift_rsso(0, parameters)
-        assert results["success"]
-        assert results["total_drift"] == 0.0
-
-    @patch("picasso_workflow.analyse.picasso_outpost.pick_similar")
-    @patch("picasso_workflow.analyse.picasso_outpost.picked_locs")
+    @patch("picasso_workflow.outpost.picks.picks.pick_similar")
+    @patch("picasso_workflow.outpost.picks.picks.picked_locs")
     @patch("picasso_workflow.analyse.render.plot_scene")
     @patch("picasso_workflow.analyse.io.save_locs")
     def find_similar(
@@ -3618,6 +3664,50 @@ class TestAnalyse(unittest.TestCase):
         )
 
         shutil.rmtree(os.path.join(self.results_folder, "00_my_method"))
+
+    def test_01b_module_decorator_records_checkpoint(self):
+        """The auto-save path records a checkpoint descriptor for resume."""
+
+        class TestClass:
+            results_folder = self.results_folder
+            analysis_config = {"always_save": True}
+            locs = "sentinel-locs"
+            channel_locs = ["a", "b"]
+            channel_tags = ["t1", "t2"]
+
+            def _save_locs(self, fp):
+                pass
+
+            def _save_datasets_agg(self, folder):
+                return [
+                    os.path.join(folder, t + ".hdf5")
+                    for t in self.channel_tags
+                ]
+
+            # the decorator's auto-save now delegates to this shared method
+            # (also used by the stepwise-boundary checkpoint)
+            save_locs_checkpoint = analyse.AutoPicasso.save_locs_checkpoint
+
+            @analyse.module_decorator
+            def my_method(self, i, parameters, results):
+                return parameters, results
+
+        tc = TestClass()
+        parameters, results = tc.my_method(0, {})
+        folder = results["folder"]
+        try:
+            assert results["checkpoint"]["single"] == {
+                "filepath": os.path.join(folder, "locs.hdf5")
+            }
+            assert results["checkpoint"]["channels"] == {
+                "filepaths": [
+                    os.path.join(folder, "t1.hdf5"),
+                    os.path.join(folder, "t2.hdf5"),
+                ],
+                "tags": ["t1", "t2"],
+            }
+        finally:
+            shutil.rmtree(folder, ignore_errors=True)
 
     def test_02_AutoPicasso_create_sample_movie(self):
         self.ap.movie = np.random.randint(
@@ -3964,3 +4054,58 @@ def test_recenter_on_com_empty_is_noop():
     centers = [(1.0, 2.0), (3.0, 4.0)]
     out = analyse._recenter_on_com(empty, centers)
     assert out == [[1.0, 2.0], [3.0, 4.0]]
+
+
+class Test_SaveLocsSanity(unittest.TestCase):
+    """_save_locs must keep the in-memory locs identical to the saved file.
+
+    io.save_locs sanitizes (lib.ensure_sanity drops NaN/inf rows, e.g.
+    failed GPU fits with NaN lpx); if the in-memory table keeps those
+    rows, downstream modules see data the file does not have (a NaN lpx
+    makes render's median blur NaN and crash -- seen live), and a
+    resumed run differs from a straight-through one.
+    """
+
+    def setUp(self):
+        import tempfile
+
+        self.results_folder = tempfile.mkdtemp()
+        analysis_config = {
+            "camera_info": {"Pixelsize": 130},
+            "gpufit_installed": False,
+        }
+        from picasso_workflow import analyse
+
+        self.ap = analyse.AutoPicasso(self.results_folder, analysis_config)
+        self.ap.locs = pd.DataFrame(
+            {
+                "frame": np.arange(10, dtype="u4"),
+                "x": np.random.rand(10).astype("f4") * 10,
+                "y": np.random.rand(10).astype("f4") * 10,
+                "photons": np.random.rand(10).astype("f4") * 1000,
+                "lpx": np.random.rand(10).astype("f4") / 10,
+                "lpy": np.random.rand(10).astype("f4") / 10,
+            }
+        )
+        # two bad fits: NaN localization precision
+        self.ap.locs.loc[3, "lpx"] = np.nan
+        self.ap.locs.loc[7, "lpy"] = np.nan
+        self.ap.info = [
+            {"Width": 64, "Height": 32, "Frames": 1000, "Pixelsize": 130}
+        ]
+
+    def tearDown(self):
+        shutil.rmtree(self.results_folder, ignore_errors=True)
+
+    def test_save_locs_adopts_sanitized_table(self):
+        from picasso import io as pio
+
+        fp = os.path.join(self.results_folder, "locs.hdf5")
+        self.ap._save_locs(fp)
+
+        # the NaN rows are gone from memory ...
+        self.assertEqual(8, len(self.ap.locs))
+        self.assertFalse(self.ap.locs[["lpx", "lpy"]].isna().any().any())
+        # ... and memory matches the file exactly
+        saved, _ = pio.load_locs(fp)
+        self.assertEqual(len(saved), len(self.ap.locs))

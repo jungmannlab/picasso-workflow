@@ -256,6 +256,35 @@ class Test_B_ConfluenceReporterModules(unittest.TestCase):
     def zfit(self):
         pass
 
+    def plugin(self):
+        parameters = {"api_name": "myfunc", "inject": ["locs"]}
+        results = {
+            "start time": "now",
+            "duration": 3.5,
+            "plugin_api_name": "myfunc",
+            "plugin_callable": "mypkg.myfunc",
+            "injected": ["locs"],
+            "plugin_report": "did a thing <ok>",
+            "plugin_result": {"count": 3},
+            "plugin_files": ["/tmp/out.csv"],
+        }
+        # self.cr.ci is shared across all module tests; isolate our calls.
+        self.cr.ci.upload_attachment.reset_mock()
+        self.cr.ci.update_page_content.reset_mock()
+        self.cr.plugin(0, parameters, results)
+
+        # the report section was posted and the file uploaded
+        self.cr.ci.update_page_content.assert_called()
+        self.cr.ci.upload_attachment.assert_called_once_with(
+            self.cr.report_page_id, "/tmp/out.csv"
+        )
+
+        # clean up
+        pgid, pgtitle = self.cr.ci.get_page_properties(
+            self.cr.report_page_name
+        )
+        self.cr.ci.delete_page(pgid)
+
     # @unittest.skip("")
     def export_brightfield(self):
         parameters = {}
@@ -692,27 +721,6 @@ class Test_B_ConfluenceReporterModules(unittest.TestCase):
         self.cr.ci.delete_page(pgid)
 
     # @unittest.skip("")
-    def ripleysk(self):
-        parameters = {
-            "ripleys_threshold": 1.2,
-            "atype": "Ripleys",
-        }
-        results = {
-            "start time": "now",
-            "duration": 4.12,
-            "success": True,
-            "ripleys_significant": [("a", "b")],
-            "fp_ripleys_meanval": "bklab",
-        }
-        self.cr.ripleysk(0, parameters, results)
-
-        # clean up
-        pgid, pgtitle = self.cr.ci.get_page_properties(
-            self.cr.report_page_name
-        )
-        self.cr.ci.delete_page(pgid)
-
-    # @unittest.skip("")
     def ripleysk2(self):
         parameters = {
             "ripleys_threshold": 1.2,
@@ -727,29 +735,6 @@ class Test_B_ConfluenceReporterModules(unittest.TestCase):
             "fp_ripleys_meanval": "bklab",
         }
         self.cr.ripleysk2(0, parameters, results)
-
-        # clean up
-        pgid, pgtitle = self.cr.ci.get_page_properties(
-            self.cr.report_page_name
-        )
-        self.cr.ci.delete_page(pgid)
-
-    # @unittest.skip("")
-    def ripleysk_average(self):
-        parameters = {
-            "ripleys_threshold": 1.2,
-            "report_names": ["a", "b", "c"],
-            "fp_workflows": ["/a", "/b", "/c"],
-        }
-        results = {
-            "start time": "now",
-            "duration": 4.12,
-            "success": True,
-            "output_folders": ["/d"],
-            "fp_ripleys_significant": "/e",
-            "ripleys_significant": [("a", "b")],
-        }
-        self.cr.ripleysk_average(0, parameters, results)
 
         # clean up
         pgid, pgtitle = self.cr.ci.get_page_properties(
@@ -1434,22 +1419,6 @@ class Test_B_ConfluenceReporterModules(unittest.TestCase):
             "success": True,
         }
         self.cr.resolution_frc_spatial(0, parameters, results)
-
-        # clean up
-        pgid, pgtitle = self.cr.ci.get_page_properties(
-            self.cr.report_page_name
-        )
-        self.cr.ci.delete_page(pgid)
-
-    # @unittest.skip("")
-    def undrift_rsso(self):
-        parameters = {}
-        results = {
-            "start time": "now",
-            "duration": 4.12,
-            "success": True,
-        }
-        self.cr.undrift_rsso(0, parameters, results)
 
         # clean up
         pgid, pgtitle = self.cr.ci.get_page_properties(
@@ -2487,3 +2456,35 @@ def test_pick_origami_report_no_clustering_is_well_formed():
     text = _pick_origami_report(results)
     _assert_well_formed(text)
     assert "p.png" in text
+
+
+class Test_PageUrl(unittest.TestCase):
+    """page_url builds a browser URL from base_url + page id (no network)."""
+
+    def _iface(self, base_url):
+        # bypass __init__/connect: page_url only needs base_url
+        ci = confluence.ConfluenceInterface.__new__(
+            confluence.ConfluenceInterface
+        )
+        ci.base_url = base_url
+        return ci
+
+    def test_cloud_url(self):
+        ci = self._iface("https://miblab.atlassian.net/wiki")
+        self.assertEqual(
+            "https://miblab.atlassian.net/wiki/pages/viewpage.action"
+            "?pageId=12345",
+            ci.page_url("12345"),
+        )
+
+    def test_server_url_trailing_slash(self):
+        ci = self._iface("https://mibwiki.biochem.mpg.de/")
+        self.assertEqual(
+            "https://mibwiki.biochem.mpg.de/pages/viewpage.action?pageId=7",
+            ci.page_url("7"),
+        )
+
+    def test_none_page_id(self):
+        ci = self._iface("https://x/wiki")
+        self.assertIsNone(ci.page_url(None))
+        self.assertIsNone(ci.page_url(""))

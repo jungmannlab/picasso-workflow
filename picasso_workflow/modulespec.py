@@ -34,6 +34,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 
+from picasso_workflow.picasso_set.params import (
+    PICASSO_SET_PARAMS,
+    PICASSO_SET_SUMMARIES,
+)
+
 
 class Scope(str, Enum):
     """A workflow type a module may be valid in."""
@@ -79,6 +84,11 @@ CAPABILITIES: frozenset[str] = frozenset(
         "labeling_efficiency",  # labeling-efficiency estimate
         "render_image",  # rendered super-resolution image
         "brightfield_image",  # processed brightfield/overview image
+        "fret_results",  # FRET efficiency results
+        "z_calibration",  # 3D (astigmatism) z-calibration file
+        "camera_calibration",  # sCMOS camera calibration file
+        "spline_calibration",  # cubic-spline PSF calibration file
+        "converted_file",  # localizations exported to a foreign format
         "dataset_summary",  # per-dataset summary statistics
         "report_items",  # items appended to the report (side-effect output)
         "saved_dataset",  # persisted result on disk
@@ -91,6 +101,64 @@ CAPABILITIES: frozenset[str] = frozenset(
         "combined_locs",  # channels combined into one dataset (e.g. RESI)
     }
 )
+
+
+# ---------------------------------------------------------------------------
+# Capabilities that live only in process memory. Everything else is either
+# encoded in the localizations themselves (and thus restored when a saved
+# locs file is re-loaded on resume) or exchanged between modules via file
+# paths recorded in the results dict, which survive in WorkflowRunner.yaml.
+# These do not: restarting from a saved-locs checkpoint cannot restore them.
+# ---------------------------------------------------------------------------
+MEMORY_ONLY_CAPABILITIES: frozenset[str] = frozenset(
+    {
+        "raw_movie",  # AutoPicasso.movie: the loaded image stack
+        "identifications",  # AutoPicasso.identifications: pre-fit spots
+        "drift",  # AutoPicasso.drift: estimated drift trace
+        "picasso_config",  # process-global picasso CONFIG set at load time
+    }
+)
+
+# Capabilities carried by the in-memory localization state. Unlike the
+# memory-only set above, these CAN be restored on resume -- by re-loading a
+# saved locs file into AutoPicasso.locs (single) or AutoPicasso.channel_locs
+# (channels). Which subset a given checkpoint restores depends on which
+# parts it saved.
+SINGLE_LOCS_CAPABILITIES: frozenset[str] = frozenset(
+    {"locs", "locs_z", "locs_undrifted"}
+)
+CHANNEL_LOCS_CAPABILITIES: frozenset[str] = frozenset(
+    {
+        "channel_locs",
+        "dataset_collection",
+        "pooled_locs",
+        "combined_locs",  # combine_channels stores into channel_locs
+        # in aggregation scope the base locs tokens ride on the channel
+        # state (cf. load_datasets_to_aggregate's provides)
+        "locs",
+        "locs_undrifted",
+    }
+)
+LOCS_STATE_CAPABILITIES: frozenset[str] = (
+    SINGLE_LOCS_CAPABILITIES | CHANNEL_LOCS_CAPABILITIES
+)
+
+# Parameter keys (dotted paths for nested dicts) that modules overwrite in
+# their own parameter dict at run time (estimates, resolved output paths,
+# defaults). Needed only when resuming runs recorded before the pristine
+# parameter snapshot existed: those yamls persisted the overwritten values,
+# which must not read as user edits. Runs recorded since compare against
+# the exact snapshot and never consult this map.
+RUNTIME_PARAMETER_WRITE_BACKS: dict[str, frozenset[str]] = {
+    "load_dataset_movie": frozenset({"sample_movie.filename"}),
+    "identify": frozenset({"min_gradient", "auto_netgrad.filename"}),
+    "undrift_rcc": frozenset({"segmentation", "dimensions"}),
+    "smlm_clusterer": frozenset({"basic_fa", "radius_z"}),
+    "align_channels": frozenset({"align_pars.plot_dir"}),
+    "labeling_efficiency_analysis": frozenset(
+        {"nn_nth", "pair_distance", "labeling_uncertainty"}
+    ),
+}
 
 
 @dataclass(frozen=True)
@@ -117,15 +185,26 @@ class ModuleSpec:
         For ``WRAPS``/``EXTENDS``, the wrapped/extended picasso entry point
         (e.g. ``"picasso.aim.aim"``). Required when ``relation`` is ``WRAPS``.
     outpost : bool
-        Orthogonal flag: implementation currently lives in ``picasso_outpost``;
-        a migration candidate for core ``picasso``.
+        Orthogonal flag: implementation currently lives in the ``outpost/``
+        package; a migration candidate for core ``picasso``.
     scopes : frozenset[Scope]
         Non-empty set of workflow scopes the module is valid in.
+    experimental : bool
+        If True, the module is functional (dispatchable from a workflow and
+        covered by tests) but hidden from the GUI module palette -- for
+        features merged to keep them alive in CI but not yet ready for users
+        to pick. Un-set this flag to surface the module.
     summary : str
         One-line human description (mirrors the contract docstring).
+    module_set : str
+        Which module set the module belongs to: ``"native"`` for the classic
+        picasso-workflow modules, ``"picasso"`` for the picasso-set modules
+        that recapitulate native picasso 1:1 (``picasso_*`` names).
     params : object | None
-        Reserved for the future per-module parameter schema (see proposal
-        Sec. 10); ``None`` until that follow-up lands.
+        Per-module parameter schema. For picasso-set modules this is the
+        ``(parameters_spec, results_spec)`` tuple from
+        :mod:`picasso_workflow.picasso_set.params`, consumed by the GUI;
+        ``None`` for native modules until the schema follow-up lands.
     """
 
     name: str
@@ -141,9 +220,13 @@ class ModuleSpec:
     outpost: bool = False
     # --- workflow scope ---
     scopes: frozenset[Scope] = frozenset({Scope.SINGLE})
+    # --- visibility ---
+    experimental: bool = False
     # --- docs ---
     summary: str = ""
-    # --- reserved for the parameter-schema follow-up (proposal Sec. 10) ---
+    # --- module set ---
+    module_set: str = "native"
+    # --- per-module parameter schema (filled for the picasso-set) ---
     params: object | None = None
 
     def __post_init__(self):
@@ -158,6 +241,21 @@ class ModuleSpec:
             )
         if self.relation is PicassoRelation.WRAPS and not self.picasso_symbol:
             raise ValueError(f"{self.name}: WRAPS requires a picasso_symbol")
+        if self.module_set not in ("native", "picasso"):
+            raise ValueError(
+                f"{self.name}: unknown module_set {self.module_set!r}"
+            )
+        if self.module_set == "picasso":
+            if not self.name.startswith("picasso_"):
+                raise ValueError(
+                    f"{self.name}: picasso-set modules must be named "
+                    "'picasso_*'"
+                )
+            if self.relation is not PicassoRelation.WRAPS:
+                raise ValueError(
+                    f"{self.name}: picasso-set modules must WRAP a picasso "
+                    "symbol"
+                )
 
 
 def _s(
@@ -172,7 +270,10 @@ def _s(
     picasso_symbol=None,
     outpost=False,
     scopes=(Scope.SINGLE,),
+    experimental=False,
     summary="",
+    module_set="native",
+    params=None,
 ):
     """Terse constructor: accepts iterables, freezes them into a ModuleSpec."""
     return ModuleSpec(
@@ -186,7 +287,10 @@ def _s(
         picasso_symbol=picasso_symbol,
         outpost=outpost,
         scopes=frozenset(scopes),
+        experimental=experimental,
         summary=summary,
+        module_set=module_set,
+        params=params,
     )
 
 
@@ -199,7 +303,9 @@ N = PicassoRelation.NATIVE
 
 
 # ---------------------------------------------------------------------------
-# The registry. One entry per module in AbstractModuleCollection (59 total).
+# The registry. One entry per module in AbstractModuleCollection (59 total),
+# plus the picasso-set modules (module_set="picasso", implemented in
+# picasso_workflow/picasso_set/).
 # ---------------------------------------------------------------------------
 _SPECS = [
     # --- plumbing / control flow -------------------------------------------
@@ -253,6 +359,19 @@ _SPECS = [
         relation=N,
         scopes=_BOTH,
         summary="Generate a random value and test plot for debugging.",
+    ),
+    _s(
+        "plugin",
+        relation=E,
+        picasso_symbol="picasso.plugins.load_api_plugins",
+        scopes=_SINGLE,
+        # Hidden from the GUI palette until the picasso plugin ecosystem
+        # ships PICASSO_API plugins to drive it (no API plugins exist yet).
+        # Still dispatchable from a workflow and covered by unit tests, so it
+        # stays green in CI and the module contract cannot drift.
+        experimental=True,
+        summary="Call an installed, enabled picasso API plugin "
+        "(PICASSO_API export).",
     ),
     # --- loaders ------------------------------------------------------------
     _s(
@@ -366,16 +485,6 @@ _SPECS = [
         picasso_symbol="picasso.aim.aim",
         scopes=_SINGLE,
         summary="Undrift localized data using the AIM algorithm.",
-    ),
-    _s(
-        "undrift_rsso",
-        requires=["locs"],
-        provides=["locs_undrifted", "drift"],
-        role="undrift",
-        relation=E,
-        outpost=True,
-        scopes=_SINGLE,
-        summary="Undrift localized data using iterative RSSO drift correction.",
     ),
     _s(
         "undrift_from_picked",
@@ -505,28 +614,12 @@ _SPECS = [
     ),
     # --- Ripley's K ---------------------------------------------------------
     _s(
-        "ripleysk",
-        requires=["locs_undrifted"],
-        provides=["ripleys_k", "report_items"],
-        relation=E,
-        scopes=_BOTH,
-        summary="Compute Ripley's K spatial statistics for the dataset.",
-    ),
-    _s(
         "ripleysk2",
         requires=["locs_undrifted"],
         provides=["ripleys_k", "report_items"],
         relation=E,
         scopes=_BOTH,
         summary="Compute Ripley's K statistics (second implementation).",
-    ),
-    _s(
-        "ripleysk_average",
-        requires=["ripleys_k"],
-        provides=["ripleys_k", "report_items"],
-        relation=E,
-        scopes=_AGG,
-        summary="Average Ripley's K curves across datasets.",
     ),
     _s(
         "ripleysk_average2",
@@ -690,6 +783,7 @@ _SPECS = [
         "save_single_dataset",
         requires=["locs", "locs_undrifted"],
         provides=["saved_dataset"],
+        role="saver",
         relation=W,
         picasso_symbol="picasso.io.save_locs",
         scopes=_SINGLE,
@@ -745,10 +839,465 @@ _SPECS = [
         "save_datasets_aggregated",
         requires=["dataset_collection"],
         provides=["saved_dataset"],
+        role="saver",
         relation=N,
         scopes=_AGG,
         summary="Save data of all single-dataset workflows in an aggregation.",
     ),
+    # --- picasso-set: 1:1 recapitulation of native picasso ------------------
+    # These modules mirror picasso CLI commands / library calls with the
+    # exact picasso parameter names and defaults. They are implemented in
+    # picasso_workflow/picasso_set/ (not in AbstractModuleCollection) and
+    # carry their GUI parameter schema in `params`. Summaries come from the
+    # same source (picasso_set.params) as the schemas.
+    _s(
+        "picasso_localize",
+        requires=["raw_movie"],
+        provides=["locs"],
+        relation=W,
+        picasso_symbol="picasso.localize.localize",
+        scopes=_SINGLE,
+        summary=PICASSO_SET_SUMMARIES["picasso_localize"],
+        module_set="picasso",
+        params=PICASSO_SET_PARAMS["picasso_localize"],
+    ),
+    _s(
+        "picasso_undrift_rcc",
+        requires=["locs"],
+        provides=["locs_undrifted", "drift"],
+        role="undrift",
+        relation=W,
+        picasso_symbol="picasso.postprocess.undrift",
+        scopes=_SINGLE,
+        summary=PICASSO_SET_SUMMARIES["picasso_undrift_rcc"],
+        module_set="picasso",
+        params=PICASSO_SET_PARAMS["picasso_undrift_rcc"],
+    ),
+    _s(
+        "picasso_undrift_aim",
+        requires=["locs"],
+        provides=["locs_undrifted", "drift"],
+        role="undrift",
+        relation=W,
+        picasso_symbol="picasso.aim.aim",
+        scopes=_SINGLE,
+        summary=PICASSO_SET_SUMMARIES["picasso_undrift_aim"],
+        module_set="picasso",
+        params=PICASSO_SET_PARAMS["picasso_undrift_aim"],
+    ),
+    _s(
+        "picasso_undrift_fiducials",
+        requires=["locs"],
+        provides=["locs_undrifted", "drift"],
+        role="undrift",
+        relation=W,
+        picasso_symbol="picasso.postprocess.undrift_from_fiducials",
+        scopes=_SINGLE,
+        summary=PICASSO_SET_SUMMARIES["picasso_undrift_fiducials"],
+        module_set="picasso",
+        params=PICASSO_SET_PARAMS["picasso_undrift_fiducials"],
+    ),
+    _s(
+        "picasso_link",
+        requires=["locs_undrifted"],
+        provides=["locs"],
+        relation=W,
+        picasso_symbol="picasso.postprocess.link",
+        scopes=_SINGLE,
+        summary=PICASSO_SET_SUMMARIES["picasso_link"],
+        module_set="picasso",
+        params=PICASSO_SET_PARAMS["picasso_link"],
+    ),
+    _s(
+        "picasso_dark",
+        requires=["locs"],
+        provides=["binding_kinetics"],
+        relation=W,
+        picasso_symbol="picasso.postprocess.compute_dark_times",
+        scopes=_SINGLE,
+        summary=PICASSO_SET_SUMMARIES["picasso_dark"],
+        module_set="picasso",
+        params=PICASSO_SET_PARAMS["picasso_dark"],
+    ),
+    _s(
+        "picasso_groupprops",
+        requires=["locs"],
+        provides=["binding_kinetics", "saved_dataset"],
+        relation=W,
+        picasso_symbol="picasso.postprocess.groupprops",
+        scopes=_SINGLE,
+        summary=PICASSO_SET_SUMMARIES["picasso_groupprops"],
+        module_set="picasso",
+        params=PICASSO_SET_PARAMS["picasso_groupprops"],
+    ),
+    _s(
+        "picasso_density",
+        requires=["locs_undrifted"],
+        provides=["density"],
+        relation=W,
+        picasso_symbol="picasso.postprocess.compute_local_density",
+        scopes=_SINGLE,
+        summary=PICASSO_SET_SUMMARIES["picasso_density"],
+        module_set="picasso",
+        params=PICASSO_SET_PARAMS["picasso_density"],
+    ),
+    _s(
+        "picasso_pair_correlation",
+        requires=["locs_undrifted"],
+        provides=["report_items"],
+        relation=W,
+        picasso_symbol="picasso.postprocess.pair_correlation",
+        scopes=_SINGLE,
+        summary=PICASSO_SET_SUMMARIES["picasso_pair_correlation"],
+        module_set="picasso",
+        params=PICASSO_SET_PARAMS["picasso_pair_correlation"],
+    ),
+    _s(
+        "picasso_dbscan",
+        requires=["locs_undrifted"],
+        provides=["clusters"],
+        role="clusterer",
+        relation=W,
+        picasso_symbol="picasso.clusterer.dbscan",
+        scopes=_SINGLE,
+        summary=PICASSO_SET_SUMMARIES["picasso_dbscan"],
+        module_set="picasso",
+        params=PICASSO_SET_PARAMS["picasso_dbscan"],
+    ),
+    _s(
+        "picasso_hdbscan",
+        requires=["locs_undrifted"],
+        provides=["clusters"],
+        role="clusterer",
+        relation=W,
+        picasso_symbol="picasso.clusterer.hdbscan",
+        scopes=_SINGLE,
+        summary=PICASSO_SET_SUMMARIES["picasso_hdbscan"],
+        module_set="picasso",
+        params=PICASSO_SET_PARAMS["picasso_hdbscan"],
+    ),
+    _s(
+        "picasso_smlm_cluster",
+        requires=["locs_undrifted"],
+        provides=["clusters"],
+        role="clusterer",
+        relation=W,
+        picasso_symbol="picasso.clusterer.cluster",
+        scopes=_SINGLE,
+        summary=PICASSO_SET_SUMMARIES["picasso_smlm_cluster"],
+        module_set="picasso",
+        params=PICASSO_SET_PARAMS["picasso_smlm_cluster"],
+    ),
+    _s(
+        "picasso_nneighbor",
+        requires=["clusters"],
+        provides=["nn_distances"],
+        relation=W,
+        picasso_symbol="picasso.__main__._nneighbor",
+        scopes=_SINGLE,
+        summary=PICASSO_SET_SUMMARIES["picasso_nneighbor"],
+        module_set="picasso",
+        params=PICASSO_SET_PARAMS["picasso_nneighbor"],
+    ),
+    _s(
+        "picasso_clusterfilter",
+        requires=["locs", "clusters"],
+        provides=["locs", "saved_dataset"],
+        relation=W,
+        picasso_symbol="picasso.__main__._clusterfilter",
+        scopes=_SINGLE,
+        summary=PICASSO_SET_SUMMARIES["picasso_clusterfilter"],
+        module_set="picasso",
+        params=PICASSO_SET_PARAMS["picasso_clusterfilter"],
+    ),
+    _s(
+        "picasso_cluster_combine",
+        requires=["clusters"],
+        provides=["locs"],
+        relation=W,
+        picasso_symbol="picasso.postprocess.cluster_combine",
+        scopes=_SINGLE,
+        summary=PICASSO_SET_SUMMARIES["picasso_cluster_combine"],
+        module_set="picasso",
+        params=PICASSO_SET_PARAMS["picasso_cluster_combine"],
+    ),
+    _s(
+        "picasso_cluster_combine_dist",
+        requires=["clusters"],
+        provides=["locs", "nn_distances"],
+        relation=W,
+        picasso_symbol="picasso.postprocess.cluster_combine_dist",
+        scopes=_SINGLE,
+        summary=PICASSO_SET_SUMMARIES["picasso_cluster_combine_dist"],
+        module_set="picasso",
+        params=PICASSO_SET_PARAMS["picasso_cluster_combine_dist"],
+    ),
+    _s(
+        "picasso_g5m",
+        requires=["clusters"],
+        provides=["locs", "saved_dataset"],
+        relation=W,
+        picasso_symbol="picasso.g5m.g5m",
+        scopes=_SINGLE,
+        summary=PICASSO_SET_SUMMARIES["picasso_g5m"],
+        module_set="picasso",
+        params=PICASSO_SET_PARAMS["picasso_g5m"],
+    ),
+    _s(
+        "picasso_render",
+        requires=["locs_undrifted"],
+        provides=["render_image"],
+        relation=W,
+        picasso_symbol="picasso.render.render",
+        scopes=_SINGLE,
+        summary=PICASSO_SET_SUMMARIES["picasso_render"],
+        module_set="picasso",
+        params=PICASSO_SET_PARAMS["picasso_render"],
+    ),
+    _s(
+        "picasso_align",
+        provides=["saved_dataset"],
+        relation=W,
+        picasso_symbol="picasso.postprocess.align",
+        scopes=_SINGLE,
+        summary=PICASSO_SET_SUMMARIES["picasso_align"],
+        module_set="picasso",
+        params=PICASSO_SET_PARAMS["picasso_align"],
+    ),
+    _s(
+        "picasso_join",
+        # like load_dataset_localizations: joined saved files are assumed
+        # finished (drift-corrected) products
+        provides=["locs", "locs_undrifted"],
+        relation=W,
+        picasso_symbol="picasso.lib.merge_locs",
+        scopes=_SINGLE,
+        summary=PICASSO_SET_SUMMARIES["picasso_join"],
+        module_set="picasso",
+        params=PICASSO_SET_PARAMS["picasso_join"],
+    ),
+    # --- picasso-set tier 2: pick-based postprocessing ----------------------
+    # Picks enter as a picks_file parameter (external file or a prior
+    # module's result), so the `picks` capability is optional, not required.
+    _s(
+        "picasso_picked_locs",
+        requires=["locs"],
+        optional=["picks"],
+        provides=["locs"],
+        relation=W,
+        picasso_symbol="picasso.postprocess.picked_locs",
+        scopes=_SINGLE,
+        summary=PICASSO_SET_SUMMARIES["picasso_picked_locs"],
+        module_set="picasso",
+        params=PICASSO_SET_PARAMS["picasso_picked_locs"],
+    ),
+    _s(
+        "picasso_pick_similar",
+        requires=["locs"],
+        optional=["picks"],
+        provides=["picks"],
+        relation=W,
+        picasso_symbol="picasso.postprocess.pick_similar",
+        scopes=_SINGLE,
+        summary=PICASSO_SET_SUMMARIES["picasso_pick_similar"],
+        module_set="picasso",
+        params=PICASSO_SET_PARAMS["picasso_pick_similar"],
+    ),
+    _s(
+        "picasso_remove_locs_in_picks",
+        requires=["locs"],
+        optional=["picks"],
+        provides=["locs"],
+        relation=W,
+        picasso_symbol="picasso.postprocess.remove_locs_in_picks",
+        scopes=_SINGLE,
+        summary=PICASSO_SET_SUMMARIES["picasso_remove_locs_in_picks"],
+        module_set="picasso",
+        params=PICASSO_SET_PARAMS["picasso_remove_locs_in_picks"],
+    ),
+    _s(
+        "picasso_pick_properties",
+        requires=["locs"],
+        optional=["picks"],
+        provides=["binding_kinetics", "saved_dataset"],
+        relation=W,
+        picasso_symbol="picasso.postprocess.pick_properties",
+        scopes=_SINGLE,
+        summary=PICASSO_SET_SUMMARIES["picasso_pick_properties"],
+        module_set="picasso",
+        params=PICASSO_SET_PARAMS["picasso_pick_properties"],
+    ),
+    _s(
+        "picasso_pick_kinetics",
+        requires=["locs"],
+        optional=["picks"],
+        provides=["locs", "binding_kinetics"],
+        relation=W,
+        picasso_symbol="picasso.postprocess.pick_kinetics",
+        scopes=_SINGLE,
+        summary=PICASSO_SET_SUMMARIES["picasso_pick_kinetics"],
+        module_set="picasso",
+        params=PICASSO_SET_PARAMS["picasso_pick_kinetics"],
+    ),
+    _s(
+        "picasso_fret",
+        provides=["fret_results", "saved_dataset"],
+        relation=W,
+        picasso_symbol="picasso.postprocess.calculate_fret",
+        scopes=_SINGLE,
+        summary=PICASSO_SET_SUMMARIES["picasso_fret"],
+        module_set="picasso",
+        params=PICASSO_SET_PARAMS["picasso_fret"],
+    ),
+    _s(
+        "picasso_mask_locs",
+        requires=["locs_undrifted"],
+        provides=["locs", "mask"],
+        relation=W,
+        picasso_symbol="picasso.masking.mask_locs",
+        scopes=_SINGLE,
+        summary=PICASSO_SET_SUMMARIES["picasso_mask_locs"],
+        module_set="picasso",
+        params=PICASSO_SET_PARAMS["picasso_mask_locs"],
+    ),
+    _s(
+        "picasso_nena",
+        requires=["locs"],
+        provides=["resolution"],
+        relation=W,
+        picasso_symbol="picasso.postprocess.nena",
+        scopes=_SINGLE,
+        summary=PICASSO_SET_SUMMARIES["picasso_nena"],
+        module_set="picasso",
+        params=PICASSO_SET_PARAMS["picasso_nena"],
+    ),
+    _s(
+        "picasso_frc",
+        requires=["locs_undrifted"],
+        provides=["resolution"],
+        relation=W,
+        picasso_symbol="picasso.postprocess.frc",
+        scopes=_SINGLE,
+        summary=PICASSO_SET_SUMMARIES["picasso_frc"],
+        module_set="picasso",
+        params=PICASSO_SET_PARAMS["picasso_frc"],
+    ),
+    # --- picasso-set tier 3: calibration & 3D -------------------------------
+    # File-in/file-out calibration steps (except zfit); their calibration
+    # files feed picasso_localize / picasso_zfit via result references.
+    _s(
+        "picasso_zfit",
+        requires=["locs"],
+        optional=["z_calibration"],
+        provides=["locs_z"],
+        relation=W,
+        picasso_symbol="picasso.zfit.zfit",
+        scopes=_SINGLE,
+        summary=PICASSO_SET_SUMMARIES["picasso_zfit"],
+        module_set="picasso",
+        params=PICASSO_SET_PARAMS["picasso_zfit"],
+    ),
+    _s(
+        "picasso_calibrate_z",
+        requires=["locs"],
+        provides=["z_calibration"],
+        relation=W,
+        picasso_symbol="picasso.zfit.calibrate_z",
+        scopes=_SINGLE,
+        summary=PICASSO_SET_SUMMARIES["picasso_calibrate_z"],
+        module_set="picasso",
+        params=PICASSO_SET_PARAMS["picasso_calibrate_z"],
+    ),
+    _s(
+        "picasso_camera_calibrate",
+        provides=["camera_calibration"],
+        relation=W,
+        picasso_symbol="picasso.scmos.calibrate_scmos",
+        scopes=_SINGLE,
+        summary=PICASSO_SET_SUMMARIES["picasso_camera_calibrate"],
+        module_set="picasso",
+        params=PICASSO_SET_PARAMS["picasso_camera_calibrate"],
+    ),
+    _s(
+        "picasso_camera_validate",
+        optional=["camera_calibration"],
+        provides=["report_items"],
+        relation=W,
+        picasso_symbol="picasso.scmos.validate_calibration",
+        scopes=_SINGLE,
+        summary=PICASSO_SET_SUMMARIES["picasso_camera_validate"],
+        module_set="picasso",
+        params=PICASSO_SET_PARAMS["picasso_camera_validate"],
+    ),
+    _s(
+        "picasso_spline_calibrate",
+        provides=["spline_calibration"],
+        relation=W,
+        picasso_symbol="picasso.spline.calibrate_spline",
+        scopes=_SINGLE,
+        summary=PICASSO_SET_SUMMARIES["picasso_spline_calibrate"],
+        module_set="picasso",
+        params=PICASSO_SET_PARAMS["picasso_spline_calibrate"],
+    ),
+    _s(
+        "picasso_lateral_calibrate",
+        provides=["saved_dataset"],
+        relation=W,
+        picasso_symbol="picasso.localize.fit_lateral_transform",
+        scopes=_SINGLE,
+        summary=PICASSO_SET_SUMMARIES["picasso_lateral_calibrate"],
+        module_set="picasso",
+        params=PICASSO_SET_PARAMS["picasso_lateral_calibrate"],
+    ),
+    # --- picasso-set tier 4: format converters -------------------------------
+    # Importers load a foreign-format file as the current dataset (like
+    # load_dataset_localizations, an imported file is a finished product);
+    # exporters convert the current locs (or an explicit file) to a foreign
+    # format.
+    _s(
+        "picasso_csv2hdf",
+        provides=["locs", "locs_undrifted", "converted_file"],
+        role="loader",
+        relation=W,
+        picasso_symbol="picasso.io.import_ts",
+        scopes=_SINGLE,
+        summary=PICASSO_SET_SUMMARIES["picasso_csv2hdf"],
+        module_set="picasso",
+        params=PICASSO_SET_PARAMS["picasso_csv2hdf"],
+    ),
+    _s(
+        "picasso_smap2hdf",
+        provides=["locs", "locs_undrifted", "converted_file"],
+        role="loader",
+        relation=W,
+        picasso_symbol="picasso.io.import_smap",
+        scopes=_SINGLE,
+        summary=PICASSO_SET_SUMMARIES["picasso_smap2hdf"],
+        module_set="picasso",
+        params=PICASSO_SET_PARAMS["picasso_smap2hdf"],
+    ),
+]
+_SPECS += [
+    _s(
+        _name,
+        requires=["locs"],
+        provides=["converted_file"],
+        relation=W,
+        picasso_symbol=_symbol,
+        scopes=_SINGLE,
+        summary=PICASSO_SET_SUMMARIES[_name],
+        module_set="picasso",
+        params=PICASSO_SET_PARAMS[_name],
+    )
+    for _name, _symbol in [
+        ("picasso_hdf2csv", "picasso.__main__._hdf2csv"),
+        ("picasso_hdf2ts", "picasso.io.export_thunderstorm"),
+        ("picasso_hdf2imagej", "picasso.io.export_txt_imagej"),
+        ("picasso_hdf2nis", "picasso.io.export_txt_nis"),
+        ("picasso_hdf2chimera", "picasso.io.export_xyz_chimera"),
+        ("picasso_hdf2visp", "picasso.io.export_3d_visp"),
+        ("picasso_hdf2smap", "picasso.io.export_smap"),
+    ]
 ]
 
 MODULE_REGISTRY: dict[str, ModuleSpec] = {}
@@ -879,15 +1428,32 @@ def _validate_branch_step(i, params, scope, registry, available):
     ``branch_modules`` are validated starting from the trunk's current
     capabilities (so they can see the shared prefix); their ``provides`` are
     kept branch-local and do not leak back to the trunk. ``join_modules`` are
-    then validated with ``branches`` added. A runtime (mask-component) split
-    requires a ``mask`` capability from an earlier module.
+    then validated with ``branches`` added. A runtime branch requires a
+    ``branch_over`` value/command (its resolved length sets the branch count).
     """
     errors = []
 
-    if params.get("branch_type") == "runtime" and "mask" not in available:
+    branch_type = params.get("branch_type")
+    if branch_type not in ("explicit", "runtime"):
+        # Missing or unknown (e.g. the removed "screen"): AutoPicasso.branch
+        # would KeyError / ValueError at run time after the prefix ran, so
+        # reject it here instead.
         errors.append(
-            f"[{i}.branch] runtime split requires a 'mask' from an earlier "
-            "module (e.g. create_mask2)"
+            f"[{i}.branch] branch_type must be 'explicit' or 'runtime' "
+            f"(got {branch_type!r})"
+        )
+    elif branch_type == "runtime" and params.get("branch_over") is None:
+        errors.append(
+            f"[{i}.branch] runtime branch requires 'branch_over' (a value or "
+            "command that resolves to a list; its length sets the branch count)"
+        )
+    elif branch_type == "explicit" and (
+        params.get("n_branches") is None
+        and params.get("branch_labels") is None
+    ):
+        errors.append(
+            f"[{i}.branch] explicit branch requires 'n_branches' or "
+            "'branch_labels'"
         )
 
     # branch_modules see the shared-prefix capabilities (available); their
@@ -907,3 +1473,116 @@ def _validate_branch_step(i, params, scope, registry, available):
     errors.extend(e.replace("[", f"[{i}.join.", 1) for e in join_errors)
 
     return errors
+
+
+def _branch_trunk_requires(params, registry) -> frozenset[str]:
+    """Capabilities a ``branch`` step's sub-workflows need from the trunk.
+
+    A nested module's requirement counts only if no earlier module of the
+    same sub-workflow provides it (mirroring how the branch executes its
+    sub-modules in order on the trunk state).
+
+    Parameters
+    ----------
+    params : dict
+        The branch step's parameters (``branch_modules``/``join_modules``).
+    registry : dict[str, ModuleSpec]
+        Registry to look nested modules up in.
+
+    Returns
+    -------
+    frozenset[str]
+        The capabilities required from outside the branch.
+    """
+    needed: set[str] = set()
+    for key in ("branch_modules", "join_modules"):
+        provided: set[str] = set()
+        for step in params.get(key) or []:
+            spec = registry.get(_step_name(step))
+            if spec is None:
+                continue
+            needed |= spec.requires - provided
+            provided |= spec.provides
+    return frozenset(needed)
+
+
+def restart_conflicts(
+    steps, restart_index: int, lost_capabilities=None, registry=None
+) -> tuple[list[str], list[str]]:
+    """Check whether restarting a workflow mid-way runs against lost state.
+
+    Used by the checkpoint-aware resume: when a workflow is restarted at
+    ``restart_index``, every module from there to the end executes in the
+    resumed run. Any of them requiring a capability from
+    ``lost_capabilities`` that was produced *before* the restart point (and
+    is not re-produced within the re-run range) is guaranteed to run
+    against missing state.
+
+    Parameters
+    ----------
+    steps : iterable
+        Ordered workflow steps in any format accepted by
+        :func:`validate_workflow`. ``branch`` steps are inspected
+        recursively: their sub-workflows' unmet requirements count as
+        requirements of the branch step itself.
+    restart_index : int
+        Index of the first module that will be executed; everything before
+        it is skipped.
+    lost_capabilities : frozenset[str], optional
+        The capabilities considered lost at the restart point. Defaults to
+        ``MEMORY_ONLY_CAPABILITIES | LOCS_STATE_CAPABILITIES`` (nothing
+        restored); a caller restoring a checkpoint passes the memory-only
+        set plus whatever locs state the checkpoint does not cover.
+    registry : dict[str, ModuleSpec], optional
+        Registry to check against. Defaults to :data:`MODULE_REGISTRY`.
+
+    Returns
+    -------
+    hard : list[str]
+        Required-capability conflicts -- the restart point is not viable.
+    soft : list[str]
+        Advisory messages: lost ``optional`` inputs and modules unknown to
+        the registry (best-effort specs).
+    """
+    if registry is None:
+        registry = MODULE_REGISTRY
+    if lost_capabilities is None:
+        lost_capabilities = MEMORY_ONLY_CAPABILITIES | LOCS_STATE_CAPABILITIES
+    producers: dict[str, int] = {}
+    hard: list[str] = []
+    soft: list[str] = []
+    for i, step in enumerate(steps):
+        name = _step_name(step)
+        spec = registry.get(name)
+        if i >= restart_index:
+            if spec is None:
+                soft.append(
+                    f"[{i}] unknown module '{name}': cannot verify "
+                    "in-memory requirements"
+                )
+            else:
+                requires = spec.requires
+                if name == "branch":
+                    requires = requires | _branch_trunk_requires(
+                        _step_params(step), registry
+                    )
+                for cap in sorted(requires & lost_capabilities):
+                    p = producers.get(cap)
+                    if p is not None and p < restart_index:
+                        hard.append(
+                            f"[{i}] {name} requires in-memory '{cap}' "
+                            f"produced at [{p}], before the restart point "
+                            f"[{restart_index}]"
+                        )
+                for cap in sorted(spec.optional & lost_capabilities):
+                    p = producers.get(cap)
+                    if p is not None and p < restart_index:
+                        soft.append(
+                            f"[{i}] {name} optionally uses in-memory "
+                            f"'{cap}' produced at [{p}], before the restart "
+                            f"point [{restart_index}]"
+                        )
+        if spec is not None:
+            for cap in spec.provides:
+                producers[cap] = i
+    return hard, soft

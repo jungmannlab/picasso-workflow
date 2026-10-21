@@ -85,6 +85,771 @@ This file was started after v0.5.6; earlier history is in the git log.
   `matplotlib>=3.10.7,<4`. `PyQt6` / `PyQt6-WebEngine` were already synced to the
   anchor and the `picassosr` line is untouched. Full test suite green under
   numpy 2.
+- **`[binding-events]` optional extra** (`lmfit`, `pandarallel`) for the
+  `binding_event_analysis` workflow module. Its code is imported lazily, so the
+  deps are only needed when that module runs: `pip install -e ".[binding-events]"`.
+- **Phase 2 outpost scaffold** (`picasso_workflow/outpost/`): a `MANIFEST.md`
+  that tracks the migration of picasso-adjacent code (`picasso_outpost.py` +
+  `outpost_modules/`) into feature-focused submodules, with a per-feature status
+  (`keep` / `dedup` / `promote` / `extend-up` / `delete`), upstream target, and
+  readiness — the burndown for upstreaming the genuinely-novel parts into
+  picasso and deleting the parts picasso ≥ 0.12 now provides.
+
+### Removed
+
+- **`undrift_rsso` drift module retired.** The RSSO (Redundant Spot Shift
+  Overrepresentation) point-space drift method was never performant, so it is
+  removed entirely: the 6.5k-line `outpost_modules/undrift_rsso.py`, the
+  `undrift_rsso` method and its ~17 drift helpers in `analyse.py`, and the
+  corresponding `ConfluenceReporter`, `AbstractModuleCollection` (`util`),
+  `modulespec` registry, and `gui` builder entries, plus its unit tests and the
+  `test_z_integration` skip-set entry. The three other drift methods
+  (`undrift_rcc`, `undrift_aim`, `undrift_from_picked`) are unaffected, as is the
+  unrelated RSSO-based *channel alignment* (`picasso_outpost.align_by_rsso`),
+  which is a different feature. Workflows that referenced the `undrift_rsso`
+  module will no longer validate — use `undrift_aim` or `undrift_rcc` instead.
+- **Legacy `ripleysk` / `ripleysk_average` Ripley modules + `ripleys_analysis`
+  subpackage retired.** The original Ripley's-K pair (backed by the separate
+  `ripleys_analysis/` subpackage: `run_ripleysAnalysis`, `ripleysModule`,
+  `dataModule`, `maskModule`) was superseded by `ripleysk2` / `ripleysk_average2`
+  (which run on `outpost/spatial_stats/ripleys`). Removed the subpackage, the two
+  `AutoPicasso` methods (plus the long-commented `ripleysk_rafal`), and the
+  matching `ConfluenceReporter`, `AbstractModuleCollection` (`util`),
+  `modulespec`, and `gui` entries, plus their tests. The surviving `ripleysk2` /
+  `ripleysk_average2` and the shared `_plot_ripleys_integrals` /
+  `_find_ripleys_significant` helpers are unchanged. Workflows using `ripleysk`
+  or `ripleysk_average` should switch to the `…2` variants.
+- **Dead SPINNA / NN modules** (`spinna.py`, `spinna_io.py`, `spinna_main.py`,
+  `spinna_mle.py`, `spinna_mle_2.py`, `nn_redistribution.py`): gitignored
+  local experiments that were never committed and are imported nowhere (the
+  workflow's SPINNA runs through `picasso.spinna`). Removed from disk and the
+  now-stale `.gitignore`, flake8 `extend-exclude`, and picasso-import-lint
+  allowlist references cleaned up.
+- **`outpost_modules/g5m.py`**: a fully commented-out dead copy; the live `g5m`
+  comes from `picasso.g5m` through the boundary.
+
+- **picasso early-warning CI** (`.github/workflows/picasso-early-warning.yml`):
+  a scheduled (weekly) + manual, non-gating job that runs the picasso contract
+  test and the unit tier against the **latest upstream `picassosr`** (pre-
+  releases included, past our pin ceiling). An upstream API change surfaces here
+  as a red run before the pin is bumped, rather than silently on the cluster.
+- **Signature-level picasso contract**: the contract test now also asserts the
+  *parameter names* picasso-workflow passes to key picasso functions
+  (`io.save_locs` / `load_locs` / `load_movie`, `postprocess.undrift`) via a new
+  `SIGNATURE_CONTRACT` in `_picasso_api.py` — catching a parameter rename, not
+  just a symbol removal.
+- **`coverage` added to the `[dev]` extra** so `run-unittests.yml`'s
+  `python -m coverage` steps have the module after `pip install -e ".[dev]"`.
+- **Declared picasso API boundary** (`picasso_workflow/_picasso_api.py`): a
+  single module recording the picasso surface picasso-workflow depends on, with
+  guarded accessors for the private `picasso.__main__` symbols
+  (`_FIT_METHOD_MAP`, `_spinna_batch_analysis`) that the localisation core and
+  the SPINNA aggregation path reach into. A new unit-tier contract test
+  (`tests/test_picasso_contract.py`) asserts that surface against the installed
+  `picassosr`, so an upstream rename or removal fails loudly in CI instead of
+  silently at runtime on the cluster.
+- **Generic `plugin` module** bridging to the **Python-API entry point**
+  (`PICASSO_API`) of the picasso (≥ 0.11) plugin system. A single-dataset
+  workflow step can call any installed, *enabled* `PICASSO_API` export via
+  `("plugin", {"api_name": ..., "kwargs": {...}, "inject": ["locs", "info",
+  "movie"]})`. Workflow state is injected as opt-in keyword arguments; a `dict`
+  return may update `locs`/`info` and contribute `report`/`files` to the
+  Confluence/HTML report. Only plugins the user has already enabled are visible
+  (picasso's opt-in trust model is honoured). Note: plugins in the official
+  registry are currently GUI plugins (`class Plugin`) and do not expose
+  `PICASSO_API`, so this module targets API-style plugins (see README "Picasso
+  plugins"). **Merged as experimental and hidden from the GUI module palette**
+  (`ModuleSpec.experimental=True`) until API plugins exist to test it against;
+  still dispatchable from a workflow and covered by unit tests so it stays
+  green in CI. Un-set the flag to surface it.
+
+### Changed
+
+- **Dedup — private `otsu()` → `picasso.masking.threshold_otsu`.** Three
+  byte-identical private copies of Otsu's-threshold (`outpost/masking/mask.py`,
+  `outpost/spatial_stats/ripleys.py`,
+  `outpost/spatial_stats/ripley_dcatlas_analysis.py`) were the seed for the
+  public `threshold_otsu` picasso now ships; all three were deleted and their
+  callers rewired to `picasso.masking.threshold_otsu` through the `_picasso_api`
+  boundary. A new equivalence test (`test_otsu_threshold_matches_upstream`) pins
+  that the upstream threshold matches the removed fork (max abs diff 0 over
+  random bimodal images). Behaviour unchanged. The correct upstream is the
+  scalar `threshold_otsu`, not `mask_image(method="otsu")` — the callers scale
+  the threshold (`otsu(x) * k`), they don't want a mask.
+- **S4b — `dbscan_molint/` backend folded under `outpost/clustering/`.** The
+  top-level `picasso_workflow/dbscan_molint/` subpackage (`dbscan`, `mask`,
+  `output_metrics`, `io`) — the DBSCAN molecular-interaction backend behind the
+  `molint` analysis extracted in S4 — moved to
+  `picasso_workflow/outpost/clustering/dbscan_molint/`, so the whole feature now
+  lives under its `outpost/<feature>/` home. Pure `git mv`: the one internal
+  import and the deferred importers in `analyse.py` and `outpost/clustering/
+  molint.py` were repointed; import timing and behaviour are unchanged.
+- **Monolith split S9 (final) — report histogram helpers →
+  `outpost/reporting/`; `picasso_outpost.py` deleted.** The last two functions
+  in the monolith, `plot_1dhist` / `plot_2dhist`, moved to
+  `outpost/reporting/histograms.py` (needs only `numpy` + `matplotlib` +
+  `lib`); `analyse.py`'s two call sites repointed via a `reporting_hist` alias.
+  With nothing left, **`picasso_outpost.py` (7579 lines at its peak) is
+  removed** — the Phase 2 monolith split (S1–S9) is complete, with every feature
+  now in its own `outpost/<feature>/` module. Stale `picasso_outpost` docstring
+  references in `util.py`, `gui.py`, `modulespec.py`, and `_picasso_api.py`
+  repointed to the functions' new homes. Behaviour unchanged.
+- **Monolith split S8 — DNA-origami picking → `outpost/origami/`.** The largest
+  slice (−1686 lines): the entire origami cluster (`OrigamiTemplate` + the
+  grid/design-file/site template builders, the kinetics simulation
+  `simulate_origami_nlocs_rmsd` / `origami_phase_space_preview`, the structure-
+  and lattice-defect descriptors and their clustering, and the `pick_origami`
+  orchestrator) moved out of `picasso_outpost.py` into
+  `outpost/origami/origami.py`. It imports the `pick_similar` family from
+  `outpost/picks` and the correspondence-free registration from
+  `outpost/registration` directly, so **both temporary forward-imports the
+  monolith carried (from S6 and S7) are gone**. `analyse.py`, `gui.py`
+  (`origami_phase_space_preview`), and the `test_analyse` / `test_picasso_outpost`
+  references repointed; the now-orphaned sklearn / scipy / yaml / dataclass /
+  Counter imports removed from the monolith. This drains `picasso_outpost.py` to
+  just the two report-plot helpers (removed next). Behaviour unchanged.
+- **Monolith split S7 — correspondence-free ICP registration → `outpost/registration/`.**
+  The rigid point-set registration cluster (`register_to_template` + `_rigid_fit`
+  Kabsch / `_match_within_gate` Hungarian / `_icp_refine` / `_rotation_matrix`,
+  the DBSCAN docking-site sub-clustering `subcluster_docking_sites`, the
+  candidate helpers, and the shape descriptors `_elongation` /
+  `_radius_of_gyration`) moved out of `picasso_outpost.py` (−408 lines) into
+  `outpost/registration/icp.py` — isolating the `picasso.registration` promote
+  candidate from the origami orchestration. The shared `_median_nn_spacing`
+  geometry helper moved with it (register_to_template needs it); the module
+  imports `get_pick_similar_vals` from `outpost/picks` (one-way). The origami
+  cluster (still in the monolith until S8) forward-imports the names it uses; the
+  now-orphaned `linear_sum_assignment`/`DBSCAN` imports were removed from the
+  monolith. `test_picasso_outpost` repointed. No analyse coupling; behaviour
+  unchanged.
+- **Monolith split S6 — pick / fiducial processing → `outpost/picks/`.** The
+  pick-finding + fiducial-drift cluster (`pick_gold`, `picked_locs`,
+  `pick_similar` + the numba-jitted `pick_similar_analysis` path, `index_locs`,
+  `shift_from_picked`, `sort_picked_locs`, `_undrift_from_picked`,
+  `find_structures`, and helpers) moved out of `picasso_outpost.py` (−816 lines)
+  into `outpost/picks/picks.py`. The numba `_n_block_locs_at = get_internal(...)`
+  module-global dispatcher moved with it (nopython mode can't call `get_internal`
+  directly). `analyse.py`, `alignment/channels.py` (resolving S5's forward
+  import), and the `test_analyse` / `test_picasso_outpost` /
+  `test_outpost_dedup_equivalence` references repointed; the now-orphaned
+  `pandas`/`numba`/`postprocess`/`get_internal`/`OPTICS` imports removed from the
+  monolith. (The origami cluster, still in the monolith until S8, now imports the
+  `pick_similar` family from the new module.) Behaviour unchanged.
+- **Monolith split S5 — channel alignment + shift kernel → `outpost/alignment/`.**
+  The biggest slice (−1841 lines): the channel-alignment orchestration
+  (`align_channels`, `align_by_rcc`/`align_by_picked`/`align_by_rsso`,
+  `shift_from_rcc`, `plot_shift`, `_solve_optimal_shifts`) and the point-set
+  pairwise-shift estimation machinery (`_calculate_pairwise_shift` + peak-fit /
+  adaptive-bin / quality-metric helpers + shift-histogram plot savers) moved out
+  of `picasso_outpost.py` into a two-module `outpost/alignment/` package —
+  `channels.py` (orchestration, `keep`) and `shift_kernel.py` (the estimation
+  machinery; its numeric core is `picasso.imageprocess` promote candidate #2).
+  `analyse.py` and the `test_picasso_outpost` RSSO/align tests repointed; the
+  now-orphaned `plt`/`os`/`render`/`imageprocess` imports removed from the
+  monolith. Behaviour unchanged.
+- **Monolith split S4 — DBSCAN molecular-interaction analysis → `outpost/clustering/`.**
+  The DBSCAN-molint cluster (`DBSCAN_analysis`, `DBSCAN_analysis_pd`,
+  `_do_dbscan_molint`, `degree_of_clustering`, and the barcode /
+  interaction-graph / degree-of-clustering plots) moved out of
+  `picasso_outpost.py` (−996 lines) into `outpost/clustering/molint.py`.
+  `analyse.py` (`dbscan_molint`, `find_cluster_motifs`, `interaction_graph`,
+  7 call sites) repointed via a module alias import; the now-orphaned
+  `mlines`/`io`/`util`/`stats` imports removed from the monolith (sklearn
+  `DBSCAN` stays — the origami cluster still uses it). The `dbscan_molint/`
+  subpackage is unchanged (still used via deferred imports; folding it in is a
+  later step). Behaviour unchanged (`keep` — coupled to the molint report).
+- **Monolith split S3b/S3c — spot extraction → `outpost/spots/`, Zeiss import →
+  `outpost/formats/`.** Two small, unrelated `keep` clusters moved out of
+  `picasso_outpost.py` (−126 lines) into their own feature folders: spot cutting
+  (`get_spots`, `_cut_spots`, `_cut_spots_byrandomframe`, `normalize_spot`) →
+  `outpost/spots/extraction.py`, and Zeiss `.czi`→`.raw` conversion
+  (`convert_zeiss_file`) → `outpost/formats/zeiss.py`. `analyse`
+  (`convert_zeiss_movie`, `_draw_sample_spots`) + the `convert_zeiss_file`
+  `@patch` repointed. Behaviour unchanged.
+- **Monolith split S3 — SPINNA wrappers → `outpost/spinna/`.** The workflow-side
+  wrappers over `picasso.spinna` (`spinna_batch`, `single_spinna_run`,
+  `single_spinna_fit_le_run`, `screen_label_uncertainty`, `plot_spinna_nnd`,
+  `load_structures_from_dict`, `_plot_label_unc_scan`) moved out of
+  `picasso_outpost.py` (−706 lines) into `outpost/spinna/wrappers.py`. `analyse`
+  (9 call sites, via a module alias import) and the `test_analyse` mocks
+  (`@patch` targets + direct calls) repointed; the now-orphaned
+  `spinna`/`get_spinna_batch_analysis`/`glob`/`datetime` imports removed from the
+  monolith. Behaviour unchanged (`keep` — thin orchestration over
+  `picasso.spinna`, not an upstream candidate).
+- **Monolith split S2 — analytic CSR k-NN stats → `outpost/spatial_stats/`.**
+  The CSR nearest-neighbour-distance model + density MLE
+  (`nndistribution_from_csr`, `nndist_loglikelihood_csr`,
+  `estimate_density_from_neighbordists`, `csr_cdf_for_ks_test`,
+  `minimization_loglike`, `_check_distance_window`) moved out of
+  `picasso_outpost.py` (−383 lines) into
+  `outpost/spatial_stats/csr_knn.py` (self-contained numpy/scipy). `analyse.py`
+  (`fit_csr`) and `test_picasso_outpost.py` import sites updated; three
+  now-orphaned scipy imports removed from the monolith. Behaviour unchanged — a
+  genuine `picasso.postprocess` promote candidate, now isolated.
+- **Monolith split S1 — PPAC resolution → `outpost/resolution/`.** The
+  point-pattern-autocorrelation resolution estimator (`resolution_ppac` and
+  helpers, `analyse_resolution_ppac`) moved out of `picasso_outpost.py` (−512
+  lines) into `outpost/resolution/resolution_ppac.py` (self-contained; only
+  `numpy`/`scipy`). `analyse.py` and `test_picasso_outpost.py` import sites
+  updated; behaviour unchanged. The module is **flagged not promote-ready** — it
+  never performed well (rebuilds a `KDTree` per grid cell, O(G²·N log N)); the
+  module docstring records the fix (a one-pass displacement-vector histogram) to
+  apply before upstreaming. First step of the `picasso_outpost.py` split.
+- **Outpost restructure (binding-events slice).** `binding_event_analysis` and
+  `binding_event_plotting` moved from the flat `outpost_modules/` into a cohesive
+  `outpost/binding_events/` feature package (as `analysis`/`plotting`). The next
+  incremental `picasso_outpost` → `outpost/<feature>/` step (see
+  `outpost/MANIFEST.md`).
+- **Packaging: subpackages now ship in non-editable wheels.** Switched
+  `[tool.setuptools]` from the non-recursive `packages = ["picasso_workflow"]`
+  to `[tool.setuptools.packages.find]` (`include = ["picasso_workflow*"]`), so
+  every subpackage — `outpost/`, `outpost/resolution/`, `outpost_modules/`,
+  `picasso_set/`, `dbscan_molint/`, `ripleys_analysis/` — is declared and
+  included in a wheel/sdist. The old explicit list omitted them (a wheel install
+  could miss them; masked until now by editable installs), and future
+  `outpost/<feature>/` folders are now auto-included.
+- **Private picasso reach-ins routed through the boundary.** The four
+  attribute-level reach-ins into private picasso symbols
+  (`postprocess._pick_similar`, `postprocess._n_block_locs_at`,
+  `localize._to_photons`, `spinna._targets_from_structures`) now go through a
+  guarded `_picasso_api.get_internal(name)` accessor and are registered in
+  `INTERNAL_SYMBOLS`, consistent with the existing `_FIT_METHOD_MAP` /
+  `_spinna_batch_analysis` accessors. The contract test now verifies every
+  registered private symbol still resolves, so an upstream rename/removal of a
+  private symbol fails loudly in CI instead of silently on the cluster.
+- **Outpost restructure (first slice):** the resolution estimators moved from
+  the flat `outpost_modules/` into a cohesive `outpost/resolution/` feature
+  package (`resolution_frc`, `resolution_decorrelation`); import sites updated,
+  behaviour unchanged. First step of the incremental `picasso_outpost` →
+  `outpost/<feature>/` reorganisation tracked in `outpost/MANIFEST.md`.
+- **Outpost restructure (spatial-stats slice):** the Ripley's-K code (`ripleys`
+  and the DC-Atlas pipeline `ripley_dcatlas_analysis`) moved from the flat
+  `outpost_modules/` into `outpost/spatial_stats/`; `analyse.ripleysk2` and the
+  DC-Atlas module's internal import updated, `ripleys` dropped from
+  `outpost_modules/__init__.py`, behaviour unchanged. The separately-wired
+  legacy `ripleys_analysis/` subpackage is left for a later sub-slice. Guarded
+  by `tests/test_outpost_spatial_stats.py`.
+- **Outpost restructure (masking slice):** the `CellMask` cell-masking module
+  (`mask.py`: `CellMask` morphology/stats/CSR sampling + `otsu` +
+  `picassolocs_to_coords`) moved from the flat `outpost_modules/` into
+  `outpost/masking/`. `analyse.py` now imports `CellMask` directly at module
+  scope (the three call sites used only `CellMask`, and two assign to a local
+  `mask`, so importing the class avoids shadowing); `mask` dropped from
+  `outpost_modules/__init__.py`; the `tests/outpost_modules/test_mask.py` import
+  updated. Behaviour unchanged. Guarded by `tests/test_outpost_masking.py`.
+- **Outpost restructure (render slice):** the `render` matplotlib glue over
+  `picasso.render` (`plot_scene` + the scene renderers) moved from the flat
+  `outpost_modules/` into `outpost/render/`. Only the import line in `analyse.py`
+  changed (`from picasso_workflow.outpost.render import render`); the ~17
+  `render.*` call sites are unchanged. With this and the earlier slices,
+  `outpost_modules/` is down to a single remaining module (`undrift_rsso`).
+  Guarded by `tests/test_outpost_render.py`.
+- **Dedup to picasso 0.12 (batch 1):** call `spinna.generate_N_structures`
+  directly instead of through the redundant `picasso_outpost.generate_N_structures`
+  wrapper, which is removed. No behavioural change — no call site passed the
+  wrapper's `save` argument (which it silently dropped anyway). First step of the
+  outpost de-duplication tracked in `picasso_workflow/outpost/MANIFEST.md`.
+- **Dedup to picasso 0.12 (batch 2):** `picasso_outpost.picked_locs` now
+  delegates pick-finding to `picasso.postprocess.picked_locs` (circular picks,
+  radius = `pick_diameter / 2`), keeping the workflow's concatenated-DataFrame
+  + `group` + optional non-picked wrapper; the forked `get_block_locs_at` /
+  `locs_at` copies are removed. Verified membership- and group-identical to the
+  former in-house loop (only intra-frame row order differs, which is
+  semantically irrelevant for localizations) by a new
+  `tests/test_outpost_dedup_equivalence.py`.
+- **All production picasso imports now route through the boundary.** Every
+  `from picasso import ...` in picasso-workflow production code is now
+  `from picasso_workflow._picasso_api import ...` (the boundary lazily
+  re-exports the picasso surface via PEP 562 `__getattr__`, preserving the
+  original — often deferred — import timing; a new `set_config` helper owns the
+  one `picasso.CONFIG` mutation). A new enforcement test
+  (`tests/test_no_direct_picasso_imports.py`) fails if a direct picasso import
+  reappears in production, keeping the coupling a single reviewable surface. The
+  only documented exceptions are the Qt-GUI surface (`picasso.gui.*` in
+  `render_tab.py`) and the isolated experimental modules.
+- **Render tab locs tree is now three-level for aggregation runs.** The
+  file list nests each saved `*.hdf5` under its path components —
+  `target → module → file` for an aggregation run (per-channel
+  `*_sgl_NN_<tag>` folders), still `module → file` for a single-dataset
+  run — instead of the previous flat module-folder grouping.
+- **Clarified the module-palette toggle label** in the workflow builder:
+  "Native-picasso (picasso_\*) module set" → "Only show native-picasso
+  (picasso_\*) modules".
+- Python baseline raised 3.10 → 3.11 (`requires-python`, black
+  `target-version`, CI matrices); `picassosr` floor moved to `>=0.12.0a3`
+  (picasso 0.12 line, requires 3.11) — supersedes the temporary B7 git-pin
+  bridge.
+- **Dependency hygiene:** development/test tooling (`pytest`, `pre-commit`,
+  `bandit`, `isort`) moved out of runtime `dependencies` into a new `[dev]`
+  optional extra, and a duplicate `memory_profiler` entry removed, so a plain
+  install no longer pulls test tooling. CI now installs with
+  `pip install -e ".[dev]"`.
+- **`picassosr` pin gained an upper bound** (`>=0.12.0a3,<0.13`) so a future
+  picasso minor cannot be pulled in untested; bump it deliberately with a green
+  picasso contract test.
+
+### Fixed
+
+- **`binding_event_analysis` module made runnable again.** The method was
+  broken by a chain of latent errors, none caught because the module is
+  experimental and mocked in the unit tier. Fixed all of them: (1) it called
+  `outpost_modules.binding_event_analysis.Measurement(...)`, but that submodule
+  was never imported into the `outpost_modules` package (its `__init__` imports
+  only `mask`/`ripleys`), so the call raised `AttributeError`; the code now
+  lives in `picasso_workflow/outpost/binding_events/` and is imported explicitly;
+  (2) `Measurement(...)` was passed `saving_path=`, but the constructor takes
+  `saving_name=` (`TypeError`); (3) three method calls used the wrong case —
+  `Plotter.plot_td()` / `plot_r()` / `saveAllResults()` vs the actual `Plot_td`
+  / `Plot_r` / `SaveAllResults` (`AttributeError`). A new static API-contract
+  test (`test_outpost_binding_events.py`) asserts the call-site kwargs and
+  method names match the classes, so these cannot silently reappear.
+- **Flaky test teardown on overlay filesystems.** Tests clean up their result
+  folders with `shutil.rmtree`; on the container's (and CI's) overlay
+  filesystem, shutil's fd-based `_rmtree_safe_fd` intermittently raised
+  `OSError("Cannot call rmtree on a symbolic link")` for a *plain* directory — a
+  TOCTOU race in its `scandir` → `is_symlink` recheck (no symlink actually
+  exists, verified via `os.path.islink`). It surfaced under cold-`numba`-cache
+  timing as a nondeterministic teardown failure — a *different* test each run,
+  passing in isolation — while the tests' own assertions always passed. An
+  autouse fixture (`tests/conftest.py`) retries the transient; **12/12
+  cold-cache full-suite runs now pass** (previously ~1 in 4 failed).
+- **Sanitize tag-derived locs filenames.** A dataset's `#tags` value now
+  feeds the saved filename by default, so `save_single_dataset` and the
+  aggregated saver replace path separators (`/`, `\`) in a tag before using
+  it as a filename — a tag like `"cell/A"` can no longer write into a
+  missing subdirectory, and a leading `/` can no longer escape the results
+  folder into an absolute path.
+- **Hardened config loading and onboarding (code-review follow-ups).** A typo in a hand-edited `config.yaml` (which the onboarding dialog invites users to edit) now degrades to a skipped layer with a warning instead of crashing `import picasso_workflow`; the startup template dropdown tolerates a null/missing `Templates`; the per-user `.env` fills an *empty* `CONFLUENCE_TOKEN` (not just an unset one); the macOS `post_install` no longer aborts under `set -e` if `stat`/`id` fail; the update check still nudges when the running version is `"unknown"`; the update-check thread shutdown is reentrancy-safe; and the per-user config dir + Confluence token env-var names now come from single sources (`_user_config_dir()`, `confluence._CONFLUENCE_PROFILES`).
+- **Wheel installs crashed on startup with `KeyError: 'Templates'`.** The
+  bundled `config.yaml` is gitignored (site-specific / secrets) and so is
+  never shipped in the wheel; `load_config`'s fallback to
+  `config_template.yaml` was commented out, leaving `CONFIG = {}` and the GUI
+  dying at `CONFIG["Templates"]`. The tracked `config_template.yaml` /
+  `.env_template` are now packaged (`[tool.setuptools.package-data]`) and
+  `load_config` falls back to the template when no `config.yaml` is present,
+  so a fresh one-click / `pip install` from a wheel starts with working
+  defaults. Only surfaced in non-editable installs (the one-click installer).
+
+### Added
+
+- **Per-channel locs filenames by default.** The two standard single-dataset
+  recipes (`minimal`, `picasso_native`) now default `save_single_dataset`'s
+  `filename` to `("$$map", "#tags", None)`, matching the GUI default. In an
+  aggregation run each channel's locs are saved as `<tag>.hdf5`; a standalone
+  (tag-less) run falls back to `locs.hdf5` as before.
+- **Set the Confluence token from the onboarding dialog.** The Getting Started dialog has an optional field to paste a Confluence personal access token (with how-to-get-it guidance and a show/hide toggle). It is persisted to the per-user `~/.config/picasso_workflow/.env` (chmod 600) as `CONFLUENCE_TOKEN` and set in the current process, so Confluence reporting / the Doctor tab's connection test work immediately and on every later launch (a new per-user `.env` is now loaded at startup). The token value is never written to `config.yaml` or the logs.
+- **Live config reload (no restart).** `reload_config()` re-reads the config.yaml layers and updates `CONFIG` in place; the GUI reloads and refreshes the template dropdown when the Getting Started dialog closes (and via Help → Reload settings file), so a config you just created/edited takes effect without restarting.
+- **First-run "Getting started" onboarding dialog.** A fresh install runs on built-in default settings, which left new users with no obvious next step. The GUI now shows a one-time guide explaining where the per-user config file lives (`~/.config/picasso_workflow/config.yaml`), that it overrides the bundled defaults, and the first steps to take; a button seeds that file from the template and opens it. Re-openable from a new **Help** menu (“Getting Started…” / “Open settings file…”). Dismissal is remembered via a marker in the config dir.
+- **macOS installer pinned to Apple Silicon.** Built on `macos-14` (arm64). Intel Macs are not targeted (GitHub's Intel runners are retired and cross-building osx-64 proved unreliable); Intel users install the classic `pip` way.
+- **macOS installer registers a Spotlight-launchable app.** `post_install`
+  now builds a `picasso-workflow.app` in `~/Applications` (per-user, no
+  admin), so the GUI launches from Spotlight (⌘-Space) and the Applications
+  folder; CI builds the `.icns` from the same GUI `.ico`.
+- **One-click installers for Windows + macOS (scaffold).** A new `release/`
+  directory builds friendly, no-Python-required installers with `constructor`
+  against the **conda-forge** channel only (the Miniforge approach) -- so the
+  installer carries no Anaconda commercial Terms of Service and is free to
+  redistribute. The base env is a minimal conda-forge Python; `post_install`
+  pip-installs the bundled `picasso_workflow` wheel (pulling `picassosr`,
+  PyQt6, PyQt6-WebEngine, numba, ... from PyPI wheels). The Windows installer
+  is **per-user** (`%LOCALAPPDATA%`, no admin, HKCU only), so multiple users on
+  one machine can install and run simultaneously without colliding.
+  `.github/workflows/release.yml` builds both installers on every `vX.Y.Z` tag
+  and attaches them to the GitHub Release. Installers are unsigned for now
+  (one-time SmartScreen/Gatekeeper prompt). See `release/README.md`. *Not yet
+  proven on a real Windows/macOS build -- the first tagged CI run is the
+  proving ground.*
+
+- **GUI: "update available" banner.** On startup the GUI checks the GitHub
+  Releases API (off the UI thread) and, if a newer release exists, shows a
+  dismissible banner above the tabs linking to the download. Fully fail-soft
+  (offline / rate-limited / up-to-date shows nothing) and skipped in headless
+  runs (`QT_QPA_PLATFORM=offscreen`) or when
+  `PICASSO_WORKFLOW_NO_UPDATE_CHECK` is set. Logic in
+  `picasso_workflow/update_check.py` (unit-tested with mocked HTTP).
+
+- **"Doctor" tab: read-only diagnostics for the running GUI.** A new tab
+  (right of *Render*) surfaces, at a glance, state that otherwise only lives
+  in the logfile: which `config.yaml` layers loaded and from where (bundled →
+  site-wide → per-user), which `.env` was picked up (and the keys it defines,
+  never the values), where the log is written, the picasso-workflow / picasso
+  / Python / platform versions, whether we are on a SLURM node, and -- per
+  Confluence profile (`Confluence`, `ConfluenceTest`) -- the resolved
+  non-secret connection settings plus whether a token is set. **Secrets are
+  shown as presence only ("set" / "not set"), never their value.** Everything
+  passive is gathered without side effects; each profile also has an opt-in
+  *Test connection* button that makes a single authenticated Confluence
+  request on a background thread (so the GUI never blocks) and reports
+  OK / warning / failure -- no network call is made just by opening the tab.
+  Backed by a new `picasso_workflow.DIAGNOSTICS` dict populated during import
+  (config/.env/log sources) and `picasso_workflow/doctor_tab.py`.
+
+- **"Render" tab: explore a run's localizations with picasso Render.** A new
+  tab (right of *Results*) lists the localization files a run saved (one
+  entry per `*.hdf5` under its module folders, discovered by scanning the
+  run folder so it is machine-independent) in a multi-select tree on the
+  left, and embeds the picasso Render canvas on the right. Selecting one or
+  several files renders them (multiple overlay as channels). The embedded
+  window exposes picasso Render's *exploration / adjustment* features
+  (zoom, pan, contrast, colormap, blur, scale bar, per-channel display via
+  the Display settings / Channels buttons) but not its processing features:
+  the render window's menus (File / Tools / Postprocess) are not surfaced.
+  The canvas is picasso's `View` widget embedded directly (as in standalone
+  picasso Render), so its mouse/zoom coordinate math and the zoom rubber-band
+  work; the render window is created lazily on first render, so GUI startup
+  is unaffected. Explicit *Zoom in* / *Zoom out* / *Fit in view* buttons
+  drive the canvas (dragging a box, right-drag pan and Ctrl+scroll zoom also
+  work).
+
+- **Render tab: picasso 0.12 icon toolbar (navigation, picking, display).**
+  When the embedded picasso is 0.12+, the Render tab surfaces picasso
+  Render's own actions as an icon toolbar reusing picasso's icon theme:
+  the navigation tools (drag-box **Zoom**, **Pan/Move**, **Measure**),
+  **picking** (the Pick tool, pick-shape/size *Tools settings*, *Clear
+  picks*) and display (*Fit in view*, *Display settings* for
+  contrast/colormap/blur/scale bar, *Channels*, *Info*, *3D view*). These
+  are picasso's real `QAction`s, so they behave and enable-on-load exactly
+  as in standalone Render. File I/O (Open/Save/Export) and the heavier
+  processing (undrift/cluster/link/pick-similar) are intentionally left
+  out. On picasso 0.11 (no icon theme) the previous plain buttons are kept
+  as a fallback.
+
+- **Confluence report link in the Run tab.** When a run documents to
+  Confluence, the runner records the report page's URL in `progress.json`
+  (`report_url`), and the Run-tab monitor shows it as a clickable link
+  (updated on each poll; the aggregation overview page is preferred for
+  aggregation runs). The URL is built from the base URL + page id
+  (`pages/viewpage.action?pageId=…`, resolving on both Confluence Cloud and
+  Server), so the GUI needs no live Confluence connection to offer the link.
+
+### Fixed
+
+- **Render tab: forward-compatible with picasso 0.12's threaded renderer.**
+  picasso 0.12 (0.12.0a3) moves localization loading *and* scene rendering
+  onto background `QThread`s (the new `picasso.gui.render_worker`); destroying
+  a running `QThread` aborts the process. The embedded Render tab now stops
+  those threads (`View.stop_load()` / `View.stop_render_worker()`, guarded so
+  it is a no-op on picasso 0.11) before it disposes the embedded view -- on
+  every *Render selected* replace, *Clear*, and (via an `aboutToQuit` hook)
+  on application shutdown -- so replacing/closing the view mid-load no longer
+  risks a crash. The dependency pin is unchanged (`picassosr>=0.11.1`); note
+  that picasso 0.12 itself requires Python >=3.11.
+
+- **Code-review fixes for the stepwise / local-run / FRC work.** A multi-agent
+  review of this branch surfaced several real bugs, now fixed:
+  - *Stepwise boundary checkpoint:* the boundary module's checkpoint is now
+    written at the runner level (`AutoPicasso.save_locs_checkpoint`, shared
+    with the module decorator) instead of injecting a `save_locs=True` module
+    parameter -- which crashed modules that read `save_locs` as a dict (e.g.
+    `localize`) and clobbered a user-set value.
+  - *Multi-rank stepwise markers:* per-dataset completion markers are now
+    stamped with the launch token, so a paused step's markers are not
+    mistaken for a later step's completion (which made rank 0 aggregate
+    stale, incomplete results).
+  - *Local-run monitor:* a stale cluster Job-ID no longer flips a live local
+    run's monitor to cluster mode; the monitor now stops polling after "Kill
+    local run" (killed process, non-terminal state); re-pointing the monitor
+    at another folder resets the launch-scoped state (no false "failed"
+    badge / empty tree).
+  - *Stepwise target:* editing the module list no longer silently re-aims the
+    boundary at a different module -- the selection is cleared if its module
+    no longer exists.
+  - *Progress:* a fully `paused` run now reads as complete (not 0%) in
+    `overall_fraction`.
+  - *FRC guard:* the memory guard now uses a cheap in-memory precision proxy
+    (median `lpx`/`lpy`) instead of a second full NeNA fit (which `frc` runs
+    internally), and guards against a non-finite estimate so degenerate
+    (all-NaN) precision no longer slips past it.
+
+- **In-memory localizations now match every saved locs file.**
+  `io.save_locs` writes the *sanitized* table (`lib.ensure_sanity` drops
+  rows with NaN/inf — e.g. failed GPU fits with NaN localization
+  precision), but the in-memory dataset kept those rows. Downstream
+  modules therefore saw data the saved file did not have: observed live,
+  32 of 14.2M locs with NaN `lpx` made `picasso_render`'s median
+  (convolve) blur NaN and crash, while the checkpoint file was clean — so
+  a resumed run would not even reproduce the failure. `_save_locs` now
+  adopts the sanitized table (logging how many rows were dropped), keeping
+  memory, disk, and resume behavior identical — the same guarantee picasso
+  itself provides at its save/load boundaries.
+
+- **`picasso_frc` no longer OOM-kills the job on large datasets.** FRC bins
+  its two half-images at half the NeNA precision, so a full-FOV render on a
+  modern sensor at good precision reaches 100k+ px per side — tens of GB per
+  image — and the job is OOM-killed (observed: 14.2M locs, 50 GB job,
+  killed in ~90 s; a SIGKILL leaves no Python traceback anywhere). The
+  module keeps picasso's exact behavior (full-FOV FRC) but adds a
+  `max_image_px` memory guard (default 16384): when the rendered images
+  would exceed it, the module fails fast with an informative `MemoryError`
+  (estimated size/memory, and how to proceed) instead of being killed.
+  Additionally, a job that SLURM ended (OOM kill, timeout, cancel) now shows
+  the SLURM reason — status, running module, exit code/MaxRSS, and an OOM
+  hint — in the *Error details* pane, since no traceback can exist; a local
+  run killed by a signal notes the signal (and the OOM-killer suspicion)
+  there too.
+
+- **Error-details pane could stay empty for a failed module.** Collecting
+  details could crash silently: a yaml error recorded as a plain string
+  (modules that set `success: False` themselves, or older runs) broke the
+  fallback reader and blanked the whole pane. Collection is now isolated per
+  module (a bad entry shows a note instead of hiding everything), string and
+  message-only error entries are rendered, modules that fail *without*
+  raising get their recorded error attached to their progress entry too, a
+  stale cluster job id left in the Job-ID field no longer filters away a
+  local run's progress states, and monitor errors are logged as warnings
+  instead of silently at debug level.
+
+- **Resume no longer resurrects disabled reporters.** Resuming a run adopted
+  the previous run's persisted `reporter_config` wholesale, so switching
+  *Document to Confluence* off between runs had no effect: `load()` rebuilt
+  the old ConfluenceReporter, whose construction contacts the server and
+  could kill the resume (e.g. 403) before any module ran. On resume the
+  reporter backends now follow the caller's current configuration (the
+  loaded run's `report_name` identity is kept) — in `WorkflowRunner` and
+  `AggregationWorkflowRunner` alike, including the per-dataset and
+  aggregation-stage runners.
+
+- **Local-run monitor no longer shows a stale "running" state.** A local run
+  that died before writing progress (e.g. a Confluence 403 at coordinator
+  startup) used to leave the badge on "running" forever, fed by the previous
+  run's `progress.json` in the same folder. The monitor now scopes progress
+  states to the current session's launch time, fuses the subprocess exit
+  status into the badge like the SLURM chip ("failed (exit N)" red /
+  "finished" green, with per-state colors), stops polling once the process
+  died without current-run states, and shows the `local_run.log` tail in the
+  *Error details* pane for such startup crashes. *Kill local run* now also
+  refreshes the badge after termination.
+
+### Added
+
+- **Error details in the Run tab.** Failed modules' tracebacks now surface
+  directly in the GUI: a new *Error details* pane (right of *Run
+  information*) is filled by the live monitor. The runner records each
+  module failure's `type: message` + traceback with its `progress.json`
+  entry (capped, traceback tail kept), so this works for local and cluster
+  runs alike; for local runs the pane additionally falls back to the full
+  traceback in the run's `WorkflowRunner.yaml` (covers runs recorded before
+  this change) and, when a run dies without any recorded module failure
+  (e.g. an import error), to the tail of `local_run.log`.
+
+- **"Run locally" tab enabled and implemented.** The previously disabled
+  ("in development") tab in the Run section is now functional: it starts the
+  generated `start_workflow.py` on the local machine (in the GUI's Python
+  environment, logging to `local_run.log` in the results folder) and adds
+  *Stop after current module* (graceful abort via the abort flag, resumable),
+  *Kill local run*, and *Show log tail* controls. The live progress monitor
+  and the run-information display are now shared between the cluster and
+  local run modes — they moved from inside the cluster tab to below the run
+  sub-tabs. Starting a second local run while one is active is refused.
+
+- **Stepwise (module-by-module) workflow development.** A workflow can now be
+  run only up to a chosen module — locally or on the cluster — to set its
+  parameters, inspect the results, and then step on. New GUI controls
+  ("Run only up to module" checkbox + target selector, plus a right-click
+  "Run up to this module locally / on cluster" on the workflow lists) bake a
+  `stop_after` argument into the generated script; the coordinators and
+  runners (`WorkflowRunner.config_from_dicts(stop_after=...)`,
+  `AggregationWorkflowRunner.config_from_dicts(stop_after=("single"|
+  "aggregation", i))`) stop cleanly after the boundary module, which always
+  saves its localizations as a resume checkpoint. Each step is a resumed
+  run, so parameter edits re-run only the affected modules, and steps can
+  alternate between local and cluster execution. The progress monitor shows
+  such runs as a new `paused` state instead of done/failed. Stepwise runs
+  are not available for Investigation workflows. See README "Stepwise
+  (module-by-module) development runs".
+
+- **picasso-set tier 4: format converters (9 modules) + docs.**
+  `picasso_csv2hdf` and `picasso_smap2hdf` import ThunderSTORM/SMAP files
+  (written next to the input like the CLI) and load them as the current
+  dataset; `picasso_hdf2csv`/`ts`/`imagej`/`nis`/`chimera`/`visp`/`smap`
+  export the current localizations (or an explicit file) with the
+  CLI-identical output suffixes. Plus the predefined recipe
+  `standard_singledataset_workflows.picasso_native()` (load →
+  picasso_localize → picasso_undrift_rcc → picasso_render → save) and a
+  README section documenting the picasso-set.
+
+- **picasso-set tier 3: calibration & 3D (6 modules).** `picasso_zfit`
+  (astigmatic z fit on the current locs, GPU with CPU fallback),
+  `picasso_calibrate_z` (bead z-stack → z-calibration yaml),
+  `picasso_camera_calibrate` / `picasso_camera_validate` (sCMOS
+  offset/variance/gain maps and their validation, CLI parameter names),
+  `picasso_spline_calibrate` (full CLI surface incl. multichannel and
+  split-FOV dispatch) and `picasso_lateral_calibrate`
+  (astigmatism/chromatic x-y correction + diagnostic figure). These are
+  file-in/file-out; the produced calibration files feed `picasso_localize`
+  / `picasso_zfit` via result references.
+
+- **picasso-set tier 2: pick-based postprocessing (9 modules).** The picasso
+  Render GUI's pick/mask operations as headless picasso-set modules with the
+  library functions' parameter names and defaults: `picasso_picked_locs`,
+  `picasso_pick_similar` (writes a pick-region yaml for downstream modules),
+  `picasso_remove_locs_in_picks`, `picasso_pick_properties`,
+  `picasso_pick_kinetics`, `picasso_fret` (donor/acceptor file parameters),
+  `picasso_mask_locs` (generate image → threshold → split, continues with
+  the in-mask localizations), `picasso_nena` and `picasso_frc` (full-FOV,
+  curve figure + data saved). Picks are exchanged as pick-region `.yaml`
+  file paths (`picks_file` parameter, `io.load_picks` format), so they can
+  come from the GUI, from disk, or from a prior module via
+  `$get_prior_result`.
+
+- **picasso-set tier 1: core pipeline (20 modules).** The full native-picasso
+  core pipeline as picasso-set modules with CLI-exact parameter names and
+  defaults: `picasso_localize` (identify + fit in one step, all CLI fit
+  methods incl. spline/GPU, calibration files, temporal-median/Gaussian
+  pre-filters; deviations: `drift` defaults to 0 and camera parameters
+  default to the loaded metadata/config instead of the CLI literals),
+  `picasso_undrift_rcc` / `picasso_undrift_aim` /
+  `picasso_undrift_fiducials`, `picasso_link`, `picasso_dark`,
+  `picasso_groupprops`, `picasso_pair_correlation`, `picasso_dbscan` /
+  `picasso_hdbscan` / `picasso_smlm_cluster` (each also saving cluster
+  centers like the CLI), `picasso_nneighbor`, `picasso_clusterfilter`,
+  `picasso_cluster_combine`, `picasso_cluster_combine_dist`,
+  `picasso_g5m`, `picasso_render`, `picasso_align` and `picasso_join`.
+  The CLI's `--regions-separately`, `--concat` and `--database` localize
+  conveniences are out of scope.
+
+- **picasso-set module layer (infrastructure + pilot).** A second module set
+  that recapitulates native picasso 1:1 (same operation granularity, exact
+  picasso CLI/library parameter names and defaults), with `picasso_`-prefixed
+  module names so both sets mix freely in one workflow. Modules live in the
+  new `picasso_workflow/picasso_set/` package (mixins on `AutoPicasso`), are
+  registered via a new `ModuleSpec.module_set` field (their GUI parameter
+  schemas ride in `ModuleSpec.params`), and are documented by a single
+  generic Confluence/HTML reporter fallback instead of per-module reporter
+  methods. The GUI gains a *Show native-picasso (picasso_\*) modules*
+  checkbox (default off) that filters the module palette; existing workflow
+  rows using a hidden picasso-set module stay editable. Ships with the pilot
+  module `picasso_density` (wraps
+  `picasso.postprocess.compute_local_density`); the remaining tiers (core
+  pipeline, picks, calibration, I/O converters) follow in separate PRs.
+  `module_decorator` moved to the new `picasso_workflow/module_runtime.py`
+  (still importable as `analyse.module_decorator`).
+
+- **Checkpoint-aware resume.** Resuming a run (`continue_previous_runner=True`)
+  now works even when the in-memory localizations are gone: modules that save
+  or load locs (`save_single_dataset`, `load_dataset_localizations`,
+  `load_datasets_to_aggregate`, `save_datasets_aggregated`, and any module run
+  with `save_locs: True` / `always_save`) record a `checkpoint` descriptor in
+  their results, and on resume the runner restores the latest checkpoint
+  before the re-run frontier and re-runs everything after it. Checkpoints
+  that would strand memory-only state (raw movie, identifications, drift,
+  picasso config — per the new `modulespec.restart_conflicts` check) are
+  rejected in favour of an earlier restart point; without any checkpoint the
+  run falls back to scratch (the previous behaviour). Note resume may now
+  re-run previously-succeeded modules between the checkpoint and the failure
+  point, since their in-memory effects cannot be restored otherwise.
+
+- The GUI exposes resume as a *Continue previous run (resume)* option, baked
+  into the generated `start_workflow.py` as `continue_previous_runners=True`.
+
+### Fixed
+
+- **Code-review fixes across the picasso-set stack** (all confirmed by an
+  adversarial review): `("$$map", ...)` defaults no longer crash plain
+  single-dataset runs — the single-dataset command executor resolves a
+  per-channel `$$map`/`$$index` with a spec default (third tuple element,
+  now used by `save_single_dataset`'s `("$$map", "#tags", None)`) and
+  otherwise fails with an actionable message; optional-unset parameters no
+  longer break modules that require them (`find_similar` overrides fall
+  through to `picasso_outpost` defaults, `save_single_dataset` defaults to
+  `locs.hdf5`, and de-facto-required specs like
+  `load_datasets_to_aggregate.tags` and the dbscan_molint/create_mask/
+  ripleysk file parameters are now marked required); `picasso_localize`
+  resolves camera parameters through the `camera_info` property
+  (analysis-config or picasso-CONFIG camera derivation) instead of CLI
+  literals; the picasso-set modules use the `pixelsize` property
+  (metadata → channel metadata → camera config) for drift plots, pick-size
+  conversion and NeNA; `picasso_pick_similar` writes Square pick sizes
+  under `Side Length (nm)` (the bare legacy key reads back as camera
+  pixels — a 130× inflation); the generic picasso-set reporter no longer
+  pre-filters figure paths with `isfile`, so regenerating an HTML report
+  from a moved result folder keeps its figures; picasso-set module saves
+  register themselves as the resume checkpoint so `always_save` no longer
+  writes a second byte-identical locs copy per module; picasso-set file
+  parameters use the drag-and-drop path widget; `picasso_mask_locs`
+  accepts an explicit numeric threshold from the GUI; the module-set
+  toggle keeps the savers (`save_single_dataset`,
+  `save_datasets_aggregated`, new `role="saver"`) visible in the
+  native-picasso palette; `picasso_join` no longer reads its first input
+  file twice.
+
+### Changed
+
+- **GUI parameter forms show units.** Parameter specs gained a structured
+  `unit` key, rendered in the parameter label (e.g. `intersectdist [px]`,
+  `radius [nm]`) and in the module help text. All picasso-set parameters
+  with unambiguous units are annotated (36: camera px / nm / frames, per
+  the CLI docs — e.g. `picasso_undrift_aim`'s `intersectdist`/`roiradius`
+  are camera pixels, the CLI default 20/130 being 20 nm at a 130 nm
+  pixel), plus 49 classic-module parameters whose descriptions explicitly
+  state the unit (notably the classic `undrift_aim` takes `intersect_d`
+  in nm and converts to px internally — the labels now surface that the
+  two sets differ here).
+
+- **GUI parameter forms: optional parameters without a default start as
+  "unset".** An optional parameter with no spec default (e.g.
+  `picasso_localize`'s camera parameters = "from loaded metadata/config",
+  `roi` = full FOV, `frame_bounds` = all frames) now starts in the greyed
+  use-default state and is omitted from the generated workflow, instead of
+  showing a spurious 0 in a number box that cannot express None. Clicking
+  the parameter label still switches to an explicit override. Optional
+  dict parameters keep their enable-checkbox behaviour.
+
+- **The picasso-set checkbox is now a set toggle.** Unchecked shows the
+  classic picasso-workflow modules, checked shows the native-picasso set
+  (`picasso_*`) plus the data loaders. Both sets can still be mixed in one
+  workflow by toggling while building it, and existing rows from the
+  hidden set remain visible and editable.
+
+- `load_dataset_movie`'s `filename` defaults to `("$$map", "filepath")`
+  and `save_single_dataset`'s `filename` to `("$$map", "#tags")` in the
+  GUI: command-tuple defaults pre-fill the input editable and are written
+  to the workflow (they are recommended arguments, not code defaults).
+
+- `summarize_branches` works as a zero-argument branch join module. When
+  `values` is omitted, the `branch` module hands it the per-branch results
+  list and it auto-summarizes every numeric per-branch metric (one
+  small-multiple subplot per metric, to avoid mixing scales), with `labels`
+  defaulting to the branch labels. The GUI seeds a `summarize_branches` join
+  when you add a branch (visible as an indented join row, editable/deletable),
+  so a branch produces an overview figure with no configuration. `values` is
+  now optional.
+
+- The `branch` module is simplified to two `branch_type`s: **`explicit`**
+  (unchanged: a fixed `n_branches` with per-branch `("$branch", [...])`
+  overrides) and **`runtime`**, which replaces both the old mask-component
+  `runtime` and the `screen` grid. A runtime branch takes a `branch_over`
+  value/command that resolves to a list `L` at run time; the branch count is
+  `len(L)` and each branch's sub-modules read their element `L[branch_id]` via
+  the new `("$branch_item",)` token (`("$branch_item", key)` indexes into the
+  element). The `screen`/`$$map`-grid and `split`/`mask_components` paths are
+  removed — express the same thing with `branch_over` + `$branch_item`. In the
+  GUI, `branch_type` is a dropdown, `branch_over`/`label_template` show only for
+  runtime and `n_branches`/`branch_labels` only for explicit, and the parameter
+  cmd dialog gains a **Branch item** command type.
+
+- A `branch` sub-module can now raise `analyse.SkipBranch` to drop its branch
+  (e.g. the requested cell does not exist): the branch is excluded from
+  `results["branches"]`/`labels` (so the join's `("$all")` pooling never sees
+  it) and recorded under `results["skipped"]`, and the overall pipeline is not
+  failed. `create_mask2` gains an opt-in `skip_if_missing_cell` that raises it
+  when `nth_largest_cell` exceeds the number of cells (via a new
+  `filter_mask(raise_if_missing=...)`), so an explicit/runtime branch can
+  over-request cells and drop the empty ones.
+
+- The GUI `branch` module editor no longer exposes `branch_modules` /
+  `join_modules` (and the runner-injected `parameter_command_executor`) as
+  raw argument text. Sub-workflows are now built entirely through the indented
+  workflow-list rows: an empty branch or join section renders a subdued
+  `+ add ... module` placeholder row that, when selected, lets you add the
+  first sub-module exactly like a top-level module. The parameter form shows a
+  hint pointing at the inline rows. This makes a freshly added branch usable
+  without hand-typing nested module tuples (previously the indented editing
+  only worked once a branch already had sub-modules). `branch_type` renders as
+  a dropdown, and the type-specific parameters are only shown for the matching
+  type: `n_branches` / `branch_labels` for `explicit`, `branch_over` /
+  `label_template` for `runtime` (see the branch simplification entry above).
+
 - `pick_origami` now re-centres every accepted pick on its localizations'
   centre of mass right after identification and re-picks once around the new
   centre. `pick_similar` returns grid positions offset from the structure by
@@ -136,6 +901,39 @@ This file was started after v0.5.6; earlier history is in the git log.
   Command (`$$map`) and per-branch values always count as overrides.
 
 ### Fixed
+
+- Resuming no longer silently discards the caller's edited workflow modules:
+  `config_from_dicts(continue_previous_runner=True)` (and the aggregation
+  resume paths) now adopt the passed parameters when the module-name sequence
+  matches the previous run's, so "fix a parameter and re-run" actually applies
+  the fix. A changed argument on a previously-succeeded module moves the
+  re-run frontier up to that module, instead of keeping its stale result.
+  Change detection compares against a pristine parameter snapshot recorded in
+  `WorkflowRunner.yaml`, so `$`-command resolution and module write-backs do
+  not read as user edits. Runs recorded before the snapshot existed fall back
+  to a conservative comparison against the persisted (mutated) parameters,
+  so an edited argument still forces a re-run there too; keys the modules
+  overwrite at run time (estimated `min_gradient`, resolved output paths --
+  see `modulespec.RUNTIME_PARAMETER_WRITE_BACKS`) are ignored so they do not
+  masquerade as edits.
+
+- Resume now actually finds the previous run: the coordinators stamp report
+  names per launch, which made `_check_previous_runner` search for a folder
+  containing the *current* timestamp (never matching an earlier launch) and
+  the aggregation runner prefer the fresh stamp over discovery. Previous
+  runs are now discovered by the stable, stamp-free base name, and folders
+  carrying a per-run token before the runstamp are matched too. A previous
+  run killed before its first save (folder without `WorkflowRunner.yaml`)
+  falls back to a fresh run instead of crashing.
+
+- Resume no longer accepts a restart point that would strand needed state:
+  every module from the restart point onward is checked (branch
+  sub-workflows included) against what the checkpoint actually restores —
+  a partially-restorable checkpoint or one stranding movie/identifications
+  is rejected in favour of an earlier restart point or scratch. Conversely,
+  file-mediated workflows (e.g. continuation after a `manual` step) resume
+  directly at the frontier again instead of degrading to a scratch re-run,
+  and checkpoint paths are translated across machines via `Drivepaths`.
 
 - `pick_origami` accepted-structure renders now pass only that structure's
   localizations (`sel`) to the renderer instead of the full multi-group set,
