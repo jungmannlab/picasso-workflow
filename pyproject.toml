@@ -113,7 +113,8 @@ binding-events = [
 
 [tool.setuptools.packages.find]
 # Auto-discover picasso_workflow and all its subpackages so feature folders
-# (e.g. outpost/, outpost/resolution/, picasso_set/, dbscan_molint/ ...) ship in
+# (e.g. outpost/, outpost/resolution/, outpost/clustering/dbscan_molint/,
+# picasso_set/ ...) ship in
 # a non-editable wheel. The former explicit ``packages = ["picasso_workflow"]``
 # was non-recursive, so subpackages were not declared and a wheel install could
 # miss them. (The test package still ships as data via the setuptools-scm file

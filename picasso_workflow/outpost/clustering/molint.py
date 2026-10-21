@@ -166,7 +166,7 @@ def _do_dbscan_molint(
     channel_map,
     it=0,
 ):
-    from picasso_workflow.dbscan_molint import dbscan
+    from picasso_workflow.outpost.clustering.dbscan_molint import dbscan
 
     filepaths = {}
 
@@ -233,7 +233,9 @@ def _do_dbscan_molint(
     db_cluster_props_df.to_hdf(dbclusters_fp, key="props")
     filepaths["fp_dbclusters"] = dbclusters_fp
 
-    from picasso_workflow.dbscan_molint import output_metrics
+    from picasso_workflow.outpost.clustering.dbscan_molint import (
+        output_metrics,
+    )
 
     """
     ===============================================================================
