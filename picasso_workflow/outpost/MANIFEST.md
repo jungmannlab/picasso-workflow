@@ -25,7 +25,7 @@ WIP / not ready.
 | 5 | **Resolution: FRC + decorrelation** → `picasso.postprocess` | `outpost_modules/resolution_frc.py`, `resolution_decorrelation.py` | promote | **H** | analyse.py | Standard published methods, self-contained (decorrelation reuses `resolution_frc.render_image_histogram`). |
 | 5b | **Resolution: PPAC** → `picasso.postprocess` | `picasso_outpost.py` `resolution_ppac*`, `analyse_resolution_ppac` (7158–7662) | promote | M | analyse.py | Third, independent resolution estimator. Prune dead params (`batch_size`, `use_chunking`) + collapse to one backend first. |
 | 6 | **Binding-event analysis** → picasso (new module) | `outpost/binding_events/{analysis,plotting}.py` (`Measurement`, `Plotting`) | promote | **H** | analyse.py | Cleanly paired analysis+plotting, zero picasso/sibling coupling. **Moved** into `outpost/binding_events/`; deps in the `[binding-events]` extra. |
-| 7 | **CellMask morphology + density CSR** → extend `picasso.masking` | `outpost_modules/mask.py` `CellMask` (morphology: `filter_mask`, `component_masks`, `erode`/`dilate`; stats: `area`, `mean_density`; `random_points*`) | extend-up | M | analyse.py, ripleys | The cell-object layer `picasso.masking` lacks. Contribute the new part; dedup the overlapping thresholding (see masking/dedup below). |
+| 7 | **CellMask morphology + density CSR** → extend `picasso.masking` | `outpost/masking/mask.py` `CellMask` (morphology: `filter_mask`, `component_masks`, `erode`/`dilate`; stats: `area`, `mean_density`; `random_points*`) | extend-up | M | analyse.py, ripleys | The cell-object layer `picasso.masking` lacks. **Moved** from `outpost_modules/` into `outpost/masking/`. Contribute the new part; dedup the overlapping thresholding (see masking/dedup below). |
 
 ## Dedup — redundant with picasso ≥ 0.12, rewire + delete the fork
 
@@ -40,7 +40,7 @@ WIP / not ready.
 | global shift solve | `picasso_outpost.py` `_solve_optimal_shifts` | `picasso.lib.minimize_shifts` | ⏳ maybe | internal | Used internally (not dead); overlaps upstream but needs an equivalence check before rewiring. |
 
 **Dedup reality (verified batches 1–3):** of the functions the triage listed, only `generate_N_structures` and `picked_locs` were *genuine* redundancies — both done. The rest of the so-called "pick/undrift fork" are **divergent workflow variants** that *use* upstream internals but return workflow-specific structures (diagnostics, applied drift, sampled spots), so they stay. The clean dedup wins are complete; remaining items (`_undrift_from_picked` drift computation, `_solve_optimal_shifts`) are uncertain and individually gated. Net leverage now shifts to **promotion** (upstreaming the novel primitives) and the **boundary follow-up** (route `pick_gold`'s private `postprocess._pick_similar` reach-in through `_picasso_api`).
-| masking primitives | local `otsu()` (`mask.py:590`, `ripleys.py`), inline render/blur, `apply_to_locs` binning | `picasso.masking.{generate_image,mask_image(method="otsu"),mask_locs}` | M | analyse.py | Preserve the PW `otsu()/3` threshold **as a parameter**, not a reason to keep a private Otsu. Consolidate the 3 masking copies onto one `CellMask`. |
+| masking primitives | local `otsu()` (`outpost/masking/mask.py`; also in the Ripley's-K module, `outpost_modules/ripleys.py` → `spatial_stats/ripleys.py` after #46), inline render/blur, `apply_to_locs` binning | `picasso.masking.{generate_image,mask_image(method="otsu"),mask_locs}` | M | analyse.py | Preserve the PW `otsu()/3` threshold **as a parameter**, not a reason to keep a private Otsu. Consolidate the 3 masking copies onto one `CellMask`. |
 | dbscan_molint mask precursor | `dbscan_molint/mask.py` | `CellMask` / `picasso.masking` | M | analyse.py | 2022 script-style precursor with known bugs + "Luciano's code" file coupling. Fold `CSR_sim_in_mask*` onto `CellMask`, delete the rest. |
 
 ## Keep — stays workflow-side
@@ -68,7 +68,8 @@ WIP / not ready.
 5. **Restructure** (incremental, one feature per PR): fold `outpost_modules/`
    into `outpost/<feature>/` and physically split `picasso_outpost.py`, flipping
    rows as each feature lands. Done so far: `resolution/` (#42),
-   `binding_events/` (#45), `spatial_stats/` (ripleys + DC-Atlas). Still flat in
-   `outpost_modules/`: `mask`, `undrift_rsso`, `render`; plus the legacy
+   `binding_events/` (#45), `spatial_stats/` (#46, ripleys + DC-Atlas),
+   `masking/` (#47, CellMask). Still flat in `outpost_modules/`: `undrift_rsso`,
+   `render`; plus the legacy
    `ripleys_analysis/` subpackage and the `picasso_outpost.py` monolith.
 6. **Promote** (readiness H first): CSR k-NN stats, correspondence-free ICP registration, binding-events; then point-set shift kernel / RSSO drift, resolution (FRC/decorrelation/PPAC), CellMask morphology.
