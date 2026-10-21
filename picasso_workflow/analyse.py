@@ -105,6 +105,7 @@ from picasso_workflow import (
 )
 from picasso_workflow import __version__ as picassoworkflowversion
 from picasso_workflow.module_runtime import module_decorator  # noqa: F401
+from picasso_workflow.outpost.clustering import molint as clustering_molint
 from picasso_workflow.outpost.masking.mask import CellMask
 from picasso_workflow.outpost.render import render
 from picasso_workflow.outpost.spinna import wrappers as spinna_wrappers
@@ -11211,7 +11212,7 @@ class AutoPicasso(
         epsilon_nm = parameters["epsilon_nm"]
         df_mask = pd.read_hdf(parameters["fp_merge_mask"], key="locs")
         fp_out_base = os.path.join(results["folder"], "dbscan.hdf5")
-        filepaths = picasso_outpost._do_dbscan_molint(
+        filepaths = clustering_molint._do_dbscan_molint(
             results["folder"],
             fp_out_base,
             df_mask,
@@ -11381,7 +11382,7 @@ class AutoPicasso(
                 plot_figures=True,
             )
             fp_out_base = os.path.join(results["folder"], f"dbscan_{s}.hdf5")
-            filepaths = picasso_outpost._do_dbscan_molint(
+            filepaths = clustering_molint._do_dbscan_molint(
                 results["folder"],
                 fp_out_base,
                 df_CSR_mask,
@@ -11754,7 +11755,7 @@ class AutoPicasso(
         origin_colors = ["blue", "gray"]
 
         # plot degree of clustering
-        fp_figs = picasso_outpost.degree_of_clustering(
+        fp_figs = clustering_molint.degree_of_clustering(
             cluster_info_exp,
             cluster_info_csr,
             origin_colors,
@@ -11797,7 +11798,7 @@ class AutoPicasso(
         (
             significant_barcodes,
             p_values,
-        ) = picasso_outpost._plot_and_compare_barcodes(
+        ) = clustering_molint._plot_and_compare_barcodes(
             barcode_numbers,
             origin_colors,
             targets,
@@ -11836,7 +11837,7 @@ class AutoPicasso(
         (
             significant_barcodes,
             p_values,
-        ) = picasso_outpost._plot_and_compare_barcodes(
+        ) = clustering_molint._plot_and_compare_barcodes(
             barcode_areas,
             origin_colors,
             targets,
@@ -11857,7 +11858,7 @@ class AutoPicasso(
             fp_fig = os.path.join(
                 results["folder"], f"ntargets_barcode_{bc[2:]}.png"
             )
-            picasso_outpost._plot_and_compare_ntargets_in_barcodes(
+            clustering_molint._plot_and_compare_ntargets_in_barcodes(
                 df, bc, origin_colors, targets, fp_fig
             )
             fp_fig_ntargets.append(fp_fig)
@@ -11937,7 +11938,7 @@ class AutoPicasso(
 
         targets = channel_tags
         meanvals = np.loadtxt(parameters["fp_ripleys_meanvals"])
-        fig, ax = picasso_outpost._plot_interaction_graph(
+        fig, ax = clustering_molint._plot_interaction_graph(
             densities * parameters["node_factor"],
             meanvals * parameters["edge_factor"],
             parameters["channel_colors"],
