@@ -12,6 +12,61 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Fixed
 
+- **WP-7 code review (2× parallel finders → verify → fix):**
+  - **Content-aware dataset identity — no more silent data loss.** The backfill
+    `run_id` was derived from `basename|frames` only, so two DISTINCT datasets
+    sharing a filename + frame count (common when a pipeline emits uniform
+    `locs.hdf5` names and the distinguishing metadata is in the folder) collided
+    to one id and the second was silently dropped. A cheap `locs_signature`
+    (n_locs + nan-summed x/y) now rides into the identity, so distinct data gets
+    distinct ids (both ingest) while an exact copy still dedupes.
+  - **`--dry-run` no longer mutates the registry.** `ingest --dry-run --labels`
+    created taxon nodes via `ensure_taxon` before the dry-run guard; dry-run now
+    performs no registry write (the store is append-only).
+  - **UTF-8-BOM label CSVs no longer silently voided.** `read_label_rows` opens
+    with `utf-8-sig`, so an Excel "CSV UTF-8" export (BOM) doesn't turn the first
+    header into `﻿run_id` and drop every row as run-id-less.
+  - **Non-finite NeNA stays NULL.** `compute_nena_nm` guards a fit that
+    converges to NaN/inf without raising, and `compute_metrics` drops any
+    non-finite float at its boundary, so an invalid-JSON `NaN` never reaches the
+    POST.
+  - **Zero-loc datasets emit no density** (an empty acquisition is not a 0.0
+    density sample that would drag a cohort band). +6 regression tests.
+
+### Added
+
+- **WP-7 flat-archive backfill (`picasso_workflow/backfill/`).** Bootstraps
+  real cohort history from the pre-automation *flat* archive (raw movies +
+  picasso ``*_locs.hdf5`` + ``.yaml`` info, NOT picasso-workflow-structured)
+  into picasso-registry via the ``/bulk`` endpoint. Mirrors
+  ``picasso_registry.backfill_liveloc`` (per-file parse → map → ``bulk_ingest``,
+  content-derived stable ``run_id`` for idempotency, ``--dry-run``, per-file
+  error reporting). Four pieces + three CLIs:
+  - ``metrics`` — the metric vector straight from the hdf5: ``n_locs``,
+    localization precision (``lp_x_nm``/``lp_y_nm`` from ``lpx``/``lpy``),
+    ``photons_median``, ``background``, PSF σ, ``net_gradient_median``,
+    ``density_locs_um2`` (from the ``.yaml`` FOV extent); **NeNA
+    (``nena_nm``) via picasso ``postprocess.nena`` through the
+    ``_picasso_api`` boundary** (not reimplemented). Kinetics/drift/clustering
+    need a processing pass and are **out of scope** for this MVP (left absent →
+    NULL); raw re-localization is out of scope too. Missing features stay
+    absent/NULL rather than guessed.
+  - ``parser`` — ``.yaml`` + folder-name convention features and the stable
+    content-derived ``run_id`` + the ``metadata_complete`` gate.
+  - ``csv_import`` — curated taxon + good/bad label CSV (keyed by ``run_id``) →
+    taxon on the experiment (at ingest, via ``--labels``) + ``qc`` / ``feedback``
+    rows. Because the registry is **append-only** (insert-only, no PATCH),
+    taxon↔experiment linkage is set at experiment creation; the standalone
+    ``import_labels`` CLI appends qc/feedback to already-ingested runs and warns
+    it cannot retrofit a taxon.
+  - ``ranges`` — per-taxon expected-metric ranges (p05/p50/p95/n) learned from
+    **metadata-complete, non-simulated, taxon-labeled** records only; returned
+    (and optionally written to a JSON sidecar — the append-only taxonomy row is
+    not updated).
+  - CLIs: ``picasso-workflow-backfill-locs`` / ``-labels`` / ``-ranges``.
+
+### Fixed
+
 - **WP-TEMPLATE-CONFORMANCE code review: an aggregation template's default now
   covers the whole pipeline.** ``Template.resolve`` previously returned only the
   recipe's ``aggregation_modules``, so a change to the per-dataset

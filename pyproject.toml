@@ -52,6 +52,11 @@ keywords = ["picasso"]
 
 [project.scripts]
 picasso-workflow-gui = "picasso_workflow._launcher:main"
+# WP-7 flat-archive backfill: ingest _locs.hdf5 datasets, import curated
+# taxon + good/bad labels, and learn per-taxon expected-metric ranges.
+picasso-workflow-backfill-locs = "picasso_workflow.backfill.ingest:main"
+picasso-workflow-backfill-labels = "picasso_workflow.backfill.csv_import:main"
+picasso-workflow-backfill-ranges = "picasso_workflow.backfill.ranges:main"
 
 [project.optional-dependencies]
 # Development & test tooling -- NOT needed at runtime, so kept out of the base
