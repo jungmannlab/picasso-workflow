@@ -89,6 +89,14 @@ This file was started after v0.5.6; earlier history is in the git log.
   package (`resolution_frc`, `resolution_decorrelation`); import sites updated,
   behaviour unchanged. First step of the incremental `picasso_outpost` →
   `outpost/<feature>/` reorganisation tracked in `outpost/MANIFEST.md`.
+- **Outpost restructure (masking slice):** the `CellMask` cell-masking module
+  (`mask.py`: `CellMask` morphology/stats/CSR sampling + `otsu` +
+  `picassolocs_to_coords`) moved from the flat `outpost_modules/` into
+  `outpost/masking/`. `analyse.py` now imports `CellMask` directly at module
+  scope (the three call sites used only `CellMask`, and two assign to a local
+  `mask`, so importing the class avoids shadowing); `mask` dropped from
+  `outpost_modules/__init__.py`; the `tests/outpost_modules/test_mask.py` import
+  updated. Behaviour unchanged. Guarded by `tests/test_outpost_masking.py`.
 - **Dedup to picasso 0.12 (batch 1):** call `spinna.generate_N_structures`
   directly instead of through the redundant `picasso_outpost.generate_N_structures`
   wrapper, which is removed. No behavioural change — no call site passed the

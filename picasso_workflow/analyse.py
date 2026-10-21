@@ -106,6 +106,7 @@ from picasso_workflow import (
 )
 from picasso_workflow import __version__ as picassoworkflowversion
 from picasso_workflow.module_runtime import module_decorator  # noqa: F401
+from picasso_workflow.outpost.masking.mask import CellMask
 from picasso_workflow.outpost_modules import render
 from picasso_workflow.picasso_set.analyse_calibration import (
     PicassoSetCalibrationMixin,
@@ -12220,7 +12221,7 @@ class AutoPicasso(
         if fp_mask := parameters.get("fp_mask"):
             # mask = np.load(fp_mask)
             # mask = mask / np.sum(mask)
-            mask = outpost_modules.mask.CellMask.load(fp_mask)
+            mask = CellMask.load(fp_mask)
             area = mask.area * 1e6  # in nm^2
             mask_pixel_size = mask._upsample
         else:
@@ -13580,7 +13581,7 @@ class AutoPicasso(
         threshold = parameters["threshold"]
         mask_pixel_size = parameters["mask_pixel_size"]
         # binary = parameters["binary"]
-        cell_mask = outpost_modules.mask.CellMask.from_mol_coords(
+        cell_mask = CellMask.from_mol_coords(
             mols,
             pixelsize,
             binsize,
@@ -13712,7 +13713,7 @@ class AutoPicasso(
         # nth_largest is 1-based (1 = largest); converted to a 0-based
         # rank at the component-selection step below.
         nth_largest = parameters.get("nth_largest", 1)
-        mask = outpost_modules.mask.CellMask.load(parameters["fp_mask"])
+        mask = CellMask.load(parameters["fp_mask"])
         mask_pixel_area = mask._upsample**2
         densities = mask.densities
 
