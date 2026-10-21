@@ -107,6 +107,7 @@ from picasso_workflow import __version__ as picassoworkflowversion
 from picasso_workflow.module_runtime import module_decorator  # noqa: F401
 from picasso_workflow.outpost.masking.mask import CellMask
 from picasso_workflow.outpost.render import render
+from picasso_workflow.outpost.spinna import wrappers as spinna_wrappers
 from picasso_workflow.picasso_set.analyse_calibration import (
     PicassoSetCalibrationMixin,
 )
@@ -9101,7 +9102,7 @@ class AutoPicasso(
             depth = z_range
             # d = 3
 
-        structures, targets = picasso_outpost.load_structures_from_dict(
+        structures, targets = spinna_wrappers.load_structures_from_dict(
             structures
         )
 
@@ -9140,7 +9141,7 @@ class AutoPicasso(
                 fitted_label_unc,
                 best_distance,
                 best_score,
-            ) = picasso_outpost.single_spinna_fit_le_run(
+            ) = spinna_wrappers.single_spinna_fit_le_run(
                 target_a=target_a,
                 target_b=target_b,
                 exp_data=exp_data,
@@ -9182,7 +9183,7 @@ class AutoPicasso(
                 labeling_uncertainty,
                 labeling_uncertainty_scan,
                 labelunc_scan_figs,
-            ) = picasso_outpost.screen_label_uncertainty(
+            ) = spinna_wrappers.screen_label_uncertainty(
                 structures=structures,
                 label_unc=labeling_uncertainty,
                 le=parameters["labeling_efficiency"],
@@ -9226,7 +9227,7 @@ class AutoPicasso(
             "n_simulated": n_sim_targets,
         }
 
-        spinna_results, fp_figs = picasso_outpost.single_spinna_run(
+        spinna_results, fp_figs = spinna_wrappers.single_spinna_run(
             **spinna_pars
         )
         plt.close("all")
@@ -9376,7 +9377,7 @@ class AutoPicasso(
     #     else:
     #         # kick off SPINNA analysis
     #         print("starting spinna batch analysis")
-    #         result_dir, fp_summary, fp_fig = picasso_outpost.spinna_batch(
+    #         result_dir, fp_summary, fp_fig = spinna_wrappers.spinna_batch(
     #             cfg_fp
     #         )
 
@@ -9480,7 +9481,7 @@ class AutoPicasso(
         # directory lands inside the module folder.
         cfg_fp_used = os.path.join(results["folder"], os.path.basename(cfg_fp))
         spinna_config.to_csv(cfg_fp_used, index=False)
-        result_dir, fp_summary, fp_figs = picasso_outpost.spinna_batch(
+        result_dir, fp_summary, fp_figs = spinna_wrappers.spinna_batch(
             cfg_fp_used
         )
 
@@ -10368,7 +10369,7 @@ class AutoPicasso(
                 compound_density = density_gt[A]
                 area = parameters["n_simulate"] / (density_gt[A] * 1e6)
                 n_sim_targets = {A: int(parameters["n_simulate"])}
-            structures, targets = picasso_outpost.load_structures_from_dict(
+            structures, targets = spinna_wrappers.load_structures_from_dict(
                 structures
             )
 
@@ -10409,7 +10410,7 @@ class AutoPicasso(
                 "n_simulated": n_sim_targets,
             }
 
-            result, fp_fig = picasso_outpost.single_spinna_run(
+            result, fp_fig = spinna_wrappers.single_spinna_run(
                 spinna_parameters
             )
             plt.close("all")
@@ -13899,7 +13900,7 @@ class AutoPicasso(
             fit_NND_maxdist = 4 * parameters["nn_nth"] * expected_1stNN_peak
 
         # NND figures (simulated vs experimental) for the fitted model
-        fp_fig = picasso_outpost.plot_spinna_nnd(
+        fp_fig = spinna_wrappers.plot_spinna_nnd(
             mixer=best_mixer,
             targets=[target, reference],
             exp_data=exp_data,

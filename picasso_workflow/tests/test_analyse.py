@@ -16,7 +16,8 @@ import numpy as np
 import pandas as pd
 from unittest.mock import patch, MagicMock
 
-from picasso_workflow import analyse, util, picasso_outpost
+from picasso_workflow import analyse, util
+from picasso_workflow.outpost.spinna import wrappers as spinna_wrappers
 
 logger = logging.getLogger(__name__)
 
@@ -1442,7 +1443,7 @@ class TestAnalyseModules(unittest.TestCase):
         self.assertLess(default_max, 100)
         self.assertAlmostEqual(plot_max, 500.0, places=6)
 
-    @patch("picasso_workflow.analyse.picasso_outpost.single_spinna_run")
+    @patch("picasso_workflow.outpost.spinna.wrappers.single_spinna_run")
     def spinna(self, mock_sptmp):
         mock_sptmp.return_value = (0, [])
         info = [{"Width": 1000, "Height": 1000, "Frames": 10000}]
@@ -1500,8 +1501,8 @@ class TestAnalyseModules(unittest.TestCase):
 
         shutil.rmtree(os.path.join(self.results_folder, "00_spinna"))
 
-    @patch("picasso_workflow.analyse.picasso_outpost.single_spinna_run")
-    @patch("picasso_workflow.analyse.picasso_outpost.screen_label_uncertainty")
+    @patch("picasso_workflow.outpost.spinna.wrappers.single_spinna_run")
+    @patch("picasso_workflow.outpost.spinna.wrappers.screen_label_uncertainty")
     def test_spinna_label_uncertainty_screen(self, mock_screen, mock_sptmp):
         """Screening routes to screen_label_uncertainty, feeds the
         best-fit value into single_spinna_run and prepends the scan
@@ -1590,9 +1591,9 @@ class TestAnalyseModules(unittest.TestCase):
 
         shutil.rmtree(os.path.join(self.results_folder, "00_spinna"))
 
-    @patch("picasso_workflow.picasso_outpost._plot_label_unc_scan")
+    @patch("picasso_workflow.outpost.spinna.wrappers._plot_label_unc_scan")
     @patch(
-        "picasso_workflow.picasso_outpost.spinna."
+        "picasso_workflow.outpost.spinna.wrappers.spinna."
         "compare_models_given_label_unc"
     )
     def test_screen_label_uncertainty_selects_best(
@@ -1601,7 +1602,7 @@ class TestAnalyseModules(unittest.TestCase):
         """screen_label_uncertainty scans multi-candidate targets, keeps
         the lowest-scoring value and leaves single-candidate targets
         untouched."""
-        Structure = picasso_outpost.spinna.Structure
+        Structure = spinna_wrappers.spinna.Structure
         mono_a = Structure("mono_A")
         mono_a.define_coordinates("A", [0.0], [0.0], [0.0])
         mono_b = Structure("mono_B")
@@ -1618,7 +1619,7 @@ class TestAnalyseModules(unittest.TestCase):
             "B": np.random.rand(20, 2) * 100,
         }
 
-        best, scan, figs = picasso_outpost.screen_label_uncertainty(
+        best, scan, figs = spinna_wrappers.screen_label_uncertainty(
             structures=structures,
             label_unc=label_unc,
             le={"A": 0.5, "B": 0.5},
@@ -1644,8 +1645,8 @@ class TestAnalyseModules(unittest.TestCase):
         self.assertNotIn("B", scan)
         self.assertEqual(figs, ["scan_A.png"])
 
-    @patch("picasso_workflow.analyse.picasso_outpost.single_spinna_run")
-    @patch("picasso_workflow.analyse.picasso_outpost.single_spinna_fit_le_run")
+    @patch("picasso_workflow.outpost.spinna.wrappers.single_spinna_run")
+    @patch("picasso_workflow.outpost.spinna.wrappers.single_spinna_fit_le_run")
     def test_spinna_pair_distance_screen(self, mock_fitle, mock_sptmp):
         """pair_distance_screen routes to fit_le (not single_spinna_run),
         passing the distance grid and per-target label_unc lists, and
@@ -1740,8 +1741,8 @@ class TestAnalyseModules(unittest.TestCase):
 
         shutil.rmtree(os.path.join(self.results_folder, "00_spinna"))
 
-    @patch("picasso_workflow.picasso_outpost.plot_spinna_nnd")
-    @patch("picasso_workflow.picasso_outpost.spinna.fit_le")
+    @patch("picasso_workflow.outpost.spinna.wrappers.plot_spinna_nnd")
+    @patch("picasso_workflow.outpost.spinna.wrappers.spinna.fit_le")
     def test_single_spinna_fit_le_run(self, mock_fit_le, mock_plot):
         """single_spinna_fit_le_run forwards the screen inputs to
         spinna.fit_le, plots the best-fit mixer and returns the fitted
@@ -1765,7 +1766,7 @@ class TestAnalyseModules(unittest.TestCase):
 
         tmpdir = tempfile.mkdtemp()
         try:
-            out = picasso_outpost.single_spinna_fit_le_run(
+            out = spinna_wrappers.single_spinna_fit_le_run(
                 target_a="A",
                 target_b="B",
                 exp_data=exp_data,
@@ -1817,7 +1818,7 @@ class TestAnalyseModules(unittest.TestCase):
         mock_plot.assert_called_once()
         self.assertIs(mock_plot.call_args.kwargs["mixer"], best_mixer)
 
-    @patch("picasso_workflow.analyse.picasso_outpost.plot_spinna_nnd")
+    @patch("picasso_workflow.outpost.spinna.wrappers.plot_spinna_nnd")
     @patch("picasso_workflow.analyse.spinna.fit_le")
     def test_labeling_efficiency_analysis_screen(self, mock_fit_le, mock_plot):
         """pair_distance_screen and labeling_uncertainty_screen expand
@@ -1906,7 +1907,7 @@ class TestAnalyseModules(unittest.TestCase):
             )
         )
 
-    @patch("picasso_workflow.analyse.picasso_outpost.spinna_batch")
+    @patch("picasso_workflow.outpost.spinna.wrappers.spinna_batch")
     @patch("picasso_workflow.analyse.io.save_locs")
     def spinna_batch(self, mock_save_locs, mock_spinna_batch):
         # a minimal spinna batch config with two analysis rows; the
@@ -1975,7 +1976,7 @@ class TestAnalyseModules(unittest.TestCase):
         os.remove(cfg_fp)
         shutil.rmtree(os.path.join(self.results_folder, "00_spinna_batch"))
 
-    @patch("picasso_workflow.analyse.picasso_outpost.spinna_batch")
+    @patch("picasso_workflow.outpost.spinna.wrappers.spinna_batch")
     @patch("picasso_workflow.analyse.io.save_locs")
     def test_spinna_batch_single_dataset(
         self, mock_save_locs, mock_spinna_batch
@@ -2033,7 +2034,7 @@ class TestAnalyseModules(unittest.TestCase):
             }
         },
     )
-    @patch("picasso_workflow.analyse.picasso_outpost.spinna_batch")
+    @patch("picasso_workflow.outpost.spinna.wrappers.spinna_batch")
     @patch("picasso_workflow.analyse.io.save_locs")
     def test_spinna_batch_converts_paths(
         self, mock_save_locs, mock_spinna_batch, mock_node
@@ -2986,7 +2987,7 @@ class TestAnalyseModules(unittest.TestCase):
 
         shutil.rmtree(os.path.join(self.results_folder, "00_link_locs"))
 
-    @patch("picasso_workflow.analyse.picasso_outpost.plot_spinna_nnd")
+    @patch("picasso_workflow.outpost.spinna.wrappers.plot_spinna_nnd")
     @patch("picasso_workflow.analyse.spinna.fit_le")
     def labeling_efficiency_analysis(self, mock_fit_le, mock_plot_nnd):
         parameters = {
