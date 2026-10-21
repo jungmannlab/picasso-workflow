@@ -14,32 +14,9 @@ import matplotlib.pyplot as plt
 from scipy.spatial import KDTree
 from scipy.ndimage import zoom, gaussian_filter, label
 
+from picasso_workflow._picasso_api import masking as picasso_masking
+
 # logger = logging.getLogger(__name__)
-
-
-def otsu(image):
-    """Simplified function from scikit-image so that i do not need to
-    install the whole package."""
-
-    # histogram the image and converts bin edges to bin centers
-    counts, bin_edges = np.histogram(image, bins=256)
-    counts = counts.astype("float32", copy=False)
-    bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2.0
-
-    # class probabilities for all possible thresholds
-    weight1 = np.cumsum(counts)
-    weight2 = np.cumsum(counts[::-1])[::-1]
-    # class means for all possible thresholds
-    mean1 = np.cumsum(counts * bin_centers) / weight1
-    mean2 = (np.cumsum((counts * bin_centers)[::-1]) / weight2[::-1])[::-1]
-
-    # Clip ends to align class 1 and class 2 variables:
-    # The last value of ``weight1``/``mean1`` should pair with zero values in
-    # ``weight2``/``mean2``, which do not exist.
-    variance12 = weight1[:-1] * weight2[1:] * (mean1[:-1] - mean2[1:]) ** 2
-    idx = np.argmax(variance12)
-    thresh = bin_centers[idx]
-    return thresh
 
 
 def univariate_ripley_K(X, r, area):
@@ -553,7 +530,7 @@ def get_cell_mask(
     )[0]
     mask = np.flipud(np.rot90(mask))
     mask = gaussian_filter(mask, blur)
-    thresh = otsu(mask) * threshold
+    thresh = picasso_masking.threshold_otsu(mask) * threshold
     mask[mask < thresh] = 0
     factor = int(binsize / upsample)
     mask_final = zoom(mask.astype(np.float64), factor)

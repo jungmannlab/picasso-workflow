@@ -92,6 +92,17 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Changed
 
+- **Dedup — private `otsu()` → `picasso.masking.threshold_otsu`.** Three
+  byte-identical private copies of Otsu's-threshold (`outpost/masking/mask.py`,
+  `outpost/spatial_stats/ripleys.py`,
+  `outpost/spatial_stats/ripley_dcatlas_analysis.py`) were the seed for the
+  public `threshold_otsu` picasso now ships; all three were deleted and their
+  callers rewired to `picasso.masking.threshold_otsu` through the `_picasso_api`
+  boundary. A new equivalence test (`test_otsu_threshold_matches_upstream`) pins
+  that the upstream threshold matches the removed fork (max abs diff 0 over
+  random bimodal images). Behaviour unchanged. The correct upstream is the
+  scalar `threshold_otsu`, not `mask_image(method="otsu")` — the callers scale
+  the threshold (`otsu(x) * k`), they don't want a mask.
 - **Monolith split S9 (final) — report histogram helpers →
   `outpost/reporting/`; `picasso_outpost.py` deleted.** The last two functions
   in the monolith, `plot_1dhist` / `plot_2dhist`, moved to

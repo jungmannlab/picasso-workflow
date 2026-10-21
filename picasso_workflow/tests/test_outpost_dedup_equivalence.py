@@ -15,6 +15,7 @@ import pytest
 
 from picasso_workflow.outpost.picks import picks as picks_mod
 from picasso_workflow._picasso_api import postprocess
+from picasso_workflow._picasso_api import masking as picasso_masking
 
 pytest.importorskip(
     "picasso", reason="picassosr required for the dedup equivalence tests"
@@ -135,3 +136,44 @@ def test_pick_similar_analysis_numba_compiles():
     )
     assert len(x_sim) == len(y_sim) == len(rmsds) == len(nlocs)
     assert len(x_sim) >= 1
+
+
+def _fork_otsu(image):
+    """The pre-dedup picasso-workflow fork of Otsu's threshold.
+
+    Verbatim copy of the ``otsu`` that lived (in triplicate) in
+    ``outpost/masking/mask.py``, ``outpost/spatial_stats/ripleys.py`` and
+    ``outpost/spatial_stats/ripley_dcatlas_analysis.py`` before they were
+    rewired to ``picasso.masking.threshold_otsu``. Kept here as the reference
+    the equivalence test pins against.
+    """
+    counts, bin_edges = np.histogram(image, bins=256)
+    counts = counts.astype("float32", copy=False)
+    bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2.0
+    weight1 = np.cumsum(counts)
+    weight2 = np.cumsum(counts[::-1])[::-1]
+    mean1 = np.cumsum(counts * bin_centers) / weight1
+    mean2 = (np.cumsum((counts * bin_centers)[::-1]) / weight2[::-1])[::-1]
+    variance12 = weight1[:-1] * weight2[1:] * (mean1[:-1] - mean2[1:]) ** 2
+    idx = np.argmax(variance12)
+    return bin_centers[idx]
+
+
+def test_otsu_threshold_matches_upstream():
+    """picasso's ``masking.threshold_otsu`` reproduces the removed fork.
+
+    The three byte-identical ``otsu`` copies in the outpost were deleted and
+    their callers rewired to ``picasso.masking.threshold_otsu`` (reached via
+    the _picasso_api boundary). Pin that the upstream threshold equals the
+    fork's output across a range of bimodal, density-map-like grayscale images
+    (what the callers actually threshold), so the dedup is behaviour-preserving.
+    """
+    rng = np.random.default_rng(1234)
+    for _ in range(50):
+        h = int(rng.integers(8, 64))
+        w = int(rng.integers(8, 64))
+        half = (h * w) // 2
+        lo = rng.normal(2.0, 1.0, size=half)
+        hi = rng.normal(12.0, 3.0, size=h * w - half)
+        image = np.abs(np.concatenate([lo, hi])).reshape(h, w)
+        assert picasso_masking.threshold_otsu(image) == _fork_otsu(image)

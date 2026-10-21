@@ -15,7 +15,6 @@ def test_cellmask_importable_at_new_location():
     from picasso_workflow.outpost.masking.mask import CellMask
 
     assert mask.CellMask is CellMask
-    assert callable(mask.otsu)
     assert callable(mask.picassolocs_to_coords)
 
 
