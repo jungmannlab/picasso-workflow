@@ -106,7 +106,7 @@ from picasso_workflow import (
 from picasso_workflow import __version__ as picassoworkflowversion
 from picasso_workflow.module_runtime import module_decorator  # noqa: F401
 from picasso_workflow.outpost.masking.mask import CellMask
-from picasso_workflow.outpost_modules import render
+from picasso_workflow.outpost.render import render
 from picasso_workflow.picasso_set.analyse_calibration import (
     PicassoSetCalibrationMixin,
 )
