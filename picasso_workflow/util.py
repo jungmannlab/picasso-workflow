@@ -1611,7 +1611,8 @@ class AbstractModuleCollection(abc.ABC):
 
         Largely identical to an implementation in spinna that will be
         integrated into picasso; evaluate deprecation (or moving the source
-        from ``outpost_modules/ripleys`` to ``picasso/spinna``) at that time.
+        from ``outpost/spatial_stats/ripleys`` to ``picasso/spinna``) at that
+        time.
         The locs must be protein positions at this stage.
 
         Parameters

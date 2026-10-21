@@ -99,7 +99,6 @@ except ImportError:
 
 
 from picasso_workflow import (
-    outpost_modules,
     picasso_outpost,
     process_brightfield,
     util,
@@ -7440,16 +7439,23 @@ class AutoPicasso(
         """
         folder_in, file_in = os.path.split(parameters["fp_locs"])
         file_nameonly, _ = os.path.splitext(file_in)
-        Meas = outpost_modules.binding_event_analysis.Measurement(
+        # Lazy import: needs the optional ``[binding-events]`` extra (lmfit,
+        # pandarallel), so importing analyse.py stays cheap and dependency-free.
+        from picasso_workflow.outpost.binding_events.analysis import (
+            Measurement,
+        )
+        from picasso_workflow.outpost.binding_events.plotting import Plotting
+
+        Meas = Measurement(
             in_path=parameters["fp_locs"],
             save_path=results["folder"],
-            saving_path=file_nameonly,
+            saving_name=file_nameonly,
             total_n_frames=self.frames,
         )
         Meas.Begin()
         Meas.FileSaver()
 
-        Plotter = outpost_modules.binding_event_plotting.Plotting(
+        Plotter = Plotting(
             table_g=Meas.table_g,
             table_k=Meas.table_k,
             show=False,
@@ -7465,13 +7471,13 @@ class AutoPicasso(
         results["fig_sbr"] = fp
         _, fp = Plotter.Plot_tb()
         results["fig_tb"] = fp
-        _, fp = Plotter.plot_td()
+        _, fp = Plotter.Plot_td()
         results["fig_td"] = fp
-        _, fp = Plotter.plot_r()
+        _, fp = Plotter.Plot_r()
         results["fig_r"] = fp
         _, fp = Plotter.Plot_locs()
         results["fig_locs"] = fp
-        config = Plotter.saveAllResults()
+        config = Plotter.SaveAllResults()
         for k, v in config.items():
             results[k] = v
 
@@ -11935,9 +11941,9 @@ class AutoPicasso(
     # @module_decorator
     # def ripleysk_rafal(self, i, parameters, results):
     #     """Exactly along Rafal's code"""
-    #     from picasso_workflow.outpost_modules.ripley_dcatlas_analysis \
+    #     from picasso_workflow.outpost.spatial_stats.ripley_dcatlas_analysis \
     #         import analyze as analyze_whole_cell
-    #     from picasso_workflow.outpost_modules.ripley_dcatlas_analysis \
+    #     from picasso_workflow.outpost.spatial_stats.ripley_dcatlas_analysis \
     #         import postprocess_ripley_matrix
 
     #     rcode = generate_random_code(6)
@@ -12212,6 +12218,8 @@ class AutoPicasso(
                 )
             )
 
+        from picasso_workflow.outpost.spatial_stats import ripleys
+
         # if isinstance(parameters["fp_combined_locs"], list):
         #     fp_combined_locs = parameters["fp_combined_locs"][0]
         # else:
@@ -12245,7 +12253,7 @@ class AutoPicasso(
             locs_used = self.channel_locs
 
         mol_coords = [
-            outpost_modules.ripleys.convert_picasso_to_coords(mol, pixelsize)
+            ripleys.convert_picasso_to_coords(mol, pixelsize)
             for mol in locs_used
         ]
 
@@ -12256,7 +12264,7 @@ class AutoPicasso(
                 fig_n,
                 curves,
                 curves_norm,
-            ) = outpost_modules.ripleys.typefraction_all_channels(
+            ) = ripleys.typefraction_all_channels(
                 mol_coords,
                 radii,
                 nRandomControls,
@@ -12280,7 +12288,7 @@ class AutoPicasso(
                 fig_n,
                 curves,
                 curves_norm,
-            ) = outpost_modules.ripleys.analyze_all_channels(
+            ) = ripleys.analyze_all_channels(
                 mol_coords,
                 mask,
                 mask_pixel_size,
@@ -12305,7 +12313,7 @@ class AutoPicasso(
         )
         np.save(results["fp_curves_norm"], curves_norm)
 
-        # ripley_matrix = outpost_modules.ripleys.postprocess_ripley_matrix(
+        # ripley_matrix = ripleys.postprocess_ripley_matrix(
         #     ripley_matrix, radii
         # )
 
@@ -12779,15 +12787,17 @@ class AutoPicasso(
 
         significance_threshold = significance_thresholds[0]
 
+        from picasso_workflow.outpost.spatial_stats import ripleys
+
         # load and plot the single curves
-        fig_curves, ax_curves = outpost_modules.ripleys.init_plot(
+        fig_curves, ax_curves = ripleys.init_plot(
             len(channel_tags),
             "un-normalized",
             ripleys_controltype,
             ripleys_metric,
             figsize_per_target=5,
         )
-        fig_curves_norm, ax_curves_norm = outpost_modules.ripleys.init_plot(
+        fig_curves_norm, ax_curves_norm = ripleys.init_plot(
             len(channel_tags),
             "normalized",
             ripleys_controltype,
@@ -12801,7 +12811,7 @@ class AutoPicasso(
             curves_norm = np.load(fp_curve_norm)
             for i, name1 in enumerate(channel_tags):
                 for j, name2 in enumerate(channel_tags):
-                    outpost_modules.ripleys.plot_ripleys(
+                    ripleys.plot_ripleys(
                         ripleys_radii,
                         curves[i, j, :],
                         None,
@@ -12815,7 +12825,7 @@ class AutoPicasso(
                         label_data=reportname,
                         showControlEnvelope=False,
                     )
-                    outpost_modules.ripleys.plot_ripleys(
+                    ripleys.plot_ripleys(
                         ripleys_radii,
                         curves_norm[i, j, :],
                         None,
@@ -13482,8 +13492,8 @@ class AutoPicasso(
 
         Largely identical to an implementation in spinna that will be
         integrated into picasso; evaluate deprecation (or moving the source
-        from ``outpost_modules/ripleys`` to ``picasso/spinna``) at that time.
-        The locs must be protein positions at this stage.
+        from ``outpost/spatial_stats/ripleys`` to ``picasso/spinna``) at that
+        time. The locs must be protein positions at this stage.
 
         Parameters
         ----------
@@ -13572,7 +13582,7 @@ class AutoPicasso(
             mols = [locs for locs in self.channel_locs]
 
         # mol_coords = [
-        #     outpost_modules.ripleys.convert_picasso_to_coords(mol, pixelsize)
+        #     ripleys.convert_picasso_to_coords(mol, pixelsize)
         #     for mol in mols
         # ]
         binsize = parameters["binsize"]
@@ -13634,7 +13644,7 @@ class AutoPicasso(
             logger.debug(f"max locs y vals [px] are {ymax}")
         area = cell_mask.area
 
-        # mask, area = outpost_modules.ripleys.get_cell_mask(
+        # mask, area = ripleys.get_cell_mask(
         #     mol_coords,
         #     pixelsize,
         #     binsize=binsize,
@@ -13644,7 +13654,7 @@ class AutoPicasso(
         #     binary=binary,
         # )
         # if parameters.get("select_cell"):
-        #     mask = outpost_modules.ripleys.filter_mask(mask)
+        #     mask = ripleys.filter_mask(mask)
 
         results["area"] = area
         # results["fp_mask"] = os.path.join(
@@ -13658,7 +13668,7 @@ class AutoPicasso(
         # results["fp_fig_mask"] = os.path.join(
         #     results["folder"], f"mask_binary-{binary}_{rcode}.png"
         # )
-        # outpost_modules.ripleys.plot_mask(
+        # ripleys.plot_mask(
         #     mask, mask_pixel_size, results["fp_fig_mask"]
         # )
         results["fp_fig_mask_binary"] = os.path.join(
