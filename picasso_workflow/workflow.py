@@ -55,6 +55,7 @@ from picasso_workflow.util import (
     DictSimpleTyper,
     convert_filepath_for_machine,
 )
+from picasso_workflow.registry_client import registry_logger_from_config
 from picasso_workflow import progress as pwprogress
 from picasso_workflow.progress import (
     ProgressManager,
@@ -543,6 +544,80 @@ def _find_previous_runner_postfix(folder: str, report_name: str) -> str | None:
 # logger = logging.getLogger(__name__)
 
 
+# Result keys carrying a numeric metric worth recording to the registry's
+# Metrics row, mapped to the registry schema field name. The Metrics schema
+# allows extra fields, so unmapped numerics are not forced in; this is the
+# curated, typed subset the preprocess modules produce. Kept small and
+# additive -- a richer metric-extraction layer is a later WP.
+_METRIC_RESULT_KEYS = {
+    "nlocs": "n_locs",
+    "duration": "compute_seconds",
+}
+
+# Result keys that point at a saved artifact on disk, mapped to the registry
+# artifact ``kind``. Each becomes one artifact pointer row keyed by run_id.
+_ARTIFACT_RESULT_KEYS = {
+    "filepath": "locs_hdf5",
+}
+
+
+def _module_metrics(results: dict) -> dict:
+    """Extract the numeric metrics a module recorded, for the registry.
+
+    Pulls the curated :data:`_METRIC_RESULT_KEYS` out of a module's results
+    and renames them to the registry ``Metrics`` schema fields. Unknown /
+    non-numeric values are skipped. Returns ``{}`` when a module produced no
+    recordable metric (a metrics record is still POSTed -- one per module --
+    carrying just the run_id + module identity).
+
+    Parameters
+    ----------
+    results : dict
+        A module's results dict.
+
+    Returns
+    -------
+    dict
+        Registry-schema metric fields (possibly empty).
+    """
+    metrics: dict = {}
+    if not isinstance(results, dict):
+        return metrics
+    for src, dst in _METRIC_RESULT_KEYS.items():
+        val = results.get(src)
+        if isinstance(val, bool) or not isinstance(val, (int, float)):
+            continue
+        metrics[dst] = val
+    return metrics
+
+
+def _module_artifacts(results: dict) -> list[tuple[str, str]]:
+    """Extract ``(kind, uri)`` artifact pointers a module recorded.
+
+    Pulls the :data:`_ARTIFACT_RESULT_KEYS` paths out of a module's results so
+    each can be logged as an artifact pointer (the registry stores the
+    pointer, not the bytes). Skips missing / non-string values.
+
+    Parameters
+    ----------
+    results : dict
+        A module's results dict.
+
+    Returns
+    -------
+    list of (str, str)
+        ``(kind, uri)`` pairs.
+    """
+    artifacts: list[tuple[str, str]] = []
+    if not isinstance(results, dict):
+        return artifacts
+    for src, kind in _ARTIFACT_RESULT_KEYS.items():
+        uri = results.get(src)
+        if isinstance(uri, str) and uri:
+            artifacts.append((kind, uri))
+    return artifacts
+
+
 class AggregationWorkflowRunner:
     """Run several single-dataset workflows and aggregate their results.
 
@@ -706,8 +781,10 @@ class AggregationWorkflowRunner:
                 "single_dataset_tileparameters"
             )
         ) is None:
-            raise KeyError("""aggregation_workflow missing
-                "single_dataset_tileparameters".""")
+            raise KeyError(
+                """aggregation_workflow missing
+                "single_dataset_tileparameters"."""
+            )
         instance = cls(postfix)
         # The coordinator may override the SLURM-derived rank/size to control
         # how the single workflows are distributed (e.g. run all locally when
@@ -1104,6 +1181,9 @@ class AggregationWorkflowRunner:
             wr.stop_after = stop_index
         self.cpage_names.append(wr.reporter_config["report_name"])
         self._agg_report_folder = wr.result_folder
+        # Tag this sub-runner's per-module registry records as aggregation
+        # scope (the default is "single"); see _log_module_to_registry.
+        wr.registry_scope = "aggregation"
         agg_success = wr.run()
         self.all_results["aggregation"] = wr.results
         self.save(self.result_folder)
@@ -2158,8 +2238,10 @@ class WorkflowRunner:
                 self.paused = True
                 break
             if i < plan.start_index:
-                logger.debug(f"""Module {i}, {module_name} has been previously
-                    analyzed. Skipping.""")
+                logger.debug(
+                    f"""Module {i}, {module_name} has been previously
+                    analyzed. Skipping."""
+                )
                 progress.module_skipped(i)
                 continue
             if i < plan.frontier:
@@ -2804,6 +2886,73 @@ class WorkflowRunner:
             },
         }
 
+    def _registry_logger(self):
+        """Return this run's :class:`RegistryLogger`, built once from config.
+
+        Lazy + cached: built from ``analysis_config["registry"]`` on first use
+        (so both the ``config_from_dicts`` and ``load`` construction paths get
+        it without extra wiring). A run with no registry config yields a
+        disabled logger, so the per-module POST is a cheap no-op and the unit
+        tests stay hermetic.
+
+        Returns
+        -------
+        RegistryLogger
+        """
+        logger_obj = getattr(self, "_registry_logger_obj", None)
+        if logger_obj is None:
+            logger_obj = registry_logger_from_config(
+                getattr(self, "analysis_config", None)
+            )
+            self._registry_logger_obj = logger_obj
+        return logger_obj
+
+    def _log_module_to_registry(
+        self, fun_name: str, i: int, results: dict
+    ) -> None:
+        """POST one metrics record + any artifact pointers for a module.
+
+        Best-effort and non-blocking: the :class:`RegistryLogger` swallows and
+        logs every error, so a registry outage never breaks the run. Exactly
+        one metrics record per (successful) module, keyed by ``run_id``; plus
+        an artifact pointer for each saved file the module recorded (a locs
+        HDF5, a render PNG).
+
+        The ``scope`` ("single"/"aggregation") the record is tagged with comes
+        from ``self.registry_scope`` (default "single"); the aggregation runner
+        sets it to "aggregation" on the runner that executes the aggregation
+        modules, so aggregation metrics are not mislabeled as single-scope.
+
+        Known limitation (deferred to the WP-9 hand-off, which owns
+        aggregation/cluster provenance): when an ``AggregationWorkflowRunner``
+        fans a single ``run_id`` out to N per-dataset sub-runners, their
+        ``module_index`` restarts at 0 per sub-run, so aggregation-run metrics
+        keyed by ``(run_id, module_index)`` are not yet unique across the
+        sub-runs. Single-dataset preprocess (WP-6's deliverable) is one runner
+        with unique indices and is unaffected. Likewise, inject the registry
+        via ``base_url`` (the production path): a live client *object* placed in
+        ``analysis_config["registry"]["client"]`` is not deepcopy-safe across
+        the aggregation runner's config copy.
+
+        Parameters
+        ----------
+        fun_name : str
+            The module name.
+        i : int
+            The module's workflow index.
+        results : dict
+            The module's results dict.
+        """
+        reg = self._registry_logger()
+        if not reg.enabled:
+            return
+        scope = getattr(self, "registry_scope", "single")
+        reg.log_module_metrics(
+            fun_name, i, _module_metrics(results), scope=scope
+        )
+        for kind, uri in _module_artifacts(results):
+            reg.log_artifact(fun_name, kind, uri)
+
     def call_module(self, fun_name: str, i: int, parameters: dict) -> bool:
         """Run one workflow module: analyse, then report.
 
@@ -2894,5 +3043,9 @@ class WorkflowRunner:
             except ConfluenceInterfaceError as e:
                 logger.error(e)
                 logger.error(traceback.format_exc())
+
+        # Per-module provenance to picasso-registry (best-effort, keyed by
+        # run_id). Non-blocking: a registry problem never aborts the run.
+        self._log_module_to_registry(fun_name, i, self.results[key])
 
         return self.results[key]["success"]

@@ -10,8 +10,48 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ## [Unreleased]
 
+### Fixed
+
+- **WP-6 code review: per-module registry ``scope`` is no longer hardcoded to
+  ``"single"``.** The aggregation runner now sets ``registry_scope =
+  "aggregation"`` on the sub-runner that executes the aggregation modules, and
+  ``_log_module_to_registry`` reads ``self.registry_scope`` (default
+  ``"single"``) — so aggregation-scope metrics are not mislabeled as single in
+  the registry's ``Metrics.scope`` column. Documented as a deferred limitation
+  (WP-9 hand-off): aggregation runs fan one ``run_id`` out to N per-dataset
+  sub-runners whose ``module_index`` restarts at 0, so ``(run_id, index)`` is
+  not yet unique across sub-runs; single-dataset preprocess (one runner, unique
+  indices) is unaffected. Inject the registry via ``base_url`` for aggregation
+  runs — a live client *object* in ``analysis_config`` is not deepcopy-safe.
+
 ### Added
 
+- **WP-6 — `preprocess` single-dataset recipe + thin registry client.** The
+  authoritative-localization reduction run when a FOV/round completes, and the
+  per-module provenance logging that feeds the picasso-registry corpus.
+  - **`standard_singledataset_workflows.preprocess`** — a location-agnostic
+    single-dataset recipe `load_dataset_movie → identify → localize → render →
+    save_single_dataset`. **No undrift** here: drift correction (and
+    aggregation) run on the SLURM cluster, and only localizations cross to it
+    (C33/C15). `validate_preprocess` validates it against `MODULE_REGISTRY`,
+    seeding the cluster-deferred `locs_undrifted` capability so render/save
+    (which predate the acquire→cluster split) don't read as missing a step.
+  - **Reuse of the lossless live locs (`live_locs.py`).** When the live pass
+    was lossless and still valid for the movie — decided by **checksumming the
+    frame range** (`frame_range_checksum` + `reuse_live_locs`) against a
+    `LiveLocsDescriptor` — the live localizations are authoritative, so the
+    recipe loads them (`load_dataset_localizations`) and **skips
+    re-localization** entirely; any mismatch (lossy pass, partial coverage,
+    changed data) falls back to re-localizing. The upstream live-locs
+    provenance type is not in this repo yet (WP-4), so the descriptor is a
+    documented, tested seam the caller supplies.
+  - **`registry_client.RegistryLogger`** — a thin, **best-effort, non-blocking**
+    wrapper that POSTs **one metrics record per module** plus artifact pointers
+    to picasso-registry, all keyed by `run_id`. A registry outage is swallowed
+    and logged, never raised into the recipe. The client is **injectable**
+    (real `RegistryClient`, or a test double), so unit tests stay hermetic;
+    wired into `WorkflowRunner.call_module` and configured via
+    `analysis_config["registry"]` (absent → disabled no-op, the default).
 - **WP-ADVISOR — shared, deterministic, LLM-free QC advisor + Materials &
   Methods (`picasso_workflow.qc_advisor`).** Ported from LiveLocalization V0.8
   (`qc_advisor.py` / `materials_methods.py` and the filter/min-net-gradient
