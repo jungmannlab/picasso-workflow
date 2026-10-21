@@ -242,7 +242,7 @@ class TestAnalyseModules(unittest.TestCase):
             assert os.path.exists(fp)
             os.remove(fp)
 
-    @patch("picasso_workflow.analyse.picasso_outpost.pick_gold")
+    @patch("picasso_workflow.outpost.picks.picks.pick_gold")
     def test_find_gold_empty_saves(self, mock_pick_gold):
         """With no gold found, the empty gold file still saves: the empty
         frame keeps self.locs's numeric dtypes rather than object dtype, which
@@ -2230,7 +2230,7 @@ class TestAnalyseModules(unittest.TestCase):
         shutil.rmtree(os.path.join(self.results_folder, "00_find_structures"))
 
     @patch("picasso_workflow.analyse.picasso_outpost.pick_origami")
-    @patch("picasso_workflow.analyse.picasso_outpost.picked_locs")
+    @patch("picasso_workflow.outpost.picks.picks.picked_locs")
     @patch("picasso_workflow.analyse.render.plot_scene")
     @patch("picasso_workflow.analyse.io.save_locs")
     def pick_origami(
@@ -2394,7 +2394,7 @@ class TestAnalyseModules(unittest.TestCase):
         "cluster_structure_patterns"
     )
     @patch("picasso_workflow.analyse.picasso_outpost.pick_origami")
-    @patch("picasso_workflow.analyse.picasso_outpost.picked_locs")
+    @patch("picasso_workflow.outpost.picks.picks.picked_locs")
     @patch("picasso_workflow.analyse.render.plot_scene")
     @patch("picasso_workflow.analyse.io.save_locs")
     def test_pick_origami_cluster_patterns(
@@ -2560,7 +2560,7 @@ class TestAnalyseModules(unittest.TestCase):
 
     @patch("picasso_workflow.analyse.picasso_outpost.cluster_lattice_defects")
     @patch("picasso_workflow.analyse.picasso_outpost.pick_origami")
-    @patch("picasso_workflow.analyse.picasso_outpost.picked_locs")
+    @patch("picasso_workflow.outpost.picks.picks.picked_locs")
     @patch("picasso_workflow.analyse.render.plot_scene")
     @patch("picasso_workflow.analyse.io.save_locs")
     def test_pick_origami_cluster_patterns_lattice(
@@ -2831,8 +2831,8 @@ class TestAnalyseModules(unittest.TestCase):
             )
         )
 
-    @patch("picasso_workflow.analyse.picasso_outpost.pick_gold")
-    @patch("picasso_workflow.analyse.picasso_outpost.picked_locs")
+    @patch("picasso_workflow.outpost.picks.picks.pick_gold")
+    @patch("picasso_workflow.outpost.picks.picks.picked_locs")
     @patch("picasso_workflow.analyse.io.save_locs")
     def find_gold(self, mock_save_locs, mock_picked_locs, mock_pick_gold):
         parameters = {}
@@ -2842,8 +2842,8 @@ class TestAnalyseModules(unittest.TestCase):
 
         shutil.rmtree(os.path.join(self.results_folder, "00_find_gold"))
 
-    @patch("picasso_workflow.analyse.picasso_outpost.picked_locs")
-    @patch("picasso_workflow.analyse.picasso_outpost._undrift_from_picked")
+    @patch("picasso_workflow.outpost.picks.picks.picked_locs")
+    @patch("picasso_workflow.outpost.picks.picks._undrift_from_picked")
     @patch("picasso_workflow.analyse.io.save_locs")
     @patch("picasso_workflow.analyse.io.load_locs")
     def undrift_from_picked(
@@ -3487,8 +3487,8 @@ class TestAnalyseModules(unittest.TestCase):
     def resolution_analysis(self):
         pass
 
-    @patch("picasso_workflow.analyse.picasso_outpost.pick_similar")
-    @patch("picasso_workflow.analyse.picasso_outpost.picked_locs")
+    @patch("picasso_workflow.outpost.picks.picks.pick_similar")
+    @patch("picasso_workflow.outpost.picks.picks.picked_locs")
     @patch("picasso_workflow.analyse.render.plot_scene")
     @patch("picasso_workflow.analyse.io.save_locs")
     def find_similar(
