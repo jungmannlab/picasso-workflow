@@ -946,7 +946,7 @@ class TestAnalyseModules(unittest.TestCase):
             os.path.join(self.results_folder, "00_load_datasets_to_aggregate")
         )
 
-    @patch("picasso_workflow.outpost_modules.render.plot_scene")
+    @patch("picasso_workflow.outpost.render.render.plot_scene")
     @patch("picasso_workflow.analyse.picasso_outpost.align_channels")
     def align_channels(self, mock_align_channels, mock_plot_scene):
         mock_align_channels.return_value = (
