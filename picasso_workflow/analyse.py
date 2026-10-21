@@ -10669,7 +10669,7 @@ class AutoPicasso(
             Module results (see
             :class:`~picasso_workflow.util.AbstractModuleCollection`).
         """
-        from picasso_workflow.dbscan_molint import mask
+        from picasso_workflow.outpost.clustering.dbscan_molint import mask
 
         # get map
         with open(parameters["fp_channel_map"], "r") as f:
@@ -11211,7 +11211,7 @@ class AutoPicasso(
             Module results (see
             :class:`~picasso_workflow.util.AbstractModuleCollection`).
         """
-        # from picasso_workflow.dbscan_molint import dbscan
+        # from picasso_workflow.outpost.clustering.dbscan_molint import dbscan
         # get map
         with open(parameters["fp_channel_map"], "r") as f:
             channel_map = yaml.safe_load(f)
@@ -11354,9 +11354,9 @@ class AutoPicasso(
             Module results (see
             :class:`~picasso_workflow.util.AbstractModuleCollection`).
         """
-        from picasso_workflow.dbscan_molint import mask
+        from picasso_workflow.outpost.clustering.dbscan_molint import mask
 
-        # from picasso_workflow.dbscan_molint import dbscan
+        # from picasso_workflow.outpost.clustering.dbscan_molint import dbscan
 
         pixelsize = self.pixelsize
         epsilon_nm = parameters["epsilon_nm"]
