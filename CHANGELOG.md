@@ -92,6 +92,16 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Changed
 
+- **Monolith split S9 (final) — report histogram helpers →
+  `outpost/reporting/`; `picasso_outpost.py` deleted.** The last two functions
+  in the monolith, `plot_1dhist` / `plot_2dhist`, moved to
+  `outpost/reporting/histograms.py` (needs only `numpy` + `matplotlib` +
+  `lib`); `analyse.py`'s two call sites repointed via a `reporting_hist` alias.
+  With nothing left, **`picasso_outpost.py` (7579 lines at its peak) is
+  removed** — the Phase 2 monolith split (S1–S9) is complete, with every feature
+  now in its own `outpost/<feature>/` module. Stale `picasso_outpost` docstring
+  references in `util.py`, `gui.py`, `modulespec.py`, and `_picasso_api.py`
+  repointed to the functions' new homes. Behaviour unchanged.
 - **Monolith split S8 — DNA-origami picking → `outpost/origami/`.** The largest
   slice (−1686 lines): the entire origami cluster (`OrigamiTemplate` + the
   grid/design-file/site template builders, the kinetics simulation

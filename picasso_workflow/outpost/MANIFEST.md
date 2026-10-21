@@ -37,11 +37,12 @@ remains is the keep-it-clean backlog:
 |---|---|---|
 | **Fragile private reach-ins** — depend on picasso *private* symbols; guarded by `get_internal` + the contract test, but any upstream refactor can break them | `postprocess._pick_similar` (`pick_gold`), `postprocess._n_block_locs_at` (`pick_similar`), `localize._to_photons` (`get_spots`), `spinna._targets_from_structures` (`screen_label_uncertainty`) | upstream a **public** picasso API for each, then drop the `get_internal`. (The boundary + contract test already make the breakage *loud*, not silent — so this is hardening, not a live bug.) |
 | **Duplication of picasso** — re-implements what picasso ≥ 0.12 provides | **3 copies of `otsu()`** (`masking/mask.py`, `spatial_stats/ripleys.py`, `ripley_dcatlas_analysis.py`) vs `picasso.masking.mask_image(method="otsu")` — `picasso_set` already uses the upstream API; `_undrift_from_picked` drift computation; `_solve_optimal_shifts` vs `picasso.lib.minimize_shifts`; `dbscan_molint/mask.py` precursor | equivalence-test, then rewire to upstream + delete the fork (see Dedup table). |
-| **Monolith** — promote-candidates and keep-glue physically interleaved in one file | `picasso_outpost.py` — **56 lines (was 7579) -- only the 2 report helpers left (S9)** | split into `outpost/<feature>/`. Prerequisite to cleanly promoting the upstream-bound parts, which are currently entangled with keep-glue. |
+| **Monolith** — ~~promote-candidates and keep-glue physically interleaved in one file~~ | `picasso_outpost.py` — **DONE: split complete, file deleted (was 7579 lines; S1–S9)** | ✅ split into `outpost/<feature>/`; the last 2 report helpers moved to `outpost/reporting/histograms.py` (S9) and the file was removed. |
 
 **Reading:** the upstream-bound set is the *promotion* backlog; the table above
-is the *keep-it-clean* backlog. Both are gated behind splitting the monolith,
-which is what physically separates the two kinds of code.
+is the *keep-it-clean* backlog. The monolith split (S1–S9) is **complete** —
+the two kinds of code are now physically separated across `outpost/<feature>/`
+modules, unblocking the promotion work.
 
 ## Done
 
@@ -93,7 +94,7 @@ which is what physically separates the two kinds of code.
 | render glue | `outpost/render/render.py` | matplotlib wrapper over `picasso.render`. **Moved** from `outpost_modules/` into `outpost/render/`. |
 | Ripley's K core | `outpost/spatial_stats/ripleys.py` | Ripley's K / RDF / FRC + CSR/randomized controls + plotting (Rafal). Report-coupled (`confluence.ripleysk2`). **Moved** from `outpost_modules/` into `outpost/spatial_stats/`. |
 | Ripley DC-Atlas redo | `outpost/spatial_stats/ripley_dcatlas_analysis.py` | Explicit reproducible redo of a published pipeline (built on `ripleys`). **Moved** into `outpost/spatial_stats/`. |
-| report plot helpers | `picasso_outpost.py` `plot_1dhist`, `plot_2dhist`, `_save_*_histogram_plot` | Reporting. |
+| report plot helpers | `outpost/reporting/histograms.py` `plot_1dhist`, `plot_2dhist` (moved, S9) | Reporting. Last code out of the monolith; `picasso_outpost.py` then deleted. |
 
 ## Suggested PR sequence
 
@@ -107,13 +108,16 @@ which is what physically separates the two kinds of code.
    `binding_events/` (#45), `spatial_stats/` (#46, ripleys + DC-Atlas),
    `masking/` (#47, CellMask), `render/` (#49); `undrift_rsso` and the legacy
    `ripleys_analysis/` subpackage both retired (deleted). `outpost_modules/` now
-   holds no feature modules; only the `picasso_outpost.py` monolith remains to
-   split.
+   holds no feature modules; the `picasso_outpost.py` monolith split is
+   **complete (S1–S9)** and the file has been deleted.
 6. **Promote** (readiness H first): CSR k-NN stats, correspondence-free ICP registration, binding-events; then point-set shift kernel, resolution (FRC/decorrelation/PPAC), CellMask morphology.
 
 ## Monolith split — sequenced plan (`picasso_outpost.py` → `outpost/<feature>/`)
 
-`picasso_outpost.py` = **56 lines (was 7579) -- only the 2 report helpers left (S9)**, used
+**✅ COMPLETE (S1–S9).** `picasso_outpost.py` (was **7579 lines**) has been fully
+split into `outpost/<feature>/` modules and **deleted**; the last two report
+helpers landed in `outpost/reporting/histograms.py` (S9). The plan below is kept
+as the record of how the split was sequenced. Originally used
 at **48 sites in `analyse.py`** and heavily in `tests/test_picasso_outpost.py`.
 Unlike the AutoPicasso-mocked unit tests, `test_picasso_outpost.py` calls these
 functions **directly**, so a repointed test gives *real* coverage of each move —
@@ -140,7 +144,7 @@ gets its own `registration/` rather than living under `origami/`.
 | S6 ✅ | **picks / fiducials** (`pick_gold`, `pick_similar*`, `picked_locs`, `index_locs`, `_undrift_from_picked*`, `shift_from_picked`, `sort_picked_locs`, `find_structures`, block/locs helpers) | `outpost/picks/picks.py` | keep | **Done** (−816 lines). Carried the numba `_n_block_locs_at = get_internal(...)` **module-global dispatcher** (njit can't call get_internal). Removed `pd`/`nb`/`postprocess`/`get_internal`/`OPTICS` as orphaned from the monolith (all 4 get_internal reach-ins now left it). Resolved S5's channels→monolith forward-import. **Origami (still in monolith, S8) calls `pick_similar`/`get_pick_similar_vals`/`picked_locs` → monolith now forward-imports them from picks** (one-way, no cycle). ~13 analyse + ~14 test refs repointed; numba-compile regression test (`test_outpost_dedup_equivalence`) green. |
 | S7 ✅ | **ICP registration** (`register_to_template`, `_rigid_fit` Kabsch, `_match_within_gate` Hungarian, `_icp_refine`, `_rotation_matrix`, `subcluster_docking_sites`, `classify/accept_candidate`, `_candidate_centers_cluster_of_clusters`, `_elongation`/`_radius_of_gyration`, `_median_nn_spacing`) | `outpost/registration/icp.py` | promote | **Done** (−408 lines), **separated from origami** → upstream-ready. Pulled the shared `_median_nn_spacing` geometry helper in (register_to_template needs it); imports `get_pick_similar_vals` from picks (one-way). Removed `linear_sum_assignment`/`DBSCAN`/`get_pick_similar_vals` orphans from the monolith. Origami (monolith, S8) forward-imports the 9 names it uses. No analyse coupling; `test_picasso_outpost` (~10 sites) repointed. |
 | S8 ✅ | **origami** (`OrigamiTemplate` + builders, kinetics sim, structure/lattice descriptors, `pick_origami`) | `outpost/origami/origami.py` | keep | **Done** (−1686 lines, biggest slice — drains the monolith to 56 lines). Moved as ONE module. Imports `pick_similar`/`picked_locs` from picks + the 9 registration names from `registration/icp` directly → **both monolith forward-imports (S6/S7) removed**. Removed the now-orphaned sklearn/scipy/yaml/dataclass/Counter imports from the monolith. analyse (6) + **gui (origami_phase_space_preview)** + test_analyse `@patch` + test_picasso_outpost (many template tests) repointed. |
-| S9 | **report plot helpers** (7031–7073: `plot_1dhist`, `plot_2dhist`) + any leftovers | fold into a reporting util | keep | Tiny; last. After this `picasso_outpost.py` is empty → delete it. |
+| S9 ✅ | **report plot helpers** (`plot_1dhist`, `plot_2dhist`) + leftovers | `outpost/reporting/histograms.py` | keep | **Done** — the final slice. Needs `np` + `LogNorm` + `lib` only. analyse (2 calls) repointed via `reporting_hist` alias; stale `picasso_outpost` docstring refs in `util`/`gui`/`modulespec`/`_picasso_api` repointed to the new homes. **`picasso_outpost.py` deleted** — the monolith split is complete. |
 
 **Order rationale:** S1–S2 are clean, self-contained extractions into folders
 that already exist (lowest risk, first) — S2 is a genuine *promote*; S1 (PPAC)

@@ -99,7 +99,6 @@ except ImportError:
 
 
 from picasso_workflow import (
-    picasso_outpost,
     process_brightfield,
     util,
 )
@@ -108,6 +107,7 @@ from picasso_workflow.module_runtime import module_decorator  # noqa: F401
 from picasso_workflow.outpost.clustering import molint as clustering_molint
 from picasso_workflow.outpost.masking.mask import CellMask
 from picasso_workflow.outpost.render import render
+from picasso_workflow.outpost.reporting import histograms as reporting_hist
 from picasso_workflow.outpost.origami import origami as origami_mod
 from picasso_workflow.outpost.picks import picks as picks_mod
 from picasso_workflow.outpost.spinna import wrappers as spinna_wrappers
@@ -13471,14 +13471,14 @@ class AutoPicasso(
         """
         if len(fields) == 1:
             fig, ax = plt.subplots()
-            picasso_outpost.plot_1dhist(self.locs, fields[0], fig, ax)
+            reporting_hist.plot_1dhist(self.locs, fields[0], fig, ax)
         else:
             fig, ax = plt.subplots(
                 nrows=len(fields) - 1, ncols=len(fields) - 1, squeeze=False
             )
             for i, field_x in enumerate(fields[:-1]):
                 for j, field_y in enumerate(fields[i + 1 :]):
-                    picasso_outpost.plot_2dhist(
+                    reporting_hist.plot_2dhist(
                         self.locs, field_x, field_y, fig, ax[i, j]
                     )
                 # if i > 0:
