@@ -73,7 +73,10 @@ def read_label_rows(csv_path: str) -> list[dict[str, Any]]:
     reason``. Unit-testable without a registry.
     """
     rows: list[dict[str, Any]] = []
-    with Path(csv_path).open(newline="") as fh:
+    # utf-8-sig strips an Excel UTF-8 BOM: without it the first header becomes
+    # "﻿run_id", the required run_id never matches, and EVERY row is
+    # dropped as run-id-less — silently voiding the whole curated label set.
+    with Path(csv_path).open(newline="", encoding="utf-8-sig") as fh:
         for raw in csv.DictReader(fh):
             label = _first(raw, "label", "verdict", "quality", "good_bad")
             rows.append(

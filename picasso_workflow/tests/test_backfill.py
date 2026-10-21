@@ -39,8 +39,17 @@ from picasso_workflow.backfill.csv_import import (
     read_label_rows,
 )
 from picasso_workflow.backfill.ingest import ingest_dataset, ingest_paths
+from picasso_workflow.backfill.metrics import locs_signature
 from picasso_workflow.backfill.parser import parse_folder_tokens
 from pathlib import Path
+
+
+def _run_id_for(fp: str) -> str:
+    """The content-aware run_id the ingest mints for a dataset (keys label CSVs
+    in tests the same way :func:`ingest.ingest_dataset` does)."""
+    locs, info = io.load_locs(fp)
+    return synth_run_id(fp, info, locs_signature(locs))
+
 
 # Deterministic synthetic constants so "computed metrics match expected" is
 # a real equality, not a smoke test.
@@ -264,8 +273,7 @@ class TestCsvImporter(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as d:
             fp = _make_locs(d, "good_exp-30ms_locs.hdf5", seed=3)
-            _, info = io.load_locs(fp)
-            run_id = synth_run_id(fp, info)
+            run_id = _run_id_for(fp)
             csv_path = os.path.join(d, "labels.csv")
             self._write_csv(
                 csv_path,
@@ -304,8 +312,7 @@ class TestCsvImporter(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as d:
             fp = _make_locs(d, "run_exp-30ms_locs.hdf5", seed=4)
-            _, info = io.load_locs(fp)
-            run_id = synth_run_id(fp, info)
+            run_id = _run_id_for(fp)
             csv_path = os.path.join(d, "labels.csv")
             self._write_csv(
                 csv_path,
@@ -347,9 +354,9 @@ class TestPerTaxonRanges(unittest.TestCase):
             # Label every dataset (complete + incomplete) as the same taxon.
             labels = {}
             for p in complete + [incomplete]:
-                _, info = io.load_locs(p)
-                labels[synth_run_id(p, info)] = {
-                    "run_id": synth_run_id(p, info),
+                rid = _run_id_for(p)
+                labels[rid] = {
+                    "run_id": rid,
                     "taxon": "origami",
                     "taxon_path": None,
                     "label": "good",
@@ -393,9 +400,9 @@ class TestPerTaxonRanges(unittest.TestCase):
             ]
             labels = {}
             for p in paths:
-                _, info = io.load_locs(p)
-                labels[synth_run_id(p, info)] = {
-                    "run_id": synth_run_id(p, info),
+                rid = _run_id_for(p)
+                labels[rid] = {
+                    "run_id": rid,
                     "taxon": "origami",
                     "taxon_path": None,
                     "label": "good",
@@ -416,6 +423,111 @@ class TestPerTaxonRanges(unittest.TestCase):
                     reg, min_samples=3, log=lambda *_: None
                 )
         self.assertEqual(ranges, {})
+
+
+class TestWP7ReviewFixes(unittest.TestCase):
+    """Regression tests for the code-review findings."""
+
+    def test_same_name_distinct_content_do_not_collide(self):
+        # Two DISTINCT datasets sharing a filename + frame count (uniform
+        # pipeline names in different folders) must BOTH ingest — the old
+        # basename|frames identity collided them and silently dropped one.
+        from picasso_registry.testing import mock_registry
+
+        with tempfile.TemporaryDirectory() as d:
+            os.makedirs(os.path.join(d, "pos1"))
+            os.makedirs(os.path.join(d, "pos5"))
+            _make_locs(os.path.join(d, "pos1"), "cell_locs.hdf5", seed=1)
+            _make_locs(os.path.join(d, "pos5"), "cell_locs.hdf5", seed=2)
+            with mock_registry() as reg:
+                counts = ingest_paths(reg, [d], log=lambda *_: None)
+                self.assertEqual(counts["ingested"], 2)
+                self.assertEqual(counts["skipped"], 0)
+                self.assertEqual(
+                    len(reg.list("acquisition_run", limit=500)), 2
+                )
+
+    def test_exact_copy_same_content_still_dedupes(self):
+        # Same content (identical seed) → same content-aware run_id → the copy
+        # under a different folder still dedupes (idempotency preserved).
+        from picasso_registry.testing import mock_registry
+
+        with tempfile.TemporaryDirectory() as d:
+            os.makedirs(os.path.join(d, "m1"))
+            os.makedirs(os.path.join(d, "m2"))
+            _make_locs(os.path.join(d, "m1"), "cell_locs.hdf5", seed=3)
+            _make_locs(os.path.join(d, "m2"), "cell_locs.hdf5", seed=3)
+            with mock_registry() as reg:
+                counts = ingest_paths(reg, [d], log=lambda *_: None)
+                self.assertEqual(counts["ingested"], 1)
+                self.assertEqual(counts["skipped"], 1)
+
+    def test_dry_run_with_labels_writes_nothing(self):
+        # --dry-run --labels must NOT create taxon nodes (append-only store).
+        from picasso_registry.testing import mock_registry
+        from picasso_workflow.backfill.metrics import locs_signature
+
+        with tempfile.TemporaryDirectory() as d:
+            fp = _make_locs(d, "ds_locs.hdf5", seed=4)
+            locs, info = io.load_locs(fp)
+            run_id = synth_run_id(fp, info, locs_signature(locs))
+            csv_path = os.path.join(d, "labels.csv")
+            with open(csv_path, "w", newline="") as fh:
+                fh.write("run_id,taxon,label\n")
+                fh.write(f"{run_id},origami,good\n")
+            with mock_registry() as reg:
+                counts = ingest_paths(
+                    reg,
+                    [fp],
+                    dry_run=True,
+                    labels=load_label_index(csv_path),
+                    log=lambda *_: None,
+                )
+                self.assertEqual(counts["ingested"], 1)  # previewed
+                # No taxon node (nor any experiment) was written.
+                self.assertEqual(
+                    len(reg.list("sample_taxonomy", limit=500)), 0
+                )
+                self.assertEqual(len(reg.list("experiment", limit=500)), 0)
+
+    def test_bom_label_csv_still_parses_run_id(self):
+        # An Excel 'CSV UTF-8' export prepends a BOM; the importer must still
+        # read run_id (else the whole curated set is silently voided).
+        with tempfile.TemporaryDirectory() as d:
+            csv_path = os.path.join(d, "labels.csv")
+            with open(csv_path, "w", newline="", encoding="utf-8-sig") as fh:
+                fh.write("run_id,taxon,label\n")
+                fh.write("RUN123,origami,good\n")
+            rows = read_label_rows(csv_path)
+            self.assertEqual(rows[0]["run_id"], "RUN123")
+            self.assertTrue(rows[0]["passed"])
+
+    def test_nonfinite_nena_stays_null(self):
+        # A fit that converges to NaN without raising must stay NULL, not ride
+        # into the POST as an invalid-JSON NaN.
+        from unittest.mock import patch
+
+        from picasso_workflow.backfill import metrics as m
+
+        with tempfile.TemporaryDirectory() as d:
+            fp = _make_locs(d, "x_locs.hdf5", seed=5)
+            locs, info = io.load_locs(fp)
+            with patch.object(m, "postprocess") as mp:
+                mp.nena.return_value = ({}, float("nan"))
+                self.assertIsNone(m.compute_nena_nm(locs, info))
+                vec = m.compute_metrics(locs, info)
+                self.assertNotIn("nena_nm", vec)
+
+    def test_zero_locs_emits_no_density(self):
+        # An empty (zero-loc) dataset is not a density sample.
+        cols = ["x", "y", "photons", "sx", "sy", "bg", "lpx", "lpy"]
+        locs = pd.DataFrame({c: np.array([], dtype=np.float32) for c in cols})
+        info = [
+            {"Pixelsize": 130.0, "Width": 128, "Height": 128, "Frames": 500}
+        ]
+        vec = compute_metrics(locs, info, with_nena=False)
+        self.assertNotIn("density_locs_um2", vec)
+        self.assertEqual(vec.get("n_locs"), 0)
 
 
 if __name__ == "__main__":  # pragma: no cover

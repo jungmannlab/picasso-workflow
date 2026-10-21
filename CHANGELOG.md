@@ -10,6 +10,29 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ## [Unreleased]
 
+### Fixed
+
+- **WP-7 code review (2× parallel finders → verify → fix):**
+  - **Content-aware dataset identity — no more silent data loss.** The backfill
+    `run_id` was derived from `basename|frames` only, so two DISTINCT datasets
+    sharing a filename + frame count (common when a pipeline emits uniform
+    `locs.hdf5` names and the distinguishing metadata is in the folder) collided
+    to one id and the second was silently dropped. A cheap `locs_signature`
+    (n_locs + nan-summed x/y) now rides into the identity, so distinct data gets
+    distinct ids (both ingest) while an exact copy still dedupes.
+  - **`--dry-run` no longer mutates the registry.** `ingest --dry-run --labels`
+    created taxon nodes via `ensure_taxon` before the dry-run guard; dry-run now
+    performs no registry write (the store is append-only).
+  - **UTF-8-BOM label CSVs no longer silently voided.** `read_label_rows` opens
+    with `utf-8-sig`, so an Excel "CSV UTF-8" export (BOM) doesn't turn the first
+    header into `﻿run_id` and drop every row as run-id-less.
+  - **Non-finite NeNA stays NULL.** `compute_nena_nm` guards a fit that
+    converges to NaN/inf without raising, and `compute_metrics` drops any
+    non-finite float at its boundary, so an invalid-JSON `NaN` never reaches the
+    POST.
+  - **Zero-loc datasets emit no density** (an empty acquisition is not a 0.0
+    density sample that would drag a cohort band). +6 regression tests.
+
 ### Added
 
 - **WP-7 flat-archive backfill (`picasso_workflow/backfill/`).** Bootstraps

@@ -35,7 +35,7 @@ from typing import Any, Callable
 
 from picasso_workflow._picasso_api import io
 
-from .metrics import compute_metrics
+from .metrics import compute_metrics, locs_signature
 from .parser import DatasetFeatures, parse_dataset, synth_run_id
 
 logger = logging.getLogger(__name__)
@@ -205,28 +205,37 @@ def ingest_dataset(
     with_nena: bool = True,
     labels: dict[str, dict[str, Any]] | None = None,
     taxon_cache: dict[str, str] | None = None,
+    dry_run: bool = False,
 ) -> tuple[str, dict[str, list[dict]]]:
     """Load + parse + measure + map one dataset; returns ``(run_id, tables)``.
 
-    Raises :class:`SkipFile` if the locs/yaml can't be loaded. When ``labels``
-    (a ``{run_id: row}`` index from the curated CSV) has an entry for this
-    dataset, its taxon is attached to the experiment at creation and its
-    good/bad qc + feedback rows are folded into the same ``/bulk`` transaction —
-    the only append-only-safe way to set ``experiment.sample_taxon_id``.
-    ``taxon_cache`` dedupes taxon-node creation across a sweep.
+    Raises :class:`SkipFile` if the locs/yaml can't be loaded. The ``run_id`` is
+    content-aware (a :func:`metrics.locs_signature` of the loaded localizations
+    rides into the identity), so two distinct datasets sharing a filename +
+    frame count get distinct ids. When ``labels`` (a ``{run_id: row}`` index
+    from the curated CSV) has an entry for this dataset, its taxon is attached
+    to the experiment at creation and its good/bad qc + feedback rows are folded
+    into the same ``/bulk`` transaction — the only append-only-safe way to set
+    ``experiment.sample_taxon_id``. ``taxon_cache`` dedupes taxon-node creation
+    across a sweep. Under ``dry_run`` NO registry write happens here (the taxon
+    node is NOT created) — the store is append-only, so a preview must not
+    mutate it.
     """
     try:
         locs, info = io.load_locs(str(locs_path))
     except Exception as exc:
         raise SkipFile(f"cannot load locs/yaml ({exc})") from exc
-    feats = parse_dataset(str(locs_path), info)
+    content_sig = locs_signature(locs)
+    feats = parse_dataset(str(locs_path), info, content_sig=content_sig)
     metrics = compute_metrics(locs, info, with_nena=with_nena)
 
     sample_taxon_id = None
     label_rows: dict[str, list[dict]] = {}
     row = (labels or {}).get(feats.run_id)
     if row:
-        if row.get("taxon") and client is not None:
+        # ensure_taxon POSTs a taxon node — a registry write, so it must NOT
+        # run under --dry-run (the append-only store can't be un-mutated).
+        if row.get("taxon") and client is not None and not dry_run:
             # Import here to avoid a hard import cycle at module load.
             from .csv_import import ensure_taxon
 
@@ -284,6 +293,7 @@ def ingest_paths(
                 with_nena=with_nena,
                 labels=labels,
                 taxon_cache=taxon_cache,
+                dry_run=dry_run,
             )
         except SkipFile as exc:
             log(f"SKIP  {path}: {exc}")

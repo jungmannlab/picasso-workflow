@@ -126,16 +126,26 @@ class DatasetFeatures:
     metadata_missing: list[str] = field(default_factory=list)
 
 
-def _identity(locs_path: str, info: Sequence[Mapping[str, Any]]) -> str:
+def _identity(
+    locs_path: str,
+    info: Sequence[Mapping[str, Any]],
+    content_sig: str | None = None,
+) -> str:
     """A content-derived identity for the dataset.
 
-    Prefer stable *content* signals (localize step's ``Frames`` + the relative
-    file name) over the mount path, so copies under different mounts/backups
-    dedupe to one run. Falls back to the file stem when info is bare.
+    Prefer stable *content* signals over the mount path, so copies under
+    different mounts/backups dedupe to one run. When a ``content_sig`` (a hash
+    of the actual localizations, :func:`metrics.locs_signature`) is supplied it
+    is the primary discriminator: two DISTINCT datasets that share a filename +
+    frame count then get DIFFERENT ids (both ingest) instead of colliding to one
+    (silent drop), while an exact copy still hashes identically and dedupes.
+    Falls back to the file name + ``Frames`` when no signature/info is given
+    (e.g. tests that mint an id without loading the array).
     """
     frames = _info_get(info, "Frames")
     name = Path(locs_path).name
-    return f"{name}|frames={frames}"
+    base = f"{name}|frames={frames}"
+    return f"{base}|sig={content_sig}" if content_sig else base
 
 
 def _deterministic_ulid(created: datetime, identity: str, salt: str) -> str:
@@ -168,14 +178,20 @@ def _created_dt(info: Sequence[Mapping[str, Any]]) -> tuple[datetime, str]:
     return datetime(1970, 1, 1, tzinfo=timezone.utc), ""
 
 
-def synth_run_id(locs_path: str, info: Sequence[Mapping[str, Any]]) -> str:
+def synth_run_id(
+    locs_path: str,
+    info: Sequence[Mapping[str, Any]],
+    content_sig: str | None = None,
+) -> str:
     """The stable acquisition ``run_id`` (``ids['acq']``) for a dataset.
 
     Exposed separately so the idempotency check and tests can mint the id
-    without a full parse.
+    without a full parse. Pass ``content_sig`` (from
+    :func:`metrics.locs_signature`) to get the collision-resistant,
+    content-aware id the ingest uses.
     """
     created, _ = _created_dt(info)
-    identity = _identity(locs_path, info)
+    identity = _identity(locs_path, info, content_sig)
     return _deterministic_ulid(created, identity, "acq")
 
 
@@ -184,6 +200,7 @@ def parse_dataset(
     info: Sequence[Mapping[str, Any]],
     *,
     yaml_path: str | None = None,
+    content_sig: str | None = None,
 ) -> DatasetFeatures:
     """Parse one dataset's ``.yaml`` info + folder path into features + ids.
 
@@ -199,7 +216,7 @@ def parse_dataset(
         yaml_path = str(path.with_suffix(".yaml"))
 
     created, created_iso = _created_dt(info)
-    identity = _identity(locs_path, info)
+    identity = _identity(locs_path, info, content_sig)
     ids = {
         salt: _deterministic_ulid(created, identity, salt)
         for salt in _TABLE_SALTS

@@ -136,9 +136,13 @@ def compute_nena_nm(
         logger.warning("NeNA computation failed, leaving NULL: %s", exc)
         return None
     try:
-        return float(best_val_px) * pixelsize
+        nm = float(best_val_px) * pixelsize
     except (TypeError, ValueError):
         return None
+    # A fit can converge to a non-finite best_val WITHOUT raising; NaN/inf must
+    # stay NULL (unlike _median, nena has no built-in finite guard), else it
+    # rides through compute_metrics' filter and POSTs an invalid-JSON NaN.
+    return nm if np.isfinite(nm) else None
 
 
 def _n_locs(locs: Any) -> int | None:
@@ -195,14 +199,49 @@ def compute_metrics(
         out["lp_x_nm"] = lp_x_px * pixelsize if lp_x_px is not None else None
         out["lp_y_nm"] = lp_y_px * pixelsize if lp_y_px is not None else None
 
-    # Density: locs per µm² over the FOV extent from the .yaml.
+    # Density: locs per µm² over the FOV extent from the .yaml. Requires
+    # n_locs > 0 — an empty (zero-loc) dataset is not a real density sample and
+    # a 0.0 would otherwise drag a cohort's learned band (ranges.py).
     area_um2 = _fov_area_um2(info, pixelsize)
-    if area_um2 and n_locs is not None and area_um2 > 0:
+    if area_um2 and area_um2 > 0 and n_locs:
         out["density_locs_um2"] = n_locs / area_um2
 
     if with_nena:
         out["nena_nm"] = compute_nena_nm(locs, info)
 
     # Drop keys we couldn't compute: a missing feature must stay NULL (absent),
-    # not be POSTed as an explicit null that pads every row.
-    return {k: v for k, v in out.items() if v is not None}
+    # not be POSTed as an explicit null that pads every row. Also drop any
+    # non-finite float (NaN/inf) so the invariant "only finite values are
+    # returned" holds at THIS boundary, not just per-source in _median.
+    def _emit(v: Any) -> bool:
+        if v is None:
+            return False
+        if isinstance(v, float) and not np.isfinite(v):
+            return False
+        return True
+
+    return {k: v for k, v in out.items() if _emit(v)}
+
+
+def locs_signature(locs: Any) -> str:
+    """A cheap, stable content signature of a locs table, for dataset identity.
+
+    ``n_locs`` + the nan-summed ``x`` / ``y`` columns, hashed. Folded into the
+    backfill ``run_id`` so two DISTINCT datasets that happen to share a filename
+    and frame count do NOT collide to one id (and get silently deduped) — while
+    an exact copy of the same dataset still hashes identically and dedupes. One
+    pass over two columns; no full-file hash.
+    """
+    import hashlib
+
+    n = _n_locs(locs) or 0
+
+    def _sum(col: str) -> float:
+        arr = _col(locs, col)
+        if arr is None or len(arr) == 0:
+            return 0.0
+        val = float(np.nansum(arr))
+        return val if np.isfinite(val) else 0.0
+
+    raw = f"{n}|{_sum('x'):.6f}|{_sum('y'):.6f}"
+    return hashlib.sha256(raw.encode()).hexdigest()[:16]
