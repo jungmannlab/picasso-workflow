@@ -875,7 +875,7 @@ def analyze_all_channels(
     ----------
     mol_coords : list of np.rec.array
         Molecular coordinates of the target types.
-    mask : outpost_modules.mask.CellMask or 2D np.ndarray
+    mask : CellMask or 2D np.ndarray
         The binary or density mask (only needed for ``controltype='CSR'``).
     mask_pixel_size : float
         Mask pixel size in nm (only needed for ``controltype='CSR'``).

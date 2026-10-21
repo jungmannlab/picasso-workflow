@@ -4888,7 +4888,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
         3rd version of the DC Atlas. It is (mostly?) identical with an
         implementation of it in spinna, which will be integrated into
         picasso soon. Evaluate deprecation (or moving source from
-        outpost_modules/ripleys to picasso/spinna) at that time.
+        outpost/spatial_stats/ripleys to picasso/spinna) at that time.
 
         the locs must be protein positions at this stage.
 
