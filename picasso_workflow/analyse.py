@@ -2665,6 +2665,8 @@ class AutoPicasso(
             Results updated with ``filepath_raw`` (full path) and
             ``filename_raw``.
         """
+        from picasso_workflow.outpost.formats import zeiss
+
         filepath_czi = parameters["filepath"]
         filename_raw = parameters.get("filename_raw")
         if filename_raw is None:
@@ -2672,7 +2674,7 @@ class AutoPicasso(
                 (os.path.splitext(filepath_czi)[0] + ".raw")
             )[1]
         filepath_raw = os.path.join(results["folder"], filename_raw)
-        picasso_outpost.convert_zeiss_file(
+        zeiss.convert_zeiss_file(
             filepath_czi, filepath_raw, parameters.get("info")
         )
 
@@ -3189,6 +3191,10 @@ class AutoPicasso(
         ng_end : float
             The highest net gradient shown (lower-right spot).
         """
+        from picasso_workflow.outpost.spots import (
+            extraction as spot_extraction,
+        )
+
         n_spots = sample_spots_cols * sample_spots_rows
         sample_idxs = np.argsort(
             np.abs(identifications["net_gradient"] - estd_net_grad)
@@ -3203,7 +3209,7 @@ class AutoPicasso(
         ).reset_index(drop=True)
 
         # sample_spots = localize.get_spots(
-        sample_spots = picasso_outpost.get_spots(
+        sample_spots = spot_extraction.get_spots(
             self.movie,
             sample_identifications,
             box_size,
@@ -3227,7 +3233,7 @@ class AutoPicasso(
             piy = iy * (box_size + border_width)
             # logger.debug(f"drawing spot {i} at ({pix}, {piy}: {str(spot)}")
             canvas[pix : pix + box_size, piy : piy + box_size] = (
-                picasso_outpost.normalize_spot(spot)
+                spot_extraction.normalize_spot(spot)
             )
         return canvas, ng_start, ng_end
 

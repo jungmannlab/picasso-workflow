@@ -19,6 +19,7 @@ import pytest
 
 
 from picasso_workflow import picasso_outpost
+from picasso_workflow.outpost.formats import zeiss
 from picasso_workflow.outpost.resolution.resolution_ppac import (
     analyse_resolution_ppac,
     resolution_ppac,
@@ -77,7 +78,7 @@ class TestPicassoOutpost(unittest.TestCase):
         )
         logger.debug(f"shift: {shift}")
 
-    @patch("picasso_workflow.picasso_outpost.io.load_czi")
+    @patch("picasso_workflow.outpost.formats.zeiss.io.load_czi")
     def test_03_convert_zeiss_file(self, mock_load_czi):
         # picasso's io.load_czi returns (movie, [info]); the movie is
         # array-like and reduces to a (T, Y, X) numpy array on slicing.
@@ -94,7 +95,7 @@ class TestPicassoOutpost(unittest.TestCase):
         filepath_czi = os.path.join(temp_folder, "zeissfile.czi")
         filepath_raw = os.path.join(temp_folder, "myrawfile.raw")
         info = {"Byte Order": "<", "Camera": "FusionBT"}
-        picasso_outpost.convert_zeiss_file(filepath_czi, filepath_raw, info)
+        zeiss.convert_zeiss_file(filepath_czi, filepath_raw, info)
 
         # clean up
         filepath_info = os.path.splitext(filepath_raw)[0] + ".yaml"

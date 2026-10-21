@@ -1002,7 +1002,7 @@ class TestAnalyseModules(unittest.TestCase):
         shutil.rmtree(os.path.join(self.results_folder, "00_combine_channels"))
 
     @patch(
-        "picasso_workflow.analyse.picasso_outpost.convert_zeiss_file",
+        "picasso_workflow.outpost.formats.zeiss.convert_zeiss_file",
         MagicMock,
     )
     def convert_zeiss_movie(self):
