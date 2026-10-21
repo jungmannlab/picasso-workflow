@@ -13,7 +13,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from picasso_workflow import picasso_outpost
+from picasso_workflow.outpost.picks import picks as picks_mod
 from picasso_workflow._picasso_api import postprocess
 
 pytest.importorskip(
@@ -84,7 +84,7 @@ def test_picked_locs_group_contract():
     """
     locs, info = _synthetic_locs()
     r = _PICK_DIAMETER / 2
-    result = picasso_outpost.picked_locs(
+    result = picks_mod.picked_locs(
         locs, info, _CENTERS, _PICK_DIAMETER, add_group=True
     )
     for i, (cx, cy) in enumerate(_CENTERS):
@@ -104,7 +104,7 @@ def test_picked_locs_matches_upstream_membership():
     ``pick_shape="Circle", pick_size=pick_diameter/2``).
     """
     locs, info = _synthetic_locs()
-    fork = picasso_outpost.picked_locs(locs, info, _CENTERS, _PICK_DIAMETER)
+    fork = picks_mod.picked_locs(locs, info, _CENTERS, _PICK_DIAMETER)
     upstream = pd.concat(
         postprocess.picked_locs(
             locs,
@@ -130,7 +130,7 @@ def test_pick_similar_analysis_numba_compiles():
     jitted function; this test does, forcing numba to compile it.
     """
     locs, info = _synthetic_locs()
-    x_sim, y_sim, rmsds, nlocs = picasso_outpost.get_pick_similar_vals(
+    x_sim, y_sim, rmsds, nlocs = picks_mod.get_pick_similar_vals(
         locs, info, diameter=_PICK_DIAMETER
     )
     assert len(x_sim) == len(y_sim) == len(rmsds) == len(nlocs)

@@ -21,6 +21,7 @@ import pytest
 from picasso_workflow import picasso_outpost
 from picasso_workflow.outpost.formats import zeiss
 from picasso_workflow.outpost.alignment import channels
+from picasso_workflow.outpost.picks import picks as picks_mod
 from picasso_workflow.outpost.resolution.resolution_ppac import (
     analyse_resolution_ppac,
     resolution_ppac,
@@ -263,7 +264,7 @@ class TestPicassoOutpost(unittest.TestCase):
             nframes=100,
             locs_per_frame=4,
         )
-        gold_picks = picasso_outpost.pick_gold(locs, info)
+        gold_picks = picks_mod.pick_gold(locs, info)
         print(gold_picks)
         # round the picks for assertion
         gold_picks = [
@@ -276,7 +277,7 @@ class TestPicassoOutpost(unittest.TestCase):
     def test_06b_index_locs(self):
         locs, info = self.get_locs_with_gold([], [])
         pick_diameters = 2.3
-        index_blocs = picasso_outpost.index_locs(locs, info, pick_diameters)
+        index_blocs = picks_mod.index_locs(locs, info, pick_diameters)
 
         assert index_blocs is not None
 
@@ -287,7 +288,7 @@ class TestPicassoOutpost(unittest.TestCase):
             [center[1] for center in centers],
             noise=0.05,
         )
-        gold_locs = picasso_outpost.picked_locs(
+        gold_locs = picks_mod.picked_locs(
             locs, info, centers, pick_diameter=0.5
         )
         print(gold_locs)
@@ -967,7 +968,7 @@ def test_05a_sort_picked_locs_keeps_common_fiducials_with_fewer_picks():
         pts = pts[rng.permutation(len(pts))]
         channels.append(_make_pick_channel(pts))
 
-    out = picasso_outpost.sort_picked_locs(channels, max_shift=5.0)
+    out = picks_mod.sort_picked_locs(channels, max_shift=5.0)
     kept = [len(np.unique(o["group"])) for o in out]
     # All common fiducials are retained in every channel...
     assert kept == [n_common] * len(counts)

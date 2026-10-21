@@ -108,6 +108,7 @@ from picasso_workflow.module_runtime import module_decorator  # noqa: F401
 from picasso_workflow.outpost.clustering import molint as clustering_molint
 from picasso_workflow.outpost.masking.mask import CellMask
 from picasso_workflow.outpost.render import render
+from picasso_workflow.outpost.picks import picks as picks_mod
 from picasso_workflow.outpost.spinna import wrappers as spinna_wrappers
 from picasso_workflow.picasso_set.analyse_calibration import (
     PicassoSetCalibrationMixin,
@@ -283,7 +284,7 @@ def _recenter_on_com(picked_locs, centers):
     """Relocate each pick centre to the centre of mass of its localizations.
 
     ``picked_locs`` is grouped by ``group`` (the group id is the index into
-    ``centers``, as :func:`picasso_outpost.picked_locs` assigns them). Returns
+    ``centers``, as :func:`picks_mod.picked_locs` assigns them). Returns
     a new list of ``[x, y]`` centres; a group with no localizations keeps its
     original centre. ``pick_similar`` returns grid positions offset from the
     structure by up to half a grid step, so re-centring on the COM (and
@@ -11989,7 +11990,7 @@ class AutoPicasso(
         for prop in ["diameter", "std_range", "mean_rmsd"]:
             if val := parameters.get(prop):
                 kwargs[prop] = val
-        gold_picks = picasso_outpost.pick_gold(self.locs, self.info, **kwargs)
+        gold_picks = picks_mod.pick_gold(self.locs, self.info, **kwargs)
 
         results["n_gold"] = len(gold_picks)
         logger.debug(f"# gold particles found: {len(gold_picks)}")
@@ -12008,7 +12009,7 @@ class AutoPicasso(
         else:
             # function needs to return the locs in a r radius around the gold
             # coordinates
-            gold_locs, nongold_locs = picasso_outpost.picked_locs(
+            gold_locs, nongold_locs = picks_mod.picked_locs(
                 self.locs,
                 self.info,
                 gold_picks,
@@ -12084,7 +12085,7 @@ class AutoPicasso(
         logger.debug(f"# locs: {len(self.locs)}")
         # search for xy positions that look like gold ('pick similar')
         # the override keys are optional: unset ones fall back to
-        # picasso_outpost.pick_similar's own defaults
+        # picks_mod.pick_similar's own defaults
         kwargs = {
             key: parameters[key]
             for key in (
@@ -12098,7 +12099,7 @@ class AutoPicasso(
         }
         diameter = kwargs.get("diameter", 2)
         # print(self.locs.dtype)
-        picks, nlocs, rmsds, labels = picasso_outpost.pick_similar(
+        picks, nlocs, rmsds, labels = picks_mod.pick_similar(
             self.locs, self.info, **kwargs
         )
         # print(self.locs.dtype)
@@ -12155,7 +12156,7 @@ class AutoPicasso(
 
         # all xy coords found for the picks
         if len(picks) > 2:
-            picked_locs = picasso_outpost.picked_locs(
+            picked_locs = picks_mod.picked_locs(
                 self.locs,
                 self.info,
                 picks,
@@ -12288,7 +12289,7 @@ class AutoPicasso(
             rmsds,
             labels,
             newlabels,
-        ) = picasso_outpost.find_structures(self.locs, self.info, **kwargs)
+        ) = picks_mod.find_structures(self.locs, self.info, **kwargs)
 
         results["n_clusters"] = len(cluster_picks)
         results["n_picks"] = [len(picks) for picks in cluster_picks]
@@ -12348,7 +12349,7 @@ class AutoPicasso(
         for cluster_id, picks in enumerate(cluster_picks):
             # all xy coords found for this cluster of structure
             if len(picks) > 2:
-                cluster_locs = picasso_outpost.picked_locs(
+                cluster_locs = picks_mod.picked_locs(
                     self.locs,
                     self.info,
                     picks,
@@ -12521,7 +12522,7 @@ class AutoPicasso(
         # centre of mass, then re-pick once around the new centres so the
         # saved picks and locs are all consistent with the actual structures.
         if len(accepted_centers) > 0:
-            picked_origami_locs = picasso_outpost.picked_locs(
+            picked_origami_locs = picks_mod.picked_locs(
                 self.locs,
                 self.info,
                 accepted_centers,
@@ -12531,7 +12532,7 @@ class AutoPicasso(
             accepted_centers = _recenter_on_com(
                 picked_origami_locs, accepted_centers
             )
-            picked_origami_locs = picasso_outpost.picked_locs(
+            picked_origami_locs = picks_mod.picked_locs(
                 self.locs,
                 self.info,
                 accepted_centers,
@@ -12586,7 +12587,7 @@ class AutoPicasso(
         results["fp_picks_dockingsites"] = fp_picks_dockingsites
 
         if len(docking_centers) > 0:
-            docking_site_locs = picasso_outpost.picked_locs(
+            docking_site_locs = picks_mod.picked_locs(
                 self.locs,
                 self.info,
                 docking_centers,
@@ -13213,7 +13214,7 @@ class AutoPicasso(
                     f"{fp_picked}: pick-region yaml needs a 'Diameter (nm)' "
                     "or 'Diameter' entry"
                 )
-            picked_df = picasso_outpost.picked_locs(
+            picked_df = picks_mod.picked_locs(
                 self.locs,
                 self.info,
                 centers,
@@ -13249,7 +13250,7 @@ class AutoPicasso(
             )
         # print(result)
         # picked_locs, picked_info = io.load_locs(parameters["fp_picked_locs"])
-        self.locs, self.info, drift = picasso_outpost._undrift_from_picked(
+        self.locs, self.info, drift = picks_mod._undrift_from_picked(
             self.locs, self.info, picked_locs
         )
         drift = pd.DataFrame(drift)

@@ -92,6 +92,19 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Changed
 
+- **Monolith split S6 — pick / fiducial processing → `outpost/picks/`.** The
+  pick-finding + fiducial-drift cluster (`pick_gold`, `picked_locs`,
+  `pick_similar` + the numba-jitted `pick_similar_analysis` path, `index_locs`,
+  `shift_from_picked`, `sort_picked_locs`, `_undrift_from_picked`,
+  `find_structures`, and helpers) moved out of `picasso_outpost.py` (−816 lines)
+  into `outpost/picks/picks.py`. The numba `_n_block_locs_at = get_internal(...)`
+  module-global dispatcher moved with it (nopython mode can't call `get_internal`
+  directly). `analyse.py`, `alignment/channels.py` (resolving S5's forward
+  import), and the `test_analyse` / `test_picasso_outpost` /
+  `test_outpost_dedup_equivalence` references repointed; the now-orphaned
+  `pandas`/`numba`/`postprocess`/`get_internal`/`OPTICS` imports removed from the
+  monolith. (The origami cluster, still in the monolith until S8, now imports the
+  `pick_similar` family from the new module.) Behaviour unchanged.
 - **Monolith split S5 — channel alignment + shift kernel → `outpost/alignment/`.**
   The biggest slice (−1841 lines): the channel-alignment orchestration
   (`align_channels`, `align_by_rcc`/`align_by_picked`/`align_by_rsso`,

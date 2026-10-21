@@ -13,11 +13,7 @@ from picasso_workflow.outpost.alignment.shift_kernel import (
     _calculate_pairwise_shift,
 )
 
-# ``shift_from_picked`` / ``sort_picked_locs`` are pick-fiducial helpers that
-# still live in ``picasso_outpost`` (they move to ``outpost/picks/`` in split
-# step S6; update this import then). Safe module-level import: the monolith does
-# not import this package back, so there is no cycle.
-from picasso_workflow.picasso_outpost import (
+from picasso_workflow.outpost.picks.picks import (
     shift_from_picked,
     sort_picked_locs,
 )
