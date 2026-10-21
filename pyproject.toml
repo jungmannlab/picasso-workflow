@@ -101,6 +101,15 @@ gpu = [
     "numba-cuda",
     "nvidia-cuda-runtime-cu12",
 ]
+# DNA-PAINT binding-event analysis (the ``binding_event_analysis`` workflow
+# module, Steen et al. 2024). Its code lives in
+# ``picasso_workflow/outpost/binding_events/`` and is imported lazily, so these
+# deps are only needed when that module runs. Install with
+# ``pip install -e ".[binding-events]"``.
+binding-events = [
+    "lmfit",
+    "pandarallel",
+]
 
 [tool.setuptools.packages.find]
 # Auto-discover picasso_workflow and all its subpackages so feature folders
