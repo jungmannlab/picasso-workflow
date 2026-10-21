@@ -22,6 +22,7 @@ from picasso_workflow import picasso_outpost
 from picasso_workflow.outpost.formats import zeiss
 from picasso_workflow.outpost.alignment import channels
 from picasso_workflow.outpost.picks import picks as picks_mod
+from picasso_workflow.outpost.registration import icp
 from picasso_workflow.outpost.resolution.resolution_ppac import (
     analyse_resolution_ppac,
     resolution_ppac,
@@ -1073,7 +1074,7 @@ def test_register_invariance_rotation_translation(angle):
     """Rotated + translated structures still register (full resolution)."""
     tmpl = picasso_outpost.origami_template_from_grid(3, 4, 20.0)
     observed = tmpl.sites_nm @ _rot2d(angle).T + np.array([500.0, -300.0])
-    reg = picasso_outpost.register_to_template(observed, tmpl.sites_nm)
+    reg = icp.register_to_template(observed, tmpl.sites_nm)
     assert reg["n_resolved"] == 12
     assert reg["rmse_nm"] < 1e-6
 
@@ -1084,13 +1085,13 @@ def test_register_detects_mirror_on_chiral_template():
     sites = sites - sites.mean(axis=0)
     rot = _rot2d(40.0)
     mirrored = (sites * np.array([-1.0, 1.0])) @ rot.T + np.array([5.0, -8.0])
-    reg = picasso_outpost.register_to_template(mirrored, sites)
+    reg = icp.register_to_template(mirrored, sites)
     assert reg["n_resolved"] == len(sites)
     assert reg["rmse_nm"] < 1e-6
     assert reg["mirror"]
 
     plain = sites @ rot.T + np.array([5.0, -8.0])
-    reg2 = picasso_outpost.register_to_template(plain, sites)
+    reg2 = icp.register_to_template(plain, sites)
     assert reg2["n_resolved"] == len(sites)
     assert not reg2["mirror"]
 
@@ -1102,9 +1103,9 @@ def test_missing_site_boundary(k):
     tmpl = picasso_outpost.origami_template_from_grid(3, 4, 20.0)
     observed = tmpl.sites_nm @ _rot2d(22.0).T + np.array([100.0, 100.0])
     observed = observed[np.arange(len(observed)) >= k]  # drop first k sites
-    reg = picasso_outpost.register_to_template(observed, tmpl.sites_nm)
+    reg = icp.register_to_template(observed, tmpl.sites_nm)
     assert reg["n_resolved"] == 12 - k
-    accepted = picasso_outpost.accept_candidate(
+    accepted = icp.accept_candidate(
         reg,
         tmpl.n_sites_expected,
         missing_sites_allowed=allowed,
@@ -1124,12 +1125,12 @@ def test_geometry_recovery_from_simulated_locs_is_idempotent():
     cloud = np.vstack(
         [s + rng.normal(0, 2.0, size=(40, 2)) for s in true_sites]
     )
-    centers = picasso_outpost.subcluster_docking_sites(
+    centers = icp.subcluster_docking_sites(
         cloud, tmpl.grid_spacing_nm, min_samples=5
     )
     assert len(centers) == 12
-    reg1 = picasso_outpost.register_to_template(centers, tmpl.sites_nm)
-    reg2 = picasso_outpost.register_to_template(centers, tmpl.sites_nm)
+    reg1 = icp.register_to_template(centers, tmpl.sites_nm)
+    reg2 = icp.register_to_template(centers, tmpl.sites_nm)
     assert reg1["n_resolved"] == 12
     assert reg1["rmse_nm"] < 3.0
     assert abs(reg1["mean_spacing_nm"] - 20.0) < 3.0
@@ -1149,12 +1150,10 @@ def test_subcluster_resolves_all_sites_for_bright_structures():
     # bright (50 locs/site), slightly spread (sigma 3 nm), random orientation
     sites = tmpl.sites_nm @ _rot2d(28.0).T + np.array([300.0, 200.0])
     cloud = np.vstack([s + rng.normal(0, 3.0, size=(50, 2)) for s in sites])
-    centers = picasso_outpost.subcluster_docking_sites(
-        cloud, tmpl.grid_spacing_nm
-    )
+    centers = icp.subcluster_docking_sites(cloud, tmpl.grid_spacing_nm)
     assert len(centers) >= 9  # ~all 12; the old default merged this to ~3
     # the old, too-large neighbourhood demonstrably merged the sites
-    merged = picasso_outpost.subcluster_docking_sites(
+    merged = icp.subcluster_docking_sites(
         cloud, tmpl.grid_spacing_nm, eps_frac=0.35
     )
     assert len(merged) < len(centers)
@@ -1177,34 +1176,20 @@ def test_classify_candidate_reasons_and_ordering():
         grid_spacing_nm=20.0,
         max_rmse_nm=3.0,
     )
+    assert icp.classify_candidate(reg(12, 1.0, 20.0), 12, **kw) == "accepted"
     assert (
-        picasso_outpost.classify_candidate(reg(12, 1.0, 20.0), 12, **kw)
-        == "accepted"
+        icp.classify_candidate(reg(9, 0.1, 20.0), 12, **kw) == "missing_sites"
     )
-    assert (
-        picasso_outpost.classify_candidate(reg(9, 0.1, 20.0), 12, **kw)
-        == "missing_sites"
-    )
-    assert (
-        picasso_outpost.classify_candidate(reg(12, 5.0, 20.0), 12, **kw)
-        == "rmse"
-    )
-    assert (
-        picasso_outpost.classify_candidate(reg(12, 1.0, 30.0), 12, **kw)
-        == "spacing"
-    )
+    assert icp.classify_candidate(reg(12, 5.0, 20.0), 12, **kw) == "rmse"
+    assert icp.classify_candidate(reg(12, 1.0, 30.0), 12, **kw) == "spacing"
     # ordering: missing sites beats rmse beats spacing
     assert (
-        picasso_outpost.classify_candidate(reg(5, 99.0, 99.0), 12, **kw)
-        == "missing_sites"
+        icp.classify_candidate(reg(5, 99.0, 99.0), 12, **kw) == "missing_sites"
     )
-    assert (
-        picasso_outpost.classify_candidate(reg(12, 5.0, 30.0), 12, **kw)
-        == "rmse"
-    )
+    assert icp.classify_candidate(reg(12, 5.0, 30.0), 12, **kw) == "rmse"
     # accept_candidate is the boolean projection of classify_candidate
-    assert picasso_outpost.accept_candidate(reg(12, 1.0, 20.0), 12, **kw)
-    assert not picasso_outpost.accept_candidate(reg(9, 0.1, 20.0), 12, **kw)
+    assert icp.accept_candidate(reg(12, 1.0, 20.0), 12, **kw)
+    assert not icp.accept_candidate(reg(9, 0.1, 20.0), 12, **kw)
 
 
 def test_simulate_origami_phase_space_is_physical_and_reproducible():
@@ -1488,8 +1473,8 @@ def test_subcluster_min_samples_1_is_clamped():
     rng = np.random.default_rng(0)
     tmpl = picasso_outpost.origami_template_from_grid(3, 4, 20.0).sites_nm
     cloud = _lattice_blob(range(12), tmpl, 20.0, rng)
-    c1 = picasso_outpost.subcluster_docking_sites(cloud, 20.0, min_samples=1)
-    c2 = picasso_outpost.subcluster_docking_sites(cloud, 20.0, min_samples=2)
+    c1 = icp.subcluster_docking_sites(cloud, 20.0, min_samples=1)
+    c2 = icp.subcluster_docking_sites(cloud, 20.0, min_samples=2)
     assert len(c1) == len(c2)  # 1 behaves like 2
     assert len(c1) <= 13  # not one cluster per localization
 
