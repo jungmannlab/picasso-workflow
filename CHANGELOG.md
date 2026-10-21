@@ -92,6 +92,15 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Changed
 
+- **Monolith split S1 — PPAC resolution → `outpost/resolution/`.** The
+  point-pattern-autocorrelation resolution estimator (`resolution_ppac` and
+  helpers, `analyse_resolution_ppac`) moved out of `picasso_outpost.py` (−512
+  lines) into `outpost/resolution/resolution_ppac.py` (self-contained; only
+  `numpy`/`scipy`). `analyse.py` and `test_picasso_outpost.py` import sites
+  updated; behaviour unchanged. The module is **flagged not promote-ready** — it
+  never performed well (rebuilds a `KDTree` per grid cell, O(G²·N log N)); the
+  module docstring records the fix (a one-pass displacement-vector histogram) to
+  apply before upstreaming. First step of the `picasso_outpost.py` split.
 - **Outpost restructure (binding-events slice).** `binding_event_analysis` and
   `binding_event_plotting` moved from the flat `outpost_modules/` into a cohesive
   `outpost/binding_events/` feature package (as `analysis`/`plotting`). The next

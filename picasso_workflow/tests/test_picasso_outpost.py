@@ -19,6 +19,10 @@ import pytest
 
 
 from picasso_workflow import picasso_outpost
+from picasso_workflow.outpost.resolution.resolution_ppac import (
+    analyse_resolution_ppac,
+    resolution_ppac,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -632,9 +636,7 @@ class TestPicassoOutpost(unittest.TestCase):
         r_max = 100.0  # 100 nm max radius
 
         # Call the function
-        autocorr_map = picasso_outpost.resolution_ppac(
-            locs, pixelsize, delta_r, r_max
-        )
+        autocorr_map = resolution_ppac(locs, pixelsize, delta_r, r_max)
 
         # Verify output properties
         expected_size = int(2 * r_max / delta_r) + 1
@@ -695,7 +697,7 @@ class TestPicassoOutpost(unittest.TestCase):
         intensities += np.random.normal(0, 0.01, intensities.shape)
 
         # Call the analysis function
-        results = picasso_outpost.analyse_resolution_ppac(intensities, delta_r)
+        results = analyse_resolution_ppac(intensities, delta_r)
 
         # Verify fit was successful
         assert results[
@@ -756,7 +758,7 @@ class TestPicassoOutpost(unittest.TestCase):
         size = 5  # Very small size
         intensities = np.random.random((size, size))
 
-        results = picasso_outpost.analyse_resolution_ppac(intensities, delta_r)
+        results = analyse_resolution_ppac(intensities, delta_r)
 
         # Should handle gracefully - either succeed or fail with proper error handling
         if results["fit_success"]:
@@ -770,7 +772,7 @@ class TestPicassoOutpost(unittest.TestCase):
         size = 21
         intensities = np.ones((size, size)) * (-0.5)  # Negative values
 
-        results = picasso_outpost.analyse_resolution_ppac(intensities, delta_r)
+        results = analyse_resolution_ppac(intensities, delta_r)
 
         # Should handle gracefully
         assert isinstance(results["fit_success"], bool)

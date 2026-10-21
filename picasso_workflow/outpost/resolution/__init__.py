@@ -6,8 +6,11 @@ Holds picasso-workflow's resolution estimators moved out of the flat
 * ``resolution_frc``          -- Fourier Ring Correlation.
 * ``resolution_decorrelation`` -- image-decorrelation resolution (reuses
   ``resolution_frc.render_image_histogram``).
+* ``resolution_ppac``         -- point-pattern autocorrelation (the third
+  estimator), moved here from ``picasso_outpost.py`` by the monolith split.
 
-The third estimator (point-pattern autocorrelation, ``resolution_ppac*``) still
-lives in ``picasso_outpost.py`` and will move here when that monolith is split.
-All three are `promote` candidates -- see ``../MANIFEST.md``.
+FRC and decorrelation are `promote` candidates. PPAC is **not** promote-ready --
+it never performed well (an O(G**2) KDTree-per-grid-cell algorithm); see its
+module docstring and ``../MANIFEST.md`` for the fix (a displacement-vector
+histogram) to apply before promoting.
 """
