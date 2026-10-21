@@ -128,9 +128,11 @@ gets its own `registration/` rather than living under `origami/`.
 
 | # | cluster (lines in current file) | → target | dest | notes / deps |
 |---|---|---|---|---|
-| S1 | **PPAC resolution** (7075–7579: `resolution_ppac*`, `analyse_resolution_ppac`) | `outpost/resolution/resolution_ppac.py` | promote | Self-contained; `resolution/__init__` already anticipates it. 2 analyse sites + `test_12/13/14`. Prune dead `batch_size`/`use_chunking` params (row 5b). |
+| S1 | **PPAC resolution** (7075–7579: `resolution_ppac*`, `analyse_resolution_ppac`) | `outpost/resolution/resolution_ppac.py` | keep ⚠️ needs-work | Move as a pure extraction, but **flag: not promote-ready — never performed well.** Root cause: it rebuilds a `KDTree(xy_shift)` for *every* grid cell → O(G²·N log N); the sparse/chunked/parallel variants are band-aids on that. **Fix (do before promoting):** the G×G map is a 2D histogram of pairwise displacement vectors — build one `KDTree`, `query_pairs` within `r_max` once, `np.histogram2d` the displacements. After the rewrite + an equivalence test, revisit promotion. Prune dead `batch_size`/`use_chunking` params then. |
 | S2 | **CSR k-NN stats** (2743–3123: `nndistribution_from_csr`, `csr_cdf_for_ks_test`, `nndist_loglikelihood_csr`, `estimate_density_from_neighbordists`, `minimization_loglike`, `_check_distance_window`) | `outpost/spatial_stats/csr_knn.py` | promote | Self-contained numpy/scipy; `spatial_stats/__init__` already anticipates it. 3 analyse sites + `test_04*`. |
-| S3 | **spinna + spot-extraction + Zeiss** (1906–2741: `spinna_batch`…`load_structures_from_dict`, `get_spots`/`_cut_spots*`/`normalize_spot`, `convert_zeiss_file`) | `outpost/spinna/` | keep | Carry the `get_internal` dispatcher: `get_spots`→`_to_photons`, `screen_label_uncertainty`→`_targets_from_structures`. |
+| S3 | **spinna wrappers** (2032–2741: `spinna_batch`, `screen_label_uncertainty`, `single_spinna_run`, `single_spinna_fit_le_run`, `plot_spinna_nnd`, `_plot_label_unc_scan`, `load_structures_from_dict`) | `outpost/spinna/` | keep | Thin wrappers over `picasso.spinna` + plots. `screen_label_uncertainty` uses `get_internal("_targets_from_structures")` — carry the dispatcher. |
+| S3b | **spot extraction** (1946–2029: `get_spots`, `_cut_spots`, `_cut_spots_byrandomframe`, `normalize_spot`) | `outpost/spots/` | keep | Distinct from spinna — localization spot-cutting for re-fitting. `get_spots` uses `get_internal("_to_photons")`. (`_cut_spots_byrandomframe` = deliberate random-frame sampling, not a dedup — see Dedup table.) |
+| S3c | **Zeiss import** (1906: `convert_zeiss_file`) | `outpost/formats/` | keep | Distinct — `.czi` conversion glue (`aicsimageio`, the `[formats]` extra). Tiny; may batch its tiny PR with another. |
 | S4 | **dbscan-molint** (3126–4120: `DBSCAN_analysis*`, `degree_of_clustering`, barcode/interaction plots) + the `dbscan_molint/` subpackage | `outpost/clustering/` | keep | Large; coupled to the molint Confluence report format. |
 | S5 | **channel alignment + shift kernel** (65–1363 + `_solve_optimal_shifts` 1742: `align_channels`/`align_by_rcc`/`align_by_picked`/`align_by_rsso`/`plot_shift`/`shift_from_rcc` + `_calculate_pairwise_shift` & peak-fit helpers + shift-histogram plots) | `outpost/alignment/` with the **shift kernel as its own `shift_kernel.py`** | keep + promote | shift kernel used by `align_by_rsso` (same cluster) + 2 analyse deferred imports; isolate it for upstreaming (row 2). `_solve_optimal_shifts` is a dedup-maybe (vs `picasso.lib.minimize_shifts`). |
 | S6 | **picks / fiducials** (4122–4939: `pick_gold`, `pick_similar*`, `picked_locs`, `index_locs`, `_undrift_from_picked*`, `shift_from_picked`, `sort_picked_locs`, `find_structures`, block/locs helpers) | `outpost/picks/` | keep | `pick_gold`/`pick_similar` use `get_internal` (carry dispatcher); `_undrift_from_picked` is a dedup-maybe. |
@@ -138,9 +140,12 @@ gets its own `registration/` rather than living under `origami/`.
 | S8 | **origami orchestration** (4941–5457 + 5858–7029: `OrigamiTemplate` + builders, kinetics sim, structure/lattice descriptors, `pick_origami`) | `outpost/origami/` | keep | Biggest keep cluster; imports `registration` (S7). Largest diff — may itself split into templates+kinetics / descriptors / `pick_origami`. |
 | S9 | **report plot helpers** (7031–7073: `plot_1dhist`, `plot_2dhist`) + any leftovers | fold into a reporting util | keep | Tiny; last. After this `picasso_outpost.py` is empty → delete it. |
 
-**Order rationale:** S1–S2 are clean, self-contained *promote* clusters with
-folders already waiting (lowest risk, immediate payoff). S3–S6 are cohesive
-*keep* clusters. S7 (ICP *promote*) is extracted **before** S8 so origami imports
-a clean `registration` module. S8 is the largest/most tangled — last. S9 empties
-and removes the file. Each S-step is one PR (S8 possibly two), merged
-sequentially with the same union-rebase dance as #45–#51.
+**Order rationale:** S1–S2 are clean, self-contained extractions into folders
+that already exist (lowest risk, first) — S2 is a genuine *promote*; S1 (PPAC)
+is the same easy move but lands flagged needs-work, not promote-ready (see its
+row). S3–S6 are cohesive *keep* clusters (S3/S3b/S3c are three *distinct*
+features, each its own folder — not bundled). S7 (ICP *promote*) is extracted
+**before** S8 so origami imports a clean `registration` module. S8 is the
+largest/most tangled — last. S9 empties and removes the file. Each step is one
+PR (the tiny S3c may batch with a neighbour; S8 may split), merged sequentially
+with the same union-rebase dance as #45–#51.
