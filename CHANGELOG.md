@@ -12,6 +12,15 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Fixed
 
+- **WP-TEMPLATE-CONFORMANCE code review: an aggregation template's default now
+  covers the whole pipeline.** ``Template.resolve`` previously returned only the
+  recipe's ``aggregation_modules``, so a change to the per-dataset
+  ``single_dataset_modules`` half (e.g. ``box_size``, fit params, an added
+  single-dataset step) was invisible to both ``template_version`` and
+  ``config_diff`` — and an aggregation run has no separate single-dataset
+  template run to catch it. ``resolve`` now returns ``single_dataset_modules``
+  followed by ``aggregation_modules`` (the two phases' module names are disjoint
+  in the shipped recipes), so the version/diff see the full content.
 - **WP-6 code review: per-module registry ``scope`` is no longer hardcoded to
   ``"single"``.** The aggregation runner now sets ``registry_scope =
   "aggregation"`` on the sub-runner that executes the aggregation modules, and
@@ -26,6 +35,27 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Added
 
+- **WP-TEMPLATE-CONFORMANCE — versioned analysis templates + deviation logging
+  (`picasso_workflow.templates`).** Standardize analysis without mandating one
+  workflow (A19/C30). Additive/opt-in; nothing is gated. Phases 1–2 (the MVP);
+  Phases 3 (registry sink) and 4 (recommender) are left as documented hooks.
+  - **Phase 1 — versioned templates.** `TEMPLATE_REGISTRY` registers the
+    existing recipes (`minimal`, `picasso_native`, `minimal_channel_align`) as
+    `Template` objects, each carrying a `template_id`, a content-hash
+    `template_version`, a coarse `question_type` tag, and optional coarse
+    descriptor-match tags (ratified A2 axes only — no leaf vocabularies).
+    `Template.resolve()` materializes the concrete default (ordered module list
+    + params). `template_version` is a SHA-256 over the canonical JSON of the
+    resolved default (per-run filepaths/directives normalized out), so it is
+    stable across runs and changes iff the template's modules/params change.
+  - **Phase 2 — deviation logging (MVP sink = the existing qc.json sidecar).**
+    `compute_config_diff` mechanically diffs a run's resolved workflow vs the
+    template default into `{param_overrides, modules_added, modules_removed}`;
+    `derive_conformance` → `exact` / `param-override` / `structural-deviation`
+    / `ad-hoc`. `write_conformance_to_qc` / `log_run_conformance` append
+    `template_id`, `template_version`, `config_diff`, `conformance` under a
+    `template_conformance` key in `qc.json`, additively (existing fields
+    preserved). Runs with no registry and no recommender.
 - **WP-6 — `preprocess` single-dataset recipe + thin registry client.** The
   authoritative-localization reduction run when a FOV/round completes, and the
   per-module provenance logging that feeds the picasso-registry corpus.
