@@ -4041,111 +4041,6 @@ class ModuleDescriptor(util.AbstractModuleCollection):
 
         return parameters_spec, results_spec
 
-    def ripleysk(self):
-        """Perforn Ripley's K analysis between the channels using
-        Magdalena's code.
-
-        Parameters
-        ----------
-        parameters:
-            ripleys_n_random_controls : int
-                number of random controls, default: 100
-            ripleys_rmax : int
-                the maximum radius, default 200
-            ripleys_dr : float
-                the radius interval, default 5
-            radii : 1D np array
-                the radius values. If given, ripleys_rmax and
-                ripleys_dr are ignored.
-            ripleys_threshold : float
-                the threshold of ripleys integrals above which the
-                interaction is deemed significant.
-            fp_combined_locs : str
-                filepath to the combined locs of all channel_locs
-            atype : str
-                the type of analysis: 'Ripleys' for the standard
-                Ripley's K analysis, or 'RDF' for calculation of the
-                radial distribution function instead of K, and random
-                controls by relocating each point by a random x/y in a
-                circle with the currently investigated r, which preserves
-                the density fluctuations (instead of CSR simulation)
-        """
-        parameters_spec = {
-            "radii": {
-                "type": "list",
-                "description": "List of analysis radii in nm",
-                "unit": "nm",
-                "element_type": "float",
-                "min": 1.0,
-                "max": 1000.0,
-                "required": True,
-            },
-            "edge_correction": {
-                "type": "str",
-                "description": "Edge correction method",
-                "options": ["none", "translation", "isotropic"],
-                "default": "translation",
-                "required": False,
-            },
-            "ripleys_n_random_controls": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: number of random controls, default: 100
-                # Hint: type appears to be int
-            },
-            "ripleys_rmax": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the maximum radius, default 200
-                # Hint: type appears to be int
-            },
-            "ripleys_dr": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the radius interval, default 5
-                # Hint: type appears to be float
-            },
-            "ripleys_threshold": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the threshold of ripleys integrals above which the interaction is deemed significant.
-                # Hint: type appears to be float
-            },
-            "fp_combined_locs": {
-                "required": True,
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: filepath to the combined locs of all channel_locs
-                # Hint: type appears to be str
-            },
-            "atype": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the type of analysis: 'Ripleys' for the standard Ripley's K analysis, or 'RDF' for calculation of the radial distribution function instead of K, an...
-                # Hint: type appears to be str
-            },
-        }
-
-        results_spec = {
-            "start time": {
-                "type": "str",
-                "description": "Module execution start timestamp",
-            },
-            "end time": {
-                "type": "str",
-                "description": "Module execution end timestamp",
-            },
-            "duration": {
-                "type": "float",
-                "description": "Module execution duration in seconds",
-                "min": 0.0,
-            },
-            "folder": {
-                "type": "str",
-                "description": "Output folder for module results",
-            },
-            "ripley_k_values": {
-                "type": "numpy.ndarray",
-                "description": "Calculated Ripley's K values",
-            },
-        }
-
-        return parameters_spec, results_spec
-
     def ripleysk2(self):
         """Perforn Ripley's K analysis between the channels using
         Rafal's code.
@@ -4331,106 +4226,6 @@ class ModuleDescriptor(util.AbstractModuleCollection):
 
         return parameters_spec, results_spec
 
-    def ripleysk_average(self):
-        """Average the results of multiple Ripley's K Analyses, analyse
-        the significant pairs after averaging, and save them into the
-        separate workflow manual folders (for further analysis there)
-
-        Parameters
-        ----------
-        parameters:
-            # fp_ripleys_integrals : list of str
-            #     the various single analyses to average, e.g. of
-            #     different workflows
-            fp_workflows : list of str
-                the paths to the folders of separate workflows
-                where the separate ripleys analyses have been done
-            report_names : list of str
-                the report names of those worklfows
-            ripleys_threshold : float
-                the threshold of ripleys integrals above which the
-                interaction is deemed significant.
-            atype : str
-                "Ripleys" or "RDF"
-            # output_folders : list of str
-            #     folders to write the significant pairs into. This can
-            #     e.g. be the 'manual' results folders of the
-            #     workflows, so these can proceed.
-        optional:
-            swkfl_ripleysk_key : str
-                the results key of the ripleysk module.
-                e.g. '05_ripleysk'
-            swkfl_manual_key : str
-                the results key of the manual module to save the
-                integrals to
-            if those two are not given, saving is not performed
-        """
-        parameters_spec = {
-            "weight_method": {
-                "type": "str",
-                "description": "Method for weighting individual analyses",
-                "options": ["equal", "by_nlocs", "by_area"],
-                "default": "equal",
-                "required": False,
-            },
-            "fp_workflows": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the paths to the folders of separate workflows where the separate ripleys analyses have been done
-                # Hint: type appears to be list
-            },
-            "report_names": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the report names of those worklfows
-                # Hint: type appears to be list
-            },
-            "ripleys_threshold": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the threshold of ripleys integrals above which the interaction is deemed significant.
-                # Hint: type appears to be float
-            },
-            "atype": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: # output_folders : list of str #     folders to write the significant pairs into. This can #     e.g. be the 'manual' results folders of the #     ...
-                # Hint: type appears to be str
-            },
-            "swkfl_ripleysk_key": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the results key of the ripleysk module. e.g. '05_ripleysk'
-                # Hint: type appears to be str
-            },
-            "swkfl_manual_key": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the results key of the manual module to save the integrals to if those two are not given, saving is not performed
-                # Hint: type appears to be str
-            },
-        }
-
-        results_spec = {
-            "start time": {
-                "type": "str",
-                "description": "Module execution start timestamp",
-            },
-            "end time": {
-                "type": "str",
-                "description": "Module execution end timestamp",
-            },
-            "duration": {
-                "type": "float",
-                "description": "Module execution duration in seconds",
-                "min": 0.0,
-            },
-            "folder": {
-                "type": "str",
-                "description": "Output folder for module results",
-            },
-            "average_ripley_k": {
-                "type": "numpy.ndarray",
-                "description": "Averaged Ripley's K values",
-            },
-        }
-
-        return parameters_spec, results_spec
-
     def ripleysk_average2(self):
         """Average the results of multiple Ripley's K Analyses, analyse
         the significant pairs after averaging, and save them into the
@@ -4470,8 +4265,8 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             #     workflows, so these can proceed.
         optional:
             swkfl_ripleysk_key : str
-                the results key of the ripleysk module.
-                e.g. '05_ripleysk'
+                the results key of the ripleysk2 module.
+                e.g. '05_ripleysk2'
             swkfl_manual_key : str
                 the results key of the manual module to save the
                 integrals to
@@ -4517,7 +4312,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             },
             "swkfl_ripleysk_key": {
                 # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the results key of the ripleysk module. e.g. '05_ripleysk'
+                # Hint: description: the results key of the ripleysk2 module. e.g. '05_ripleysk2'
                 # Hint: type appears to be str
             },
             "swkfl_manual_key": {

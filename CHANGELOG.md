@@ -24,6 +24,17 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Removed
 
+- **Legacy `ripleysk` / `ripleysk_average` Ripley modules + `ripleys_analysis`
+  subpackage retired.** The original Ripley's-K pair (backed by the separate
+  `ripleys_analysis/` subpackage: `run_ripleysAnalysis`, `ripleysModule`,
+  `dataModule`, `maskModule`) was superseded by `ripleysk2` / `ripleysk_average2`
+  (which run on `outpost/spatial_stats/ripleys`). Removed the subpackage, the two
+  `AutoPicasso` methods (plus the long-commented `ripleysk_rafal`), and the
+  matching `ConfluenceReporter`, `AbstractModuleCollection` (`util`),
+  `modulespec`, and `gui` entries, plus their tests. The surviving `ripleysk2` /
+  `ripleysk_average2` and the shared `_plot_ripleys_integrals` /
+  `_find_ripleys_significant` helpers are unchanged. Workflows using `ripleysk`
+  or `ripleysk_average` should switch to the `…2` variants.
 - **Dead SPINNA / NN modules** (`spinna.py`, `spinna_io.py`, `spinna_main.py`,
   `spinna_mle.py`, `spinna_mle_2.py`, `nn_redistribution.py`): gitignored
   local experiments that were never committed and are imported nowhere (the

@@ -13,6 +13,7 @@ WIP / not ready.
 |---|---|---|---|
 | spinna_mle / spinna_mle_2 / nn_redistribution / spinna / spinna_io / spinna_main | `picasso_workflow/spinna*.py`, `nn_redistribution.py` | **delete** ✅ | Dead, never committed (gitignored local experiments); 0 imports anywhere. Removed from disk + gitignore + flake8-exclude + lint allowlist. |
 | g5m (outpost copy) | `outpost_modules/g5m.py` | **delete** ✅ | Fully commented-out; live `g5m` comes from `picasso.g5m` via the boundary. |
+| ripleys_analysis (legacy Ripley) | `ripleys_analysis/` subpackage + the `ripleysk` / `ripleysk_average` workflow modules | **delete** ✅ | Retired: superseded by `ripleysk2` / `ripleysk_average2` (which use `spatial_stats/ripleys`). Removed the subpackage, the two methods + the commented `ripleysk_rafal`, and the `confluence`/`util`/`modulespec`/`gui` entries + tests. Shared helpers `_plot_ripleys_integrals` / `_find_ripleys_significant` stay (used by the `…2` pair). |
 
 ## Promote — genuinely novel, upstream candidates (ranked by readiness)
 
@@ -56,7 +57,6 @@ WIP / not ready.
 | render glue | `outpost_modules/render.py` | matplotlib wrapper over `picasso.render`. |
 | Ripley's K core | `outpost/spatial_stats/ripleys.py` | Ripley's K / RDF / FRC + CSR/randomized controls + plotting (Rafal). Report-coupled (`confluence.ripleysk2`). **Moved** from `outpost_modules/` into `outpost/spatial_stats/`. |
 | Ripley DC-Atlas redo | `outpost/spatial_stats/ripley_dcatlas_analysis.py` | Explicit reproducible redo of a published pipeline (built on `ripleys`). **Moved** into `outpost/spatial_stats/`. |
-| Ripley subpackage (legacy) | `ripleys_analysis/` (`run_ripleysAnalysis`, `ripleysModule`, `dataModule`, `maskModule`) | Separate, older Ripley implementation, live-wired via `analyse.ripleysk`. A distinct `spatial_stats` sub-slice will fold it in (import-path-only move); not touched by the first `spatial_stats` move. |
 | report plot helpers | `picasso_outpost.py` `plot_1dhist`, `plot_2dhist`, `_save_*_histogram_plot` | Reporting. |
 
 ## Suggested PR sequence
@@ -70,6 +70,6 @@ WIP / not ready.
    rows as each feature lands. Done so far: `resolution/` (#42),
    `binding_events/` (#45), `spatial_stats/` (#46, ripleys + DC-Atlas),
    `masking/` (#47, CellMask). Still flat in `outpost_modules/`: `undrift_rsso`,
-   `render`; plus the legacy
-   `ripleys_analysis/` subpackage and the `picasso_outpost.py` monolith.
+   `render`; plus the `picasso_outpost.py` monolith. (The legacy
+   `ripleys_analysis/` subpackage was retired — see Done.)
 6. **Promote** (readiness H first): CSR k-NN stats, correspondence-free ICP registration, binding-events; then point-set shift kernel / RSSO drift, resolution (FRC/decorrelation/PPAC), CellMask morphology.
