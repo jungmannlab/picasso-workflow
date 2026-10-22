@@ -95,6 +95,11 @@ _LOWER_IS_BETTER = (
     "frc_nm",
 )
 
+#: Minimum cohort samples a variant needs before it may REPLACE the template
+#: default (a single lucky run must not flip the pipeline). The template default
+#: is the conservative baseline; swap only on real evidence.
+MIN_COHORT_SAMPLES = 3
+
 
 # ---------------------------------------------------------------------------
 # Result container.
@@ -148,7 +153,15 @@ def _scope_for_goal(goal: str, conditions: Dict[str, Any]) -> Scope:
     """
     explicit = (conditions or {}).get("scope")
     if explicit:
-        return Scope(explicit)
+        try:
+            return Scope(explicit)
+        except ValueError:
+            # recommend_workflow never raises: an invalid scope string falls
+            # back to goal inference rather than propagating a ValueError.
+            logger.warning(
+                "recommender: ignoring invalid conditions['scope']=%r",
+                explicit,
+            )
     g = (goal or "").lower()
     if "align" in g or "aggregate" in g or "aggregation" in g:
         return Scope.AGGREGATION
@@ -307,23 +320,26 @@ def _module_of(metrics_row: dict) -> Optional[str]:
 
 def _variant_scores(
     db_client, taxon_id: str, candidate_names: set
-) -> Dict[str, Tuple[float, int]]:
-    """Mean optimize-tier metric + sample count per candidate module, from cohort.
+) -> Tuple[Dict[str, Tuple[float, int]], Optional[str]]:
+    """Per-candidate mean of ONE shared optimize-tier metric, from the cohort.
 
     Walks the taxon-distance-ranked cohort → its analysis runs → their metrics,
-    and for every metrics row whose module is one of ``candidate_names`` records
-    the first available ``_LOWER_IS_BETTER`` metric. Returns
-    ``{module: (mean_metric, n_samples)}`` — only modules with at least one
-    cohort sample appear.
+    collecting each candidate module's values **per metric** (not mixed). It
+    then picks a single *comparison metric* -- the highest-priority
+    ``_LOWER_IS_BETTER`` metric any candidate has data for -- and scores every
+    candidate on THAT metric only, so variants are ranked on the same physical
+    quantity (NeNA nm vs drift-residual nm are not averaged together). Returns
+    ``({module: (mean, n_samples)}, comparison_metric)``; ``({}, None)`` when no
+    candidate has any usable metric.
     """
     cohort = _cohort_runs(db_client, taxon_id)
     if not cohort:
-        return {}
+        return {}, None
     ana_by_acq = _analysis_by_acquisition(db_client)
     metrics_by_ana = _metrics_by_run(db_client)
 
-    # In cohort rank order, collect each candidate module's metric values.
-    values: Dict[str, List[float]] = {}
+    # Per (module, metric) values -- metrics are kept separate, never mixed.
+    per: Dict[str, Dict[str, List[float]]] = {}
     for item in cohort:
         acq_id = item.get("acquisition_run_id")
         for ana in ana_by_acq.get(acq_id, []):
@@ -339,13 +355,23 @@ def _variant_scores(
                         fval = float(val)
                     except (TypeError, ValueError):
                         continue
-                    values.setdefault(module, []).append(fval)
-                    break  # one optimize metric per row is enough to rank
-    return {
-        module: (sum(vals) / len(vals), len(vals))
-        for module, vals in values.items()
-        if vals
+                    per.setdefault(module, {}).setdefault(metric, []).append(
+                        fval
+                    )
+
+    # The shared comparison metric: the highest-priority one any candidate has.
+    metric = next(
+        (m for m in _LOWER_IS_BETTER if any(m in v for v in per.values())),
+        None,
+    )
+    if metric is None:
+        return {}, None
+    scores = {
+        module: (sum(vals[metric]) / len(vals[metric]), len(vals[metric]))
+        for module, vals in per.items()
+        if metric in vals
     }
+    return scores, metric
 
 
 def _roles(workflow: Workflow) -> Dict[str, List[int]]:
@@ -376,6 +402,11 @@ def _alternatives(role: str, default_spec: ModuleSpec) -> List[str]:
         if spec.role == role
         and default_spec.scopes <= spec.scopes
         and spec.module_set == default_spec.module_set
+        # (d) an alternative must not REQUIRE more than the default: swapping in
+        # a variant with extra data deps (e.g. undrift_from_picked needs
+        # `picks`, which a plain localize template never provides) would make
+        # the graph unorderable and silently revert the whole recommendation.
+        and spec.requires <= default_spec.requires
     )
 
 
@@ -413,7 +444,7 @@ def resolve_choice_points(
         if len(alts) <= 1:
             continue  # no genuine choice
 
-        scores = _variant_scores(db_client, taxon_id, set(alts))
+        scores, metric = _variant_scores(db_client, taxon_id, set(alts))
         if not scores:
             decisions.append(
                 {
@@ -425,17 +456,40 @@ def resolve_choice_points(
             )
             continue
 
-        # Lower is better across the optimize tier (see _LOWER_IS_BETTER).
-        best = min(scores.items(), key=lambda kv: kv[1][0])
-        best_name, (best_val, n) = best
+        # Lower is better on the shared comparison metric (see _variant_scores).
+        best_name, (best_val, n) = min(scores.items(), key=lambda kv: kv[1][0])
+        default_score = scores.get(default_name)
         if best_name == default_name:
             decisions.append(
                 {
                     "role": role,
                     "chosen": default_name,
                     "source": "cohort-confirmed-default",
+                    "metric": metric,
                     "metric_mean": best_val,
                     "n_samples": n,
+                }
+            )
+            continue
+
+        # Guard against a noisy swap: only replace the template default when the
+        # winner clears MIN_COHORT_SAMPLES AND (when the default has cohort data)
+        # actually beats it. Otherwise keep the explainable template default -- a
+        # single lucky run must not flip the pipeline.
+        beats_default = default_score is None or best_val < default_score[0]
+        if n < MIN_COHORT_SAMPLES or not beats_default:
+            decisions.append(
+                {
+                    "role": role,
+                    "chosen": default_name,
+                    "source": "template-default-kept",
+                    "reason": (
+                        f"insufficient cohort evidence to swap in {best_name} "
+                        f"(n={n} on {metric}; need n>={MIN_COHORT_SAMPLES} and "
+                        "to beat the default)"
+                    ),
+                    "metric": metric,
+                    "candidates": {k: v[0] for k, v in scores.items()},
                 }
             )
             continue
@@ -448,6 +502,7 @@ def resolve_choice_points(
                 "chosen": best_name,
                 "replaced": default_name,
                 "source": "cohort-history",
+                "metric": metric,
                 "metric_mean": best_val,
                 "n_samples": n,
                 "candidates": {k: v[0] for k, v in scores.items()},
@@ -484,6 +539,45 @@ def _latest_cohort_ranges(db_client, taxon_id: str) -> Dict[str, dict]:
     return latest
 
 
+def _node_default_overrides(
+    node_defaults: Dict[str, Any], name: str, params: Dict[str, Any]
+) -> Dict[str, Tuple[Any, str]]:
+    """Resolve the node-default overrides that apply to module ``name``.
+
+    Supports the three shapes the ``node_defaults`` blob may use (so the
+    docstring's promise is actually honored):
+
+    * ``{"<module>": {"<param>": val}}`` -- a per-module dict;
+    * ``"<module>.<param>": val`` -- a dotted key for one module's param;
+    * ``"<param>": val`` (a bare scalar) -- applied to EVERY module that
+      already declares that param (safe: never introduces a param the module
+      doesn't use).
+
+    Returns ``{param: (value, source_tag)}``; the more specific per-module /
+    dotted forms win over a bare scalar on the same param.
+    """
+    overrides: Dict[str, Tuple[Any, str]] = {}
+    # Bare "<param>" first (lowest precedence), only where the module uses it.
+    for key, val in node_defaults.items():
+        if isinstance(val, dict) or "." in key:
+            continue
+        if key in params:
+            overrides[key] = (val, "node_defaults[<param>]")
+    # Dotted "<module>.<param>".
+    for key, val in node_defaults.items():
+        if isinstance(val, dict) or "." not in key:
+            continue
+        mod, _, param = key.partition(".")
+        if mod == name:
+            overrides[param] = (val, f"node_defaults[{key}]")
+    # Per-module dict (highest precedence).
+    md = node_defaults.get(name)
+    if isinstance(md, dict):
+        for param, val in md.items():
+            overrides[param] = (val, f"node_defaults[{name}]")
+    return overrides
+
+
 def recommend_parameters(
     workflow: Workflow,
     conditions: Dict[str, Any],
@@ -517,22 +611,19 @@ def recommend_parameters(
     for step in workflow:
         name = _step_name(step)
         params = dict(_step_params(step))
-        # Per-module defaults keyed "<module>.<param>" take precedence over a
-        # bare "<param>" default that happens to share a key name.
-        module_scoped = node_defaults.get(name)
-        if isinstance(module_scoped, dict):
-            for key, val in module_scoped.items():
-                if params.get(key) != val:
-                    decisions.append(
-                        {
-                            "module": name,
-                            "param": key,
-                            "value": val,
-                            "source": f"node_defaults[{name}]",
-                            "taxon_id": taxon_id,
-                        }
-                    )
-                    params[key] = val
+        overrides = _node_default_overrides(node_defaults, name, params)
+        for key, (val, src) in overrides.items():
+            if params.get(key) != val:
+                decisions.append(
+                    {
+                        "module": name,
+                        "param": key,
+                        "value": val,
+                        "source": src,
+                        "taxon_id": taxon_id,
+                    }
+                )
+                params[key] = val
         out.append((name, params))
 
     # Learned ranges are advisory hints (the recommender stays conservative and

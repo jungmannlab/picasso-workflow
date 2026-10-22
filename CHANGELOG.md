@@ -10,6 +10,31 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ## [Unreleased]
 
+### Fixed
+
+- **WP-10 recommender code review (finder -> verify -> fix), 5 fixes:**
+  - **Never-raises contract held:** an invalid `conditions['scope']` no longer
+    raises `ValueError` out of `recommend_workflow` -- it falls back to goal
+    inference.
+  - **Choice-point ranking no longer mixes metrics:** `_variant_scores` scores
+    every candidate on ONE shared optimize-tier metric (the highest-priority one
+    any candidate has), instead of averaging incommensurable per-row metrics
+    (NeNA nm vs drift-residual nm).
+  - **No noisy swaps:** a role's template default is only replaced when the
+    winning variant clears `MIN_COHORT_SAMPLES` (3) AND beats the default -- a
+    single lucky cohort run can't flip the pipeline (`source:
+    template-default-kept` records the held default).
+  - **`_alternatives` excludes higher-`requires` variants** (e.g.
+    `undrift_from_picked` needs `picks`), so a cohort-driven swap can't produce
+    an unorderable graph that silently reverts the whole recommendation.
+  - **`node_defaults` honors all three documented shapes** (`{module:{param}}`,
+    dotted `module.param`, and bare `param` applied to modules that declare it).
+  - Known latent limitation (not currently triggered -- shipped recipes start
+    the aggregation phase with an aggregation-only loader): `_split_aggregation`
+    keys the phase boundary on the first aggregation-only module, so a dual-scope
+    module placed before it would be assigned to the single phase. +5 regression
+    tests; 23 recommender tests; 839 pass.
+
 ### Added
 
 - **WP-10 — sample-aware workflow recommender (`picasso_workflow/recommender.py`).**

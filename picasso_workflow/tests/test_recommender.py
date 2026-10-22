@@ -169,13 +169,16 @@ class TestChoicePointsAndFallback(unittest.TestCase):
         with mock_registry() as reg:
             reg.add_taxon(id="synthetic", name="Synthetic")
             reg.add_taxon(id="origami", name="Origami", parent_id="synthetic")
-            # undrift_aim has lower (better) NeNA than undrift_rcc.
+            # undrift_aim has lower (better) NeNA than undrift_rcc. Seed >=
+            # MIN_COHORT_SAMPLES (3) aim runs so the swap clears the
+            # noisy-single-sample guard.
             _seed_cohort(
                 reg,
                 taxon_id="origami",
                 runs=[
                     ("undrift_aim", 5.0),
                     ("undrift_aim", 5.5),
+                    ("undrift_aim", 5.2),
                     ("undrift_rcc", 9.0),
                 ],
             )
@@ -220,7 +223,11 @@ class TestChoicePointsAndFallback(unittest.TestCase):
             _seed_cohort(
                 reg,
                 taxon_id="origami",
-                runs=[("undrift_aim", 5.0), ("undrift_aim", 5.2)],
+                runs=[
+                    ("undrift_aim", 5.0),
+                    ("undrift_aim", 5.2),
+                    ("undrift_aim", 5.1),
+                ],
             )
             # Query at the PARENT node: the cohort falls back up the tree and is
             # non-empty, so the choice point still resolves to the winner.
@@ -361,7 +368,12 @@ class TestRecommendWorkflowEndToEnd(unittest.TestCase):
             _seed_cohort(
                 reg,
                 taxon_id="origami",
-                runs=[("undrift_aim", 4.0), ("undrift_rcc", 9.0)],
+                runs=[
+                    ("undrift_aim", 4.0),
+                    ("undrift_aim", 4.2),
+                    ("undrift_aim", 3.9),
+                    ("undrift_rcc", 9.0),
+                ],
             )
             r = rec.recommend_workflow(
                 {"sample_type": "Synthetic", "taxon_id": "origami"},
@@ -414,6 +426,59 @@ class TestRecommendWorkflowEndToEnd(unittest.TestCase):
             )
             fb = rec.capture_operator_feedback(reg, r, list(r.workflow))
             self.assertEqual(fb["operator_decision"], "accepted")
+
+
+class TestRecommenderReviewFixes(unittest.TestCase):
+    """Regression tests for the code-review findings."""
+
+    def test_invalid_scope_does_not_raise(self):
+        # recommend_workflow never raises: an invalid conditions['scope'] falls
+        # back to goal inference instead of a ValueError.
+        r = rec.recommend_workflow({"scope": "agg"}, "localize")
+        self.assertTrue(r.workflow)  # a valid default workflow, no exception
+
+    def test_no_conditions_or_registry_does_not_raise(self):
+        # The whole advisory path tolerates absent conditions/registry.
+        r = rec.recommend_workflow({}, "localize")
+        self.assertTrue(r.workflow)
+
+    def test_bare_param_node_default_applies(self):
+        # #5: a bare "<param>" node default applies to every module declaring it.
+        wf = [("identify", {"box_size": 7}), ("localize", {"box_size": 7})]
+        ovr = rec._node_default_overrides(
+            {"box_size": 9}, "identify", {"box_size": 7}
+        )
+        self.assertEqual(ovr.get("box_size"), (9, "node_defaults[<param>]"))
+        # not applied to a module that doesn't declare it.
+        self.assertEqual(
+            rec._node_default_overrides(
+                {"foo": 1}, "identify", {"box_size": 7}
+            ),
+            {},
+        )
+
+    @requires_registry
+    def test_single_sample_does_not_swap_the_default(self):
+        # #3: one lucky cohort sample must NOT replace the template default.
+        from picasso_registry.testing import mock_registry
+
+        with mock_registry() as reg:
+            reg.add_taxon(id="synthetic", name="Synthetic")
+            reg.add_taxon(id="origami", name="Origami", parent_id="synthetic")
+            _seed_cohort(
+                reg,
+                taxon_id="origami",
+                runs=[("undrift_aim", 1.0)],  # a single, lucky sample
+            )
+            wf, _ = rec.select_modules("localize", {})
+            out, decisions = rec.resolve_choice_points(
+                wf, {"taxon_id": "origami"}, reg
+            )
+            names = [_step_name(s) for s in out]
+            self.assertIn("undrift_rcc", names)  # template default kept
+            self.assertNotIn("undrift_aim", names)
+            undrift = next(d for d in decisions if d["role"] == "undrift")
+            self.assertEqual(undrift["source"], "template-default-kept")
 
 
 if __name__ == "__main__":  # pragma: no cover
