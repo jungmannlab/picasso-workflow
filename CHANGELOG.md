@@ -10,6 +10,21 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ## [Unreleased]
 
+### Added
+
+- **WP-7 range write-back to the registry (opt-in, best-effort).** The backfill
+  can now persist its learned per-taxon expected-metric ranges to the registry
+  as append-only `cohort_metric_range` rows (one per taxon+metric, carrying
+  `p05`/`p50`/`p95`/`n`/`source`), not just to the JSON sidecar.
+  `picasso_workflow.backfill.ranges` gains `write_ranges_to_registry(client,
+  ranges, *, source=...)` and an optional `registry_client=` param on
+  `compute_taxon_ranges`; the `ranges` CLI gains a `--to-registry` flag. The
+  write is best-effort — a registry hiccup is logged and swallowed, never
+  raised, and never loses the `--out` sidecar (which stays the fallback). The
+  registry client is imported lazily (picasso-registry is not a base/dev dep),
+  so the new tests carry the `@requires_registry` skip and the package still
+  imports headlessly on the wheel-only CI.
+
 ### Fixed
 
 - **Gate-3 CI prep: the registry-integration tests skip on the hosted wheel-only
