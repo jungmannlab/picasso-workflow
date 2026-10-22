@@ -43,21 +43,26 @@ from picasso_workflow.backfill.metrics import locs_signature
 from picasso_workflow.backfill.parser import parse_folder_tokens
 from pathlib import Path
 
-# The registry-integration tests need picasso-registry's server-backed
-# mock_registry (FastAPI TestClient). picasso-registry is NOT a base/dev dep of
-# picasso-workflow (it stays wheel-only, hermetic), so these skip on the hosted
-# CI runner and run in the full dev container. The pure parse/metric/CSV tests
-# below have no such dependency and always run.
+# The backfill needs the picasso-registry CLIENT STACK — both the server-backed
+# `mock_registry` (FastAPI TestClient) AND `python-ulid` (the `ulid` module
+# `synth_run_id` mints ids with); both ship with `pip install
+# picasso-registry[client]`. That stack is NOT a base/dev dep of picasso-workflow
+# (the package stays wheel-only / hermetic and imports headlessly without it), so
+# these tests skip on the hosted CI runner and run in the full dev container. The
+# pure parse / metric / CSV tests below have no such dependency and always run.
 try:
     from picasso_registry.testing import mock_registry as _mock_registry
+    import ulid as _ulid  # python-ulid, used by synth_run_id
 
-    _ = _mock_registry
+    _ = (_mock_registry, _ulid)
     HAS_REGISTRY = True
 except Exception:
     HAS_REGISTRY = False
 
 requires_registry = unittest.skipUnless(
-    HAS_REGISTRY, "picasso-registry not installed (hosted wheel-only CI)"
+    HAS_REGISTRY,
+    "picasso-registry client stack (picasso-registry[client] + python-ulid) "
+    "not installed (hosted wheel-only CI)",
 )
 
 
@@ -235,6 +240,7 @@ class TestMapAndIngest(unittest.TestCase):
                     len(reg.list("acquisition_run", limit=500)), 2
                 )
 
+    @requires_registry
     def test_synth_run_id_is_stable(self):
         with tempfile.TemporaryDirectory() as d:
             fp = _make_locs(d, "stable_locs.hdf5", seed=7)

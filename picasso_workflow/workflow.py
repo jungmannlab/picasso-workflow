@@ -781,10 +781,8 @@ class AggregationWorkflowRunner:
                 "single_dataset_tileparameters"
             )
         ) is None:
-            raise KeyError(
-                """aggregation_workflow missing
-                "single_dataset_tileparameters"."""
-            )
+            raise KeyError("""aggregation_workflow missing
+                "single_dataset_tileparameters".""")
         instance = cls(postfix)
         # The coordinator may override the SLURM-derived rank/size to control
         # how the single workflows are distributed (e.g. run all locally when
@@ -2238,10 +2236,8 @@ class WorkflowRunner:
                 self.paused = True
                 break
             if i < plan.start_index:
-                logger.debug(
-                    f"""Module {i}, {module_name} has been previously
-                    analyzed. Skipping."""
-                )
+                logger.debug(f"""Module {i}, {module_name} has been previously
+                    analyzed. Skipping.""")
                 progress.module_skipped(i)
                 continue
             if i < plan.frontier:
