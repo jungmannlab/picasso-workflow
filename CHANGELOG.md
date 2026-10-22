@@ -12,6 +12,33 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Added
 
+- **WP-9 Phase C — the cluster-submit worker (sbatch-over-SSH, undrift-first).**
+  New non-GUI module `picasso_workflow.cluster_submit` with a
+  `ClusterSubmitWorker` that hands one QC-passed dataset to the SLURM cluster:
+  it atomically `claim_handoff`s a `ready` dataset (exactly-once; a second
+  worker gets `None`), stages only the **localizations** to cluster scratch
+  (never the raw movie; C33/C15), creates the cluster aggregation's
+  `analysis_run` in the registry, submits an sbatch job that `module load`s the
+  pinned Apptainer version (`apptainer/1.4.1` — the lowest on the target node
+  group, C10) and runs the recommended **undrift-first** aggregation inside the
+  dev-container image, and transitions the hand-off `claimed → running`. The
+  cluster job closes the loop via `cluster_writeback(... running → done/failed)`
+  + final metrics (emulated in tests; the real cluster run is a user-side
+  smoke test). A submit failure after a successful claim marks the hand-off
+  `failed` — merging the failure reason into the existing locs `detail` so the
+  dataset is never lost and stays re-queueable. A new undrift-first
+  `standard_aggregation_workflows.cluster_aggregation` recipe (+ a
+  `cluster_aggregation` template) is the submitted default.
+- **WP-TEMPLATE Phase 3 — registry-backed conformance sink.** The cluster
+  submit worker attaches the submitted workflow's template-conformance record
+  (via `templates.template_conformance_record`) into the `analysis_run` **at
+  creation**, under `extra["template_conformance"]` (append-only / set-at-
+  creation — no migration). This wires the Phase-3 hook the MVP left open.
+- **Qt-free SLURM/SSH transport (`picasso_workflow.slurm_submit`).**
+  `SlurmCommunicator` (SSH + sbatch-over-SSH) was factored out of `gui.py` into
+  a new PyQt-free module so the cluster-submit worker can reuse the exact same
+  transport without importing Qt. `gui.py` re-exports it, so GUI call sites and
+  tests (`gui.SlurmCommunicator(...)`) are unchanged.
 - **WP-7 range write-back to the registry (opt-in, best-effort).** The backfill
   can now persist its learned per-taxon expected-metric ranges to the registry
   as append-only `cohort_metric_range` rows (one per taxon+metric, carrying
