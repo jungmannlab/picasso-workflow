@@ -444,7 +444,6 @@ class TestRecommenderReviewFixes(unittest.TestCase):
 
     def test_bare_param_node_default_applies(self):
         # #5: a bare "<param>" node default applies to every module declaring it.
-        wf = [("identify", {"box_size": 7}), ("localize", {"box_size": 7})]
         ovr = rec._node_default_overrides(
             {"box_size": 9}, "identify", {"box_size": 7}
         )
