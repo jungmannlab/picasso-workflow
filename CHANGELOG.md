@@ -10,6 +10,25 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ## [Unreleased]
 
+### Fixed
+
+- **WP-11 code review (finder -> verify -> fix), 4 fixes:**
+  - **Held-out guard now VALIDATES instead of re-selecting.** It previously took
+    the argmin/argmax over the held-out scores of *every* candidate -- held-out
+    selection bias that just moves overfitting to the held-out split. Now the
+    SEARCH set selects the winner and the held-out split only validates it: the
+    winner is shipped only if it beats the data-driven DEFAULT on held-out, else
+    it reverts to the default (so a config that only won the noisy search set is
+    not shipped). Two tests replace the degenerate one (revert-on-overfit +
+    keep-when-generalizes).
+  - **Int bounds guard rejects a non-integer value** for an `int` param.
+  - **A non-positive grid `step` is rejected** (`_validate_space`) instead of
+    yielding an empty axis and a silent no-op "optimization".
+  - **Grid truncation at `max_evals` now warns** (it drops the tail of the
+    lexicographic enumeration, which could exclude the optimum).
+  +2 regression tests; 25 self-optimize tests; 864 pass. Determinism + the
+  minimize/maximize direction were confirmed sound (mutation-tested).
+
 ### Added
 
 - **WP-11 offline parameter self-optimization (`self_optimize.py`):** an

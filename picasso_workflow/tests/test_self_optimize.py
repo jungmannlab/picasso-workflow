@@ -140,34 +140,48 @@ class TestKnownOptimum(unittest.TestCase):
         self.assertAlmostEqual(bx, X_STAR, delta=0.11)
         self.assertAlmostEqual(by, Y_STAR, delta=0.11)
 
-    def test_holdout_guard_prefers_the_generalizing_config(self):
-        # Construct an objective where ONE search candidate wins only because of
-        # a lucky search-split noise spike, but a different candidate wins the
-        # held-out split. The guard must prefer the held-out winner.
+    def test_holdout_guard_reverts_an_overfit_winner_to_the_default(self):
+        # The search winner ('b') beat the default ('a') on the SEARCH split by a
+        # lucky spike, but is WORSE than the default on held-out. The guard must
+        # VALIDATE against the default (not re-select) and revert to 'a' -- it
+        # must NOT just pick the held-out argmin (that would be held-out bias).
         target = ("localize", "box_size")
         space = {
-            target: {
-                "type": "choice",
-                "choices": ["a", "b"],
-                "default": "a",
-            }
+            target: {"type": "choice", "choices": ["a", "b"], "default": "a"}
         }
 
         def search(params):
-            # 'a' looks great ONLY on the search split (big negative spike).
-            return {"m": 0.0 if params[target] == "b" else -5.0}
+            return {"m": -5.0 if params[target] == "b" else 0.0}  # picks 'b'
 
         def holdout(params):
-            # On held-out, 'b' is genuinely better.
-            return {"m": 1.0 if params[target] == "a" else 0.0}
+            return {"m": 2.0 if params[target] == "b" else 0.0}  # 'b' worse
 
         result = so.optimize(
             space, "m", search, seed=3, minimize=True, holdout_eval=holdout
         )
-        # Search alone would pick 'a' (-5.0); the held-out guard flips to 'b'.
-        self.assertEqual(result.best_params[target], "b")
+        self.assertEqual(result.best_params[target], "a")  # reverted
+        self.assertEqual(result.rationale["holdout"]["preferred"], "default")
+
+    def test_holdout_guard_keeps_a_generalizing_winner(self):
+        # The search winner ('b') also beats the default ('a') on held-out, so
+        # it generalizes and is kept (no revert).
+        target = ("localize", "box_size")
+        space = {
+            target: {"type": "choice", "choices": ["a", "b"], "default": "a"}
+        }
+
+        def search(params):
+            return {"m": -5.0 if params[target] == "b" else 0.0}  # picks 'b'
+
+        def holdout(params):
+            return {"m": 0.0 if params[target] == "b" else 1.0}  # 'b' better
+
+        result = so.optimize(
+            space, "m", search, seed=3, minimize=True, holdout_eval=holdout
+        )
+        self.assertEqual(result.best_params[target], "b")  # kept
         self.assertEqual(
-            result.rationale["holdout"]["preferred"], "holdout_winner"
+            result.rationale["holdout"]["preferred"], "search_winner"
         )
 
 
@@ -539,6 +553,24 @@ class TestProvenance(unittest.TestCase):
         )
         self.assertIsNotNone(result.best_score)
         self.assertEqual(result.optimizer_version, so.OPTIMIZER_VERSION)
+
+
+class TestReviewFixes(unittest.TestCase):
+    def test_int_bounds_reject_non_integer(self):
+        # #2: an int param's bounds guard rejects a fractional value.
+        spec = {"type": "int", "low": 0, "high": 10}
+        self.assertFalse(so._in_bounds(spec, 3.5))
+        self.assertTrue(so._in_bounds(spec, 3))
+        self.assertTrue(so._in_bounds(spec, 3.0))
+
+    def test_non_positive_step_is_rejected(self):
+        # #3: a non-positive step is a caller error (silent empty-grid no-op),
+        # surfaced loudly rather than returning the defaults.
+        space = {
+            ("m", "x"): {"type": "float", "low": 0, "high": 9, "step": -1}
+        }
+        with self.assertRaises(ValueError):
+            so.optimize(space, "m", lambda p: {"m": 0.0}, seed=0)
 
 
 if __name__ == "__main__":  # pragma: no cover

@@ -153,6 +153,12 @@ def _validate_space(param_space: "Mapping[ParamKey, ParamSpecDict]") -> None:
                 raise ValueError(f"{key}: {t} spec needs 'low' and 'high'")
             if spec["low"] > spec["high"]:
                 raise ValueError(f"{key}: low > high ({spec['low']!r})")
+            step = spec.get("step")
+            if step is not None and step <= 0:
+                raise ValueError(
+                    f"{key}: step must be > 0 (got {step!r}) -- a non-positive "
+                    "step yields an empty grid axis (a silent no-op search)"
+                )
         elif t == "choice":
             if not spec.get("choices"):
                 raise ValueError(
@@ -201,6 +207,10 @@ def _in_bounds(spec: ParamSpecDict, value: Any) -> bool:
     if spec["type"] == "choice":
         return value in spec["choices"]
     if not isinstance(value, (int, float)):
+        return False
+    # An int param must be integer-valued (a fractional "int" would reach
+    # evaluate_fn unflagged otherwise).
+    if spec["type"] == "int" and not float(value).is_integer():
         return False
     return spec["low"] <= value <= spec["high"]
 
@@ -282,11 +292,24 @@ def _grid_candidates(
     """
     keys = list(param_space.keys())
     axes = [_grid_values(param_space[k]) for k in keys]
+    full = 1
+    for ax in axes:
+        full *= max(len(ax), 1)
     out: List[Dict[ParamKey, Any]] = []
     for combo in itertools.product(*axes):
         out.append(dict(zip(keys, combo)))
         if len(out) >= max_evals:
             break
+    if full > len(out):
+        # The cap drops the tail of the lexicographic enumeration (high values
+        # of the first axis), so the optimum there is never evaluated -- warn
+        # loudly rather than silently ship a corner-of-grid result.
+        logger.warning(
+            "self_optimize: grid truncated to %d of %d points by max_evals; "
+            "raise max_evals or coarsen the grid for full coverage.",
+            len(out),
+            full,
+        )
     return out
 
 
@@ -603,60 +626,63 @@ def _apply_holdout_guard(
     minimize: bool,
     holdout_eval: Callable[[Dict[ParamKey, Any]], Mapping[str, Any]],
 ) -> Tuple[Dict[ParamKey, Any], float, Optional[float], Dict[str, Any]]:
-    """Re-score the search winner on the held-out split; prefer the robust one.
+    """VALIDATE the search winner on the held-out split (no re-selection).
 
-    Scores the search winner on ``holdout_eval`` and also the search
-    *runner-up(s)* — specifically every scored candidate — to find which config
-    wins the HELD-OUT split. If the held-out winner differs from the search
-    winner, the held-out winner is preferred (it generalizes), guarding against
-    a config that only won the (noisy) search set. Returns
+    The SEARCH set selects the winner; the held-out split only *validates* that
+    it generalizes. The winner is shipped **only if it beats the data-driven
+    DEFAULT on the held-out split**; otherwise we fall back to the default (the
+    search win didn't generalize -- don't ship an overfit config).
+
+    Crucially this does NOT re-select by taking the argmin/argmax over held-out
+    scores of every candidate: that would just move overfitting from the search
+    set to the held-out set (held-out selection bias). Only two configs are
+    compared on held-out -- the search winner vs. the default. Returns
     ``(params, search_score, holdout_score, detail)``.
     """
 
     def _frozen(cand: Dict[ParamKey, Any]) -> Tuple:
         return tuple(cand[k] for k in keys)
 
-    pick = min if minimize else max
-    # Held-out score for every scored candidate (bounds already guaranteed).
-    holdout_scores: Dict[Tuple, float] = {}
-    for fc in scores:
-        cand = dict(zip(keys, fc))
+    def _ho(cand: Dict[ParamKey, Any]) -> Optional[float]:
         assert_in_bounds(param_space, cand)
         val = (holdout_eval(cand) or {}).get(objective)
-        if val is not None:
-            holdout_scores[fc] = float(val)
+        return None if val is None else float(val)
 
-    search_winner = _frozen(best_params)
-    if not holdout_scores:
-        return best_params, best_score, None, {"note": "no held-out metric"}
-
-    holdout_winner = pick(holdout_scores, key=lambda fc: holdout_scores[fc])
-    detail = {
-        "search_winner": {f"{m}.{p}": best_params[(m, p)] for (m, p) in keys},
-        "search_winner_holdout_score": holdout_scores.get(search_winner),
-        "holdout_winner": dict(
-            zip([f"{m}.{p}" for (m, p) in keys], holdout_winner)
-        ),
-        "holdout_winner_score": holdout_scores[holdout_winner],
-        "preferred": (
-            "search_winner"
-            if holdout_winner == search_winner
-            else "holdout_winner"
-        ),
-    }
-    if holdout_winner == search_winner:
+    winner_ho = _ho(best_params)
+    if winner_ho is None:
         return (
             best_params,
             best_score,
-            holdout_scores.get(search_winner),
-            detail,
+            None,
+            {"note": "no held-out metric for the search winner"},
         )
-    # The search winner does NOT win held-out → prefer the robust config.
-    robust = dict(zip(keys, holdout_winner))
+
+    default_params = {k: _default_of(param_space[k]) for k in keys}
+    default_ho = _ho(default_params)
+    # The winner generalizes iff it beats the default on the held-out split
+    # (unknown default held-out metric → give the winner the benefit).
+    if default_ho is None:
+        generalizes = True
+    elif minimize:
+        generalizes = winner_ho <= default_ho
+    else:
+        generalizes = winner_ho >= default_ho
+
+    detail = {
+        "search_winner": {f"{m}.{p}": best_params[(m, p)] for (m, p) in keys},
+        "search_winner_holdout_score": winner_ho,
+        "default_holdout_score": default_ho,
+        "generalizes": generalizes,
+        "preferred": "search_winner" if generalizes else "default",
+    }
+    if generalizes:
+        return best_params, best_score, winner_ho, detail
+    # Didn't beat the default on unseen data -> revert to the default rather
+    # than ship a config that only won the (noisy) search set.
     return (
-        robust,
-        scores[holdout_winner],
-        holdout_scores[holdout_winner],
+        default_params,
+        scores.get(_frozen(default_params)),
+        default_ho,
         detail,
     )
 
