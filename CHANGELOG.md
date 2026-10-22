@@ -12,6 +12,46 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Fixed
 
+- **WP-11 code review (finder -> verify -> fix), 4 fixes:**
+  - **Held-out guard now VALIDATES instead of re-selecting.** It previously took
+    the argmin/argmax over the held-out scores of *every* candidate -- held-out
+    selection bias that just moves overfitting to the held-out split. Now the
+    SEARCH set selects the winner and the held-out split only validates it: the
+    winner is shipped only if it beats the data-driven DEFAULT on held-out, else
+    it reverts to the default (so a config that only won the noisy search set is
+    not shipped). Two tests replace the degenerate one (revert-on-overfit +
+    keep-when-generalizes).
+  - **Int bounds guard rejects a non-integer value** for an `int` param.
+  - **A non-positive grid `step` is rejected** (`_validate_space`) instead of
+    yielding an empty axis and a silent no-op "optimization".
+  - **Grid truncation at `max_evals` now warns** (it drops the tail of the
+    lexicographic enumeration, which could exclude the optimum).
+  +2 regression tests; 25 self-optimize tests; 864 pass. Determinism + the
+  minimize/maximize direction were confirmed sound (mutation-tested).
+
+### Added
+
+- **WP-11 offline parameter self-optimization (`self_optimize.py`):** an
+  advisory auto-tune stage that searches a caller-supplied, flagged-param
+  `ParamSpace` for the params that best hit an objective metric (maximize, or
+  minimize for the A1/C19 lower-is-better set — direction reused from the
+  recommender's `_LOWER_IS_BETTER`, caller-overridable). `optimize(...)` fans
+  every candidate out through an injected `evaluate_fn` seam (a cluster
+  analysis run in production — see `cluster_evaluator` over the WP-9
+  cluster-submit path; a synthetic objective in tests), returns an
+  `OptimizeResult` (best params + rationale + full search provenance), and
+  writes the chosen params + search trace back to the registry **best-effort /
+  non-blocking** (lazy `picasso_registry` import; a registry outage never fails
+  the optimize). Strategies: `"grid"` (cartesian over per-param grids) and a
+  dependency-light few-round `"coordinate"` descent with seeded random restart.
+  Every candidate is clamped/asserted **in-bounds** (bounds property); a
+  `holdout_eval` split re-scores the winner and prefers the config that also
+  wins held-out (guards against overfitting the search set); all search is
+  driven by a recorded `seed` (reproducible). Additive/opt-in; the package still
+  imports headlessly without picasso-registry.
+
+### Fixed
+
 - **WP-10 recommender code review (finder -> verify -> fix), 5 fixes:**
   - **Never-raises contract held:** an invalid `conditions['scope']` no longer
     raises `ValueError` out of `recommend_workflow` -- it falls back to goal
