@@ -250,6 +250,13 @@ _TEMPLATES: List[Template] = [
         builder=saw.minimal_channel_align,
         builder_kwargs={"filepaths": _PH_FILES},
     ),
+    Template(
+        template_id="cluster_aggregation",
+        scope=Scope.AGGREGATION,
+        question_type="cluster-undrift-aggregate",
+        builder=saw.cluster_aggregation,
+        builder_kwargs={"filepaths": _PH_FILES},
+    ),
 ]
 
 TEMPLATE_REGISTRY: Dict[str, Template] = {}

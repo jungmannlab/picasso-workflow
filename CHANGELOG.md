@@ -10,8 +10,66 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ## [Unreleased]
 
+### Fixed
+
+- **WP-9 Phase C code review (2 parallel finders → verify → fix):**
+  - **sbatch `#SBATCH` directives are no longer `shlex.quote`d.** SLURM parses
+    `#SBATCH` lines itself (no shell), so a quoted value would put the quote
+    chars literally in the filename — directive values (`--output`/`--error`/
+    `--job-name`/`--partition`/…) are now emitted raw; the `apptainer exec`
+    SHELL command keeps its `shlex.quote` (where spaced data paths actually
+    appear).
+  - **No more orphaned `status='running'` analysis_run on submit failure.** The
+    analysis_run (append-only, status set once) + the `claimed→running`
+    transition now happen AFTER the sbatch submit succeeds, with a client-minted
+    id embedded in the script; a pre-launch failure leaves the hand-off
+    `claimed` for a clean `_fail`→re-ready and records nothing.
+  - **A malformed claim no longer strands a dataset.** `acquisition_run_id` is
+    read defensively (guarded no-op) instead of a `KeyError` escaping `run_once`
+    with the hand-off stuck in `claimed`.
+  - **`_fail` tries `claimed` before `running`** so it can't clobber a hand-off
+    another actor legitimately advanced to `running` (marking a live job
+    failed). The gui.py→slurm_submit.py extraction was independently verified
+    behavior-preserving. 852 tests; black 26.5.1 + flake8 clean.
+
 ### Added
 
+- **WP-9 Phase C — the cluster-submit worker (sbatch-over-SSH, undrift-first).**
+  New non-GUI module `picasso_workflow.cluster_submit` with a
+  `ClusterSubmitWorker` that hands one QC-passed dataset to the SLURM cluster:
+  it atomically `claim_handoff`s a `ready` dataset (exactly-once; a second
+  worker gets `None`), stages only the **localizations** to cluster scratch
+  (never the raw movie; C33/C15), creates the cluster aggregation's
+  `analysis_run` in the registry, submits an sbatch job that `module load`s the
+  pinned Apptainer version (`apptainer/1.4.1` — the lowest on the target node
+  group, C10) and runs the recommended **undrift-first** aggregation inside the
+  dev-container image, and transitions the hand-off `claimed → running`. The
+  cluster job closes the loop via `cluster_writeback(... running → done/failed)`
+  + final metrics (emulated in tests; the real cluster run is a user-side
+  smoke test) through a `run` CLI entry (`python -m
+  picasso_workflow.cluster_submit run`) that executes
+  `AggregationWorkflowRunner` with a minimal (Confluence-less) reporter/analysis
+  config. A submit failure after a successful claim marks the hand-off `failed`
+  — merging the failure reason into the existing locs `detail` so the dataset is
+  never lost and stays re-queueable; because `reready` resets the mutable
+  hand-off `detail`, the locs pointer also resolves from the acquisition_run's
+  durable `extra.locs`, so a failed+requeued dataset can't strand in a
+  can't-find-locs loop. Every remote path the worker emits into a shell command
+  or `#SBATCH` directive is `shlex`-quoted (lab folders contain spaces, e.g.
+  "channel 0.hdf5" — unquoted it would word-split `--spec <half-a-path>`); the
+  shared `SlurmCommunicator.submit_job` likewise quotes the script path. A new
+  undrift-first `standard_aggregation_workflows.cluster_aggregation` recipe (+ a
+  `cluster_aggregation` template) is the submitted default.
+- **WP-TEMPLATE Phase 3 — registry-backed conformance sink.** The cluster
+  submit worker attaches the submitted workflow's template-conformance record
+  (via `templates.template_conformance_record`) into the `analysis_run` **at
+  creation**, under `extra["template_conformance"]` (append-only / set-at-
+  creation — no migration). This wires the Phase-3 hook the MVP left open.
+- **Qt-free SLURM/SSH transport (`picasso_workflow.slurm_submit`).**
+  `SlurmCommunicator` (SSH + sbatch-over-SSH) was factored out of `gui.py` into
+  a new PyQt-free module so the cluster-submit worker can reuse the exact same
+  transport without importing Qt. `gui.py` re-exports it, so GUI call sites and
+  tests (`gui.SlurmCommunicator(...)`) are unchanged.
 - **WP-7 range write-back to the registry (opt-in, best-effort).** The backfill
   can now persist its learned per-taxon expected-metric ranges to the registry
   as append-only `cohort_metric_range` rows (one per taxon+metric, carrying
