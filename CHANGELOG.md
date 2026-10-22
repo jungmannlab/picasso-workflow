@@ -10,6 +10,27 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ## [Unreleased]
 
+### Added
+
+- **WP-11 offline parameter self-optimization (`self_optimize.py`):** an
+  advisory auto-tune stage that searches a caller-supplied, flagged-param
+  `ParamSpace` for the params that best hit an objective metric (maximize, or
+  minimize for the A1/C19 lower-is-better set — direction reused from the
+  recommender's `_LOWER_IS_BETTER`, caller-overridable). `optimize(...)` fans
+  every candidate out through an injected `evaluate_fn` seam (a cluster
+  analysis run in production — see `cluster_evaluator` over the WP-9
+  cluster-submit path; a synthetic objective in tests), returns an
+  `OptimizeResult` (best params + rationale + full search provenance), and
+  writes the chosen params + search trace back to the registry **best-effort /
+  non-blocking** (lazy `picasso_registry` import; a registry outage never fails
+  the optimize). Strategies: `"grid"` (cartesian over per-param grids) and a
+  dependency-light few-round `"coordinate"` descent with seeded random restart.
+  Every candidate is clamped/asserted **in-bounds** (bounds property); a
+  `holdout_eval` split re-scores the winner and prefers the config that also
+  wins held-out (guards against overfitting the search set); all search is
+  driven by a recorded `seed` (reproducible). Additive/opt-in; the package still
+  imports headlessly without picasso-registry.
+
 ### Fixed
 
 - **WP-10 recommender code review (finder -> verify -> fix), 5 fixes:**
