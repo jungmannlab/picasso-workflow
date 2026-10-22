@@ -172,9 +172,17 @@ class TestWorkflowAndScript(unittest.TestCase):
         self.assertEqual(toks[toks.index("--bind") + 1], "/scratch/my run 1")
         # the image path is a single token (not split on its space).
         self.assertIn("/sw/picasso workflow.sif", toks)
-        # the #SBATCH output pattern is quoted (one directive, not split).
+        # #SBATCH directives are parsed by SLURM, NOT a shell -- so the value is
+        # emitted RAW (no shell quotes; SLURM would take the quote chars
+        # literally in the filename). The scratch/results path feeding it is
+        # deployment-controlled + space-free in practice; only the spaced DATA
+        # paths get shlex-quoted, and only in the `apptainer exec` command above.
         out_line = next(ln for ln in script.splitlines() if "--output=" in ln)
-        self.assertIn("'/scratch/my run 1/", out_line)
+        self.assertEqual(
+            out_line,
+            "#SBATCH --output=/scratch/my run 1/pwf-agg-my run 1_%j.out",
+        )
+        self.assertNotIn("'", out_line)
 
 
 # ---------------------------------------------------------------------------
@@ -436,6 +444,16 @@ class TestSubmitFailureNeverLosesDataset(unittest.TestCase):
             # locs pointers preserved through the failure (merged, not clobbered)
             self.assertEqual(ho["detail"]["locs"], locs)
             self.assertIn("error", ho["detail"])
+
+            # Submit failed BEFORE the analysis_run was recorded, so there is NO
+            # orphaned status='running' analysis_run (append-only: it could never
+            # be corrected afterward, and would pollute cohort queries).
+            analyses = [
+                a
+                for a in reg.list("analysis_run", limit=500)
+                if a.get("acquisition_run_id") == acq_id
+            ]
+            self.assertEqual(analyses, [])
 
             # and it can be re-queued.
             rereadied = reg.reready_handoff(acq_id)

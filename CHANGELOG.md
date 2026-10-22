@@ -10,6 +10,28 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ## [Unreleased]
 
+### Fixed
+
+- **WP-9 Phase C code review (2 parallel finders → verify → fix):**
+  - **sbatch `#SBATCH` directives are no longer `shlex.quote`d.** SLURM parses
+    `#SBATCH` lines itself (no shell), so a quoted value would put the quote
+    chars literally in the filename — directive values (`--output`/`--error`/
+    `--job-name`/`--partition`/…) are now emitted raw; the `apptainer exec`
+    SHELL command keeps its `shlex.quote` (where spaced data paths actually
+    appear).
+  - **No more orphaned `status='running'` analysis_run on submit failure.** The
+    analysis_run (append-only, status set once) + the `claimed→running`
+    transition now happen AFTER the sbatch submit succeeds, with a client-minted
+    id embedded in the script; a pre-launch failure leaves the hand-off
+    `claimed` for a clean `_fail`→re-ready and records nothing.
+  - **A malformed claim no longer strands a dataset.** `acquisition_run_id` is
+    read defensively (guarded no-op) instead of a `KeyError` escaping `run_once`
+    with the hand-off stuck in `claimed`.
+  - **`_fail` tries `claimed` before `running`** so it can't clobber a hand-off
+    another actor legitimately advanced to `running` (marking a live job
+    failed). The gui.py→slurm_submit.py extraction was independently verified
+    behavior-preserving. 852 tests; black 26.5.1 + flake8 clean.
+
 ### Added
 
 - **WP-9 Phase C — the cluster-submit worker (sbatch-over-SSH, undrift-first).**

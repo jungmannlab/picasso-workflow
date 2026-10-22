@@ -122,6 +122,18 @@ def _yaml_safe(value: Any) -> Any:
     return value
 
 
+def _new_ulid() -> str:
+    """Mint a fresh ULID id (python-ulid ships with picasso-registry[client]).
+
+    Minted client-side so the analysis_run id is known BEFORE the row is
+    created -- the sbatch write-back embeds it, and the row is only recorded
+    once the submit succeeds (see :meth:`ClusterSubmitWorker._submit_claimed`).
+    """
+    from ulid import ULID
+
+    return str(ULID())
+
+
 def _conformance_for(workflow: list[tuple[str, dict]]) -> dict:
     """WP-TEMPLATE Phase-3 conformance of ``workflow`` vs the cluster template.
 
@@ -165,17 +177,22 @@ def build_sbatch_script(
     so a failed run reports FAILED to SLURM (not a bare 0).
     """
     binds = bind_paths or [results_dir_remote]
-    # Every remote path lands in a shell command (the apptainer invocation) or a
-    # SLURM directive value; lab data folders routinely contain spaces (e.g.
-    # "channel 0.hdf5"), so each is shlex-quoted or an unquoted space would
-    # word-split the argv (--spec <half-a-path>) / break the #SBATCH directive.
-    # Mirrors SlurmCommunicator.fetch_progress et al., which already quote.
+    # Two DIFFERENT quoting rules apply:
+    #  * the `apptainer exec` line is a real SHELL command, so every path there
+    #    is shlex-quoted (lab data folders routinely contain spaces, e.g.
+    #    "channel 0.hdf5" -- an unquoted space would word-split the argv);
+    #  * `#SBATCH` directives are parsed by SLURM ITSELF, NOT a shell -- SLURM
+    #    does not strip shell quotes, so shlex-quoting them would make the
+    #    quote chars part of the value (a filename literally containing `'`).
+    #    So directive values are emitted RAW. The scratch/results paths that
+    #    feed them are deployment-controlled and space-free; the spaced DATA
+    #    paths only ever appear in the shell `apptainer exec` command below.
     bind_arg = " ".join(f"--bind {shlex.quote(b)}" for b in binds)
-    out_pattern = shlex.quote(f"{results_dir_remote}/{job_name}_%j.out")
-    err_pattern = shlex.quote(f"{results_dir_remote}/{job_name}_%j.err")
+    out_pattern = f"{results_dir_remote}/{job_name}_%j.out"
+    err_pattern = f"{results_dir_remote}/{job_name}_%j.err"
     lines = [
         "#!/bin/bash",
-        f"#SBATCH --job-name={shlex.quote(job_name)}",
+        f"#SBATCH --job-name={job_name}",
         f"#SBATCH --output={out_pattern}",
         f"#SBATCH --error={err_pattern}",
         f"#SBATCH --time={time_limit}",
@@ -183,11 +200,11 @@ def build_sbatch_script(
         f"#SBATCH --cpus-per-task={cpus_per_task}",
     ]
     if partition:
-        lines.append(f"#SBATCH --partition={shlex.quote(partition)}")
+        lines.append(f"#SBATCH --partition={partition}")
     if nodelist:
-        lines.append(f"#SBATCH --nodelist={shlex.quote(nodelist)}")
+        lines.append(f"#SBATCH --nodelist={nodelist}")
     if constraint:
-        lines.append(f"#SBATCH --constraint={shlex.quote(constraint)}")
+        lines.append(f"#SBATCH --constraint={constraint}")
     run_cmd = (
         "apptainer exec "
         + bind_arg
@@ -332,7 +349,17 @@ class ClusterSubmitWorker:
             logger.info("cluster-submit: nothing ready to claim.")
             return None
 
-        acq_id = claimed["acquisition_run_id"]
+        acq_id = claimed.get("acquisition_run_id")
+        if not acq_id:
+            # A claimed row without its dataset id is anomalous (schema drift);
+            # we can't stage/transition it. Log loudly and no-op rather than
+            # crash out of run_once (the extraction was previously outside the
+            # try, so a KeyError here stranded the dataset in 'claimed').
+            logger.error(
+                "cluster-submit: claimed hand-off missing acquisition_run_id: "
+                f"{claimed!r}"
+            )
+            return None
         logger.info(f"cluster-submit: claimed {acq_id} as {self.worker_id}.")
         try:
             return self._submit_claimed(claimed)
@@ -371,30 +398,53 @@ class ClusterSubmitWorker:
         )
         conformance = _conformance_for(workflow)
 
-        # 3) Create the cluster analysis_run (carrying the conformance in
-        #    extra), then move the hand-off claimed -> running with its id.
-        analysis_run_id = self._create_analysis_run(
-            acq_id, workflow, conformance
-        )
-        moved = self.registry.transition_handoff(
-            acq_id,
-            expected=STATE_CLAIMED,
-            to=STATE_RUNNING,
-            worker=self.worker_id,
-            analysis_run_id=analysis_run_id,
-        )
-        if moved is None:
-            # Lost the claimed->running guard (someone else moved it). Do not
-            # submit; leave the registry authoritative.
-            raise RuntimeError(
-                f"claimed->running transition rejected for {acq_id}"
-            )
+        # 3) Mint the analysis_run id client-side. The sbatch write-back needs
+        #    it, but we DON'T record the analysis_run row (status=running) or
+        #    advance the hand-off until the submit SUCCEEDS: an append-only
+        #    status='running' row for a job that never launched can never be
+        #    corrected and would pollute cohort queries, and the hand-off must
+        #    stay 'claimed' for a clean _fail -> re-ready on a submit failure.
+        analysis_run_id = _new_ulid()
 
-        # 4) Write the spec yaml + sbatch script, submit over SSH.
+        # 4) Write the spec yaml + sbatch script, submit over SSH -- FIRST.
+        #    A failure here is PRE-launch: it raises, run_once._fail marks the
+        #    hand-off failed (still 'claimed'), and nothing was orphaned.
         job = self._submit_job(acq_id, spec, remote_dir, analysis_run_id)
         if not job.get("success"):
             raise RuntimeError(
                 f"sbatch submission failed: {job.get('stderr')!r}"
+            )
+
+        # 5) Submit succeeded -> the job is LIVE. Record the analysis_run (with
+        #    the Phase-3 conformance under extra) using the pre-minted id, and
+        #    advance the hand-off claimed -> running. This is POST-submit
+        #    bookkeeping: a failure here must NOT mark a live job failed, so it
+        #    is best-effort (logged, not raised) rather than funneled to _fail.
+        try:
+            self._create_analysis_run(
+                acq_id, workflow, conformance, analysis_run_id
+            )
+            moved = self.registry.transition_handoff(
+                acq_id,
+                expected=STATE_CLAIMED,
+                to=STATE_RUNNING,
+                worker=self.worker_id,
+                analysis_run_id=analysis_run_id,
+            )
+            if moved is None:
+                logger.error(
+                    "cluster-submit: %s submitted (job %s) but claimed->"
+                    "running was rejected; hand-off left as-is.",
+                    acq_id,
+                    job.get("job_id"),
+                )
+        except Exception as exc:  # a LIVE job -- never _fail it
+            logger.error(
+                "cluster-submit: %s submitted (job %s) but post-submit "
+                "bookkeeping failed: %r",
+                acq_id,
+                job.get("job_id"),
+                exc,
             )
 
         logger.info(
@@ -461,20 +511,23 @@ class ClusterSubmitWorker:
         acquisition_run_id: str,
         workflow: list[tuple[str, dict]],
         conformance: dict,
+        analysis_run_id: str,
     ) -> str:
         """Create the cluster aggregation's analysis_run (+ Phase-3 sink).
 
         WP-TEMPLATE **Phase 3**: the conformance record is attached into the
         analysis_run at creation under ``extra["template_conformance"]``. The
         store is append-only / set-at-creation, so this is the one place to
-        wire it -- no migration, additive. Returns the (server-minted)
-        analysis_run id.
+        wire it -- no migration, additive. The id is minted client-side (passed
+        in) so the sbatch write-back can reference it before the row exists;
+        returns it.
         """
         workflow_yaml = yaml.safe_dump(
             [{"module": m, "params": p} for m, p in workflow],
             sort_keys=False,
         )
         row = self.registry.log_analysis(
+            id=analysis_run_id,
             acquisition_run_id=acquisition_run_id,
             kind=ANALYSIS_KIND,
             compute_location=COMPUTE_LOCATION,
@@ -564,7 +617,11 @@ class ClusterSubmitWorker:
         """
         detail = dict(base_detail or {})
         detail.update({"error": reason, "stage": "cluster-submit"})
-        for expected in (STATE_RUNNING, STATE_CLAIMED):
+        # Try CLAIMED first: with submit reordered BEFORE the claimed->running
+        # advance, a _fail (pre-launch failure) finds the hand-off in 'claimed'.
+        # Trying 'running' first could clobber a hand-off another actor
+        # legitimately advanced to 'running' (marking a live job failed).
+        for expected in (STATE_CLAIMED, STATE_RUNNING):
             try:
                 row = self.registry.transition_handoff(
                     acquisition_run_id,
