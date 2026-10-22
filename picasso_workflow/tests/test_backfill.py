@@ -31,6 +31,7 @@ from picasso_workflow.backfill import (
     compute_taxon_ranges,
     parse_dataset,
     synth_run_id,
+    write_ranges_to_registry,
 )
 from picasso_workflow.backfill.csv_import import (
     import_labels,
@@ -452,6 +453,80 @@ class TestPerTaxonRanges(unittest.TestCase):
                     reg, min_samples=3, log=lambda *_: None
                 )
         self.assertEqual(ranges, {})
+
+    @requires_registry
+    def test_write_ranges_to_registry_lands_one_row_per_pair(self):
+        """compute_taxon_ranges with registry_client also writes one
+        append-only cohort_metric_range row per (taxon, metric), carrying
+        p05/p50/p95/n/source."""
+        from picasso_registry.testing import mock_registry
+
+        with tempfile.TemporaryDirectory() as d:
+            paths = [
+                _make_locs(d, f"w{i}_exp-30ms_locs.hdf5", seed=i)
+                for i in range(4)
+            ]
+            labels = {}
+            for p in paths:
+                rid = _run_id_for(p)
+                labels[rid] = {
+                    "run_id": rid,
+                    "taxon": "origami",
+                    "taxon_path": None,
+                    "label": "good",
+                    "passed": True,
+                    "curator": "a",
+                    "reason": "",
+                }
+            with mock_registry() as reg:
+                ingest_paths(
+                    reg,
+                    [d],
+                    labels=labels,
+                    data_source="acquired",
+                    log=lambda *_: None,
+                )
+                ranges = compute_taxon_ranges(
+                    reg,
+                    min_samples=3,
+                    registry_client=reg,
+                    log=lambda *_: None,
+                )
+                rows = reg.list("cohort_metric_range", limit=500)
+
+        # One row per (taxon, metric) learned range landed in the registry.
+        expected = sum(len(by_metric) for by_metric in ranges.values())
+        self.assertGreater(expected, 0)
+        self.assertEqual(len(rows), expected)
+        by_metric = {r["metric"]: r for r in rows}
+        self.assertIn("nena_nm", by_metric)
+        sample = by_metric["photons_median"]
+        self.assertEqual(sample["source"], "wp7-backfill-ranges")
+        for key in ("p05", "p50", "p95", "n"):
+            self.assertIsNotNone(sample[key])
+        self.assertEqual(sample["n"], 4)
+        # taxon_id points at the real taxon node (the cohort join key).
+        self.assertTrue(all(r["taxon_id"] for r in rows))
+
+    @requires_registry
+    def test_write_ranges_best_effort_swallows_client_errors(self):
+        """A failing registry client double does NOT raise — the write is
+        best-effort (same posture as the rest of the backfill)."""
+
+        class _FailingClient:
+            def create(self, *_a, **_k):
+                raise RuntimeError("registry down")
+
+        ranges = {
+            "origami": {
+                "nena_nm": {"p05": 2.0, "p50": 3.0, "p95": 4.0, "n": 5}
+            }
+        }
+        # Must not raise; returns 0 rows written.
+        written = write_ranges_to_registry(
+            _FailingClient(), ranges, log=lambda *_: None
+        )
+        self.assertEqual(written, 0)
 
 
 class TestWP7ReviewFixes(unittest.TestCase):

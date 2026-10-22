@@ -42,7 +42,7 @@ from __future__ import annotations
 
 from .metrics import compute_metrics
 from .parser import DatasetFeatures, parse_dataset, synth_run_id
-from .ranges import compute_taxon_ranges
+from .ranges import compute_taxon_ranges, write_ranges_to_registry
 
 __all__ = [
     "compute_metrics",
@@ -50,4 +50,5 @@ __all__ = [
     "synth_run_id",
     "DatasetFeatures",
     "compute_taxon_ranges",
+    "write_ranges_to_registry",
 ]
