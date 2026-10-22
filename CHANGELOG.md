@@ -10,8 +10,231 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Gate-3 CI prep: the registry-integration tests skip on the hosted wheel-only
+  runner.** The WP-6 / WP-7 tests that use picasso-registry's server-backed
+  `mock_registry` (FastAPI TestClient) now carry a `@requires_registry`
+  `skipUnless` guard — picasso-registry is deliberately NOT a picasso-workflow
+  dependency (base stays wheel-only / hermetic), so on the hosted `develop` CI
+  (`pip install -e ".[dev]"`, no picasso-registry) these 10 tests skip instead
+  of erroring, while they still run in the full dev container. The package
+  imports headlessly without picasso-registry (all its imports are lazy); the
+  pure parse/metric/CSV unit tests always run. Pre-empts the C16
+  green-in-container / red-on-hosted trap before promoting to `develop`.
+
+- **WP-7 code review (2× parallel finders → verify → fix):**
+  - **Content-aware dataset identity — no more silent data loss.** The backfill
+    `run_id` was derived from `basename|frames` only, so two DISTINCT datasets
+    sharing a filename + frame count (common when a pipeline emits uniform
+    `locs.hdf5` names and the distinguishing metadata is in the folder) collided
+    to one id and the second was silently dropped. A cheap `locs_signature`
+    (n_locs + nan-summed x/y) now rides into the identity, so distinct data gets
+    distinct ids (both ingest) while an exact copy still dedupes.
+  - **`--dry-run` no longer mutates the registry.** `ingest --dry-run --labels`
+    created taxon nodes via `ensure_taxon` before the dry-run guard; dry-run now
+    performs no registry write (the store is append-only).
+  - **UTF-8-BOM label CSVs no longer silently voided.** `read_label_rows` opens
+    with `utf-8-sig`, so an Excel "CSV UTF-8" export (BOM) doesn't turn the first
+    header into `﻿run_id` and drop every row as run-id-less.
+  - **Non-finite NeNA stays NULL.** `compute_nena_nm` guards a fit that
+    converges to NaN/inf without raising, and `compute_metrics` drops any
+    non-finite float at its boundary, so an invalid-JSON `NaN` never reaches the
+    POST.
+  - **Zero-loc datasets emit no density** (an empty acquisition is not a 0.0
+    density sample that would drag a cohort band). +6 regression tests.
+
 ### Added
 
+- **WP-7 flat-archive backfill (`picasso_workflow/backfill/`).** Bootstraps
+  real cohort history from the pre-automation *flat* archive (raw movies +
+  picasso ``*_locs.hdf5`` + ``.yaml`` info, NOT picasso-workflow-structured)
+  into picasso-registry via the ``/bulk`` endpoint. Mirrors
+  ``picasso_registry.backfill_liveloc`` (per-file parse → map → ``bulk_ingest``,
+  content-derived stable ``run_id`` for idempotency, ``--dry-run``, per-file
+  error reporting). Four pieces + three CLIs:
+  - ``metrics`` — the metric vector straight from the hdf5: ``n_locs``,
+    localization precision (``lp_x_nm``/``lp_y_nm`` from ``lpx``/``lpy``),
+    ``photons_median``, ``background``, PSF σ, ``net_gradient_median``,
+    ``density_locs_um2`` (from the ``.yaml`` FOV extent); **NeNA
+    (``nena_nm``) via picasso ``postprocess.nena`` through the
+    ``_picasso_api`` boundary** (not reimplemented). Kinetics/drift/clustering
+    need a processing pass and are **out of scope** for this MVP (left absent →
+    NULL); raw re-localization is out of scope too. Missing features stay
+    absent/NULL rather than guessed.
+  - ``parser`` — ``.yaml`` + folder-name convention features and the stable
+    content-derived ``run_id`` + the ``metadata_complete`` gate.
+  - ``csv_import`` — curated taxon + good/bad label CSV (keyed by ``run_id``) →
+    taxon on the experiment (at ingest, via ``--labels``) + ``qc`` / ``feedback``
+    rows. Because the registry is **append-only** (insert-only, no PATCH),
+    taxon↔experiment linkage is set at experiment creation; the standalone
+    ``import_labels`` CLI appends qc/feedback to already-ingested runs and warns
+    it cannot retrofit a taxon.
+  - ``ranges`` — per-taxon expected-metric ranges (p05/p50/p95/n) learned from
+    **metadata-complete, non-simulated, taxon-labeled** records only; returned
+    (and optionally written to a JSON sidecar — the append-only taxonomy row is
+    not updated).
+  - CLIs: ``picasso-workflow-backfill-locs`` / ``-labels`` / ``-ranges``.
+
+### Fixed
+
+- **WP-TEMPLATE-CONFORMANCE code review: an aggregation template's default now
+  covers the whole pipeline.** ``Template.resolve`` previously returned only the
+  recipe's ``aggregation_modules``, so a change to the per-dataset
+  ``single_dataset_modules`` half (e.g. ``box_size``, fit params, an added
+  single-dataset step) was invisible to both ``template_version`` and
+  ``config_diff`` — and an aggregation run has no separate single-dataset
+  template run to catch it. ``resolve`` now returns ``single_dataset_modules``
+  followed by ``aggregation_modules`` (the two phases' module names are disjoint
+  in the shipped recipes), so the version/diff see the full content.
+- **WP-6 code review: per-module registry ``scope`` is no longer hardcoded to
+  ``"single"``.** The aggregation runner now sets ``registry_scope =
+  "aggregation"`` on the sub-runner that executes the aggregation modules, and
+  ``_log_module_to_registry`` reads ``self.registry_scope`` (default
+  ``"single"``) — so aggregation-scope metrics are not mislabeled as single in
+  the registry's ``Metrics.scope`` column. Documented as a deferred limitation
+  (WP-9 hand-off): aggregation runs fan one ``run_id`` out to N per-dataset
+  sub-runners whose ``module_index`` restarts at 0, so ``(run_id, index)`` is
+  not yet unique across sub-runs; single-dataset preprocess (one runner, unique
+  indices) is unaffected. Inject the registry via ``base_url`` for aggregation
+  runs — a live client *object* in ``analysis_config`` is not deepcopy-safe.
+
+### Added
+
+- **WP-TEMPLATE-CONFORMANCE — versioned analysis templates + deviation logging
+  (`picasso_workflow.templates`).** Standardize analysis without mandating one
+  workflow (A19/C30). Additive/opt-in; nothing is gated. Phases 1–2 (the MVP);
+  Phases 3 (registry sink) and 4 (recommender) are left as documented hooks.
+  - **Phase 1 — versioned templates.** `TEMPLATE_REGISTRY` registers the
+    existing recipes (`minimal`, `picasso_native`, `minimal_channel_align`) as
+    `Template` objects, each carrying a `template_id`, a content-hash
+    `template_version`, a coarse `question_type` tag, and optional coarse
+    descriptor-match tags (ratified A2 axes only — no leaf vocabularies).
+    `Template.resolve()` materializes the concrete default (ordered module list
+    + params). `template_version` is a SHA-256 over the canonical JSON of the
+    resolved default (per-run filepaths/directives normalized out), so it is
+    stable across runs and changes iff the template's modules/params change.
+  - **Phase 2 — deviation logging (MVP sink = the existing qc.json sidecar).**
+    `compute_config_diff` mechanically diffs a run's resolved workflow vs the
+    template default into `{param_overrides, modules_added, modules_removed}`;
+    `derive_conformance` → `exact` / `param-override` / `structural-deviation`
+    / `ad-hoc`. `write_conformance_to_qc` / `log_run_conformance` append
+    `template_id`, `template_version`, `config_diff`, `conformance` under a
+    `template_conformance` key in `qc.json`, additively (existing fields
+    preserved). Runs with no registry and no recommender.
+- **WP-6 — `preprocess` single-dataset recipe + thin registry client.** The
+  authoritative-localization reduction run when a FOV/round completes, and the
+  per-module provenance logging that feeds the picasso-registry corpus.
+  - **`standard_singledataset_workflows.preprocess`** — a location-agnostic
+    single-dataset recipe `load_dataset_movie → identify → localize → render →
+    save_single_dataset`. **No undrift** here: drift correction (and
+    aggregation) run on the SLURM cluster, and only localizations cross to it
+    (C33/C15). `validate_preprocess` validates it against `MODULE_REGISTRY`,
+    seeding the cluster-deferred `locs_undrifted` capability so render/save
+    (which predate the acquire→cluster split) don't read as missing a step.
+  - **Reuse of the lossless live locs (`live_locs.py`).** When the live pass
+    was lossless and still valid for the movie — decided by **checksumming the
+    frame range** (`frame_range_checksum` + `reuse_live_locs`) against a
+    `LiveLocsDescriptor` — the live localizations are authoritative, so the
+    recipe loads them (`load_dataset_localizations`) and **skips
+    re-localization** entirely; any mismatch (lossy pass, partial coverage,
+    changed data) falls back to re-localizing. The upstream live-locs
+    provenance type is not in this repo yet (WP-4), so the descriptor is a
+    documented, tested seam the caller supplies.
+  - **`registry_client.RegistryLogger`** — a thin, **best-effort, non-blocking**
+    wrapper that POSTs **one metrics record per module** plus artifact pointers
+    to picasso-registry, all keyed by `run_id`. A registry outage is swallowed
+    and logged, never raised into the recipe. The client is **injectable**
+    (real `RegistryClient`, or a test double), so unit tests stay hermetic;
+    wired into `WorkflowRunner.call_module` and configured via
+    `analysis_config["registry"]` (absent → disabled no-op, the default).
+- **WP-ADVISOR — shared, deterministic, LLM-free QC advisor + Materials &
+  Methods (`picasso_workflow.qc_advisor`).** Ported from LiveLocalization V0.8
+  (`qc_advisor.py` / `materials_methods.py` and the filter/min-net-gradient
+  helpers) into a clean, unit-testable subpackage that the live GUI (WP-GUI),
+  the dashboard, the notifier, and later the agent (WP-14) all import as ONE
+  rule engine (C31/C39: no `paint-util` leaf — import `qc_advisor` directly).
+  - **`Finding` structured contract** (`findings.py`): a dataclass with
+    `metric / severity / message / cause / action / value / source / detail`
+    plus `.as_dict()` — the explicit, documented type WP-GUI consumes.
+  - **`diagnose` / `focus` / `summary`** — prioritised, explainable findings over
+    the A1/C19 metric keys (byte-identical to the V0.8 reference on shared
+    fixtures).
+  - **`frc_trend`** — the net-new "keep acquiring vs you can stop" signal: fits
+    `FRC ≈ a·N^(-b)` on the recent series and returns
+    improving / plateau / plateau_check (pre-undrift) / plateau_early /
+    degrading, with the V0.8 guards (never stops on a number alone, before
+    undrift, or while early).
+  - **`center_edge_trend`** — centre-vs-edge density trend → docking-strand
+    photodamage vs a static illumination profile.
+  - **`cohort_stats` + `db_anomalies`** — live cohort-outlier early warning in
+    robust p20↔p80 spread units; `cohort_stats` bridges the picasso-registry
+    client's `cohort(taxon_id)` run list to the stats `db_anomalies` consumes,
+    keeping the rule engine hermetic (registry is injected, not imported).
+  - **Filter-settings advisor** (`filter_advisor.py`): `filter_suggestions`
+    (data-driven Picasso photons/sx/sy/ellipticity/precision thresholds),
+    `filter_keep_mask`, `filter_preview_counts` (kept/removed payload for
+    WP-GUI), a bimodal-histogram **`estimate_min_net_gradient`** (picasso
+    imported lazily; a picasso-free numeric core), the **clustering guide**
+    (`suggest_clustering`, eps ≈ 2.5·NeNA), and `qc.json` sidecar writers
+    (`write_filter_suggestions_to_qc` / `write_clustering_to_qc` /
+    `write_min_net_gradient_to_qc`).
+  - **Deterministic Materials & Methods** (`materials_methods.py`):
+    `materials_and_methods(qc, setup_name=, config_path=)` renders a paragraph
+    from qc.json + an optional hardware-profile YAML; missing fields degrade to
+    "not specified".
+  - **C35 deterministic notifier** (`notifier.py`): a `run_id`-keyed
+    `NotifierEngine` driven by `RegistryEvent`s that spans the live AND
+    cluster-analysis phases, with the deterministic half only (no LLM
+    narration, no actuation buttons). Anti-noise built in: per-user/per-run
+    subscription, per-event severity thresholds, ONE thread per `run_id`, and
+    dedup; the delivery transport is an injected `sink` (Slack never runs on the
+    cluster). Read-only `status` / `quality` query surface answered from
+    registry-derived state.
+  - Tier-2 known-answer + property tests in `tests/test_qc_advisor.py`
+    (hermetic; registry mocked for db-anomalies; no Qt), incl. a golden
+    full-list assertion locking the exact ordering + count of the composed
+    findings against the V0.8 reference.
+  - **Robustness fixes from adversarial code review** (deviations from the V0.8
+    port, deliberate): (a) `frc_trend` no longer emits the confident "you can
+    stop" plateau when the guard context is absent — the actionable stop needs
+    both `undrift_done=True` and a `progress_frac`; otherwise it returns
+    `plateau_unconfirmed` (a false stop is a costly re-acquisition).
+    (b) `db_anomalies` guards a degenerate / collapsed-spread cohort (all-equal
+    or zero-median runs) — insufficient spread is skipped instead of over-
+    flagging a tiny deviation as `bad` with a nonsensical `p20–p80 0–0` band.
+    (c) The notifier broadcasts an always-deliver critical
+    (`analysis_failed` / `early_abort`) to a `fallback_sink` when a run has zero
+    subscribers, so a cluster-side failure before/after anyone subscribed is
+    never silently dropped. (d) A seq-less `qc_update` now dedups on its
+    escalated severity + a rounded metric fingerprint instead of the kind alone,
+    so a worsening live update (e.g. NeNA 3→9 nm) is delivered, not swallowed.
+
+### Fixed
+
+- **Integration fix (surfaced by the `develop` refresh): route the WP-ADVISOR
+  `estimate_min_net_gradient` picasso import through the `_picasso_api`
+  boundary.** `qc_advisor/filter_advisor.py` did a direct in-function
+  `from picasso import localize`; `develop` has since added the single-surface
+  picasso boundary (`picasso_workflow._picasso_api`) + the AST enforcement test
+  `test_no_direct_picasso_imports`, which the refresh merged alongside the
+  WP-ADVISOR code → the direct import became the lone offender. Changed it to the
+  lazy `from picasso_workflow._picasso_api import localize` (same deferred import
+  timing via the boundary's PEP-562 `__getattr__`, so the advisor package still
+  imports without picasso). No behaviour change; `test_no_direct_picasso_imports`
+  + the full `qc_advisor` suite green.
+
+### Changed
+
+- **Stack-wide dependency harmonization (decision C41, picasso is the anchor).**
+  The shared numeric/IO libs were previously **unpinned**; pinned them to picasso
+  0.11.3's shared-lib ranges so picasso-workflow resolves to the same numpy-2
+  stack as picasso / PycroFlow / monet when co-installed: `numpy` →
+  `numpy>=2.2.6,<3`, `pandas` → `pandas>=2.3.3,<3`, `tables` → `tables>=3.10.1,<4`,
+  `numba` → `numba>=0.62.1,<1`, `h5py` → `h5py>=3.15.1,<4`, `matplotlib` →
+  `matplotlib>=3.10.7,<4`. `PyQt6` / `PyQt6-WebEngine` were already synced to the
+  anchor and the `picassosr` line is untouched. Full test suite green under
+  numpy 2.
 - **`[binding-events]` optional extra** (`lmfit`, `pandarallel`) for the
   `binding_event_analysis` workflow module. Its code is imported lazily, so the
   deps are only needed when that module runs: `pip install -e ".[binding-events]"`.
