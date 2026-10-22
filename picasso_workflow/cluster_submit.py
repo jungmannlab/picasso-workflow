@@ -36,6 +36,7 @@ headlessly on the wheel-only CI.
 from __future__ import annotations
 
 import datetime as _dt
+import shlex
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
 
@@ -164,22 +165,37 @@ def build_sbatch_script(
     so a failed run reports FAILED to SLURM (not a bare 0).
     """
     binds = bind_paths or [results_dir_remote]
-    bind_arg = " ".join(f"--bind {b}" for b in binds)
+    # Every remote path lands in a shell command (the apptainer invocation) or a
+    # SLURM directive value; lab data folders routinely contain spaces (e.g.
+    # "channel 0.hdf5"), so each is shlex-quoted or an unquoted space would
+    # word-split the argv (--spec <half-a-path>) / break the #SBATCH directive.
+    # Mirrors SlurmCommunicator.fetch_progress et al., which already quote.
+    bind_arg = " ".join(f"--bind {shlex.quote(b)}" for b in binds)
+    out_pattern = shlex.quote(f"{results_dir_remote}/{job_name}_%j.out")
+    err_pattern = shlex.quote(f"{results_dir_remote}/{job_name}_%j.err")
     lines = [
         "#!/bin/bash",
-        f"#SBATCH --job-name={job_name}",
-        f"#SBATCH --output={results_dir_remote}/{job_name}_%j.out",
-        f"#SBATCH --error={results_dir_remote}/{job_name}_%j.err",
+        f"#SBATCH --job-name={shlex.quote(job_name)}",
+        f"#SBATCH --output={out_pattern}",
+        f"#SBATCH --error={err_pattern}",
         f"#SBATCH --time={time_limit}",
         f"#SBATCH --mem={mem}",
         f"#SBATCH --cpus-per-task={cpus_per_task}",
     ]
     if partition:
-        lines.append(f"#SBATCH --partition={partition}")
+        lines.append(f"#SBATCH --partition={shlex.quote(partition)}")
     if nodelist:
-        lines.append(f"#SBATCH --nodelist={nodelist}")
+        lines.append(f"#SBATCH --nodelist={shlex.quote(nodelist)}")
     if constraint:
-        lines.append(f"#SBATCH --constraint={constraint}")
+        lines.append(f"#SBATCH --constraint={shlex.quote(constraint)}")
+    run_cmd = (
+        "apptainer exec "
+        + bind_arg
+        + f" {shlex.quote(image_path)} "
+        + "python -m picasso_workflow.cluster_submit run "
+        + f"--spec {shlex.quote(workflow_yaml_remote)} "
+        + f"--results-dir {shlex.quote(results_dir_remote)}"
+    )
     lines += [
         "",
         'echo "Job started at: $(date)"',
@@ -188,17 +204,12 @@ def build_sbatch_script(
         "source /etc/profile.d/modules.sh",
         # Apptainer version PINNED to the lowest on the target node group
         # (C10). module-load FIRST so `apptainer` resolves below.
-        f"module load {apptainer_module}",
+        f"module load {shlex.quote(apptainer_module)}",
         "",
         "# Run the recommended undrift-first aggregation inside the "
         "dev-container image. The 'run' entry point loads the staged "
         "aggregation spec and executes AggregationWorkflowRunner.",
-        "apptainer exec "
-        + bind_arg
-        + f" {image_path} "
-        + "python -m picasso_workflow.cluster_submit run "
-        + f"--spec {workflow_yaml_remote} "
-        + f"--results-dir {results_dir_remote}",
+        run_cmd,
         "PW_RC=$?",
         "",
         'echo "Job completed at: $(date) (exit ${PW_RC:-0})"',
@@ -404,7 +415,12 @@ class ClusterSubmitWorker:
 
         Prefers an explicit ``detail.locs`` list carried on the hand-off
         (whatever QC readied it with); falls back to a single
-        ``detail.locs_path``. A dataset with no locs pointer cannot be staged.
+        ``detail.locs_path``. If the hand-off detail carries no locs pointer
+        (e.g. a re-readied dataset — ``reready_handoff`` resets ``detail`` to
+        None, so the pointer does NOT survive a failure+requeue), it falls
+        back to the acquisition_run's durable, append-only ``extra.locs`` /
+        ``extra.locs_path``. Without a reachable pointer anywhere the dataset
+        cannot be staged, which is a hard error (never a silent skip).
         """
         detail = claimed.get("detail") or {}
         locs = detail.get("locs")
@@ -413,9 +429,31 @@ class ClusterSubmitWorker:
         one = detail.get("locs_path")
         if one:
             return [one]
+
+        # Durable fallback: the acquisition_run's append-only extra survives a
+        # reready that wiped the mutable hand-off detail. Best-effort lookup;
+        # a registry/lookup failure falls through to the hard error below.
+        acq_id = claimed.get("acquisition_run_id")
+        if acq_id:
+            try:
+                acq = self.registry.get("acquisition_run", acq_id)
+            except Exception as exc:
+                logger.warning(
+                    f"cluster-submit: could not read acquisition_run "
+                    f"{acq_id!r} for locs fallback: {exc!r}"
+                )
+                acq = None
+            extra = (acq or {}).get("extra") or {}
+            locs = extra.get("locs")
+            if locs:
+                return list(locs)
+            one = extra.get("locs_path")
+            if one:
+                return [one]
+
         raise ValueError(
-            f"no localization pointer on hand-off {claimed.get('id')!r} "
-            "(detail.locs / detail.locs_path)"
+            f"no localization pointer for hand-off {claimed.get('id')!r} "
+            "(detail.locs / detail.locs_path / acquisition_run.extra.locs)"
         )
 
     def _create_analysis_run(
@@ -466,18 +504,28 @@ class ClusterSubmitWorker:
         comm = self.communicator
         job_name = f"pwf-agg-{acquisition_run_id}"
 
+        # The cluster runner (AggregationWorkflowRunner.config_from_dicts)
+        # REQUIRES reporter_config["report_name"] and
+        # analysis_config["result_location"] (both indexed unconditionally), so
+        # empty dicts would KeyError on the first line of the run. Supply a
+        # minimal, Confluence-less config: results land under the run's scratch
+        # dir, the report is named by the dataset. The registry run_id rides in
+        # analysis_config so cluster-side logging + the write-back join this run.
         staged = {
             "acquisition_run_id": acquisition_run_id,
             "analysis_run_id": analysis_run_id,
             "aggregation_workflow": _yaml_safe(spec),
-            "reporter_config": {},
+            "reporter_config": {
+                "report_name": f"cluster-agg-{acquisition_run_id}",
+            },
             "analysis_config": {
+                "result_location": remote_dir,
                 "registry": {"run_id": analysis_run_id},
             },
         }
         workflow_yaml = yaml.safe_dump(staged, sort_keys=False)
         workflow_remote = f"{remote_dir}/workflow.yaml"
-        comm.execute_ssh_command(f"mkdir -p {remote_dir}")
+        comm.execute_ssh_command(f"mkdir -p {shlex.quote(remote_dir)}")
         _ssh_write_file(comm, workflow_remote, workflow_yaml)
 
         script = build_sbatch_script(
@@ -552,11 +600,20 @@ def rsync_stage(
     import subprocess
 
     remote_paths = []
-    subprocess.run(["ssh", config.host, f"mkdir -p {remote_dir}"], check=True)
+    # Quote the remote path for the REMOTE shell: `ssh host "<cmd>"` runs <cmd>
+    # through the login shell, and lab folders contain spaces.
+    subprocess.run(
+        ["ssh", config.host, f"mkdir -p {shlex.quote(remote_dir)}"],
+        check=True,
+    )
     for p in local_paths:
         base = p.rsplit("/", 1)[-1]
         dest = f"{remote_dir}/{base}"
-        subprocess.run(["rsync", "-a", p, f"{config.host}:{dest}"], check=True)
+        # `-s` (--protect-args) stops rsync from re-splitting the remote path on
+        # spaces (otherwise "channel 0.hdf5" becomes two args on the far side).
+        subprocess.run(
+            ["rsync", "-a", "-s", p, f"{config.host}:{dest}"], check=True
+        )
         remote_paths.append(dest)
     return remote_paths
 
@@ -630,9 +687,11 @@ def _ssh_write_file(comm: Any, remote_path: str, content: str) -> None:
 
     Uses a heredoc over ``execute_ssh_command`` so no local temp file / scp
     round-trip is needed; the communicator is the single SSH chokepoint tests
-    mock. A quoted heredoc marker keeps the content literal.
+    mock. The target path is shlex-quoted (lab paths contain spaces) and the
+    heredoc marker is quoted so the content is written literally (no shell
+    expansion of ``$``/backtick in the yaml or script body).
     """
-    cmd = f"cat > {remote_path} <<'PWF_EOF'\n{content}\nPWF_EOF"
+    cmd = f"cat > {shlex.quote(remote_path)} <<'PWF_EOF'\n{content}\nPWF_EOF"
     comm.execute_ssh_command(cmd)
 
 
@@ -701,9 +760,13 @@ def cluster_run(
     from picasso_workflow import AggregationWorkflowRunner
 
     analysis_config = dict(staged.get("analysis_config") or {})
+    # ``result_location`` is the key the runner indexes (not ``result_folder``);
+    # default it to the sbatch --results-dir if the staged config omitted it.
     if results_dir:
-        analysis_config.setdefault("result_folder", results_dir)
-    os.makedirs(results_dir, exist_ok=True) if results_dir else None
+        analysis_config.setdefault("result_location", results_dir)
+    result_location = analysis_config.get("result_location")
+    if result_location:
+        os.makedirs(result_location, exist_ok=True)
 
     ok = False
     reason = None

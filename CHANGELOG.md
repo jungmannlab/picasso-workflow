@@ -24,10 +24,19 @@ This file was started after v0.5.6; earlier history is in the git log.
   dev-container image, and transitions the hand-off `claimed → running`. The
   cluster job closes the loop via `cluster_writeback(... running → done/failed)`
   + final metrics (emulated in tests; the real cluster run is a user-side
-  smoke test). A submit failure after a successful claim marks the hand-off
-  `failed` — merging the failure reason into the existing locs `detail` so the
-  dataset is never lost and stays re-queueable. A new undrift-first
-  `standard_aggregation_workflows.cluster_aggregation` recipe (+ a
+  smoke test) through a `run` CLI entry (`python -m
+  picasso_workflow.cluster_submit run`) that executes
+  `AggregationWorkflowRunner` with a minimal (Confluence-less) reporter/analysis
+  config. A submit failure after a successful claim marks the hand-off `failed`
+  — merging the failure reason into the existing locs `detail` so the dataset is
+  never lost and stays re-queueable; because `reready` resets the mutable
+  hand-off `detail`, the locs pointer also resolves from the acquisition_run's
+  durable `extra.locs`, so a failed+requeued dataset can't strand in a
+  can't-find-locs loop. Every remote path the worker emits into a shell command
+  or `#SBATCH` directive is `shlex`-quoted (lab folders contain spaces, e.g.
+  "channel 0.hdf5" — unquoted it would word-split `--spec <half-a-path>`); the
+  shared `SlurmCommunicator.submit_job` likewise quotes the script path. A new
+  undrift-first `standard_aggregation_workflows.cluster_aggregation` recipe (+ a
   `cluster_aggregation` template) is the submitted default.
 - **WP-TEMPLATE Phase 3 — registry-backed conformance sink.** The cluster
   submit worker attaches the submitted workflow's template-conformance record

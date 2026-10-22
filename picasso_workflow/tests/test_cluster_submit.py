@@ -147,6 +147,35 @@ class TestWorkflowAndScript(unittest.TestCase):
         # exit code propagated.
         self.assertIn("exit ${PW_RC:-0}", script)
 
+    def test_sbatch_quotes_paths_with_spaces(self):
+        # Lab data folders contain spaces; the apptainer argv and #SBATCH
+        # directives must survive word-splitting (regression: unquoted paths
+        # split --spec <half-a-path>).
+        import shlex
+
+        script = build_sbatch_script(
+            job_name="pwf-agg-my run 1",
+            workflow_yaml_remote="/scratch/my run 1/workflow.yaml",
+            results_dir_remote="/scratch/my run 1",
+            image_path="/sw/picasso workflow.sif",
+        )
+        exec_line = next(
+            ln for ln in script.splitlines() if ln.startswith("apptainer exec")
+        )
+        toks = shlex.split(exec_line)  # the real shell tokenization
+        self.assertEqual(
+            toks[toks.index("--spec") + 1], "/scratch/my run 1/workflow.yaml"
+        )
+        self.assertEqual(
+            toks[toks.index("--results-dir") + 1], "/scratch/my run 1"
+        )
+        self.assertEqual(toks[toks.index("--bind") + 1], "/scratch/my run 1")
+        # the image path is a single token (not split on its space).
+        self.assertIn("/sw/picasso workflow.sif", toks)
+        # the #SBATCH output pattern is quoted (one directive, not split).
+        out_line = next(ln for ln in script.splitlines() if "--output=" in ln)
+        self.assertIn("'/scratch/my run 1/", out_line)
+
 
 # ---------------------------------------------------------------------------
 # Registry-backed tests — skip on hosted CI.
@@ -278,6 +307,49 @@ class TestClusterSubmitHappyPath(unittest.TestCase):
 
 
 @requires_registry
+class TestLocsResolution(unittest.TestCase):
+    def test_locs_fallback_to_acquisition_extra(self):
+        # A re-readied dataset loses its hand-off detail (reready resets it to
+        # None), so the locs must resolve from the acquisition_run's durable
+        # extra — otherwise the dataset strands in a fail/requeue loop.
+        with _mock_registry() as reg:
+            acq_id = "acq-fallback"
+            locs = [f"/data/{acq_id}/channel 0.hdf5"]
+            reg.log_acquisition(id=acq_id, status="done", extra={"locs": locs})
+            # Ready with NO locs in detail (mimicking a reready that wiped it).
+            reg.mark_ready(acq_id, detail=None)
+            comm = MockSlurmCommunicator()
+            worker = ClusterSubmitWorker(
+                reg, communicator=comm, stager=_fake_stager
+            )
+            summary = worker.run_once()
+            # Resolved from acquisition.extra → submitted, not stranded.
+            self.assertTrue(summary["submitted"])
+            self.assertEqual(len(comm.submitted), 1)
+
+    def test_no_locs_anywhere_fails_cleanly(self):
+        with _mock_registry() as reg:
+            acq_id = "acq-nolocs"
+            reg.log_acquisition(id=acq_id, status="done")
+            reg.mark_ready(acq_id, detail=None)
+            comm = MockSlurmCommunicator()
+            worker = ClusterSubmitWorker(
+                reg, communicator=comm, stager=_fake_stager
+            )
+            summary = worker.run_once()
+            # No pointer anywhere → not submitted, hand-off marked failed
+            # (never silently lost, never a crash out of run_once).
+            self.assertFalse(summary["submitted"])
+            self.assertEqual(len(comm.submitted), 0)
+            ho = [
+                h
+                for h in reg.list_handoffs()
+                if h["acquisition_run_id"] == acq_id
+            ][0]
+            self.assertEqual(ho["state"], "failed")
+
+
+@requires_registry
 class TestNothingReady(unittest.TestCase):
     def test_no_ready_dataset_is_clean_noop(self):
         with _mock_registry() as reg:
@@ -386,10 +458,16 @@ class TestClusterRunEntryPoint(unittest.TestCase):
         import picasso_workflow
 
         # Put a dataset into 'running' with an analysis_run to write back to.
+        # Stage under the tmpdir so the staged result_location is a real,
+        # writable path when cluster_run makedirs it below (on the cluster this
+        # is the scratch dir; here it must be local-writable).
         acq_id, _ = _ready_dataset(reg)
         comm = MockSlurmCommunicator()
         worker = ClusterSubmitWorker(
-            reg, communicator=comm, stager=_fake_stager
+            reg,
+            ClusterSubmitConfig(scratch_root=tmpdir),
+            communicator=comm,
+            stager=_fake_stager,
         )
         worker.run_once()
 

@@ -524,7 +524,10 @@ class SlurmCommunicator:
         if additional_options:
             sbatch_cmd += " " + " ".join(additional_options)
 
-        sbatch_cmd += f" {script_path}"
+        # Quote the script path for the remote shell: cluster/lab paths contain
+        # spaces, which would otherwise split `sbatch <half-a-path>` into a
+        # bogus argv (the rest of the class already quotes remote paths).
+        sbatch_cmd += f" {shlex.quote(script_path)}"
 
         logger.info(f"Submitting job via SSH: {sbatch_cmd}")
         result = self.execute_ssh_command(sbatch_cmd)
