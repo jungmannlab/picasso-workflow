@@ -10,6 +10,43 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ## [Unreleased]
 
+### Added
+
+- **WP-10 — sample-aware workflow recommender (`picasso_workflow/recommender.py`).**
+  `recommend_workflow(conditions, goal, registry, db_client, dataset_uri=None)`
+  turns a goal + coarse descriptor conditions into a runnable, ordered
+  `(module, params)` workflow the existing `WorkflowRunner` /
+  `AggregationWorkflowRunner` execute **unchanged** — **advisory only**, the
+  recommender never gates. Built as four pure-ish, independently-tested layers:
+  - **Layer 0 — `select_modules`** picks a `templates.Template` keyed by `goal`
+    (question-type) + the ratified-coarse descriptor axes (sample_type /
+    modality / dimensionality — **no A2 leaf vocab**) and resolves it to a
+    concrete default; falls back to a sane default template when nothing matches.
+  - **Layer 1 — `resolve_choice_points`** swaps each mutually-exclusive `role`
+    (undrift, clusterer, …) for the variant with the better A1/C19 optimize-tier
+    metric over the **taxon-distance-ranked cohort** (`db_client.cohort`, joined
+    to `analysis_run` → `metrics`); keeps the template default when there is no
+    history (explainable). Variant alternatives are scope- and module_set-safe.
+  - **Layer 2 — `recommend_parameters`** seeds params from the taxon node
+    (`db_client.node_defaults`) and records the WP-7 learned per-cohort ranges
+    (latest `cohort_metric_range` per metric) as hints — conservative: only
+    overrides a template default when the cohort evidence is real.
+  - **Layer 3 — `topological_order`** orders the modules over the ModuleSpec
+    `requires`/`provides` DAG and asserts the result passes `validate_workflow`
+    (aggregation workflows are validated per-phase in their own scope).
+  - Persistence + feedback: `persist_recommendation` writes `recommended_spec` +
+    `recommender_version` onto an `analysis_run` row; `capture_operator_feedback`
+    diffs the operator's final workflow against the recommendation (reusing
+    `templates.compute_config_diff`) into a `feedback` row.
+  - picasso-registry is **not** a dependency — `registry` / `db_client` are
+    injected and all registry I/O is best-effort (a registry outage degrades the
+    recommendation, never raises); the package imports headlessly without it and
+    the registry-backed tests skip on hosted wheel-only CI.
+  - **Note (soft precondition A7, open/low-priority):** the Layer-0/1 choice
+    space is only as rich as the current ModuleSpec annotations; the A7
+    module-annotation curation cadence is not yet decided, so the recommender
+    proceeds on the present annotations and improves automatically as they do.
+
 ### Fixed
 
 - **WP-9 Phase C code review (2 parallel finders → verify → fix):**
