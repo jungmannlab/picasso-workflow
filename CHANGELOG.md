@@ -12,6 +12,17 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Fixed
 
+- **Gate-3 CI prep: the registry-integration tests skip on the hosted wheel-only
+  runner.** The WP-6 / WP-7 tests that use picasso-registry's server-backed
+  `mock_registry` (FastAPI TestClient) now carry a `@requires_registry`
+  `skipUnless` guard — picasso-registry is deliberately NOT a picasso-workflow
+  dependency (base stays wheel-only / hermetic), so on the hosted `develop` CI
+  (`pip install -e ".[dev]"`, no picasso-registry) these 10 tests skip instead
+  of erroring, while they still run in the full dev container. The package
+  imports headlessly without picasso-registry (all its imports are lazy); the
+  pure parse/metric/CSV unit tests always run. Pre-empts the C16
+  green-in-container / red-on-hosted trap before promoting to `develop`.
+
 - **WP-7 code review (2× parallel finders → verify → fix):**
   - **Content-aware dataset identity — no more silent data loss.** The backfill
     `run_id` was derived from `basename|frames` only, so two DISTINCT datasets

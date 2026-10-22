@@ -43,6 +43,23 @@ from picasso_workflow.backfill.metrics import locs_signature
 from picasso_workflow.backfill.parser import parse_folder_tokens
 from pathlib import Path
 
+# The registry-integration tests need picasso-registry's server-backed
+# mock_registry (FastAPI TestClient). picasso-registry is NOT a base/dev dep of
+# picasso-workflow (it stays wheel-only, hermetic), so these skip on the hosted
+# CI runner and run in the full dev container. The pure parse/metric/CSV tests
+# below have no such dependency and always run.
+try:
+    from picasso_registry.testing import mock_registry as _mock_registry
+
+    _ = _mock_registry
+    HAS_REGISTRY = True
+except Exception:
+    HAS_REGISTRY = False
+
+requires_registry = unittest.skipUnless(
+    HAS_REGISTRY, "picasso-registry not installed (hosted wheel-only CI)"
+)
+
 
 def _run_id_for(fp: str) -> str:
     """The content-aware run_id the ingest mints for a dataset (keys label CSVs
@@ -169,6 +186,7 @@ class TestMetricsFromHdf5(unittest.TestCase):
 
 
 class TestMapAndIngest(unittest.TestCase):
+    @requires_registry
     def test_metrics_land_keyed_to_run_id(self):
         from picasso_registry.testing import mock_registry
 
@@ -199,6 +217,7 @@ class TestMapAndIngest(unittest.TestCase):
                 self.assertEqual(len(rows), 1)
                 self.assertEqual(rows[0]["n_locs"], N_LOCS)
 
+    @requires_registry
     def test_idempotent_reingest_does_not_duplicate(self):
         from picasso_registry.testing import mock_registry
 
@@ -268,6 +287,7 @@ class TestCsvImporter(unittest.TestCase):
             {},
         )
 
+    @requires_registry
     def test_ingest_with_labels_attaches_taxon_and_qc_feedback(self):
         from picasso_registry.testing import mock_registry
 
@@ -307,6 +327,7 @@ class TestCsvImporter(unittest.TestCase):
                 self.assertEqual(len(reg.list("feedback", limit=500)), 1)
                 self.assertTrue(reg.list("qc", limit=500)[0]["passed"])
 
+    @requires_registry
     def test_standalone_import_labels_appends_qc_feedback(self):
         from picasso_registry.testing import mock_registry
 
@@ -330,6 +351,7 @@ class TestCsvImporter(unittest.TestCase):
 
 
 class TestPerTaxonRanges(unittest.TestCase):
+    @requires_registry
     def test_ranges_populate_and_exclude_incomplete(self):
         from picasso_registry.testing import mock_registry
 
@@ -390,6 +412,7 @@ class TestPerTaxonRanges(unittest.TestCase):
             {"p05", "p50", "p95", "n"},
         )
 
+    @requires_registry
     def test_simulated_runs_excluded_from_ranges(self):
         from picasso_registry.testing import mock_registry
 
@@ -428,6 +451,7 @@ class TestPerTaxonRanges(unittest.TestCase):
 class TestWP7ReviewFixes(unittest.TestCase):
     """Regression tests for the code-review findings."""
 
+    @requires_registry
     def test_same_name_distinct_content_do_not_collide(self):
         # Two DISTINCT datasets sharing a filename + frame count (uniform
         # pipeline names in different folders) must BOTH ingest — the old
@@ -447,6 +471,7 @@ class TestWP7ReviewFixes(unittest.TestCase):
                     len(reg.list("acquisition_run", limit=500)), 2
                 )
 
+    @requires_registry
     def test_exact_copy_same_content_still_dedupes(self):
         # Same content (identical seed) → same content-aware run_id → the copy
         # under a different folder still dedupes (idempotency preserved).
@@ -462,6 +487,7 @@ class TestWP7ReviewFixes(unittest.TestCase):
                 self.assertEqual(counts["ingested"], 1)
                 self.assertEqual(counts["skipped"], 1)
 
+    @requires_registry
     def test_dry_run_with_labels_writes_nothing(self):
         # --dry-run --labels must NOT create taxon nodes (append-only store).
         from picasso_registry.testing import mock_registry

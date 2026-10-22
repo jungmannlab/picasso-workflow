@@ -35,6 +35,23 @@ from picasso_workflow.workflow import (
     _module_metrics,
 )
 
+# The one test using picasso-registry's server-backed mock_registry (FastAPI
+# TestClient) skips when picasso-registry is absent (it's not a dep —
+# picasso-workflow stays wheel-only/hermetic), so it runs in the full dev
+# container but not on the hosted CI runner. Everything else here uses the
+# local in-process doubles and always runs.
+try:
+    from picasso_registry.testing import mock_registry as _mock_registry
+
+    _ = _mock_registry
+    HAS_REGISTRY = True
+except Exception:
+    HAS_REGISTRY = False
+
+requires_registry = unittest.skipUnless(
+    HAS_REGISTRY, "picasso-registry not installed (hosted wheel-only CI)"
+)
+
 
 def _movie(n_frames=5, h=4, w=4, seed=0):
     rng = np.random.default_rng(seed)
@@ -286,6 +303,7 @@ class TestRegistryLogger(unittest.TestCase):
 # RegistryLogger against the real in-memory mock_registry (FastAPI TestClient).
 # ---------------------------------------------------------------------------
 class TestRegistryLoggerAgainstMockRegistry(unittest.TestCase):
+    @requires_registry
     def test_metrics_land_in_the_registry_keyed_by_run_id(self):
         from picasso_registry.testing import mock_registry
 
