@@ -20,12 +20,13 @@ dependencies = [
     "tables>=3.10.1,<4",
     "numba>=0.62.1,<1",
     "openpyxl==3.1.2",
-    # Upper bound caps at the next picasso minor, where the library is allowed
-    # to break API. Bump it deliberately with a green picasso contract test
-    # (tests/test_picasso_contract.py), not automatically -- an open-ended lower
-    # bound onto a pre-release would otherwise float across untested picasso
-    # releases.
-    "picassosr>=0.12.0a3,<0.13",
+    # Upper bound caps at the next picasso major, where the library is allowed
+    # to break its 1.0 stability promise. Bump it deliberately with a green
+    # picasso contract test (tests/test_picasso_contract.py), not automatically.
+    # picasso 1.0 is the first release with a stability promise; the workflow is
+    # migrated to its nm-everywhere / IdentificationParameters / unified-progress
+    # API (see the picasso 1.0 migration).
+    "picassosr>=1.0.0a1,<2",
     # GUI uses PyQt6 directly; keep in sync with picasso's constraint
     "PyQt6>=6.10.2,<7",
     # Embedded HTML report viewer in the GUI Results tab (QWebEngineView);

@@ -129,9 +129,10 @@ class PicassoSetCoreMixin:
         fp_drift = os.path.join(results["folder"], driftfile_name)
         io.save_drift(fp_drift, drift)
         results["filepath_driftfile"] = fp_drift
-        pixelsize = self._picasso_set_pixelsize(1.0)
         fig = plt.figure(figsize=(10, 6), constrained_layout=True)
-        postprocess.plot_drift(drift, pixelsize, fig)
+        # picasso 1.0 plot_drift takes (drift, fig) -- the drift is already in
+        # nm, so the pixelsize argument is gone.
+        postprocess.plot_drift(drift, fig)
         fp_fig = os.path.join(results["folder"], "drift.png")
         fig.savefig(fp_fig)
         results["fp_fig_drift"] = fp_fig
@@ -297,12 +298,15 @@ class PicassoSetCoreMixin:
                 parameters["camera_calibration"]
             )
 
-        identification_parameters = {
-            "Min. Net Gradient": gradient,
-            "Box Size": box,
-            "Temporal Median Window": temporal_median,
-            "Gaussian Filter Sigma": gaussian_filter,
-        }
+        # picasso 1.0 bundles the identification settings into an
+        # IdentificationParameters (a 0 window / sigma means the filter is
+        # off), and localize always returns (locs, info).
+        identification_parameters = localize.IdentificationParameters(
+            method=localize.NetGradient(gradient),
+            box=box,
+            temporal_median_window=int(temporal_median),
+            gaussian_filter_sigma=float(gaussian_filter),
+        )
         locs, info = localize.localize(
             self.movie,
             camera_info=camera_info,
@@ -315,8 +319,7 @@ class PicassoSetCoreMixin:
             max_it=max_iterations if max_iterations > 0 else None,
             spline_calibration=spline_calibration,
             camera_calibration=camera_calibration,
-            threaded=True,
-            return_info=True,
+            parallel=True,
         )
 
         # post-fit steps, mirroring the CLI's _localize_finish
@@ -333,7 +336,7 @@ class PicassoSetCoreMixin:
                 fitting_method=method,
                 filter=0,
                 lateral_transforms=lateral_transforms,
-                multiprocess=not fit_z_gpu,
+                parallel=not fit_z_gpu,
                 gpu=fit_z_gpu,
             )
             info[-1]["Z Calibration Path"] = zpath
@@ -359,8 +362,10 @@ class PicassoSetCoreMixin:
                 "Segmentation": drift,
                 "Wrapped by": "picasso-workflow : picasso_localize",
             }
-            drift_df, self.locs = postprocess.undrift(
-                self.locs, self.info, drift, display=False
+            # picasso 1.0 returns (locs, info, drift) and takes segmentation by
+            # keyword; the drift is in nm.
+            self.locs, _undrift_info, drift_df = postprocess.undrift(
+                self.locs, self.info, segmentation=drift, display=False
             )
             undrift_info["Drift X"] = float(drift_df["x"].mean())
             undrift_info["Drift Y"] = float(drift_df["y"].mean())
@@ -411,8 +416,9 @@ class PicassoSetCoreMixin:
             self.locs.y -= drift.loc[self.locs.frame, "y"].to_numpy()
         else:
             undrift_info["Segmentation"] = segmentation
-            drift, self.locs = postprocess.undrift(
-                self.locs, self.info, segmentation, display=False
+            # picasso 1.0 returns (locs, info, drift); segmentation by keyword.
+            self.locs, _undrift_info, drift = postprocess.undrift(
+                self.locs, self.info, segmentation=segmentation, display=False
             )
             undrift_info["Drift X"] = float(drift["x"].mean())
             undrift_info["Drift Y"] = float(drift["y"].mean())
@@ -451,8 +457,16 @@ class PicassoSetCoreMixin:
         segmentation = parameters.get("segmentation", 100)
         intersectdist = parameters.get("intersectdist", 20 / 130)
         roiradius = parameters.get("roiradius", 60 / 130)
+        # picasso 1.0 takes intersect_d / roi_r in nm by keyword (0.11 took
+        # camera pixels positionally), so convert the px config to nm. The
+        # 20/130, 60/130 defaults become picasso 1.0's 20 nm / 60 nm.
+        pixelsize = self._picasso_set_pixelsize()
         self.locs, new_info, drift = aim.aim(
-            self.locs, self.info, segmentation, intersectdist, roiradius
+            self.locs,
+            self.info,
+            segmentation=segmentation,
+            intersect_d=intersectdist * pixelsize,
+            roi_r=roiradius * pixelsize,
         )
         self.info = new_info
         self.info.append(
@@ -490,16 +504,19 @@ class PicassoSetCoreMixin:
             "pre-RCC segmentation": segmentation,
             "Wrapped by": "picasso-workflow : picasso_undrift_fiducials",
         }
-        drift, self.locs = postprocess.undrift(
-            self.locs, self.info, segmentation, display=False
+        # pre-RCC undrift so fiducials can be detected. picasso 1.0 returns
+        # (locs, info, drift); only the undrifted locs are carried forward.
+        self.locs, _pre_info, _pre_drift = postprocess.undrift(
+            self.locs, self.info, segmentation=segmentation, display=False
         )
         self.locs, new_info, drift = postprocess.undrift_from_fiducials(
             self.locs, self.info
         )
         undrift_info["Drift X"] = float(drift["x"].mean())
         undrift_info["Drift Y"] = float(drift["y"].mean())
+        # picasso 1.0 records the fiducial pick by its diameter (was radius).
         undrift_info["Number of picks"] = new_info[-1]["Number of picks"]
-        undrift_info["Pick radius (nm)"] = new_info[-1]["Pick radius (nm)"]
+        undrift_info["Pick diameter (nm)"] = new_info[-1]["Pick diameter (nm)"]
         self.info.append(undrift_info)
         self.drift = drift
         self._picasso_set_save_drift(results, drift, "drift_fiducials.txt")
@@ -537,7 +554,15 @@ class PicassoSetCoreMixin:
         """
         distance = parameters.get("distance", 1.0)
         tolerance = parameters.get("tolerance", 1)
-        self.locs = postprocess.link(self.locs, self.info, distance, tolerance)
+        # picasso 1.0 takes r_max in nm by keyword and returns (locs, info);
+        # the distance config is in camera pixels, so convert to nm.
+        pixelsize = self._picasso_set_pixelsize()
+        self.locs, _ = postprocess.link(
+            self.locs,
+            self.info,
+            r_max=distance * pixelsize,
+            max_dark_time=tolerance,
+        )
         link_info = {
             "Maximum Distance": distance,
             "Maximum Transient Dark Time": tolerance,
@@ -565,7 +590,8 @@ class PicassoSetCoreMixin:
             Module results (see
             :class:`~picasso_workflow.util.AbstractModuleCollection`).
         """
-        self.locs = postprocess.compute_dark_times(self.locs)
+        # picasso 1.0 returns (locs, info).
+        self.locs, _ = postprocess.compute_dark_times(self.locs, self.info)
         d_info = {
             "Generated by": f"Picasso v{picassoversion} Dark",
             "Wrapped by": "picasso-workflow : picasso_dark",
@@ -629,8 +655,11 @@ class PicassoSetCoreMixin:
             :class:`~picasso_workflow.util.AbstractModuleCollection`).
         """
         radius = float(parameters["radius"])
-        self.locs = postprocess.compute_local_density(
-            self.locs, self.info, radius
+        # picasso 1.0 takes the radius in nm by keyword and returns
+        # (locs, info); the config radius is in camera pixels.
+        pixelsize = self._picasso_set_pixelsize()
+        self.locs, _ = postprocess.compute_local_density(
+            self.locs, self.info, radius=radius * pixelsize
         )
         density_info = {
             "Generated by": f"Picasso v{picassoversion} Density",
@@ -668,13 +697,20 @@ class PicassoSetCoreMixin:
         """
         binsize = parameters.get("binsize", 0.1)
         rmax = parameters.get("rmax", 10)
+        # picasso 1.0 takes bin_size / r_max in nm by keyword (the config is
+        # in camera pixels) and returns bin centres in nm.
+        pixelsize = self._picasso_set_pixelsize()
+        bin_size_nm = binsize * pixelsize
         bins_lower, pc = postprocess.pair_correlation(
-            self.locs, self.info, binsize, rmax
+            self.locs,
+            self.info,
+            bin_size=bin_size_nm,
+            r_max=rmax * pixelsize,
         )
         fig, ax = plt.subplots(figsize=(8, 5), constrained_layout=True)
-        ax.plot(bins_lower - binsize / 2, pc)
-        ax.set_xlabel("r (pixel)")
-        ax.set_ylabel("pair-correlation (pixel^-2)")
+        ax.plot(bins_lower - bin_size_nm / 2, pc)
+        ax.set_xlabel("r (nm)")
+        ax.set_ylabel("pair-correlation (nm^-2)")
         ax.set_title(f"Pair-correlation. Bin size: {binsize}, R max: {rmax}")
         fp_fig = os.path.join(results["folder"], "pair_correlation.png")
         fig.savefig(fp_fig)
@@ -729,16 +765,23 @@ class PicassoSetCoreMixin:
         """
         radius = parameters["radius"]
         density = parameters["density"]
-        pixelsize = parameters.get("pixelsize")
         radius_z = parameters.get("radius_z")
-        self.locs, dbscan_info = clusterer.dbscan(
-            self.locs,
-            radius,
-            density,
-            pixelsize=pixelsize,
-            radius_z=radius_z,
+        # picasso 1.0 takes radius / radius_z in nm and drops the pixelsize
+        # argument (0.11 took camera pixels + a pixelsize). The config radii
+        # are in camera pixels, so convert to nm; it returns (locs, info) with
+        # the whole info list.
+        pixelsize = (
+            parameters.get("pixelsize") or self._picasso_set_pixelsize()
         )
-        clusters = clusterer.find_cluster_centers(self.locs, pixelsize)
+        self.locs, _dbscan_info = clusterer.dbscan(
+            self.locs,
+            self.info,
+            radius=radius * pixelsize,
+            min_samples=density,
+            radius_z=(radius_z * pixelsize) if radius_z is not None else None,
+        )
+        dbscan_info = dict(_dbscan_info[-1])
+        clusters, _ = clusterer.find_cluster_centers(self.locs, self.info)
         dbscan_info["Wrapped by"] = "picasso-workflow : picasso_dbscan"
         self.info.append(dbscan_info)
         self._picasso_set_save_locs(results, "locs_dbscan.hdf5")
@@ -779,11 +822,16 @@ class PicassoSetCoreMixin:
         """
         min_cluster = parameters["min_cluster"]
         min_samples = parameters["min_samples"]
-        pixelsize = parameters.get("pixelsize")
-        self.locs, hdbscan_info = clusterer.hdbscan(
-            self.locs, min_cluster, min_samples, pixelsize
+        # min_cluster_size / min_samples are counts (not lengths); picasso 1.0
+        # drops the pixelsize argument and returns (locs, info) as a list.
+        self.locs, _hdbscan_info = clusterer.hdbscan(
+            self.locs,
+            self.info,
+            min_cluster_size=min_cluster,
+            min_samples=min_samples,
         )
-        clusters = clusterer.find_cluster_centers(self.locs, pixelsize)
+        hdbscan_info = dict(_hdbscan_info[-1])
+        clusters, _ = clusterer.find_cluster_centers(self.locs, self.info)
         hdbscan_info["Wrapped by"] = "picasso-workflow : picasso_hdbscan"
         self.info.append(hdbscan_info)
         self._picasso_set_save_locs(results, "locs_hdbscan.hdf5")
@@ -830,18 +878,24 @@ class PicassoSetCoreMixin:
         """
         radius = parameters["radius"]
         min_locs = parameters["min_locs"]
-        pixelsize = parameters.get("pixelsize")
         basic_fa = parameters.get("basic_fa", False)
         radius_z = parameters.get("radius_z")
-        self.locs, smlm_cluster_info = clusterer.cluster(
+        # picasso 1.0 takes radius_xy / radius_z in nm and drops the pixelsize
+        # argument (the config radii are in camera pixels); it returns
+        # (locs, info) with the whole info list.
+        pixelsize = (
+            parameters.get("pixelsize") or self._picasso_set_pixelsize()
+        )
+        self.locs, _smlm_cluster_info = clusterer.cluster(
             self.locs,
-            radius_xy=radius,
-            radius_z=radius_z,
+            self.info,
+            radius_xy=radius * pixelsize,
+            radius_z=(radius_z * pixelsize) if radius_z is not None else None,
             min_locs=min_locs,
             frame_analysis=basic_fa,
-            pixelsize=pixelsize,
         )
-        clusters = clusterer.find_cluster_centers(self.locs, pixelsize)
+        smlm_cluster_info = dict(_smlm_cluster_info[-1])
+        clusters, _ = clusterer.find_cluster_centers(self.locs, self.info)
         smlm_cluster_info["Wrapped by"] = (
             "picasso-workflow : picasso_smlm_cluster"
         )
@@ -937,7 +991,10 @@ class PicassoSetCoreMixin:
         minval = parameters["minval"]
         maxval = parameters["maxval"]
 
-        clusters = io.load_clusters(clusterfile)
+        # picasso 1.0 removed io.load_clusters: cluster centers are plain
+        # localization files now, so load them with io.load_locs and key on the
+        # "group" column (0.11's cluster table used a "groups" field).
+        clusters, _ = io.load_locs(clusterfile)
         selector = (clusters[parameter] > minval) & (
             clusters[parameter] < maxval
         )
@@ -959,7 +1016,7 @@ class PicassoSetCoreMixin:
         }
         all_locs = self.locs
         for tag, sel in (("in", selector), ("out", ~selector)):
-            groups = clusters["groups"][sel]
+            groups = clusters["group"].to_numpy()[sel.to_numpy()]
             part = all_locs[all_locs["group"].isin(groups)].sort_values(
                 kind="quicksort", by="frame"
             )
@@ -979,60 +1036,33 @@ class PicassoSetCoreMixin:
 
     @module_decorator
     def picasso_cluster_combine(self, i, parameters, results):
-        """Combine localizations in each cluster
-        (native CLI: cluster_combine).
+        """Removed in picasso 1.0 (native CLI: cluster_combine).
 
-        Wraps ``picasso.postprocess.cluster_combine``.
-
-        Parameters
-        ----------
-        i : int
-            Index of the module in the workflow.
-        parameters : dict
-            (none)
-        results : dict
-            Module results (see
-            :class:`~picasso_workflow.util.AbstractModuleCollection`).
+        ``picasso.postprocess.cluster_combine`` and the ``cluster_combine``
+        CLI command were both removed in picasso 1.0, so this module no
+        longer has an upstream to wrap and raises a clear error if run.
         """
-        self.locs = postprocess.cluster_combine(self.locs)
-        combined_info = {
-            "Generated by": f"Picasso v{picassoversion} Combine",
-            "Wrapped by": "picasso-workflow : picasso_cluster_combine",
-        }
-        self.info.append(combined_info)
-        self._picasso_set_save_locs(results, "locs_comb.hdf5")
-        results["nlocs"] = len(self.locs)
-        return parameters, results
+        raise NotImplementedError(
+            "picasso_cluster_combine wraps picasso.postprocess.cluster_combine,"
+            " which was removed in picasso 1.0 (the cluster_combine CLI command"
+            " was removed too). Drop this module from the workflow."
+        )
 
     @module_decorator
     def picasso_cluster_combine_dist(self, i, parameters, results):
-        """Calculate the distance to the nearest neighbor for combined
-        clusters (native CLI: cluster_combine_dist).
+        """Removed in picasso 1.0 (native CLI: cluster_combine_dist).
 
-        Wraps ``picasso.postprocess.cluster_combine_dist``. The pixel size
-        is read from the dataset metadata (the CLI reads ``info[1]``; here
-        the whole info list is searched).
-
-        Parameters
-        ----------
-        i : int
-            Index of the module in the workflow.
-        parameters : dict
-            (none)
-        results : dict
-            Module results (see
-            :class:`~picasso_workflow.util.AbstractModuleCollection`).
+        ``picasso.postprocess.cluster_combine_dist`` and the
+        ``cluster_combine_dist`` CLI command were both removed in picasso 1.0,
+        so this module no longer has an upstream to wrap and raises a clear
+        error if run.
         """
-        pixelsize = self._picasso_set_pixelsize()
-        self.locs = postprocess.cluster_combine_dist(self.locs, pixelsize)
-        cluster_combine_dist_info = {
-            "Generated by": f"Picasso v{picassoversion} CombineDist",
-            "Wrapped by": ("picasso-workflow : picasso_cluster_combine_dist"),
-        }
-        self.info.append(cluster_combine_dist_info)
-        self._picasso_set_save_locs(results, "locs_cdist.hdf5")
-        results["nlocs"] = len(self.locs)
-        return parameters, results
+        raise NotImplementedError(
+            "picasso_cluster_combine_dist wraps "
+            "picasso.postprocess.cluster_combine_dist, which was removed in "
+            "picasso 1.0 (the cluster_combine_dist CLI command was removed "
+            "too). Drop this module from the workflow."
+        )
 
     # ------------------------------------------------------------------
     # molecular mapping (CLI: g5m)
@@ -1116,7 +1146,10 @@ class PicassoSetCoreMixin:
             with open(calibration, "r") as f:
                 calib = yaml.full_load(f)
 
-        mols, _, g5m_info = g5m.g5m(
+        # picasso 1.0 returns (centers, info, clustered_locs) -- info and the
+        # clustered locs swapped relative to 0.11 -- and renamed asynch ->
+        # parallel.
+        mols, g5m_info, _ = g5m.g5m(
             self.locs,
             self.info,
             min_locs=min_locs,
@@ -1129,7 +1162,7 @@ class PicassoSetCoreMixin:
             covariance_type=covariance_type,
             postprocess=postprocess_results,
             max_locs_per_cluster=max_locs,
-            asynch=asynch,
+            parallel=asynch,
             group_column=group_column,
         )
         g5m_info[-1]["Wrapped by"] = "picasso-workflow : picasso_g5m"
@@ -1186,12 +1219,15 @@ class PicassoSetCoreMixin:
 
         if blur_method == "none":
             blur_method = None
+        # picasso 1.0 takes min_blur_width in nm (0.11 took camera pixels);
+        # disp_px_size was already nm.
+        pixelsize = self._picasso_set_pixelsize()
         n_rendered, image = render.render(
             self.locs,
             self.info,
             disp_px_size=disp_px_size,
             blur_method=blur_method,
-            min_blur_width=min_blur_width,
+            min_blur_width=min_blur_width * pixelsize,
         )
         fp = os.path.join(results["folder"], "render.png")
         im_max = image.max() / 100
@@ -1235,7 +1271,10 @@ class PicassoSetCoreMixin:
         locs_infos = [io.load_locs(fp) for fp in files]
         locs = [li[0] for li in locs_infos]
         infos = [li[1] for li in locs_infos]
-        aligned_locs = postprocess.align(locs, infos, display=False)
+        # picasso 1.0 align returns (locs, infos) rather than just the locs.
+        aligned_locs, _aligned_infos = postprocess.align(
+            locs, infos, display=False
+        )
         align_info = {
             "Generated by": f"Picasso v{picassoversion} Align",
             "Files": files,

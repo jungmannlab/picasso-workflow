@@ -41,11 +41,12 @@ class PicassoSetPicksMixin:
     # ------------------------------------------------------------------
 
     def _picasso_set_load_picks(self, picks_file):
-        """Load a pick-region yaml, sizes converted to camera pixels.
+        """Load a pick-region yaml; positions and sizes are in nm.
 
         Returns ``(picks, pick_shape, pick_size)`` from
-        ``picasso.io.load_picks``, using the dataset's pixel size for the
-        nm-to-camera-pixel conversion of stored pick sizes.
+        ``picasso.io.load_picks``. picasso 1.0 returns the positions and the
+        pick size in nm; the ``pixelsize`` is only used to convert pick files
+        written before 1.0 (which stored camera pixels).
         """
         pixelsize = self._picasso_set_pixelsize()
         return io.load_picks(picks_file, pixelsize=pixelsize)
@@ -69,11 +70,10 @@ class PicassoSetPicksMixin:
             data["Center-Axis-Points"] = picks_list
             data["Width"] = float(pick_size)
         elif pick_shape == "Square":
-            pixelsize = self._picasso_set_pixelsize(1.0)
             data["Centers"] = picks_list
-            # the bare "Side Length" key would be read back as camera
-            # pixels; the nm value belongs under "Side Length (nm)"
-            data["Side Length (nm)"] = float(pick_size * pixelsize)
+            # pick sizes are in nm in picasso 1.0 (io.load_picks returns nm);
+            # the nm value belongs under "Side Length (nm)".
+            data["Side Length (nm)"] = float(pick_size)
         elif pick_shape == "Box":
             data["Corners"] = picks_list
         else:
@@ -90,11 +90,13 @@ class PicassoSetPicksMixin:
     def _picasso_set_picked_locs(self, picks_file, add_group=True):
         """Load picks and return the per-pick localization tables."""
         picks, pick_shape, pick_size = self._picasso_set_load_picks(picks_file)
+        # picasso 1.0: picks / pick_shape are keyword-only, and pick_size is in
+        # nm -- as io.load_picks already returns it, so no conversion is needed.
         picked = postprocess.picked_locs(
             self.locs,
             self.info,
-            picks,
-            pick_shape,
+            picks=picks,
+            pick_shape=pick_shape,
             pick_size=pick_size,
             add_group=add_group,
         )
@@ -451,11 +453,21 @@ class PicassoSetPicksMixin:
             except ValueError:
                 pass
 
+        # picasso 1.0: disp_px_size / blur are keyword-only and blur is a
+        # sigma in nm (0.11 took it in display pixels), so scale by the display
+        # pixel size to keep the same physical blur.
         image = masking.generate_image(
-            self.locs, self.info, disp_px_size, blur
+            self.locs,
+            self.info,
+            disp_px_size=disp_px_size,
+            blur=blur * disp_px_size,
         )
         mask, threshold = masking.mask_image(image, method)
-        locs_in, locs_out = masking.mask_locs(self.locs, self.info, mask)
+        # picasso 1.0 mask_locs takes mask= keyword and returns
+        # (locs_in, info_in, locs_out, info_out).
+        locs_in, _info_in, locs_out, _info_out = masking.mask_locs(
+            self.locs, self.info, mask=mask
+        )
 
         fp_mask = os.path.join(results["folder"], "mask.npy")
         np.save(fp_mask, mask)
@@ -508,11 +520,13 @@ class PicassoSetPicksMixin:
             Module results (see
             :class:`~picasso_workflow.util.AbstractModuleCollection`).
         """
+        # picasso 1.0: nena returns the precision in nm (0.11 returned camera
+        # pixels); nm is native, px is derived from the pixel size.
         _result, s = postprocess.nena(self.locs, self.info)
-        results["nena_px"] = float(s)
+        results["nena_nm"] = float(s)
         pixelsize = self._picasso_set_pixelsize()
         if pixelsize is not None:
-            results["nena_nm"] = float(s) * pixelsize
+            results["nena_px"] = float(s) / pixelsize
         return parameters, results
 
     @module_decorator
@@ -552,7 +566,13 @@ class PicassoSetPicksMixin:
         max_image_px = parameters.get("max_image_px", 16384)
         height = lib.get_from_metadata(self.info, "Height", raise_error=True)
         width = lib.get_from_metadata(self.info, "Width", raise_error=True)
-        viewport = ((0, 0), (height, width))
+        # picasso 1.0 works in nm: the FRC viewport and the lpx/lpy precision
+        # are nm, while Width / Height stay in camera pixels, so convert the
+        # field of view to nm.
+        pixelsize = self._picasso_set_pixelsize()
+        height_nm = height * pixelsize
+        width_nm = width * pixelsize
+        viewport = ((0, 0), (height_nm, width_nm))
         # Fail fast instead of getting OOM-killed: FRC renders two images
         # binned at NeNA/2, so a full FOV at good precision can be 100k+ px
         # per side (tens of GB) and the job is OOM-killed with no traceback.
@@ -575,12 +595,12 @@ class PicassoSetPicksMixin:
             )
         else:
             binsize = lp_est / 2
-            est_px = min(height, width) / binsize
+            est_px = min(height_nm, width_nm) / binsize
             if est_px > max_image_px:
                 est_gb = (est_px**2) * 4 * 2 / 1e9
                 raise MemoryError(
                     f"FRC would render two ~{est_px:.0f} px wide images "
-                    f"(bin size = NeNA/2 ~= {binsize:.4f} camera px), roughly "
+                    f"(bin size = NeNA/2 ~= {binsize:.4f} nm), roughly "
                     f"{est_gb:.0f} GB before the FFTs -- beyond the "
                     f"max_image_px={max_image_px} guard, and likely an OOM "
                     "kill. Reduce the localizations to a region of interest "
@@ -589,7 +609,7 @@ class PicassoSetPicksMixin:
                     "scales with its square)."
                 )
         frc_result = postprocess.frc(
-            self.locs, self.info, viewport, random_seed=random_seed
+            self.locs, self.info, viewport=viewport, random_seed=random_seed
         )
         results["resolution_nm"] = float(frc_result["resolution"])
 

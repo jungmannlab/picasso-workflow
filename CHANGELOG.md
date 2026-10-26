@@ -10,6 +10,42 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ## [Unreleased]
 
+### Changed
+
+- **Migrate to picasso 1.0** (`picassosr>=1.0.0a1,<2`). picasso 1.0 is the first
+  release with a stability promise and changes the API wholesale: every length
+  is in **nm** (not camera pixels), identification settings are one
+  `localize.IdentificationParameters`, progress is a single `progress`
+  tracker (`lib.Progress`), and many functions now return their metadata
+  alongside their result. The workflow is migrated across `analyse.py`
+  (AutoPicasso) and the `picasso_set/*` CLI-mirror mixins:
+  - **Identification/fitting:** `localize.identify` / `localize` take an
+    `IdentificationParameters` (net-gradient threshold → `NetGradient`, box,
+    temporal-median / Gaussian filters); `threaded`/`multiprocess` → `parallel`;
+    `return_info` dropped; the workflow's `PicassoProgressProxy` (already a
+    `lib.Progress`) is passed as `progress`.
+  - **Units (nm):** `aim` `intersect_d`/`roi_r`, `postprocess.link` `r_max`,
+    `clusterer` radii, `pair_correlation` `bin_size`/`r_max`,
+    `compute_local_density` radius, `frc`/`render` viewports and
+    `min_blur_width`, pick sizes — all converted to nm (multiplying by the pixel
+    size where the value was previously passed to picasso as camera pixels, and
+    dropping the former `/pixelsize` where it was already nm). `nena`'s
+    precision and distance axis are now nm.
+  - **Return shapes:** `undrift` → `(locs, info, drift)`; `link`,
+    `compute_dark_times`, `compute_local_density`, `clusterer.*`,
+    `find_cluster_centers` → `(…, info)`; `g5m` → `(centers, info, clustered)`;
+    `align` → `(locs, infos)`.
+  - **Dropped `pixelsize` args** on `clusterer.*`, `find_cluster_centers`,
+    `plot_drift`; `minimum_ng` → `identification_method` on the spline / channel-
+    registration / lateral calibrations; `undrift_from_fiducials` records
+    `Pick diameter (nm)` (was `Pick radius (nm)`); `imageprocess.rcc`
+    `callback` → `progress`; circular `picked_locs`/pick files use nm diameters.
+  - Picasso's upstreamed `localize_frames` wrapper means the WP-2 picasso fork is
+    no longer needed. The `_picasso_api` contract test stays green on 1.0.
+  - **Final correctness is validated on the Gate-5 cluster/instrument round-trip**
+    (the unit suite mocks picasso, so it checks wiring/return-shapes, not the
+    nm-unit numerics end to end).
+
 ### Fixed
 
 - **WP-11 code review (finder -> verify -> fix), 4 fixes:**

@@ -66,7 +66,12 @@ def _synthetic_locs():
         rows,
         columns=["frame", "x", "y", "photons", "sx", "sy", "bg", "lpx", "lpy"],
     )
-    info = [{"Frames": 1000, "Width": 128, "Height": 128, "Pixelsize": 130}]
+    # Pixelsize 1 keeps this fixture unit-consistent under picasso 1.0: the
+    # locs, the pick centres and pick_diameter are all in one coordinate unit,
+    # and the workflow's px->nm pick-size conversion (pick_diameter * Pixelsize)
+    # is a no-op, so the equivalence/radius contracts are tested directly in
+    # that unit (the real px->nm scaling is exercised elsewhere).
+    info = [{"Frames": 1000, "Width": 128, "Height": 128, "Pixelsize": 1}]
     return locs, info
 
 
@@ -106,13 +111,17 @@ def test_picked_locs_matches_upstream_membership():
     """
     locs, info = _synthetic_locs()
     fork = picks_mod.picked_locs(locs, info, _CENTERS, _PICK_DIAMETER)
+    # picasso 1.0: picks / pick_shape are keyword-only and pick_size is the
+    # circle DIAMETER (0.11 took the radius). With Pixelsize 1 the fork passes
+    # pick_size = pick_diameter * 1 = _PICK_DIAMETER, so upstream matches with
+    # pick_size=_PICK_DIAMETER.
     upstream = pd.concat(
         postprocess.picked_locs(
             locs,
             info,
-            _CENTERS,
-            "Circle",
-            pick_size=_PICK_DIAMETER / 2,
+            picks=_CENTERS,
+            pick_shape="Circle",
+            pick_size=_PICK_DIAMETER,
             add_group=True,
         ),
         ignore_index=True,

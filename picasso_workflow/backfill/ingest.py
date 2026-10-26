@@ -197,6 +197,27 @@ def iter_locs_files(paths: list[str]):
             yield p
 
 
+def load_locs_lenient(locs_path):
+    """Load a localization file, tolerating pre-1.0 Pixelsize-less files.
+
+    picasso 1.0 needs a pixel size to read a legacy (camera-pixel) file and
+    raises :class:`picasso.io.MissingPixelsizeError` without one. Rather than
+    invent a scale, load with a neutral pixel size so the localizations parse
+    and strip ``Pixelsize`` from the metadata, so the dataset is flagged
+    metadata-incomplete and its nm-scaled metrics are dropped downstream (see
+    :mod:`picasso_workflow.backfill.metrics` / :func:`map_dataset`). Any other
+    load failure propagates.
+    """
+    try:
+        return io.load_locs(str(locs_path))
+    except io.MissingPixelsizeError:
+        locs, info = io.load_locs(str(locs_path), pixelsize=1.0)
+        for entry in info:
+            if isinstance(entry, dict):
+                entry.pop("Pixelsize", None)
+        return locs, info
+
+
 def ingest_dataset(
     client,
     locs_path: str,
@@ -222,7 +243,7 @@ def ingest_dataset(
     mutate it.
     """
     try:
-        locs, info = io.load_locs(str(locs_path))
+        locs, info = load_locs_lenient(locs_path)
     except Exception as exc:
         raise SkipFile(f"cannot load locs/yaml ({exc})") from exc
     content_sig = locs_signature(locs)

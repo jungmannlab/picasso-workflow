@@ -228,7 +228,7 @@ def screen_label_uncertainty(
                 random_rot_mode=random_rot_mode,
                 nn_counts=nn_counts,
                 N_sim=sim_repeats,
-                asynch=asynch,
+                parallel=asynch,  # picasso 1.0: asynch -> parallel
                 # empty savedir: the target sub-model here has a single
                 # candidate, which crashes picasso's fit_stoichiometry
                 # CSV-save branch (2-D N_structures vs 1-D props).
@@ -324,7 +324,7 @@ def single_spinna_run(
     ).fit_stoichiometry(
         N_structures,
         save=f"{save_filename}_fit_scores.csv",
-        asynch=asynch,
+        parallel=asynch,  # picasso 1.0: asynch -> parallel
         bootstrap=bootstrap,
     )
 
@@ -630,7 +630,7 @@ def single_spinna_fit_le_run(
         height=height,
         depth=depth,
         random_rot_mode=random_rot_mode,
-        asynch=asynch,
+        parallel=asynch,  # picasso 1.0: asynch -> parallel
         # empty savedir: avoid picasso's fit_stoichiometry crash on the
         # single-candidate target sub-model used when screening labeling
         # uncertainty (see labeling_efficiency_analysis for details).

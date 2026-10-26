@@ -363,8 +363,10 @@ def shift_from_rcc(channel_locs, channel_info):
         images.append(image)
     n_pairs = int(n_channels * (n_channels - 1) / 2)
     logger.debug(f"Correlating {n_pairs} image pairs.")
+    # picasso 1.0 reports through a single ``progress`` tracker (0.11 took a
+    # ``callback``); MockProgress satisfies the lib.Progress interface.
     progress = lib.MockProgress()
-    return imageprocess.rcc(images, callback=progress.set_value)
+    return imageprocess.rcc(images, progress=progress)
 
 
 def align_by_rsso(
