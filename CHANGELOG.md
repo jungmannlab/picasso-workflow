@@ -46,6 +46,18 @@ This file was started after v0.5.6; earlier history is in the git log.
     (the unit suite mocks picasso, so it checks wiring/return-shapes, not the
     nm-unit numerics end to end).
 
+### Added
+- **Non-mocked picasso integration tests** (`tests/test_picasso_integration.py`)
+  — a "golden pipeline" tier that runs the unit-sensitive analysis modules
+  (`dbscan` nm · `picasso_dbscan` px→nm · `smlm_clusterer` · `link_locs` ·
+  `summarize_dataset` NeNA · `density`) through the **real** picasso on tiny
+  synthetic ground-truth data, asserting physical correctness / oracle equality.
+  These catch nm↔px unit regressions that the mocked suite cannot (a mock
+  accepts any argument). CPU-only and small, so they stay CI-fast; they sit
+  between the mocked unit tests and the Gate-5 on-cluster round-trip. Prompted
+  by this migration — a real render-stage test was the only thing that caught a
+  viewport double-conversion the 900 mocked tests passed straight through.
+
 ### Fixed
 
 - **WP-11 code review (finder -> verify -> fix), 4 fixes:**
