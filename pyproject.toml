@@ -27,11 +27,10 @@ dependencies = [
     # migrated to its nm-everywhere / IdentificationParameters / unified-progress
     # API (see the picasso 1.0 migration).
     "picassosr>=1.0.0a1,<2",
-    # GUI uses PyQt6 directly; keep in sync with picasso's constraint
-    "PyQt6>=6.10.2,<7",
-    # Embedded HTML report viewer in the GUI Results tab (QWebEngineView);
-    # keep the major/minor in sync with PyQt6.
-    "PyQt6-WebEngine>=6.10,<7",
+    # The Qt GUI (PyQt6 + the embedded WebEngine report viewer) is a `[gui]`
+    # EXTRA, not a base dep: it is lazy-imported, so headless/cluster/analysis
+    # installs don't need it, and PyQt6 + its Qt6/WebEngine binaries are ~530 MB
+    # (the bulk of the cluster Apptainer image). See the `[gui]` extra below.
     # NVML bindings for GPU CUDA-core count in analysis_documentation
     # (nvidia-smi cannot report cores). Harmless without an NVIDIA driver.
     "nvidia-ml-py>=12.0.0",
@@ -72,6 +71,17 @@ dev = [
     "pre-commit>=3.5.1",
     "bandit==1.7.8",
     "isort==5.13.2",
+]
+# Qt desktop GUI (lazy-imported, so NOT a base dep). PyQt6 + its Qt6/WebEngine
+# binaries are ~530 MB -- keeping them out of base makes headless analysis and
+# the cluster Apptainer image lean. `pip install .[gui]` for the desktop app;
+# CI installs `.[dev,gui]` so the GUI tests run (the suite skips test_gui_*.py
+# when PyQt6 is absent -- see tests/conftest.py).
+gui = [
+    # keep the constraint in sync with picasso's.
+    "PyQt6>=6.10.2,<7",
+    # embedded HTML report viewer in the GUI Results tab (QWebEngineView).
+    "PyQt6-WebEngine>=6.10,<7",
 ]
 cluster = [
     "mpi4py>=4.0.2",

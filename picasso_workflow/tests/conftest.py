@@ -31,6 +31,7 @@ dummy_reporter_config(report_name) → dict
     them directly without going through pytest's fixture injection.
 """
 
+import importlib.util
 import os
 import shutil
 import time
@@ -38,6 +39,13 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+
+# The Qt GUI is a `[gui]` extra (PyQt6 is lazy-imported, ~530 MB of binaries kept
+# out of base). On a lean/headless install (cluster, Apptainer) PyQt6 is absent,
+# so skip the GUI tests at collection rather than erroring on `import PyQt6`.
+# CI installs `.[dev,gui]`, so they still run there.
+if importlib.util.find_spec("PyQt6") is None:
+    collect_ignore_glob = ["test_gui_*.py"]
 
 
 @pytest.fixture(autouse=True)

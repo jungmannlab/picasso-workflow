@@ -11,6 +11,15 @@ This file was started after v0.5.6; earlier history is in the git log.
 ## [Unreleased]
 
 ### Changed
+- **The Qt GUI is now a `[gui]` extra, not a base dependency.** `PyQt6` +
+  `PyQt6-WebEngine` (≈530 MB of Qt6/WebEngine binaries) moved out of the base
+  `dependencies` into a `gui` optional-dependency. They are lazy-imported — the
+  top-level package, `AutoPicasso`, the workflow runners and the cluster-submit
+  entrypoint import zero PyQt6 — so headless/analysis/cluster installs no longer
+  pull them. `pip install picasso_workflow[gui]` for the desktop app;
+  CI installs `.[dev,gui]` so the GUI tests still run, and the test suite skips
+  `test_gui_*.py` when PyQt6 is absent (a lean install, e.g. the cluster
+  Apptainer image, which is ~530 MB smaller as a result).
 
 - **Migrate to picasso 1.0** (`picassosr>=1.0.0a1,<2`). picasso 1.0 is the first
   release with a stability promise and changes the API wholesale: every length
