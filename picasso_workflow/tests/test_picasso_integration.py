@@ -17,16 +17,23 @@ mock would stay green. They are deliberately small (hundreds of locs, CPU-only)
 so they stay CI-fast; they sit between the mocked unit tests and the Gate-5
 on-cluster round-trip.
 
-Covered here (the modules the migration touched whose config carries a length,
-with the convention each uses):
+Covered here (the modules the migration touched, with the length convention /
+return shape each exercises):
+  * ``identify``        -- movie -> spots via IdentificationParameters/NetGradient
+  * ``picasso_localize``-- movie -> nm coordinates (identify + fit; px->nm output)
   * ``dbscan``          -- AutoPicasso, radius already in nm (passed through)
   * ``picasso_dbscan``  -- picasso_set, radius in camera pixels (* pixelsize)
-  * ``link_locs``       -- AutoPicasso, d_max in camera pixels (* pixelsize)
   * ``smlm_clusterer``  -- AutoPicasso, radius in nm
+  * ``picasso_g5m``     -- return (centers, info, clustered); asynch -> parallel
+  * ``link_locs``       -- AutoPicasso, d_max in camera pixels (* pixelsize)
   * ``summarize_dataset`` (NeNA) -- precision in nm (oracle vs. postprocess.nena)
   * ``density``         -- AutoPicasso, radius in camera pixels (* pixelsize)
+  * ``picasso_pair_correlation`` -- bin_size/r_max camera pixels -> nm (oracle)
+  * ``picasso_frc``     -- FRC viewport = FOV in nm; finite nm resolution
+  * ``picasso_mask_locs``-- mask_locs 4-tuple; generate_image nm blur
 """
 
+import os
 import shutil
 import tempfile
 import unittest
@@ -115,6 +122,54 @@ def _planted_clusters(
     return _locs_frame(records, frames)
 
 
+def _grid_positions(n, size_px, margin=12):
+    """``n`` well-separated (x, y) pixel positions on a near-square grid."""
+    ncol = int(np.ceil(np.sqrt(n)))
+    nrow = int(np.ceil(n / ncol))
+    xs = np.linspace(margin, size_px - margin, ncol)
+    ys = np.linspace(margin, size_px - margin, nrow)
+    return [(float(xs[k % ncol]), float(ys[k // ncol])) for k in range(n)]
+
+
+def _synthetic_movie(
+    n_frames=30,
+    size_px=64,
+    n_emitters=6,
+    peak_adu=3000.0,
+    bg=100.0,
+    sigma_px=1.2,
+    seed=0,
+):
+    """A ``(n_frames, size, size)`` uint16 stack of fixed Gaussian emitters.
+
+    Bright, always-on spots laid out on a grid (deterministically separated, so
+    ``identify`` detects ~one per emitter per frame and ``localize`` fits each
+    to sub-pixel accuracy without neighbours merging). Returns
+    ``(movie, emitters_px)`` with the emitter pixel positions as ``(x, y)``
+    pairs, so a test can check that the fitted nm coordinates equal those
+    pixels times the pixel size.
+    """
+    rng = np.random.default_rng(seed)
+    positions = _grid_positions(n_emitters, size_px)
+    ex = np.array([p[0] for p in positions], dtype=np.float32)
+    ey = np.array([p[1] for p in positions], dtype=np.float32)
+    yy, xx = np.mgrid[:size_px, :size_px].astype(np.float32)
+    kernels = peak_adu * np.exp(
+        -(
+            (xx[None] - ex[:, None, None]) ** 2
+            + (yy[None] - ey[:, None, None]) ** 2
+        )
+        / (2.0 * sigma_px**2)
+    )
+    spots = kernels.sum(axis=0)
+    movie = np.zeros((n_frames, size_px, size_px), dtype=np.uint16)
+    for f in range(n_frames):
+        frame = rng.poisson(bg, (size_px, size_px)).astype(np.float32) + spots
+        np.clip(frame, 0, 65535, out=frame)
+        movie[f] = frame.astype(np.uint16)
+    return movie, list(zip(ex.tolist(), ey.tolist()))
+
+
 class PicassoIntegrationBase(unittest.TestCase):
     def setUp(self):
         # A per-test mkdtemp (NOT the shared repo-relative ./temp) so a failure
@@ -129,6 +184,18 @@ class PicassoIntegrationBase(unittest.TestCase):
         ap.info = _info(**info_kw)
         ap.locs = locs
         return ap
+
+    def _memmap_movie(self, movie):
+        """Back a movie array with an ``np.memmap``.
+
+        picasso 1.0's ``localize.fit`` only accepts a real movie object
+        (``np.memmap`` / ``AbstractPicassoMovie`` / ...), not a plain ndarray,
+        so the synthetic stack is written to the test's temp dir and re-opened
+        as a memmap -- the cheapest way to hand picasso a movie it accepts.
+        """
+        path = os.path.join(self.folder, "movie.raw")
+        movie.tofile(path)
+        return np.memmap(path, dtype=movie.dtype, mode="r", shape=movie.shape)
 
 
 class TestClusteringIntegration(PicassoIntegrationBase):
@@ -279,6 +346,187 @@ class TestDensityIntegration(PicassoIntegrationBase):
         )
         # Physical sanity: clustered points really do have neighbours.
         self.assertGreater(float(ap.locs[density_col].max()), 1.0)
+
+
+class TestG5mIntegration(PicassoIntegrationBase):
+    def test_picasso_g5m_runs_and_returns_centers(self):
+        """picasso_g5m: picasso 1.0 g5m returns ``(centers, info, clustered)``
+
+        -- info and clustered swapped vs 0.11 -- and renamed ``asynch`` ->
+        ``parallel``. Running it on grouped locs (one tight single-molecule
+        blob per group) and getting a non-empty centre table proves both the
+        return-tuple unpacking and the kwarg rename; a wrong unpack yields None
+        -> raises, a wrong kwarg a TypeError. (The AutoPicasso
+        ``gaussian_mixture_cluster`` wraps the same g5m call but carries a
+        ``@profile_resource_usage`` decorator that runs the body twice, which
+        is incompatible with this stateful module in-process, so the equivalent
+        picasso-set module -- single-run -- is exercised here.)
+        """
+        # g5m fits a mixture within each pre-clustered group; plant the "group"
+        # column directly (one tight single-molecule blob per group).
+        n_clusters, pts = 5, 40
+        locs = _planted_clusters(n_clusters=n_clusters, pts=pts, seed=4)
+        locs["group"] = np.repeat(np.arange(n_clusters), pts).astype(np.uint32)
+        ap = self._ap_with(locs)
+        _, results = ap.picasso_g5m(0, {"min_locs": 10})
+        self.assertGreater(results["n_molecules"], 0)
+        self.assertEqual(len(ap.locs), results["n_molecules"])
+
+
+class TestPairCorrelationIntegration(PicassoIntegrationBase):
+    def test_pair_correlation_bins_are_camera_pixels_to_nm(self):
+        """picasso_pair_correlation: bin_size / r_max are camera pixels -> nm.
+
+        Oracle: the workflow's curve equals a direct postprocess.pair_correlation
+        at the physical nm arguments (config px * pixelsize). A dropped
+        conversion would change the bin positions and the curve.
+        """
+        locs = _planted_clusters(n_clusters=5, pts=60, seed=5)
+        ap = self._ap_with(locs.copy())
+        binsize_px, rmax_px = 0.2, 6.0
+        _, results = ap.picasso_pair_correlation(
+            0, {"binsize": binsize_px, "rmax": rmax_px}
+        )
+        data = np.loadtxt(results["filepath_pair_correlation"])
+        bins_workflow, pc_workflow = data[:, 0], data[:, 1]
+
+        bins_direct, pc_direct = postprocess.pair_correlation(
+            locs.copy(),
+            _info(),
+            bin_size=binsize_px * PIXELSIZE,
+            r_max=rmax_px * PIXELSIZE,
+        )
+        np.testing.assert_allclose(bins_workflow, bins_direct, rtol=1e-4)
+        np.testing.assert_allclose(pc_workflow, pc_direct, rtol=1e-4)
+        # The bins span the physical r_max in nm, not the camera-pixel value.
+        self.assertGreater(bins_workflow.max(), rmax_px)
+
+
+class TestFrcIntegration(PicassoIntegrationBase):
+    def test_frc_resolution_is_finite_nm(self):
+        """picasso_frc: the FRC viewport is the FOV in nm (Width * pixelsize).
+
+        A smoke + sanity check that FRC runs end-to-end on real locs and
+        reports a finite, positive resolution in nm. If the viewport were left
+        in camera pixels, the locs would fall outside it and FRC would render
+        empty / error.
+        """
+        rng = np.random.default_rng(6)
+        n = 4000
+        records = [
+            (
+                int(rng.integers(0, 1000)),
+                float(rng.uniform(0, 4000)),
+                float(rng.uniform(0, 4000)),
+            )
+            for _ in range(n)
+        ]
+        # Small FOV so the two rendered half-images stay well under the guard.
+        ap = self._ap_with(
+            _locs_frame(records, frames=1000), width_px=64, height_px=64
+        )
+        _, results = ap.picasso_frc(0, {})
+        res = results["resolution_nm"]
+        self.assertTrue(np.isfinite(res))
+        self.assertGreater(res, 0.0)
+
+
+class TestMaskingIntegration(PicassoIntegrationBase):
+    def test_mask_locs_partitions_dense_region(self):
+        """picasso_mask_locs: picasso 1.0 mask_locs returns a 4-tuple and
+
+        generate_image takes a nm blur. Render a density image, Otsu-threshold
+        it, split the locs: a dense planted blob lands inside the mask, sparse
+        background outside. A non-trivial partition proves the 4-tuple unpack
+        and the keyword generate_image call; a wrong unpack would crash.
+        """
+        rng = np.random.default_rng(7)
+        # Dense blob near (2000, 2000) nm + sparse background across the FOV.
+        dense = [
+            (
+                int(rng.integers(0, 1000)),
+                2000.0 + rng.normal(0, 60.0),
+                2000.0 + rng.normal(0, 60.0),
+            )
+            for _ in range(800)
+        ]
+        sparse = [
+            (
+                int(rng.integers(0, 1000)),
+                float(rng.uniform(0, 8000)),
+                float(rng.uniform(0, 8000)),
+            )
+            for _ in range(200)
+        ]
+        ap = self._ap_with(_locs_frame(dense + sparse, frames=1000))
+        n_before = len(ap.locs)
+        _, results = ap.picasso_mask_locs(
+            0, {"disp_px_size": 50.0, "blur": 1.0, "method": "otsu"}
+        )
+        # self.locs continues with the inside-mask locs: a real subset.
+        n_in = len(ap.locs)
+        self.assertGreater(n_in, 0)
+        self.assertLess(n_in, n_before)
+        # The dense blob dominates the mask, so most kept locs sit near it.
+        near = np.hypot(ap.locs["x"] - 2000.0, ap.locs["y"] - 2000.0) < 300.0
+        self.assertGreater(near.mean(), 0.5)
+
+
+class TestIdentifyIntegration(PicassoIntegrationBase):
+    def test_identify_finds_the_planted_spots(self):
+        """AutoPicasso.identify: the net-gradient threshold is wrapped in a 1.0
+
+        IdentificationParameters(method=NetGradient(...)). Running identify on a
+        movie of bright, always-on emitters detects about one spot per emitter
+        per frame -- proving the IdentificationParameters path works end-to-end.
+        """
+        movie, emitters = _synthetic_movie(n_frames=20, n_emitters=6, seed=8)
+        ap = _auto_picasso(self.folder)
+        ap.info = _info(width_px=64, height_px=64, frames=len(movie))
+        ap.movie = movie
+        _, results = ap.identify(0, {"min_gradient": 500, "box_size": 7})
+        n = results["num_identifications"]
+        # ~one detection per emitter per frame (allow a generous band).
+        self.assertGreaterEqual(n, len(emitters))
+        self.assertGreater(n, 0.5 * len(emitters) * len(movie))
+        self.assertLess(n, 1.5 * len(emitters) * len(movie))
+
+
+class TestLocalizeIntegration(PicassoIntegrationBase):
+    def test_localize_fits_spots_to_nm_coordinates(self):
+        """picasso_localize: identify + fit on a movie yields nm coordinates.
+
+        The emitters sit at known camera-pixel positions; picasso 1.0 returns
+        the fitted coordinates in nm, so each planted pixel (ex, ey) must have
+        localizations near (ex * pixelsize, ey * pixelsize). If localize
+        returned camera pixels instead of nm, the fitted coordinates would be
+        ~pixelsize-times too small and the match would fail -- so this pins the
+        nm output of the whole identify->fit path.
+        """
+        movie, emitters = _synthetic_movie(n_frames=20, n_emitters=6, seed=9)
+        ap = _auto_picasso(self.folder)
+        ap.info = _info(width_px=64, height_px=64, frames=len(movie))
+        ap.movie = self._memmap_movie(movie)
+        _, _results = ap.picasso_localize(
+            0, {"fit_method": "lq", "box_side_length": 7, "gradient": 500}
+        )
+        xs = ap.locs["x"].to_numpy()
+        ys = ap.locs["y"].to_numpy()
+        # Nearest fitted loc to each planted emitter, in nm.
+        nearest_nm = [
+            float(
+                np.hypot(xs - ex_px * PIXELSIZE, ys - ey_px * PIXELSIZE).min()
+            )
+            for ex_px, ey_px in emitters
+        ]
+        # Most emitters localize to sub-pixel accuracy. If localize returned
+        # camera pixels instead of nm, every nearest distance would be
+        # ~pixelsize-times too large, so the median would blow up -- this is
+        # the handle on the nm output of the whole identify->fit path.
+        self.assertLess(float(np.median(nearest_nm)), PIXELSIZE)
+        self.assertGreaterEqual(
+            sum(d < PIXELSIZE for d in nearest_nm), 0.75 * len(emitters)
+        )
 
 
 if __name__ == "__main__":

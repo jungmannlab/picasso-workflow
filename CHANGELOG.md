@@ -49,9 +49,13 @@ This file was started after v0.5.6; earlier history is in the git log.
 ### Added
 - **Non-mocked picasso integration tests** (`tests/test_picasso_integration.py`)
   — a "golden pipeline" tier that runs the unit-sensitive analysis modules
-  (`dbscan` nm · `picasso_dbscan` px→nm · `smlm_clusterer` · `link_locs` ·
-  `summarize_dataset` NeNA · `density`) through the **real** picasso on tiny
-  synthetic ground-truth data, asserting physical correctness / oracle equality.
+  through the **real** picasso on tiny synthetic ground-truth data, asserting
+  physical correctness / oracle equality: `identify` + `picasso_localize`
+  (synthetic movie → nm coordinates), `dbscan` (nm) · `picasso_dbscan` (px→nm)
+  · `smlm_clusterer` · `picasso_g5m` (the `(centers, info, clustered)` reorder)
+  · `link_locs` (px→nm) · `summarize_dataset` NeNA (oracle) · `density` (px→nm)
+  · `picasso_pair_correlation` (px→nm oracle) · `picasso_frc` (nm viewport) ·
+  `picasso_mask_locs` (4-tuple + nm blur).
   These catch nm↔px unit regressions that the mocked suite cannot (a mock
   accepts any argument). CPU-only and small, so they stay CI-fast; they sit
   between the mocked unit tests and the Gate-5 on-cluster round-trip. Prompted
