@@ -104,6 +104,22 @@ class PicassoSetCoreMixin:
         except Exception:
             return default
 
+    def _require_pixelsize_nm(self):
+        """The dataset pixel size in nm, or raise if it cannot be resolved.
+
+        Use for nm conversions (multiplying a camera-pixel config by the pixel
+        size): a missing pixel size then fails with a clear message instead of
+        producing ``value * None`` (a cryptic TypeError).
+        """
+        pixelsize = self._picasso_set_pixelsize()
+        if pixelsize is None:
+            raise ValueError(
+                "No pixel size (nm) available for the nm conversion: set it in "
+                "the dataset metadata (Pixelsize), the camera_info, or the "
+                "module's 'pixelsize' parameter."
+            )
+        return pixelsize
+
     def _picasso_set_save_locs(self, results, filename, key=None):
         """Save ``self.locs``/``self.info`` into the module result folder.
 
@@ -460,7 +476,7 @@ class PicassoSetCoreMixin:
         # picasso 1.0 takes intersect_d / roi_r in nm by keyword (0.11 took
         # camera pixels positionally), so convert the px config to nm. The
         # 20/130, 60/130 defaults become picasso 1.0's 20 nm / 60 nm.
-        pixelsize = self._picasso_set_pixelsize()
+        pixelsize = self._require_pixelsize_nm()
         self.locs, new_info, drift = aim.aim(
             self.locs,
             self.info,
@@ -556,7 +572,7 @@ class PicassoSetCoreMixin:
         tolerance = parameters.get("tolerance", 1)
         # picasso 1.0 takes r_max in nm by keyword and returns (locs, info);
         # the distance config is in camera pixels, so convert to nm.
-        pixelsize = self._picasso_set_pixelsize()
+        pixelsize = self._require_pixelsize_nm()
         self.locs, _ = postprocess.link(
             self.locs,
             self.info,
@@ -657,7 +673,7 @@ class PicassoSetCoreMixin:
         radius = float(parameters["radius"])
         # picasso 1.0 takes the radius in nm by keyword and returns
         # (locs, info); the config radius is in camera pixels.
-        pixelsize = self._picasso_set_pixelsize()
+        pixelsize = self._require_pixelsize_nm()
         self.locs, _ = postprocess.compute_local_density(
             self.locs, self.info, radius=radius * pixelsize
         )
@@ -699,7 +715,7 @@ class PicassoSetCoreMixin:
         rmax = parameters.get("rmax", 10)
         # picasso 1.0 takes bin_size / r_max in nm by keyword (the config is
         # in camera pixels) and returns bin centres in nm.
-        pixelsize = self._picasso_set_pixelsize()
+        pixelsize = self._require_pixelsize_nm()
         bin_size_nm = binsize * pixelsize
         bins_lower, pc = postprocess.pair_correlation(
             self.locs,
@@ -770,9 +786,7 @@ class PicassoSetCoreMixin:
         # argument (0.11 took camera pixels + a pixelsize). The config radii
         # are in camera pixels, so convert to nm; it returns (locs, info) with
         # the whole info list.
-        pixelsize = (
-            parameters.get("pixelsize") or self._picasso_set_pixelsize()
-        )
+        pixelsize = parameters.get("pixelsize") or self._require_pixelsize_nm()
         self.locs, _dbscan_info = clusterer.dbscan(
             self.locs,
             self.info,
@@ -883,9 +897,7 @@ class PicassoSetCoreMixin:
         # picasso 1.0 takes radius_xy / radius_z in nm and drops the pixelsize
         # argument (the config radii are in camera pixels); it returns
         # (locs, info) with the whole info list.
-        pixelsize = (
-            parameters.get("pixelsize") or self._picasso_set_pixelsize()
-        )
+        pixelsize = parameters.get("pixelsize") or self._require_pixelsize_nm()
         self.locs, _smlm_cluster_info = clusterer.cluster(
             self.locs,
             self.info,
@@ -1034,35 +1046,10 @@ class PicassoSetCoreMixin:
         self.info.append(in_info)
         return parameters, results
 
-    @module_decorator
-    def picasso_cluster_combine(self, i, parameters, results):
-        """Removed in picasso 1.0 (native CLI: cluster_combine).
-
-        ``picasso.postprocess.cluster_combine`` and the ``cluster_combine``
-        CLI command were both removed in picasso 1.0, so this module no
-        longer has an upstream to wrap and raises a clear error if run.
-        """
-        raise NotImplementedError(
-            "picasso_cluster_combine wraps picasso.postprocess.cluster_combine,"
-            " which was removed in picasso 1.0 (the cluster_combine CLI command"
-            " was removed too). Drop this module from the workflow."
-        )
-
-    @module_decorator
-    def picasso_cluster_combine_dist(self, i, parameters, results):
-        """Removed in picasso 1.0 (native CLI: cluster_combine_dist).
-
-        ``picasso.postprocess.cluster_combine_dist`` and the
-        ``cluster_combine_dist`` CLI command were both removed in picasso 1.0,
-        so this module no longer has an upstream to wrap and raises a clear
-        error if run.
-        """
-        raise NotImplementedError(
-            "picasso_cluster_combine_dist wraps "
-            "picasso.postprocess.cluster_combine_dist, which was removed in "
-            "picasso 1.0 (the cluster_combine_dist CLI command was removed "
-            "too). Drop this module from the workflow."
-        )
+    # picasso_cluster_combine / picasso_cluster_combine_dist were removed:
+    # picasso 1.0 dropped postprocess.cluster_combine / cluster_combine_dist
+    # (and the CLI commands), so there is no upstream to wrap. Their ModuleSpecs
+    # and params/summaries were removed too (see modulespec.py / params.py).
 
     # ------------------------------------------------------------------
     # molecular mapping (CLI: g5m)
@@ -1165,6 +1152,15 @@ class PicassoSetCoreMixin:
             parallel=asynch,
             group_column=group_column,
         )
+        # picasso 1.0 g5m returns (None, info, None) when no molecules pass its
+        # filters; fail with an actionable message rather than len(None).
+        if mols is None or len(mols) == 0:
+            results["success"] = False
+            results["message"] = (
+                "Gaussian mixture mapping found no molecules passing its "
+                "filters; check the input clustering and 'min_locs'."
+            )
+            return parameters, results
         g5m_info[-1]["Wrapped by"] = "picasso-workflow : picasso_g5m"
         self.locs = mols
         self.info = g5m_info
@@ -1221,7 +1217,7 @@ class PicassoSetCoreMixin:
             blur_method = None
         # picasso 1.0 takes min_blur_width in nm (0.11 took camera pixels);
         # disp_px_size was already nm.
-        pixelsize = self._picasso_set_pixelsize()
+        pixelsize = self._require_pixelsize_nm()
         n_rendered, image = render.render(
             self.locs,
             self.info,

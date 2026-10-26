@@ -60,17 +60,96 @@ TOP_LEVEL_ATTRS = ("CONFIG", "__version__")
 #: (e.g. ``registration.tform``), not re-exported flat by ``__getattr__``.
 SUBMODULE_ATTRS = {
     "registration": ("tform",),
+    # picasso 1.0 identification is built around these (NetGradient method +
+    # the IdentificationParameters bundle), passed to identify / localize /
+    # the calibrations.
+    "localize": ("NetGradient", "IdentificationParameters"),
 }
 
 #: Picasso functions whose *parameter names* picasso-workflow passes (by
 #: keyword or position).  A silent upstream rename of one of these would break
 #: the call at runtime; the contract test asserts each listed parameter still
 #: exists in the installed picassosr.  Keys are ``<submodule>.<function>``.
+#: (This pins parameter *names*, not return shapes; the picasso-1.0 return-shape
+#: dependencies are covered by tests/test_picasso_integration.py instead.)
 SIGNATURE_CONTRACT = {
     "io.save_locs": ("path", "locs", "info"),
-    "io.load_locs": ("path",),
+    "io.load_locs": ("path", "pixelsize"),
     "io.load_movie": ("path",),
+    "io.load_picks": ("path", "pixelsize"),
+    "io.picks_dict": ("picks", "shape", "size"),
+    # picasso 1.0 identification / fitting surface.
+    "localize.identify": ("movie", "parameters", "parallel"),
+    "localize.fit": (
+        "movie",
+        "camera_info",
+        "identifications",
+        "box",
+        "fitting_method",
+        "parallel",
+    ),
+    "localize.localize": (
+        "movie",
+        "camera_info",
+        "identification_parameters",
+        "fitting_method",
+        "parallel",
+    ),
+    "localize.fit_lateral_transform": (
+        "movie_ref",
+        "movie_target",
+        "calibration",
+        "box",
+        "identification_method",
+        "pixelsize",
+    ),
+    # picasso 1.0 nm-unit / new-signature postprocess + clusterer calls.
     "postprocess.undrift": ("locs", "info", "segmentation"),
+    "postprocess.link": ("locs", "info", "r_max", "max_dark_time"),
+    "postprocess.compute_local_density": ("locs", "info", "radius"),
+    "postprocess.compute_dark_times": ("locs", "info"),
+    "postprocess.pair_correlation": ("locs", "info", "bin_size", "r_max"),
+    "postprocess.picked_locs": (
+        "locs",
+        "info",
+        "picks",
+        "pick_shape",
+        "pick_size",
+    ),
+    "postprocess.align": ("locs", "infos"),
+    "postprocess.plot_drift": ("drift", "fig"),
+    "clusterer.dbscan": ("locs", "info", "radius", "min_samples"),
+    "clusterer.hdbscan": (
+        "locs",
+        "info",
+        "min_cluster_size",
+        "min_samples",
+    ),
+    "clusterer.cluster": (
+        "locs",
+        "info",
+        "radius_xy",
+        "min_locs",
+        "frame_analysis",
+    ),
+    "clusterer.find_cluster_centers": ("locs", "info"),
+    "aim.aim": ("locs", "info", "segmentation", "intersect_d", "roi_r"),
+    "g5m.g5m": ("locs", "info", "min_locs", "parallel", "group_column"),
+    "masking.mask_locs": ("locs", "info", "mask"),
+    "masking.generate_image": ("locs", "info", "disp_px_size", "blur"),
+    "registration.calibrate_channel_registration_from_beads": (
+        "movies",
+        "box",
+        "identification_method",
+    ),
+    "spline.calibrate_spline": (
+        "movie",
+        "info",
+        "camera_info",
+        "box",
+        "identification_method",
+        "d",
+    ),
 }
 
 #: Private picasso symbols picasso-workflow currently depends on, mapped to

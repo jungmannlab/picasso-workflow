@@ -31,6 +31,10 @@ return shape each exercises):
   * ``picasso_pair_correlation`` -- bin_size/r_max camera pixels -> nm (oracle)
   * ``picasso_frc``     -- FRC viewport = FOV in nm; finite nm resolution
   * ``picasso_mask_locs``-- mask_locs 4-tuple; generate_image nm blur
+  * ``summarize_dataset`` (median-loc-precision) -- lpx/lpy are nm
+  * ``_picasso_set_save_picks`` -- pick file round-trips through io.load_picks
+  * ``picasso_g5m`` (empty) -- (None, info, None) -> clean failure, not a crash
+  * ``convert_picasso_to_coords`` (Ripley's K) -- coords already nm
 """
 
 import os
@@ -42,7 +46,7 @@ import numpy as np
 import pandas as pd
 
 from picasso_workflow import analyse
-from picasso_workflow._picasso_api import postprocess
+from picasso_workflow._picasso_api import io, postprocess
 
 PIXELSIZE = 130.0  # nm / camera pixel
 
@@ -527,6 +531,79 @@ class TestLocalizeIntegration(PicassoIntegrationBase):
         self.assertGreaterEqual(
             sum(d < PIXELSIZE for d in nearest_nm), 0.75 * len(emitters)
         )
+
+
+class TestMedianLocPrecisionIntegration(PicassoIntegrationBase):
+    def test_median_loc_precision_is_nm(self):
+        """summarize_dataset median-loc-precision: lpx/lpy are nm in 1.0.
+
+        ``_locs_frame`` sets lpx = lpy = 8 nm, so the median precision is 8 nm
+        and the px value is 8 / pixelsize. Before the fix this branch multiplied
+        the (already-nm) median by the pixel size (~130x) and mislabeled it px.
+        """
+        ap = self._ap_with(_planted_clusters(n_clusters=5, seed=1))
+        _, results = ap.summarize_dataset(
+            0, {"methods": {"median-loc-precision": {}}}
+        )
+        mlp = results["median-loc-precision"]
+        self.assertAlmostEqual(mlp["median_lp-nm"], 8.0, places=3)
+        self.assertAlmostEqual(mlp["median_lp-px"], 8.0 / PIXELSIZE, places=4)
+
+
+class TestSavePicksRoundTrip(PicassoIntegrationBase):
+    def test_save_picks_reloads_with_the_same_nm_size(self):
+        """_picasso_set_save_picks -> io.load_picks round-trips in nm.
+
+        picasso 1.0 io.load_picks only reads the nm size keys ("Diameter (nm)"
+        etc.) and needs the format marker; the file is written via io.picks_dict.
+        Before the fix Circle/Rectangle were saved under the legacy bare keys
+        and could not be reloaded (only Square was migrated).
+        """
+        ap = _auto_picasso(self.folder)
+        ap.info = _info()
+        centers = [[1000.0, 2000.0], [3000.0, 4000.0]]
+        for shape, size in [("Circle", 200.0), ("Square", 150.0)]:
+            fp = ap._picasso_set_save_picks(
+                {"folder": self.folder}, centers, shape, size, f"{shape}.yaml"
+            )
+            picks, loaded_shape, loaded_size = io.load_picks(fp)
+            self.assertEqual(loaded_shape, shape)
+            self.assertAlmostEqual(float(loaded_size), size, places=3)
+            self.assertEqual(len(picks), len(centers))
+
+
+class TestG5mEmptyIntegration(PicassoIntegrationBase):
+    def test_picasso_g5m_empty_fails_cleanly(self):
+        """picasso_g5m: an empty g5m result fails cleanly, not with len(None).
+
+        With ``min_locs`` far above any group's size, g5m finds no molecules and
+        returns (None, info, None); the module must report success=False rather
+        than crash on ``len(None)``.
+        """
+        n_clusters, pts = 4, 20
+        locs = _planted_clusters(n_clusters=n_clusters, pts=pts, seed=4)
+        locs["group"] = np.repeat(np.arange(n_clusters), pts).astype(np.uint32)
+        ap = self._ap_with(locs)
+        _, results = ap.picasso_g5m(0, {"min_locs": 100000})
+        self.assertFalse(results["success"])
+        self.assertNotIn("n_molecules", results)
+
+
+class TestRipleyCoordsIntegration(PicassoIntegrationBase):
+    def test_convert_picasso_to_coords_is_nm(self):
+        """Ripley's K convert_picasso_to_coords returns the nm coords as-is.
+
+        picasso 1.0 locs are nm; before the fix this multiplied them by the
+        pixel size, pushing points outside the (correct-nm) mask extent.
+        """
+        from picasso_workflow.outpost.spatial_stats.ripleys import (
+            convert_picasso_to_coords,
+        )
+
+        mols = _planted_clusters(n_clusters=3, pts=10, seed=7)
+        coords = convert_picasso_to_coords(mols, PIXELSIZE)
+        np.testing.assert_allclose(coords[:, 0], mols["x"].to_numpy())
+        np.testing.assert_allclose(coords[:, 1], mols["y"].to_numpy())
 
 
 if __name__ == "__main__":

@@ -486,9 +486,7 @@ class PicassoSetCalibrationMixin:
         gradient = parameters.get("gradient", 5000)
         # picasso 1.0 fit_lateral_transform requires a pixel size; fall back to
         # the dataset's when the module does not override it.
-        pixelsize = (
-            parameters.get("pixelsize") or self._picasso_set_pixelsize()
-        )
+        pixelsize = parameters.get("pixelsize") or self._require_pixelsize_nm()
 
         movie_ref, _ = io.load_movie(reference)
         movie_target, _ = io.load_movie(target)

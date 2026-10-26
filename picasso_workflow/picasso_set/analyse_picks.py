@@ -56,34 +56,18 @@ class PicassoSetPicksMixin:
     ):
         """Save picks as a pick-region yaml loadable by ``io.load_picks``.
 
-        Sizes are written in camera pixels using the legacy keys
-        (``Diameter``/``Width``); square picks, whose size is only ever
-        stored in nm (the ``Side Length (nm)`` key), are converted back
-        via the dataset's pixel size.
+        Built with picasso 1.0's ``io.picks_dict`` so the file carries the 1.0
+        format marker and the nm size key (``Diameter (nm)`` / ``Width (nm)`` /
+        ``Side Length (nm)``) that ``io.load_picks`` requires. Positions and
+        sizes are in nm; shapes without a size (Box, Polygon, Brush) pass
+        ``size=None``.
         """
         picks_list = [np.asarray(pick).tolist() for pick in picks]
-        data = {"Shape": pick_shape}
-        if pick_shape == "Circle":
-            data["Centers"] = picks_list
-            data["Diameter"] = float(pick_size)
-        elif pick_shape == "Rectangle":
-            data["Center-Axis-Points"] = picks_list
-            data["Width"] = float(pick_size)
-        elif pick_shape == "Square":
-            data["Centers"] = picks_list
-            # pick sizes are in nm in picasso 1.0 (io.load_picks returns nm);
-            # the nm value belongs under "Side Length (nm)".
-            data["Side Length (nm)"] = float(pick_size)
-        elif pick_shape == "Box":
-            data["Corners"] = picks_list
-        else:
-            raise ValueError(
-                f"Cannot save picks of shape {pick_shape!r} to a "
-                "pick-region file."
-            )
+        size = float(pick_size) if pick_size is not None else None
+        regions = io.picks_dict(picks_list, pick_shape, size)
         fp = os.path.join(results["folder"], filename)
         with open(fp, "w") as f:
-            yaml.dump(data, f)
+            yaml.dump(regions, f)
         results["filepath_picks"] = fp
         return fp
 
@@ -569,7 +553,7 @@ class PicassoSetPicksMixin:
         # picasso 1.0 works in nm: the FRC viewport and the lpx/lpy precision
         # are nm, while Width / Height stay in camera pixels, so convert the
         # field of view to nm.
-        pixelsize = self._picasso_set_pixelsize()
+        pixelsize = self._require_pixelsize_nm()
         height_nm = height * pixelsize
         width_nm = width * pixelsize
         viewport = ((0, 0), (height_nm, width_nm))

@@ -4121,7 +4121,9 @@ class AutoPicasso(
             all_x = np.concatenate([lcs["x"] for lcs in locs_list])
             all_y = np.concatenate([lcs["y"] for lcs in locs_list])
 
-            roi_size = parameters.get("ctrmass_fov_nm", 10000.0) / pixelsize
+            # picasso 1.0: locs are in nm, so the ROI size is the nm FOV
+            # directly (0.11 divided by pixelsize to get a camera-pixel span).
+            roi_size = parameters.get("ctrmass_fov_nm", 10000.0)
             if roi_size <= 0:
                 roi_size = 100.0  # fallback
 
@@ -4246,7 +4248,8 @@ class AutoPicasso(
         x_mean_clipped = x_mean
         y_mean_clipped = y_mean
         if parameters.get("ctrmass_fov_nm"):
-            zoom_size = parameters.get("ctrmass_fov_nm") / pixelsize
+            # nm FOV directly (picasso 1.0 locs are nm).
+            zoom_size = parameters.get("ctrmass_fov_nm")
             if (x_max - x_min) >= zoom_size:
                 x_mean_clipped = np.clip(
                     x_mean, x_min + zoom_size / 2.0, x_max - zoom_size / 2.0
@@ -4268,10 +4271,11 @@ class AutoPicasso(
             for idx, (_, _, t_xmin, t_xmax, t_ymin, t_ymax) in enumerate(
                 selected_rois
             ):
-                x_min_um = (t_xmin * pixelsize) / 1000.0
-                x_max_um = (t_xmax * pixelsize) / 1000.0
-                y_min_um = (t_ymin * pixelsize) / 1000.0
-                y_max_um = (t_ymax * pixelsize) / 1000.0
+                # coords are nm (picasso 1.0) -> µm.
+                x_min_um = t_xmin / 1000.0
+                x_max_um = t_xmax / 1000.0
+                y_min_um = t_ymin / 1000.0
+                y_max_um = t_ymax / 1000.0
 
                 width_um = x_max_um - x_min_um
                 height_um = y_max_um - y_min_um
@@ -4305,16 +4309,19 @@ class AutoPicasso(
             # Draw standard Zoom-In outline on overview image
             import matplotlib.patches as patches
 
+            # picasso 1.0: locs (and thus x_mean_clipped) are nm, so the nm
+            # half-FOV is subtracted directly (no /pixelsize), and the nm
+            # extents convert to µm by /1000.
             fov_half = parameters.get("ctrmass_fov_nm") / 2
-            x_min_zoom = x_mean_clipped - fov_half / pixelsize
-            x_max_zoom = x_mean_clipped + fov_half / pixelsize
-            y_min_zoom = y_mean_clipped - fov_half / pixelsize
-            y_max_zoom = y_mean_clipped + fov_half / pixelsize
+            x_min_zoom = x_mean_clipped - fov_half
+            x_max_zoom = x_mean_clipped + fov_half
+            y_min_zoom = y_mean_clipped - fov_half
+            y_max_zoom = y_mean_clipped + fov_half
 
-            x_min_um = (x_min_zoom * pixelsize) / 1000.0
-            x_max_um = (x_max_zoom * pixelsize) / 1000.0
-            y_min_um = (y_min_zoom * pixelsize) / 1000.0
-            y_max_um = (y_max_zoom * pixelsize) / 1000.0
+            x_min_um = x_min_zoom / 1000.0
+            x_max_um = x_max_zoom / 1000.0
+            y_min_um = y_min_zoom / 1000.0
+            y_max_um = y_max_zoom / 1000.0
 
             width_um = x_max_um - x_min_um
             height_um = y_max_um - y_min_um
@@ -4630,19 +4637,17 @@ class AutoPicasso(
         for i, dim in enumerate(dimensions):
             color = colors[i % len(colors)]
 
+            # picasso 1.0 returns the drift already in nm (0.11: camera pixels),
+            # so it is plotted as-is on the nm axis.
             if isinstance(drift, np.recarray):
-                drift_values = drift[dim] * pixelsize
+                drift_values = drift[dim]
                 uncertainty_values = (
-                    uncertainty[dim] * pixelsize
-                    if uncertainty is not None
-                    else None
+                    uncertainty[dim] if uncertainty is not None else None
                 )
             else:
-                drift_values = drift[:, i] * pixelsize
+                drift_values = drift[:, i]
                 uncertainty_values = (
-                    uncertainty[:, i] * pixelsize
-                    if uncertainty is not None
-                    else None
+                    uncertainty[:, i] if uncertainty is not None else None
                 )
 
             # Plot drift trajectory
@@ -4709,10 +4714,11 @@ class AutoPicasso(
         frames = np.arange(drift.shape[0])
         for i, dim in enumerate(dimensions):
             factor = 1e-3 if dim == "z" else 1
+            # picasso 1.0 drift is already in nm (0.11: camera pixels).
             if isinstance(drift, pd.DataFrame):
-                ax.plot(frames, drift[dim] * pixelsize * factor, label=dim)
+                ax.plot(frames, drift[dim] * factor, label=dim)
             else:
-                ax.plot(frames, drift[:, i] * pixelsize * factor, label=dim)
+                ax.plot(frames, drift[:, i] * factor, label=dim)
         ax.set_xlabel("frame")
         ax.set_ylabel("drift [nm]")
         ax.set_title(f"undrift by {method}")
@@ -4940,9 +4946,11 @@ class AutoPicasso(
                     ).mean(1)
                 )
                 median_lp = median_lp / meth_pars.get("qe_correction", 1)
+                # picasso 1.0: lpx/lpy are in nm (0.11: camera pixels), so the
+                # median is nm; derive px from the pixel size.
                 results["median-loc-precision"] = {
-                    "median_lp-px": median_lp,
-                    "median_lp-nm": median_lp * pixelsize,
+                    "median_lp-px": median_lp / pixelsize,
+                    "median_lp-nm": median_lp,
                 }
             else:
                 raise NotImplementedError(
@@ -5969,8 +5977,9 @@ class AutoPicasso(
         logger.debug(f"  Memory limit: {max_memory_gb} GB per chunk")
 
         # Extract coordinates
-        x_coords = self.locs["x"] * self.pixelsize  # Convert to nm
-        y_coords = self.locs["y"] * self.pixelsize
+        # picasso 1.0 localizations are already in nm (0.11: camera pixels).
+        x_coords = self.locs["x"]
+        y_coords = self.locs["y"]
 
         logger.debug(f"  Processing {len(x_coords)} localizations")
         x_range = x_coords.max() - x_coords.min()
@@ -7494,12 +7503,9 @@ class AutoPicasso(
             # points = np.array(
             #     locs[parameters["dims"]].tolist()
             # )  # c-locs[0] only for now, before sgl/agg workflow refactoring!!
+            # picasso 1.0 localizations are already in nm (x, y and z), so no
+            # per-dimension conversion is needed.
             points = locs[list(parameters["dims"])].to_numpy()
-            # convert all dimensions to nanometers
-            pixelsize = self.pixelsize
-            for i, dim in enumerate(parameters["dims"]):
-                if dim in ["x", "y"]:
-                    points[:, i] = points[:, i] * pixelsize
 
             # logger.debug(points)
             # logger.debug(points.shape)
@@ -9115,7 +9121,6 @@ class AutoPicasso(
                 density[i] = density[i] / le
 
         # locs, but as np.ndarray
-        pixelsize = self.pixelsize
         exp_data = {}
         exp_n_targets = np.zeros(len(self.channel_tags))
         for i, target in enumerate(self.channel_tags):
@@ -9123,13 +9128,11 @@ class AutoPicasso(
             exp_n_targets[i] = len(locs)
             if "z" in locs.columns:
                 exp_data[target] = np.stack(
-                    (locs["x"] * pixelsize, locs["y"] * pixelsize, locs["z"])
+                    (locs["x"], locs["y"], locs["z"])
                 ).T
                 # dim = 3
             else:
-                exp_data[target] = np.stack(
-                    (locs["x"] * pixelsize, locs["y"] * pixelsize)
-                ).T
+                exp_data[target] = np.stack((locs["x"], locs["y"])).T
 
         data_2d = "z" not in self.channel_locs[0].columns
         if not data_2d:
@@ -10254,7 +10257,6 @@ class AutoPicasso(
         # # homo-analysis (proportions of 1- or 2-mers of the same kind)
         # props = {}
         dimensionality = 2
-        pixelsize = self.pixelsize
         if isinstance(parameters["density"], list):
             density = {
                 tag: parameters["density"][cid]
@@ -10353,16 +10355,14 @@ class AutoPicasso(
                 if "z" in locs.columns:
                     exp_data[target] = np.stack(
                         (
-                            locs["x"] * pixelsize,
-                            locs["y"] * pixelsize,
+                            locs["x"],
+                            locs["y"],
                             locs["z"],
                         )
                     ).T
                     # dim = 3
                 else:
-                    exp_data[target] = np.stack(
-                        (locs["x"] * pixelsize, locs["y"] * pixelsize)
-                    ).T
+                    exp_data[target] = np.stack((locs["x"], locs["y"])).T
                     # dim = 2
             structures = self._create_spinna_structure(
                 [A], [[1, 2]], parameters["structure_distance"]
@@ -13833,7 +13833,6 @@ class AutoPicasso(
         # # homo-analysis (proportions of 1- or 2-mers of the same kind)
         # props = {}
         dimensionality = 2
-        pixelsize = self.pixelsize
 
         if isinstance(parameters["density"], list):
             density = {
@@ -13862,14 +13861,10 @@ class AutoPicasso(
         for i, tgt in zip([i_target, i_reference], [target, reference]):
             locs = self.channel_locs[i]
             if "z" in locs.columns:
-                exp_data[tgt] = np.stack(
-                    (locs["x"] * pixelsize, locs["y"] * pixelsize, locs["z"])
-                ).T
+                exp_data[tgt] = np.stack((locs["x"], locs["y"], locs["z"])).T
                 # dim = 3
             else:
-                exp_data[tgt] = np.stack(
-                    (locs["x"] * pixelsize, locs["y"] * pixelsize)
-                ).T
+                exp_data[tgt] = np.stack((locs["x"], locs["y"])).T
                 # dim = 2
 
         compound_density = (

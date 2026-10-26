@@ -592,8 +592,13 @@ def plot_mask(mask, pixelsize, fp):
 
 def convert_picasso_to_coords(mols, pixelsize):
     """Converts the Picasso-format np.rec.array to a 2D numpy array with
-    spatial coordinates in nm."""
-    return np.array([mols["x"], mols["y"]]).T * pixelsize
+    spatial coordinates in nm.
+
+    picasso 1.0 localizations are already in nm (0.11: camera pixels), so the
+    coordinates are returned as-is; ``pixelsize`` is kept for signature
+    compatibility.
+    """
+    return np.array([mols["x"], mols["y"]]).T
 
 
 def analyze_2_channels(

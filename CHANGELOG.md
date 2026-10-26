@@ -64,6 +64,37 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Fixed
 
+- **picasso 1.0 migration code review (finder -> verify -> fix).** A review of
+  the migration found that it had updated the picasso *call sites* but missed
+  the workflow's own *coordinate arithmetic*: since picasso 1.0 returns
+  `x/y/lpx/lpy/drift` in nm, every remaining `coord * pixelsize` (correct in
+  0.11, where locs were camera pixels) was a silent ~130x double-conversion.
+  Fixed across the modules the migration diff never touched:
+  - **nm double-conversions removed:** `resolution_autocorr` coords, the
+    `median-loc-precision` metric, the drift-trajectory plots, the SPINNA
+    `exp_data` prep (x/y were scaled while z was not), the center-of-mass /
+    active-ROI `render` viewports (ROI/zoom size and the µm labels), and
+    Ripley's K `convert_picasso_to_coords` (both spatial-stats modules).
+  - **Pick-file round-trip:** `_picasso_set_save_picks` now writes via
+    `io.picks_dict` (1.0 format marker + nm size keys) so Circle/Rectangle
+    picks reload (only Square had been migrated).
+  - **`picasso_g5m`** guards the `(None, info, None)` empty return instead of
+    `len(None)`.
+  - **Removed `picasso_cluster_combine` / `picasso_cluster_combine_dist`**
+    entirely (spec + implementation + params/summaries + tests): picasso 1.0
+    dropped `postprocess.cluster_combine` / `cluster_combine_dist`, so leaving
+    selectable specs would let the recommender route to a dead module
+    (`nn_distances` is still provided by `picasso_nneighbor`).
+  - **Missing pixel size** now raises a clear error at the nm-conversion sites
+    (`_require_pixelsize_nm`) instead of `value * None`.
+  - **`_picasso_api` contract extended** to pin the new 1.0 surface
+    (`NetGradient` / `IdentificationParameters`, and the keyword params of
+    identify/fit/localize, link, clusterer, aim, g5m, picked_locs, mask_locs,
+    generate_image, the calibrations) so a future picasso rename fails in CI.
+  - The non-mocked integration tier (`test_picasso_integration.py`) was extended
+    to lock these in (median-loc-precision nm, pick-file round-trip, g5m-empty,
+    Ripley coords).
+
 - **WP-11 code review (finder -> verify -> fix), 4 fixes:**
   - **Held-out guard now VALIDATES instead of re-selecting.** It previously took
     the argmin/argmax over the held-out scores of *every* candidate -- held-out

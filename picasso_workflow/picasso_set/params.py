@@ -146,14 +146,6 @@ PICASSO_SET_SUMMARIES: dict[str, str] = {
         "Filter localizations by properties of their clusters "
         "(native picasso CLI: clusterfilter)."
     ),
-    "picasso_cluster_combine": (
-        "Combine localizations in each cluster "
-        "(native picasso CLI: cluster_combine)."
-    ),
-    "picasso_cluster_combine_dist": (
-        "Calculate the nearest-neighbor distance for combined clusters "
-        "(native picasso CLI: cluster_combine_dist)."
-    ),
     "picasso_g5m": (
         "Gaussian Mixture Modeling for Molecular Mapping of clustered "
         "localizations (native picasso CLI: g5m)."
@@ -849,22 +841,6 @@ PICASSO_SET_PARAMS: dict[str, tuple[dict, dict]] = {
                 "description": "Number of out-of-range localizations",
                 "min": 0,
             },
-        ),
-    ),
-    "picasso_cluster_combine": (
-        {},
-        _results(
-            nlocs=_NLOCS_RESULT,
-            filepath_locs_comb=_fp("Combined localizations hdf5"),
-        ),
-    ),
-    "picasso_cluster_combine_dist": (
-        {},
-        _results(
-            nlocs=_NLOCS_RESULT,
-            filepath_locs_cdist=_fp(
-                "Combined localizations with distances hdf5"
-            ),
         ),
     ),
     "picasso_g5m": (

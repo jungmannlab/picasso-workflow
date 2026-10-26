@@ -452,17 +452,9 @@ class TestPicassoSetModules(unittest.TestCase):
         )
         self.assertFalse(results["success"])
 
-    def test_picasso_cluster_combine(self):
-        # picasso 1.0 removed postprocess.cluster_combine (+ the CLI command),
-        # so the module now raises a clear NotImplementedError if run.
-        with self.assertRaises(NotImplementedError):
-            self.ap.picasso_cluster_combine(0, {})
-
-    def test_picasso_cluster_combine_dist(self):
-        # picasso 1.0 removed postprocess.cluster_combine_dist (+ the CLI
-        # command), so the module now raises NotImplementedError if run.
-        with self.assertRaises(NotImplementedError):
-            self.ap.picasso_cluster_combine_dist(0, {})
+    # picasso_cluster_combine / picasso_cluster_combine_dist were removed with
+    # picasso 1.0 (postprocess.cluster_combine / cluster_combine_dist are gone),
+    # so there are no modules to test.
 
     @patch("picasso_workflow.picasso_set.analyse_core.g5m.g5m")
     def test_picasso_g5m(self, mock_g5m):
@@ -974,7 +966,10 @@ class TestPicassoSetModules(unittest.TestCase):
         with open(results["filepath_picks"]) as f:
             saved = _yaml.full_load(f)
         self.assertEqual("Circle", saved["Shape"])
-        self.assertEqual(1.5, saved["Diameter"])
+        # picasso 1.0 pick files carry the nm size key + the format marker
+        # (written via io.picks_dict), not the legacy bare "Diameter".
+        self.assertEqual(1.5, saved["Diameter (nm)"])
+        self.assertEqual("1.0", str(saved["picasso_format"]))
         self.assertEqual(3, len(saved["Centers"]))
 
     @patch(
