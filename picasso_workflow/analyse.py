@@ -27,6 +27,7 @@ import re
 import string
 import subprocess
 import sys
+import threading
 import time
 from functools import wraps
 
@@ -38,7 +39,6 @@ import pandas as pd
 import psutil
 import yaml
 from matplotlib import colormaps
-from memory_profiler import memory_usage
 from picasso_workflow._picasso_api import CONFIG as pCONFIG
 from picasso_workflow._picasso_api import __version__ as picassoversion
 from picasso_workflow._picasso_api import (
@@ -1075,62 +1075,61 @@ def profile_resource_usage(method):
     def wrapper(self, i, parameters, calling_module_dir=None, suffix=""):
         profiling_results = {"peak_memory_gb": 0.0, "peak_cpu_cores": 0.0}
 
-        # Memory profiling function
-        def memory_measure(self, i, parameters, calling_module_dir, suffix):
-            start_cpu = time.process_time()
-            start_real = time.time()
-            _ = psutil.cpu_percent()
-            # Call the actual function
-            results = method(self, i, parameters, calling_module_dir, suffix)
-            cpu_time = time.process_time() - start_cpu
-            real_time = time.time() - start_real
-            cpu_percent_end = psutil.cpu_percent()
-            # Store CPU usage for access in wrapper
-            wrapper.cpu_usage = cpu_time / max(real_time, 0.001)
-            wrapper.mean_cpu_percent = cpu_percent_end
-            return results
+        # Run the module body EXACTLY ONCE and sample this process's RSS in a
+        # background thread for the peak. We do NOT hand the callable to
+        # memory_profiler.memory_usage: with a (func, args) proc it re-runs the
+        # function several times to collect samples (7x for a fast module in
+        # memory_profiler 0.61), which silently corrupts any *stateful* module
+        # that mutates self.locs -- e.g. g5m replaces the 'group' column with
+        # 'group_input', so the second run fails "Localizations must be
+        # grouped". Sampling ourselves keeps the single run that modules assume.
+        proc = psutil.Process()
+        peak_mib = proc.memory_info().rss / (1024.0**2)
+        stop = threading.Event()
 
+        def _sample_memory():
+            nonlocal peak_mib
+            while not stop.is_set():
+                try:
+                    rss_mib = proc.memory_info().rss / (1024.0**2)
+                    if rss_mib > peak_mib:
+                        peak_mib = rss_mib
+                except Exception:
+                    pass
+                stop.wait(0.5)
+
+        sampler = threading.Thread(target=_sample_memory, daemon=True)
+        sampler.start()
+        start_cpu = time.process_time()
+        start_real = time.time()
+        _ = psutil.cpu_percent()
         try:
-            # Measure memory usage
-            mem_usage = memory_usage(
-                proc=(
-                    memory_measure,
-                    [self, i, parameters, calling_module_dir, suffix],
-                ),
-                interval=0.5,
-                timeout=None,
-                max_usage=True,
-                retval=True,
+            parameters, results = method(
+                self, i, parameters, calling_module_dir, suffix
             )
+        finally:
+            stop.set()
+            sampler.join(timeout=2.0)
+        cpu_time = time.process_time() - start_cpu
+        real_time = time.time() - start_real
+        cpu_usage = cpu_time / max(real_time, 0.001)
+        wrapper.cpu_usage = cpu_usage
+        wrapper.mean_cpu_percent = psutil.cpu_percent()
 
-            # Extract memory results
-            peak_memory = mem_usage[0]  # First element is peak memory
-            # Convert MiB to GiB
-            profiling_results["peak_memory_gb"] = peak_memory / 1024.0
-
-            # Calculate peak CPU usage in terms of cores
-            total_cores = psutil.cpu_count(logical=True)  # total logical cores
-            profiling_results["peak_cpu_cores"] = min(
-                wrapper.cpu_usage * total_cores, total_cores
-            )
-            profiling_results["peak_cpu_usage"] = wrapper.cpu_usage
-            profiling_results["mean_cpu_usage"] = wrapper.mean_cpu_percent
-            pcpuc = profiling_results["peak_cpu_cores"]
-            logger.debug(
-                f"profiled cpu usage: {wrapper.cpu_usage}, "
-                + f"total cores: {total_cores}, "
-                + f"peak_cpu_cores: {pcpuc}"
-            )
-
-            # Get the results from the memory_measure function
-            # Second element is the actual results
-            parameters, results = mem_usage[1]
-
-        except Exception as e:
-            raise e
-            # print(f"Profiling error: {e}")
-            # return None, profiling_results  # Return None for results on
-            # error
+        # Convert MiB to GiB.
+        profiling_results["peak_memory_gb"] = peak_mib / 1024.0
+        total_cores = psutil.cpu_count(logical=True)  # total logical cores
+        profiling_results["peak_cpu_cores"] = min(
+            cpu_usage * total_cores, total_cores
+        )
+        profiling_results["peak_cpu_usage"] = cpu_usage
+        profiling_results["mean_cpu_usage"] = wrapper.mean_cpu_percent
+        pcpuc = profiling_results["peak_cpu_cores"]
+        logger.debug(
+            f"profiled cpu usage: {cpu_usage}, "
+            + f"total cores: {total_cores}, "
+            + f"peak_cpu_cores: {pcpuc}"
+        )
 
         results["peak_memory_gb"] = profiling_results["peak_memory_gb"]
         try:

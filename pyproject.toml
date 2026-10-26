@@ -42,7 +42,6 @@ dependencies = [
     # subclasses, get_page_by_title space -> space_key, methods relocated),
     # which breaks ConfluenceInterface. Pin below it until that migration.
     "atlassian-python-api>=3.41,<5",
-    "memory-profiler>=0.61.0",
     "loguru>=0.7.3",
     # C41 anchor range (was unpinned).
     "h5py>=3.15.1,<4",

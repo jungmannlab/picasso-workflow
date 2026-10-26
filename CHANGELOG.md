@@ -94,6 +94,16 @@ This file was started after v0.5.6; earlier history is in the git log.
   - The non-mocked integration tier (`test_picasso_integration.py`) was extended
     to lock these in (median-loc-precision nm, pick-file round-trip, g5m-empty,
     Ripley coords).
+- **`@profile_resource_usage` now runs the module body exactly once.** It handed
+  the callable to `memory_profiler.memory_usage((func, args), ...)`, which
+  re-executes a fast function several times (7x in memory_profiler 0.61) to
+  collect memory samples — corrupting any *stateful* module. In particular
+  `gaussian_mixture_cluster` (the only module still carrying the decorator) has
+  g5m replace the `group` column with `group_input`, so the re-run failed
+  "Localizations must be grouped". The decorator now samples this process's RSS
+  in a background thread around a single `method(...)` call (mocks hid this —
+  they return the same value on every re-run). `memory-profiler` is dropped as a
+  dependency.
 
 - **WP-11 code review (finder -> verify -> fix), 4 fixes:**
   - **Held-out guard now VALIDATES instead of re-selecting.** It previously took

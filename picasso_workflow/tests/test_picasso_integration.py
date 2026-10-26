@@ -360,11 +360,7 @@ class TestG5mIntegration(PicassoIntegrationBase):
         ``parallel``. Running it on grouped locs (one tight single-molecule
         blob per group) and getting a non-empty centre table proves both the
         return-tuple unpacking and the kwarg rename; a wrong unpack yields None
-        -> raises, a wrong kwarg a TypeError. (The AutoPicasso
-        ``gaussian_mixture_cluster`` wraps the same g5m call but carries a
-        ``@profile_resource_usage`` decorator that runs the body twice, which
-        is incompatible with this stateful module in-process, so the equivalent
-        picasso-set module -- single-run -- is exercised here.)
+        -> raises, a wrong kwarg a TypeError.
         """
         # g5m fits a mixture within each pre-clustered group; plant the "group"
         # column directly (one tight single-molecule blob per group).
@@ -375,6 +371,25 @@ class TestG5mIntegration(PicassoIntegrationBase):
         _, results = ap.picasso_g5m(0, {"min_locs": 10})
         self.assertGreater(results["n_molecules"], 0)
         self.assertEqual(len(ap.locs), results["n_molecules"])
+
+    def test_gaussian_mixture_cluster_runs_under_profiling(self):
+        """AutoPicasso.gaussian_mixture_cluster is wrapped by
+
+        @profile_resource_usage. That decorator must run the (stateful) module
+        body exactly once: g5m replaces the 'group' column with 'group_input',
+        so a re-run (memory_profiler re-executes a fast function to sample it)
+        would fail "Localizations must be grouped". Getting centres back proves
+        the single-run profiling fix end to end.
+        """
+        n_clusters, pts = 5, 40
+        locs = _planted_clusters(n_clusters=n_clusters, pts=pts, seed=4)
+        locs["group"] = np.repeat(np.arange(n_clusters), pts).astype(np.uint32)
+        ap = self._ap_with(locs)
+        ap.channel_locs = None
+        _, results = ap.gaussian_mixture_cluster(0, {"min_locs": 10})
+        self.assertGreater(results["n_centers"], 0)
+        # the profiler bookkeeping is attached (proving it wrapped the run)
+        self.assertIn("peak_memory_gb", results)
 
 
 class TestPairCorrelationIntegration(PicassoIntegrationBase):
