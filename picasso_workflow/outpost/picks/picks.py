@@ -19,10 +19,14 @@ _n_block_locs_at = get_internal("_n_block_locs_at")
 
 
 def prep_pick_similar_kwargs(locs, info, diameter):
-    d = diameter
+    # picasso 1.0 localizations are in nm, while Width / Height stay in camera
+    # pixels; build the whole search grid in nm so it matches the locs (0.11
+    # worked in camera pixels throughout).
+    pixelsize = lib.get_from_metadata(info, "Pixelsize", raise_error=True)
+    d = diameter * pixelsize
 
-    maxheight = info[0]["Height"]
-    maxwidth = info[0]["Width"]
+    maxheight = info[0]["Height"] * pixelsize
+    maxwidth = info[0]["Width"] * pixelsize
     r = d / 2
     d2 = d**2
 
@@ -124,8 +128,10 @@ def index_locs(locs, info, pick_diameter):
     Indexes localizations from a given channel in a grid with grid
     size equal to the pick radius.
     """
-    d = pick_diameter
-    size = d / 2
+    # picasso 1.0 indexes in nm (0.11 used camera pixels); the grid size was
+    # the pick radius in camera pixels.
+    pixelsize = lib.get_from_metadata(info, "Pixelsize", raise_error=True)
+    size = (pick_diameter / 2) * pixelsize
     index_blocks = postprocess.get_index_blocks(locs, info, size)
     return index_blocks
 
@@ -165,12 +171,15 @@ def picked_locs(
     # concatenated-DataFrame + group + optional non-picked-locs contract. It is
     # equivalent to the former in-house loop in picked membership and group ids
     # (up to intra-frame row order) -- see tests/test_outpost_dedup_equivalence.
+    # picasso 1.0: picks / pick_shape / pick_size are keyword-only, pick_size
+    # is the circle DIAMETER in nm (0.11 took the radius in camera pixels).
+    pixelsize = lib.get_from_metadata(info, "Pixelsize", raise_error=True)
     per_pick = postprocess.picked_locs(
         locs,
         info,
-        _centers,
-        "Circle",
-        pick_size=pick_diameter / 2,
+        picks=_centers,
+        pick_shape="Circle",
+        pick_size=pick_diameter * pixelsize,
         add_group=add_group,
     )
     per_pick = [

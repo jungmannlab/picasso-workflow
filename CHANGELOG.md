@@ -10,7 +10,109 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ## [Unreleased]
 
+### Changed
+- **The Qt GUI is now a `[gui]` extra, not a base dependency.** `PyQt6` +
+  `PyQt6-WebEngine` (≈530 MB of Qt6/WebEngine binaries) moved out of the base
+  `dependencies` into a `gui` optional-dependency. They are lazy-imported — the
+  top-level package, `AutoPicasso`, the workflow runners and the cluster-submit
+  entrypoint import zero PyQt6 — so headless/analysis/cluster installs no longer
+  pull them. `pip install picasso_workflow[gui]` for the desktop app;
+  CI installs `.[dev,gui]` so the GUI tests still run, and the test suite skips
+  `test_gui_*.py` when PyQt6 is absent (a lean install, e.g. the cluster
+  Apptainer image, which is ~530 MB smaller as a result).
+
+- **Migrate to picasso 1.0** (`picassosr>=1.0.0a1,<2`). picasso 1.0 is the first
+  release with a stability promise and changes the API wholesale: every length
+  is in **nm** (not camera pixels), identification settings are one
+  `localize.IdentificationParameters`, progress is a single `progress`
+  tracker (`lib.Progress`), and many functions now return their metadata
+  alongside their result. The workflow is migrated across `analyse.py`
+  (AutoPicasso) and the `picasso_set/*` CLI-mirror mixins:
+  - **Identification/fitting:** `localize.identify` / `localize` take an
+    `IdentificationParameters` (net-gradient threshold → `NetGradient`, box,
+    temporal-median / Gaussian filters); `threaded`/`multiprocess` → `parallel`;
+    `return_info` dropped; the workflow's `PicassoProgressProxy` (already a
+    `lib.Progress`) is passed as `progress`.
+  - **Units (nm):** `aim` `intersect_d`/`roi_r`, `postprocess.link` `r_max`,
+    `clusterer` radii, `pair_correlation` `bin_size`/`r_max`,
+    `compute_local_density` radius, `frc`/`render` viewports and
+    `min_blur_width`, pick sizes — all converted to nm (multiplying by the pixel
+    size where the value was previously passed to picasso as camera pixels, and
+    dropping the former `/pixelsize` where it was already nm). `nena`'s
+    precision and distance axis are now nm.
+  - **Return shapes:** `undrift` → `(locs, info, drift)`; `link`,
+    `compute_dark_times`, `compute_local_density`, `clusterer.*`,
+    `find_cluster_centers` → `(…, info)`; `g5m` → `(centers, info, clustered)`;
+    `align` → `(locs, infos)`.
+  - **Dropped `pixelsize` args** on `clusterer.*`, `find_cluster_centers`,
+    `plot_drift`; `minimum_ng` → `identification_method` on the spline / channel-
+    registration / lateral calibrations; `undrift_from_fiducials` records
+    `Pick diameter (nm)` (was `Pick radius (nm)`); `imageprocess.rcc`
+    `callback` → `progress`; circular `picked_locs`/pick files use nm diameters.
+  - Picasso's upstreamed `localize_frames` wrapper means the WP-2 picasso fork is
+    no longer needed. The `_picasso_api` contract test stays green on 1.0.
+  - **Final correctness is validated on the Gate-5 cluster/instrument round-trip**
+    (the unit suite mocks picasso, so it checks wiring/return-shapes, not the
+    nm-unit numerics end to end).
+
+### Added
+- **Non-mocked picasso integration tests** (`tests/test_picasso_integration.py`)
+  — a "golden pipeline" tier that runs the unit-sensitive analysis modules
+  through the **real** picasso on tiny synthetic ground-truth data, asserting
+  physical correctness / oracle equality: `identify` + `picasso_localize`
+  (synthetic movie → nm coordinates), `dbscan` (nm) · `picasso_dbscan` (px→nm)
+  · `smlm_clusterer` · `picasso_g5m` (the `(centers, info, clustered)` reorder)
+  · `link_locs` (px→nm) · `summarize_dataset` NeNA (oracle) · `density` (px→nm)
+  · `picasso_pair_correlation` (px→nm oracle) · `picasso_frc` (nm viewport) ·
+  `picasso_mask_locs` (4-tuple + nm blur).
+  These catch nm↔px unit regressions that the mocked suite cannot (a mock
+  accepts any argument). CPU-only and small, so they stay CI-fast; they sit
+  between the mocked unit tests and the Gate-5 on-cluster round-trip. Prompted
+  by this migration — a real render-stage test was the only thing that caught a
+  viewport double-conversion the 900 mocked tests passed straight through.
+
 ### Fixed
+
+- **picasso 1.0 migration code review (finder -> verify -> fix).** A review of
+  the migration found that it had updated the picasso *call sites* but missed
+  the workflow's own *coordinate arithmetic*: since picasso 1.0 returns
+  `x/y/lpx/lpy/drift` in nm, every remaining `coord * pixelsize` (correct in
+  0.11, where locs were camera pixels) was a silent ~130x double-conversion.
+  Fixed across the modules the migration diff never touched:
+  - **nm double-conversions removed:** `resolution_autocorr` coords, the
+    `median-loc-precision` metric, the drift-trajectory plots, the SPINNA
+    `exp_data` prep (x/y were scaled while z was not), the center-of-mass /
+    active-ROI `render` viewports (ROI/zoom size and the µm labels), and
+    Ripley's K `convert_picasso_to_coords` (both spatial-stats modules).
+  - **Pick-file round-trip:** `_picasso_set_save_picks` now writes via
+    `io.picks_dict` (1.0 format marker + nm size keys) so Circle/Rectangle
+    picks reload (only Square had been migrated).
+  - **`picasso_g5m`** guards the `(None, info, None)` empty return instead of
+    `len(None)`.
+  - **Removed `picasso_cluster_combine` / `picasso_cluster_combine_dist`**
+    entirely (spec + implementation + params/summaries + tests): picasso 1.0
+    dropped `postprocess.cluster_combine` / `cluster_combine_dist`, so leaving
+    selectable specs would let the recommender route to a dead module
+    (`nn_distances` is still provided by `picasso_nneighbor`).
+  - **Missing pixel size** now raises a clear error at the nm-conversion sites
+    (`_require_pixelsize_nm`) instead of `value * None`.
+  - **`_picasso_api` contract extended** to pin the new 1.0 surface
+    (`NetGradient` / `IdentificationParameters`, and the keyword params of
+    identify/fit/localize, link, clusterer, aim, g5m, picked_locs, mask_locs,
+    generate_image, the calibrations) so a future picasso rename fails in CI.
+  - The non-mocked integration tier (`test_picasso_integration.py`) was extended
+    to lock these in (median-loc-precision nm, pick-file round-trip, g5m-empty,
+    Ripley coords).
+- **`@profile_resource_usage` now runs the module body exactly once.** It handed
+  the callable to `memory_profiler.memory_usage((func, args), ...)`, which
+  re-executes a fast function several times (7x in memory_profiler 0.61) to
+  collect memory samples — corrupting any *stateful* module. In particular
+  `gaussian_mixture_cluster` (the only module still carrying the decorator) has
+  g5m replace the `group` column with `group_input`, so the re-run failed
+  "Localizations must be grouped". The decorator now samples this process's RSS
+  in a background thread around a single `method(...)` call (mocks hid this —
+  they return the same value on every re-run). `memory-profiler` is dropped as a
+  dependency.
 
 - **WP-11 code review (finder -> verify -> fix), 4 fixes:**
   - **Held-out guard now VALIDATES instead of re-selecting.** It previously took

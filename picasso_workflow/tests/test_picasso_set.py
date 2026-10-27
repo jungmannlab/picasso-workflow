@@ -140,11 +140,12 @@ class TestPicassoSetModules(unittest.TestCase):
         kwargs = mock_localize.call_args[1]
         # CLI defaults through the fit-method map
         self.assertEqual("gaussmle", kwargs["fitting_method"])
-        self.assertEqual(
-            5000,
-            kwargs["identification_parameters"]["Min. Net Gradient"],
-        )
-        self.assertEqual(7, kwargs["identification_parameters"]["Box Size"])
+        # picasso 1.0: identification_parameters is an
+        # IdentificationParameters whose method carries the net-gradient
+        # threshold (NetGradient.minimum) and box.
+        id_params = kwargs["identification_parameters"]
+        self.assertEqual(5000, id_params.method.minimum)
+        self.assertEqual(7, id_params.box)
         # convergence/max_iterations 0 -> the method's own defaults
         self.assertIsNone(kwargs["eps"])
         self.assertIsNone(kwargs["max_it"])
@@ -202,12 +203,13 @@ class TestPicassoSetModules(unittest.TestCase):
     @patch("picasso_workflow.picasso_set.analyse_core.postprocess.undrift")
     def test_picasso_undrift_rcc(self, mock_undrift, mock_sd, mock_pd):
         drift = self._drift()
-        mock_undrift.return_value = (drift, self.ap.locs)
+        # picasso 1.0: undrift returns (locs, info, drift); segmentation kwarg.
+        mock_undrift.return_value = (self.ap.locs, self.ap.info, drift)
         with patch.object(self.ap, "_save_locs"):
             parameters, results = self.ap.picasso_undrift_rcc(
                 0, {"segmentation": 500}
             )
-        self.assertEqual(500, mock_undrift.call_args[0][2])
+        self.assertEqual(500, mock_undrift.call_args[1]["segmentation"])
         self.assertIs(self.ap.drift, drift)
         mock_sd.assert_called_once()
         self.assertIn("filepath_driftfile", results)
@@ -225,11 +227,12 @@ class TestPicassoSetModules(unittest.TestCase):
         mock_aim.return_value = (self.ap.locs, new_info, drift)
         with patch.object(self.ap, "_save_locs"):
             parameters, results = self.ap.picasso_undrift_aim(0, {})
-        # CLI defaults
-        args = mock_aim.call_args[0]
-        self.assertEqual(100, args[2])
-        self.assertAlmostEqual(20 / 130, args[3])
-        self.assertAlmostEqual(60 / 130, args[4])
+        # CLI defaults; picasso 1.0 takes intersect_d / roi_r in nm by keyword
+        # ((20/130)*130 = 20, (60/130)*130 = 60).
+        kwargs = mock_aim.call_args[1]
+        self.assertEqual(100, kwargs["segmentation"])
+        self.assertAlmostEqual(20.0, kwargs["intersect_d"])
+        self.assertAlmostEqual(60.0, kwargs["roi_r"])
         self.assertIs(self.ap.drift, drift)
         self.assertIn("filepath_locs_aim", results)
 
@@ -244,15 +247,16 @@ class TestPicassoSetModules(unittest.TestCase):
         self, mock_undrift, mock_uff, mock_sd, mock_pd
     ):
         drift = self._drift()
-        mock_undrift.return_value = (drift, self.ap.locs)
+        # picasso 1.0: undrift returns (locs, info, drift); segmentation kwarg.
+        mock_undrift.return_value = (self.ap.locs, self.ap.info, drift)
         new_info = self.ap.info + [
-            {"Number of picks": 7, "Pick radius (nm)": 500.0}
+            {"Number of picks": 7, "Pick diameter (nm)": 500.0}
         ]
         mock_uff.return_value = (self.ap.locs, new_info, drift)
         with patch.object(self.ap, "_save_locs"):
             parameters, results = self.ap.picasso_undrift_fiducials(0, {})
         # CLI composite: pre-RCC with segmentation 2000
-        self.assertEqual(2000, mock_undrift.call_args[0][2])
+        self.assertEqual(2000, mock_undrift.call_args[1]["segmentation"])
         entry = self.ap.info[-1]
         self.assertEqual(7, entry["Number of picks"])
         self.assertEqual(2000, entry["pre-RCC segmentation"])
@@ -260,12 +264,13 @@ class TestPicassoSetModules(unittest.TestCase):
 
     @patch("picasso_workflow.picasso_set.analyse_core.postprocess.link")
     def test_picasso_link(self, mock_link):
-        mock_link.return_value = self.ap.locs
+        # picasso 1.0: link returns (locs, info); r_max in nm (1.0 px * 130).
+        mock_link.return_value = (self.ap.locs, self.ap.info)
         with patch.object(self.ap, "_save_locs"):
             parameters, results = self.ap.picasso_link(0, {})
         # CLI defaults
-        self.assertEqual(1.0, mock_link.call_args[0][2])
-        self.assertEqual(1, mock_link.call_args[0][3])
+        self.assertEqual(130.0, mock_link.call_args[1]["r_max"])
+        self.assertEqual(1, mock_link.call_args[1]["max_dark_time"])
         entry = self.ap.info[-1]
         self.assertEqual(1.0, entry["Maximum Distance"])
         self.assertEqual(1, entry["Maximum Transient Dark Time"])
@@ -276,7 +281,8 @@ class TestPicassoSetModules(unittest.TestCase):
         "postprocess.compute_dark_times"
     )
     def test_picasso_dark(self, mock_dark):
-        mock_dark.return_value = self.ap.locs
+        # picasso 1.0: compute_dark_times returns (locs, info).
+        mock_dark.return_value = (self.ap.locs, self.ap.info)
         with patch.object(self.ap, "_save_locs"):
             parameters, results = self.ap.picasso_dark(0, {})
         mock_dark.assert_called_once()
@@ -301,9 +307,10 @@ class TestPicassoSetModules(unittest.TestCase):
         bins = np.linspace(0.1, 10, 100)
         mock_pc.return_value = (bins, np.random.rand(100))
         parameters, results = self.ap.picasso_pair_correlation(0, {})
-        # CLI defaults
-        self.assertEqual(0.1, mock_pc.call_args[0][2])
-        self.assertEqual(10, mock_pc.call_args[0][3])
+        # CLI defaults; picasso 1.0 takes bin_size / r_max in nm by keyword
+        # (0.1 px * 130 = 13, 10 px * 130 = 1300).
+        self.assertAlmostEqual(13.0, mock_pc.call_args[1]["bin_size"])
+        self.assertAlmostEqual(1300.0, mock_pc.call_args[1]["r_max"])
         self.assertTrue(os.path.isfile(results["fp_fig_pair_correlation"]))
         self.assertTrue(os.path.isfile(results["filepath_pair_correlation"]))
 
@@ -314,15 +321,20 @@ class TestPicassoSetModules(unittest.TestCase):
     )
     @patch("picasso_workflow.picasso_set.analyse_core.clusterer.dbscan")
     def test_picasso_dbscan(self, mock_dbscan, mock_fcc, mock_sl):
-        mock_dbscan.return_value = (self.ap.locs, {"Generated by": "DBSCAN"})
-        mock_fcc.return_value = self.ap.locs.iloc[:3]
+        # picasso 1.0: dbscan returns (locs, info_list); find_cluster_centers
+        # returns (centers, info); radius in nm by keyword (0.5 px * 130 = 65).
+        mock_dbscan.return_value = (
+            self.ap.locs,
+            self.ap.info + [{"Generated by": "DBSCAN"}],
+        )
+        mock_fcc.return_value = (self.ap.locs.iloc[:3], self.ap.info)
         with patch.object(self.ap, "_save_locs"):
             parameters, results = self.ap.picasso_dbscan(
                 0, {"radius": 0.5, "density": 4}
             )
-        args = mock_dbscan.call_args
-        self.assertEqual(0.5, args[0][1])
-        self.assertEqual(4, args[0][2])
+        kwargs = mock_dbscan.call_args[1]
+        self.assertAlmostEqual(65.0, kwargs["radius"])
+        self.assertEqual(4, kwargs["min_samples"])
         self.assertEqual(3, results["nclusters"])
         self.assertIn("filepath_locs_dbclusters", results)
 
@@ -333,18 +345,20 @@ class TestPicassoSetModules(unittest.TestCase):
     )
     @patch("picasso_workflow.picasso_set.analyse_core.clusterer.hdbscan")
     def test_picasso_hdbscan(self, mock_hdbscan, mock_fcc, mock_sl):
+        # picasso 1.0: hdbscan returns (locs, info_list); find_cluster_centers
+        # returns (centers, info); min_cluster_size / min_samples by keyword.
         mock_hdbscan.return_value = (
             self.ap.locs,
-            {"Generated by": "HDBSCAN"},
+            self.ap.info + [{"Generated by": "HDBSCAN"}],
         )
-        mock_fcc.return_value = self.ap.locs.iloc[:2]
+        mock_fcc.return_value = (self.ap.locs.iloc[:2], self.ap.info)
         with patch.object(self.ap, "_save_locs"):
             parameters, results = self.ap.picasso_hdbscan(
                 0, {"min_cluster": 10, "min_samples": 5}
             )
-        args = mock_hdbscan.call_args[0]
-        self.assertEqual(10, args[1])
-        self.assertEqual(5, args[2])
+        kwargs = mock_hdbscan.call_args[1]
+        self.assertEqual(10, kwargs["min_cluster_size"])
+        self.assertEqual(5, kwargs["min_samples"])
         self.assertEqual(2, results["nclusters"])
         self.assertIn("filepath_locs_hdbclusters", results)
 
@@ -355,14 +369,19 @@ class TestPicassoSetModules(unittest.TestCase):
     )
     @patch("picasso_workflow.picasso_set.analyse_core.clusterer.cluster")
     def test_picasso_smlm_cluster(self, mock_cluster, mock_fcc, mock_sl):
-        mock_cluster.return_value = (self.ap.locs, {"Generated by": "SMLM"})
-        mock_fcc.return_value = self.ap.locs.iloc[:4]
+        # picasso 1.0: cluster returns (locs, info_list); find_cluster_centers
+        # returns (centers, info); radius_xy in nm by keyword (0.3 * 130 = 39).
+        mock_cluster.return_value = (
+            self.ap.locs,
+            self.ap.info + [{"Generated by": "SMLM"}],
+        )
+        mock_fcc.return_value = (self.ap.locs.iloc[:4], self.ap.info)
         with patch.object(self.ap, "_save_locs"):
             parameters, results = self.ap.picasso_smlm_cluster(
                 0, {"radius": 0.3, "min_locs": 8}
             )
         kwargs = mock_cluster.call_args[1]
-        self.assertEqual(0.3, kwargs["radius_xy"])
+        self.assertAlmostEqual(39.0, kwargs["radius_xy"])
         self.assertEqual(8, kwargs["min_locs"])
         self.assertFalse(kwargs["frame_analysis"])  # CLI default basic_fa
         self.assertEqual(4, results["nclusters"])
@@ -385,14 +404,20 @@ class TestPicassoSetModules(unittest.TestCase):
         np.testing.assert_allclose(minvals, [1.0, 1.0, 4.0])
 
     @patch("picasso_workflow.picasso_set.analyse_core.io.save_locs")
-    @patch("picasso_workflow.picasso_set.analyse_core.io.load_clusters")
-    def test_picasso_clusterfilter(self, mock_lc, mock_sl):
+    @patch("picasso_workflow.picasso_set.analyse_core.io.load_locs")
+    def test_picasso_clusterfilter(self, mock_ll, mock_sl):
         self.ap.locs["group"] = [0, 0, 1, 1, 2, 2, 3, 3, 4, 4]
-        mock_lc.return_value = pd.DataFrame(
-            {
-                "groups": [0, 1, 2, 3, 4],
-                "n_events": [1.0, 5.0, 5.0, 5.0, 9.0],
-            }
+        # picasso 1.0 removed io.load_clusters: cluster centres are plain
+        # localization files now (io.load_locs -> (locs, info)), keyed on the
+        # "group" column (0.11 used a "groups" field).
+        mock_ll.return_value = (
+            pd.DataFrame(
+                {
+                    "group": [0, 1, 2, 3, 4],
+                    "n_events": [1.0, 5.0, 5.0, 5.0, 9.0],
+                }
+            ),
+            [{}],
         )
         parameters, results = self.ap.picasso_clusterfilter(
             0,
@@ -409,10 +434,13 @@ class TestPicassoSetModules(unittest.TestCase):
         self.assertEqual(6, len(self.ap.locs))
         self.assertIn("Clusterfilter - in", self.ap.info[-1]["Generated by"])
 
-    @patch("picasso_workflow.picasso_set.analyse_core.io.load_clusters")
-    def test_picasso_clusterfilter_aborts_on_empty_range(self, mock_lc):
+    @patch("picasso_workflow.picasso_set.analyse_core.io.load_locs")
+    def test_picasso_clusterfilter_aborts_on_empty_range(self, mock_ll):
         self.ap.locs["group"] = np.zeros(len(self.ap.locs), dtype=int)
-        mock_lc.return_value = pd.DataFrame({"groups": [0], "n_events": [1.0]})
+        mock_ll.return_value = (
+            pd.DataFrame({"group": [0], "n_events": [1.0]}),
+            [{}],
+        )
         parameters, results = self.ap.picasso_clusterfilter(
             0,
             {
@@ -424,36 +452,16 @@ class TestPicassoSetModules(unittest.TestCase):
         )
         self.assertFalse(results["success"])
 
-    @patch(
-        "picasso_workflow.picasso_set.analyse_core."
-        "postprocess.cluster_combine"
-    )
-    def test_picasso_cluster_combine(self, mock_cc):
-        mock_cc.return_value = self.ap.locs
-        with patch.object(self.ap, "_save_locs"):
-            parameters, results = self.ap.picasso_cluster_combine(0, {})
-        mock_cc.assert_called_once()
-        self.assertIn("Combine", self.ap.info[-1]["Generated by"])
-        self.assertIn("filepath_locs_comb", results)
-
-    @patch(
-        "picasso_workflow.picasso_set.analyse_core."
-        "postprocess.cluster_combine_dist"
-    )
-    def test_picasso_cluster_combine_dist(self, mock_ccd):
-        self.ap.info.append({"Pixelsize": 130})
-        mock_ccd.return_value = self.ap.locs
-        with patch.object(self.ap, "_save_locs"):
-            parameters, results = self.ap.picasso_cluster_combine_dist(0, {})
-        # pixelsize read from metadata like the CLI
-        self.assertEqual(130, mock_ccd.call_args[0][1])
-        self.assertIn("CombineDist", self.ap.info[-1]["Generated by"])
+    # picasso_cluster_combine / picasso_cluster_combine_dist were removed with
+    # picasso 1.0 (postprocess.cluster_combine / cluster_combine_dist are gone),
+    # so there are no modules to test.
 
     @patch("picasso_workflow.picasso_set.analyse_core.g5m.g5m")
     def test_picasso_g5m(self, mock_g5m):
         mols = self.ap.locs.iloc[:3]
         g5m_info = self.ap.info + [{"Generated by": "Picasso G5M"}]
-        mock_g5m.return_value = (mols, None, g5m_info)
+        # picasso 1.0: g5m returns (centers, info, clustered_locs).
+        mock_g5m.return_value = (mols, g5m_info, None)
         with patch.object(self.ap, "_save_locs"):
             parameters, results = self.ap.picasso_g5m(0, {})
         kwargs = mock_g5m.call_args[1]
@@ -496,7 +504,11 @@ class TestPicassoSetModules(unittest.TestCase):
     @patch("picasso_workflow.picasso_set.analyse_core.io.load_locs")
     def test_picasso_align(self, mock_ll, mock_align, mock_sl):
         mock_ll.return_value = (self.ap.locs, [{"Frames": 1000}])
-        mock_align.return_value = [self.ap.locs, self.ap.locs]
+        # picasso 1.0: align returns (locs_list, infos_list).
+        mock_align.return_value = (
+            [self.ap.locs, self.ap.locs],
+            [[{"Frames": 1000}], [{"Frames": 1000}]],
+        )
         parameters, results = self.ap.picasso_align(
             0, {"files": ["a.hdf5", "b.hdf5"]}
         )
@@ -599,7 +611,7 @@ class TestPicassoSetModules(unittest.TestCase):
     def test_save_locs_registers_checkpoint_once(self, mock_dark):
         """The module save doubles as the resume checkpoint: with
         always_save, the decorator must not write a second copy."""
-        mock_dark.return_value = self.ap.locs
+        mock_dark.return_value = (self.ap.locs, self.ap.info)
         self.ap.analysis_config["always_save"] = True
         with patch.object(self.ap, "_save_locs") as mock_save:
             parameters, results = self.ap.picasso_dark(0, {})
@@ -617,9 +629,19 @@ class TestPicassoSetModules(unittest.TestCase):
     ):
         """An explicit threshold entered as text reaches mask_image as a
         float."""
+        # io.save_locs (picasso 1.0) needs Width/Height/Frames/Pixelsize.
+        self.ap.info = [
+            {"Width": 64, "Height": 32, "Frames": 1000, "Pixelsize": 130}
+        ]
         mock_gi.return_value = np.random.rand(8, 8)
         mock_mi.return_value = (np.ones((8, 8), dtype=bool), 0.5)
-        mock_ml.return_value = (self.ap.locs, self.ap.locs.iloc[:0])
+        # picasso 1.0 mask_locs returns (locs_in, info_in, locs_out, info_out).
+        mock_ml.return_value = (
+            self.ap.locs,
+            self.ap.info,
+            self.ap.locs.iloc[:0],
+            self.ap.info,
+        )
         with patch.object(self.ap, "_save_locs"):
             self.ap.picasso_mask_locs(
                 0, {"disp_px_size": 100.0, "blur": 2.0, "method": "0.5"}
@@ -686,8 +708,9 @@ class TestPicassoSetModules(unittest.TestCase):
             0, {"d": 10.0, "magnification_factor": 0.79}
         )
         args = mock_cz.call_args
-        self.assertEqual(10.0, args[0][2])
-        self.assertEqual(0.79, args[0][3])
+        # picasso 1.0: d / magnification_factor are keyword-only.
+        self.assertEqual(10.0, args[1]["d"])
+        self.assertEqual(0.79, args[1]["magnification_factor"])
         # library defaults
         self.assertEqual(1, args[1]["frames_per_step"])
         self.assertEqual("fov", args[1]["frame_order"])
@@ -764,9 +787,9 @@ class TestPicassoSetModules(unittest.TestCase):
             0, {"files": ["beads.tif"], "step": 10.0}
         )
         kwargs = mock_cs.call_args[1]
-        # CLI defaults
+        # CLI defaults; picasso 1.0: minimum_ng -> identification_method.
         self.assertEqual(13, kwargs["box"])
-        self.assertEqual(5000, kwargs["minimum_ng"])
+        self.assertEqual(5000, kwargs["identification_method"].minimum)
         self.assertEqual(10.0, kwargs["d"])
         self.assertEqual("spline-3d", kwargs["model"])
         self.assertEqual(0.79, kwargs["magnification_factor"])
@@ -804,9 +827,9 @@ class TestPicassoSetModules(unittest.TestCase):
             0, {"reference": "ref.tif", "target": "target.tif"}
         )
         kwargs = mock_flt.call_args[1]
-        # CLI defaults
+        # CLI defaults; picasso 1.0: minimum_ng -> identification_method.
         self.assertEqual(7, kwargs["box"])
-        self.assertEqual(5000, kwargs["minimum_ng"])
+        self.assertEqual(5000, kwargs["identification_method"].minimum)
         self.assertEqual("astigmatism", kwargs["transform_type"])
         self.assertEqual("affine", kwargs["model"])
         self.assertEqual(12, results["n_bead_pairs"])
@@ -943,7 +966,10 @@ class TestPicassoSetModules(unittest.TestCase):
         with open(results["filepath_picks"]) as f:
             saved = _yaml.full_load(f)
         self.assertEqual("Circle", saved["Shape"])
-        self.assertEqual(1.5, saved["Diameter"])
+        # picasso 1.0 pick files carry the nm size key + the format marker
+        # (written via io.picks_dict), not the legacy bare "Diameter".
+        self.assertEqual(1.5, saved["Diameter (nm)"])
+        self.assertEqual("1.0", str(saved["picasso_format"]))
         self.assertEqual(3, len(saved["Centers"]))
 
     @patch(
@@ -1060,7 +1086,13 @@ class TestPicassoSetModules(unittest.TestCase):
     def test_picasso_mask_locs(self, mock_gi, mock_mi, mock_ml, mock_sl):
         mock_gi.return_value = np.random.rand(8, 8)
         mock_mi.return_value = (np.ones((8, 8), dtype=bool), 0.5)
-        mock_ml.return_value = (self.ap.locs.iloc[:6], self.ap.locs.iloc[6:])
+        # picasso 1.0: mask_locs returns (locs_in, info_in, locs_out, info_out).
+        mock_ml.return_value = (
+            self.ap.locs.iloc[:6],
+            self.ap.info,
+            self.ap.locs.iloc[6:],
+            self.ap.info,
+        )
         with patch.object(self.ap, "_save_locs"):
             parameters, results = self.ap.picasso_mask_locs(
                 0, {"disp_px_size": 100.0, "blur": 2.0}
@@ -1077,10 +1109,12 @@ class TestPicassoSetModules(unittest.TestCase):
     @patch("picasso_workflow.picasso_set.analyse_picks.postprocess.nena")
     def test_picasso_nena(self, mock_nena):
         self.ap.info.append({"Pixelsize": 130})
+        # picasso 1.0: nena returns the precision in nm (here 0.4 nm); px is
+        # derived (0.4 / 130).
         mock_nena.return_value = ({"best_vals": None}, 0.4)
         parameters, results = self.ap.picasso_nena(0, {})
-        self.assertAlmostEqual(0.4, results["nena_px"])
-        self.assertAlmostEqual(52.0, results["nena_nm"])
+        self.assertAlmostEqual(0.4, results["nena_nm"])
+        self.assertAlmostEqual(0.4 / 130, results["nena_px"])
 
     @staticmethod
     def _frc_return():
@@ -1097,12 +1131,16 @@ class TestPicassoSetModules(unittest.TestCase):
     @patch("picasso_workflow.picasso_set.analyse_picks.postprocess.frc")
     def test_picasso_frc(self, mock_frc, mock_nena):
         mock_frc.return_value = self._frc_return()
-        # precision proxy = median lpx/lpy; 0.5 px -> bin 0.25 -> 128 px image
-        self.ap.locs["lpx"] = 0.5
-        self.ap.locs["lpy"] = 0.5
+        # picasso 1.0: lpx/lpy and the FRC viewport are in nm. precision proxy
+        # = median lpx/lpy; 65 nm -> bin 32.5 nm -> min(4160, 8320)/32.5 = 128
+        # px image (below the memory guard).
+        self.ap.locs["lpx"] = 65.0
+        self.ap.locs["lpy"] = 65.0
         parameters, results = self.ap.picasso_frc(0, {})
-        # full-FOV viewport from the metadata (below the memory guard)
-        self.assertEqual(((0, 0), (32, 64)), mock_frc.call_args[0][2])
+        # full-FOV viewport (nm) from the metadata: (32, 64) px * 130 nm.
+        self.assertEqual(
+            ((0, 0), (4160, 8320)), mock_frc.call_args[1]["viewport"]
+        )
         self.assertEqual(42, mock_frc.call_args[1]["random_seed"])
         self.assertEqual(25.0, results["resolution_nm"])
         self.assertTrue(os.path.isfile(results["fp_fig_frc"]))
@@ -1141,12 +1179,14 @@ class TestPicassoSetModules(unittest.TestCase):
         "postprocess.compute_local_density"
     )
     def test_picasso_density(self, mock_cld):
-        mock_cld.return_value = self.ap.locs
+        # picasso 1.0: compute_local_density returns (locs, info); radius in
+        # nm by keyword (1.5 px * 130 = 195).
+        mock_cld.return_value = (self.ap.locs, self.ap.info)
         with patch.object(self.ap, "_save_locs") as mock_save:
             parameters, results = self.ap.picasso_density(0, {"radius": 1.5})
 
         mock_cld.assert_called_once()
-        self.assertEqual(1.5, mock_cld.call_args[0][2])
+        self.assertAlmostEqual(195.0, mock_cld.call_args[1]["radius"])
         self.assertTrue(results["success"])
         self.assertEqual(len(self.ap.locs), results["nlocs"])
         # saved like the CLI's _density.hdf5 output

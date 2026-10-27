@@ -121,22 +121,22 @@ def compute_nena_nm(
     """Whole-FOV NeNA in nm via picasso ``postprocess.nena`` (the boundary).
 
     ``postprocess.nena`` returns ``(result, best_val)`` with ``best_val`` the
-    NeNA in **pixels**; we scale by the ``.yaml`` pixel size to nm (the same
-    convention as ``analyse.AnalysisDescribe``). Any fit/compute failure — too
-    few locs, a fitting error — is logged and yields None, so the metric stays
-    NULL instead of aborting the ingest. Not reimplemented here: it is picasso.
+    NeNA in **nm** in picasso 1.0 (0.11 returned camera pixels). Any
+    fit/compute failure — too few locs, a fitting error — is logged and yields
+    None, so the metric stays NULL instead of aborting the ingest. Not
+    reimplemented here: it is picasso.
     """
     pixelsize = _pixelsize_nm(info)
     if pixelsize is None:
         logger.warning("no Pixelsize in info; NeNA stays NULL")
         return None
     try:
-        _result, best_val_px = postprocess.nena(locs, info)
+        _result, best_val = postprocess.nena(locs, info)
     except Exception as exc:  # fitting error, too few locs, etc.
         logger.warning("NeNA computation failed, leaving NULL: %s", exc)
         return None
     try:
-        nm = float(best_val_px) * pixelsize
+        nm = float(best_val)  # picasso 1.0: nena returns nm
     except (TypeError, ValueError):
         return None
     # A fit can converge to a non-finite best_val WITHOUT raising; NaN/inf must

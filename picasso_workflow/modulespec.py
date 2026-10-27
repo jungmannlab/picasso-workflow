@@ -1010,28 +1010,10 @@ _SPECS = [
         module_set="picasso",
         params=PICASSO_SET_PARAMS["picasso_clusterfilter"],
     ),
-    _s(
-        "picasso_cluster_combine",
-        requires=["clusters"],
-        provides=["locs"],
-        relation=W,
-        picasso_symbol="picasso.postprocess.cluster_combine",
-        scopes=_SINGLE,
-        summary=PICASSO_SET_SUMMARIES["picasso_cluster_combine"],
-        module_set="picasso",
-        params=PICASSO_SET_PARAMS["picasso_cluster_combine"],
-    ),
-    _s(
-        "picasso_cluster_combine_dist",
-        requires=["clusters"],
-        provides=["locs", "nn_distances"],
-        relation=W,
-        picasso_symbol="picasso.postprocess.cluster_combine_dist",
-        scopes=_SINGLE,
-        summary=PICASSO_SET_SUMMARIES["picasso_cluster_combine_dist"],
-        module_set="picasso",
-        params=PICASSO_SET_PARAMS["picasso_cluster_combine_dist"],
-    ),
+    # picasso_cluster_combine / picasso_cluster_combine_dist removed: picasso
+    # 1.0 dropped postprocess.cluster_combine / cluster_combine_dist (and the
+    # CLI commands), so there is no upstream to wrap. nn_distances is still
+    # provided by picasso_nneighbor.
     _s(
         "picasso_g5m",
         requires=["clusters"],

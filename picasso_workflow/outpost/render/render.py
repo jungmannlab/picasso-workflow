@@ -96,9 +96,11 @@ def _oversampling_to_disp_px_size(render_args, info):
     """Translate the deprecated picasso ``oversampling`` render kwarg into
     ``disp_px_size`` (picasso >= 0.10). Modifies ``render_args`` in place.
 
-    The result is byte-identical to passing ``oversampling`` directly:
-    picasso computes ``oversampling = Pixelsize / disp_px_size`` internally,
-    so ``disp_px_size = Pixelsize / oversampling`` round-trips exactly.
+    ``disp_px_size = Pixelsize / oversampling`` is in nm (the unit picasso 1.0
+    renders in). The ``viewport`` is NOT converted here: it is derived from the
+    localizations' own coordinates, which picasso 1.0 already returns in nm, so
+    it is in the right unit as-is (``min_blur_width`` likewise stays in the
+    render's nm coordinate space).
     """
     if (
         "oversampling" in render_args

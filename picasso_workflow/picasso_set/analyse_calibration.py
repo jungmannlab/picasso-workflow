@@ -92,7 +92,7 @@ class PicassoSetCalibrationMixin:
             fitting_method=fitting_method,
             filter=filter_,
             lateral_transforms=lateral_transforms,
-            multiprocess=multiprocess,
+            parallel=multiprocess,
             gpu=gpu,
         )
         if locs is None:
@@ -153,8 +153,8 @@ class PicassoSetCalibrationMixin:
         calibration = zfit.calibrate_z(
             self.locs,
             self.info,
-            d,
-            magnification_factor,
+            d=d,
+            magnification_factor=magnification_factor,
             path=fp,
             frame_bounds=frame_bounds,
             frames_per_step=frames_per_step,
@@ -379,7 +379,7 @@ class PicassoSetCalibrationMixin:
                 info=info,
                 camera_info=camera_info,
                 box=box,
-                minimum_ng=gradient,
+                identification_method=localize.NetGradient(gradient),
                 d=step,
                 regions=regions,
                 reference=reference,
@@ -398,7 +398,7 @@ class PicassoSetCalibrationMixin:
                 info=info,
                 camera_info=camera_info,
                 box=box,
-                minimum_ng=gradient,
+                identification_method=localize.NetGradient(gradient),
                 d=step,
                 frames_per_step=frames_per_step,
                 frame_order=frame_order,
@@ -419,7 +419,7 @@ class PicassoSetCalibrationMixin:
                 infos=infos,
                 camera_infos=camera_infos,
                 box=box,
-                minimum_ng=gradient,
+                identification_method=localize.NetGradient(gradient),
                 d=step,
                 frames_per_step=frames_per_step,
                 frame_order=frame_order,
@@ -484,7 +484,9 @@ class PicassoSetCalibrationMixin:
         calibration_path = parameters.get("calibration", "")
         box = parameters.get("box_side_length", 7)
         gradient = parameters.get("gradient", 5000)
-        pixelsize = parameters.get("pixelsize")
+        # picasso 1.0 fit_lateral_transform requires a pixel size; fall back to
+        # the dataset's when the module does not override it.
+        pixelsize = parameters.get("pixelsize") or self._require_pixelsize_nm()
 
         movie_ref, _ = io.load_movie(reference)
         movie_target, _ = io.load_movie(target)
@@ -500,9 +502,9 @@ class PicassoSetCalibrationMixin:
         calibration, qc = localize.fit_lateral_transform(
             movie_ref,
             movie_target,
-            calibration,
+            calibration=calibration,
             box=box,
-            minimum_ng=gradient,
+            identification_method=localize.NetGradient(gradient),
             pixelsize=pixelsize,
             transform_type=transform_type,
             ref_path=reference,

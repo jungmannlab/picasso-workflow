@@ -269,8 +269,14 @@ def estimate_min_net_gradient(
                 "error": "no frames available (start/continue a run first)."
             }
         low = max(int(low_floor), 1)
+        # picasso 1.0: the threshold + box are an IdentificationParameters, and
+        # threaded -> parallel; identify returns (ids, info).
         ids = localize.identify(
-            np.ascontiguousarray(frames), low, int(box_size), threaded=True
+            np.ascontiguousarray(frames),
+            parameters=localize.IdentificationParameters(
+                method=localize.NetGradient(low), box=int(box_size)
+            ),
+            parallel=True,
         )
         if isinstance(ids, tuple):
             ids = ids[0]
