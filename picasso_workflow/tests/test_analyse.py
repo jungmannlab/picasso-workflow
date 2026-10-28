@@ -257,7 +257,9 @@ class TestAnalyseModules(unittest.TestCase):
                 "photons": np.array([100.0, 200.0, 300.0], dtype=np.float32),
             }
         )
-        self.ap.info = [{"Frames": 3, "Width": 576, "Height": 576}]
+        self.ap.info = [
+            {"Frames": 3, "Width": 576, "Height": 576, "Pixelsize": 130}
+        ]
         _, results = self.ap.find_gold(
             0, {"diameter": 2.0, "remove_gold": False}
         )
@@ -292,13 +294,14 @@ class TestAnalyseModules(unittest.TestCase):
             self.ap._progress_callback = None
             self.ap._abort_callback = None
 
-        # the callbacks were forwarded to picasso...
+        # the callbacks were forwarded to picasso (picasso 1.0: the single
+        # ``progress`` tracker replaces progress_callback)...
         _, kwargs = mock_identify.call_args
-        assert "progress_callback" in kwargs
+        assert "progress" in kwargs
         assert "abort_callback" in kwargs
         # ...but must NOT have leaked into the saved info
         info = self.ap.info[-1]
-        assert "progress_callback" not in info
+        assert "progress" not in info
         assert "abort_callback" not in info
         # real params are still recorded
         assert info["temporal_median_window"] == 20
@@ -354,11 +357,14 @@ class TestAnalyseModules(unittest.TestCase):
             }
             self.ap.identify(0, parameters)
             _, kwargs = mock_identify.call_args
-            assert kwargs["temporal_median_window"] == 20
-            assert kwargs["gaussian_filter_sigma"] == 1.5
-            assert kwargs["threaded"] is False
-            # unset filters are not forwarded (picasso defaults preserved)
-            assert "temporal_median_stride" not in kwargs
+            # picasso 1.0: the filters live on the IdentificationParameters,
+            # and threaded -> parallel.
+            params = kwargs["parameters"]
+            assert params.temporal_median_window == 20
+            assert params.gaussian_filter_sigma == 1.5
+            assert kwargs["parallel"] is False
+            # unset stride stays at the default (None)
+            assert params.temporal_median_stride is None
         shutil.rmtree(os.path.join(self.results_folder, "00_identify"))
 
         # GUI placeholder / off sentinels must NOT be forwarded, so picasso's
@@ -402,8 +408,10 @@ class TestAnalyseModules(unittest.TestCase):
             }
             self.ap.identify(0, parameters)
             _, kwargs = mock_identify.call_args
-            assert kwargs["temporal_median_window"] == 20
-            assert kwargs["temporal_median_stride"] == 5
+            # picasso 1.0: window + stride live on the IdentificationParameters.
+            params = kwargs["parameters"]
+            assert params.temporal_median_window == 20
+            assert params.temporal_median_stride == 5
         shutil.rmtree(os.path.join(self.results_folder, "00_identify"))
 
     @patch("picasso_workflow.analyse.localize.fit")
@@ -427,7 +435,8 @@ class TestAnalyseModules(unittest.TestCase):
         parameters, results = self.ap.localize(0, parameters)
         _, kwargs = mock_fit.call_args
         assert kwargs["fitting_method"] == "gausslq"
-        assert kwargs["multiprocess"] is False
+        # picasso 1.0: multiprocess -> parallel.
+        assert kwargs["parallel"] is False
         assert results["fit_method"] == "gausslq"
         shutil.rmtree(os.path.join(self.results_folder, "00_localize"))
 
@@ -447,7 +456,7 @@ class TestAnalyseModules(unittest.TestCase):
         assert kwargs["fitting_method"] == "spline"
         # a dict calibration is passed through untouched
         assert kwargs["spline_calibration"] == spline_cal
-        assert kwargs["multiprocess"] is True
+        assert kwargs["parallel"] is True
         assert kwargs["eps"] == 0.001
         assert kwargs["max_it"] == 100
         assert results["fit_method"] == "spline"
@@ -608,15 +617,16 @@ class TestAnalyseModules(unittest.TestCase):
         self.ap.info = []
         self.ap.identifications = pd.DataFrame({"frame": [0, 1, 2]})
 
-        # no progress wired -> neither callback forwarded (picasso unchanged)
+        # no progress wired -> no progress tracker forwarded. picasso 1.0
+        # reports the whole fit through a single ``progress`` (0.11's
+        # progress_callback + cut_progress_callback collapsed into one).
         self.ap._progress_callback = None
         self.ap.localize(0, {"box_size": 7, "fit_parallel": False})
         _, kwargs = mock_fit.call_args
-        assert "progress_callback" not in kwargs
-        assert "cut_progress_callback" not in kwargs
+        assert "progress" not in kwargs
         shutil.rmtree(os.path.join(self.results_folder, "00_localize"))
 
-        # progress wired -> both phases report
+        # progress wired -> the fit reports through ``progress``
         mock_fit.reset_mock()
         self.ap._progress_callback = lambda *a, **k: None
         try:
@@ -624,8 +634,7 @@ class TestAnalyseModules(unittest.TestCase):
         finally:
             self.ap._progress_callback = None
         _, kwargs = mock_fit.call_args
-        assert kwargs["progress_callback"] is not None
-        assert kwargs["cut_progress_callback"] is not None
+        assert kwargs["progress"] is not None
         shutil.rmtree(os.path.join(self.results_folder, "00_localize"))
 
     @patch("picasso.zfit.zfit")
@@ -784,8 +793,8 @@ class TestAnalyseModules(unittest.TestCase):
     @patch("picasso_workflow.analyse.postprocess.undrift")
     def undrift_rcc(self, mock_undrift_rcc):
         nspots = 5
+        # picasso 1.0: undrift returns (locs, info, drift).
         mock_undrift_rcc.return_value = (
-            np.random.rand(2, len(self.ap.movie)),
             pd.DataFrame(
                 np.rec.array(
                     [
@@ -795,6 +804,8 @@ class TestAnalyseModules(unittest.TestCase):
                     dtype=self.locs_dtype,
                 )
             ),
+            [{"Pixelsize": 130}],
+            pd.DataFrame({"x": np.zeros(nspots), "y": np.zeros(nspots)}),
         )
         parameters = {
             "segmentation": 5000,
@@ -1027,12 +1038,11 @@ class TestAnalyseModules(unittest.TestCase):
     #     logger.debug(f"results: {results}")
     #     assert results["duration"] > -1
 
-    @patch(
-        "picasso_workflow.analyse.postprocess.compute_local_density",
-        MagicMock(),
-    )
-    def density(self):
-        self.ap.info = []
+    @patch("picasso_workflow.analyse.postprocess.compute_local_density")
+    def density(self, mock_cld):
+        self.ap.info = [{"Pixelsize": 130}]
+        # picasso 1.0: compute_local_density returns (locs, info).
+        mock_cld.return_value = (self.ap.locs, self.ap.info)
         parameters = {"radius": 5}
         parameters, results = self.ap.density(0, parameters)
         # logger.debug(f'parameters: {parameters}')
@@ -1044,7 +1054,9 @@ class TestAnalyseModules(unittest.TestCase):
     @patch("picasso_workflow.analyse.clusterer.find_cluster_centers")
     @patch("picasso_workflow.analyse.clusterer.dbscan")
     def dbscan(self, mock_dbscan, mock_fcc):
-        self.ap.info = [{"Width": 1000, "Height": 1000, "Frames": 10000}]
+        self.ap.info = [
+            {"Width": 1000, "Height": 1000, "Frames": 10000, "Pixelsize": 130}
+        ]
         locs_dtype = [
             ("frame", "u4"),
             ("photons", "f4"),
@@ -1062,8 +1074,10 @@ class TestAnalyseModules(unittest.TestCase):
             dtype=locs_dtype,
         )
         self.ap.locs = pd.DataFrame(self.ap.locs)
-        mock_dbscan.return_value = (self.ap.locs, {})
-        mock_fcc.return_value = self.ap.locs
+        # picasso 1.0: dbscan returns (locs, info_list); find_cluster_centers
+        # returns (centers, info).
+        mock_dbscan.return_value = (self.ap.locs, self.ap.info + [{}])
+        mock_fcc.return_value = (self.ap.locs, self.ap.info)
 
         parameters = {
             "radius": 5,
@@ -1082,7 +1096,9 @@ class TestAnalyseModules(unittest.TestCase):
     @patch("picasso_workflow.analyse.clusterer.find_cluster_centers")
     @patch("picasso_workflow.analyse.clusterer.hdbscan")
     def hdbscan(self, mock_hdbscan, mock_fcc):
-        self.ap.info = [{"Width": 1000, "Height": 1000, "Frames": 10000}]
+        self.ap.info = [
+            {"Width": 1000, "Height": 1000, "Frames": 10000, "Pixelsize": 130}
+        ]
         locs_dtype = [
             ("frame", "u4"),
             ("photons", "f4"),
@@ -1099,8 +1115,10 @@ class TestAnalyseModules(unittest.TestCase):
             dtype=locs_dtype,
         )
         self.ap.locs = pd.DataFrame(self.ap.locs)
-        mock_hdbscan.return_value = (self.ap.locs, {})
-        mock_fcc.return_value = self.ap.locs
+        # picasso 1.0: hdbscan returns (locs, info_list); find_cluster_centers
+        # returns (centers, info).
+        mock_hdbscan.return_value = (self.ap.locs, self.ap.info + [{}])
+        mock_fcc.return_value = (self.ap.locs, self.ap.info)
 
         parameters = {"min_cluster": 5, "min_samples": 3}
         parameters, results = self.ap.hdbscan(0, parameters)
@@ -1120,7 +1138,9 @@ class TestAnalyseModules(unittest.TestCase):
     @patch("picasso_workflow.analyse.clusterer.find_cluster_centers")
     @patch("picasso_workflow.analyse.clusterer.cluster")
     def smlm_clusterer(self, mock_clusterer, mock_fcc):
-        self.ap.info = [{"Width": 1000, "Height": 1000, "Frames": 10000}]
+        self.ap.info = [
+            {"Width": 1000, "Height": 1000, "Frames": 10000, "Pixelsize": 130}
+        ]
         locs_dtype = [
             ("frame", "u4"),
             ("photons", "f4"),
@@ -1141,8 +1161,10 @@ class TestAnalyseModules(unittest.TestCase):
         # emulate a few clusters so the locs-per-cluster stats/histogram work.
         clustered = self.ap.locs.copy()
         clustered["group"] = np.arange(len(clustered)) % 5
-        mock_clusterer.return_value = (clustered, {})
-        mock_fcc.return_value = clustered.iloc[:5].copy()
+        # picasso 1.0: cluster returns (locs, info_list); find_cluster_centers
+        # returns (centers, info).
+        mock_clusterer.return_value = (clustered, self.ap.info + [{}])
+        mock_fcc.return_value = (clustered.iloc[:5].copy(), self.ap.info)
 
         parameters = {"radius": 5, "min_locs": 10}
         parameters, results = self.ap.smlm_clusterer(0, parameters)
@@ -1162,7 +1184,9 @@ class TestAnalyseModules(unittest.TestCase):
     def gaussian_mixture_cluster(
         self, mock_gmms, mock_test_subclustering, mock_plot
     ):
-        self.ap.info = [{"Width": 1000, "Height": 1000, "Frames": 10000}]
+        self.ap.info = [
+            {"Width": 1000, "Height": 1000, "Frames": 10000, "Pixelsize": 130}
+        ]
         locs_dtype = [
             ("frame", "u4"),
             ("photons", "f4"),
@@ -1181,7 +1205,8 @@ class TestAnalyseModules(unittest.TestCase):
             dtype=locs_dtype,
         )
         self.ap.locs = pd.DataFrame(self.ap.locs)
-        mock_gmms.return_value = self.ap.locs, self.ap.locs, self.ap.info
+        # picasso 1.0: g5m returns (centers, info, clustered_locs).
+        mock_gmms.return_value = self.ap.locs, self.ap.info, self.ap.locs
         mock_test_subclustering.return_value = (None, None)
         mock_plot.return_value = None
 
@@ -1205,7 +1230,9 @@ class TestAnalyseModules(unittest.TestCase):
         ``'NoneType' object is not subscriptable`` (or empty-quantile /
         divide-by-zero) at the histogram/statistics step.
         """
-        self.ap.info = [{"Width": 1000, "Height": 1000, "Frames": 10000}]
+        self.ap.info = [
+            {"Width": 1000, "Height": 1000, "Frames": 10000, "Pixelsize": 130}
+        ]
         self.ap.locs = pd.DataFrame({"x": [1.0], "y": [2.0], "group": [0]})
         parameters = {"min_locs": 10}
         folder = os.path.join(
@@ -1237,7 +1264,9 @@ class TestAnalyseModules(unittest.TestCase):
         module_decorator saves whatever self.locs held into an
         ``error_state`` subfolder of the module's result folder.
         """
-        self.ap.info = [{"Width": 1000, "Height": 1000, "Frames": 10000}]
+        self.ap.info = [
+            {"Width": 1000, "Height": 1000, "Frames": 10000, "Pixelsize": 130}
+        ]
         self.ap.locs = pd.DataFrame(
             {
                 "frame": np.arange(20, dtype="u4"),
@@ -1275,8 +1304,8 @@ class TestAnalyseModules(unittest.TestCase):
         self.ap.locs = None
         self.ap.channel_locs = [ch_locs, ch_locs.copy()]
         self.ap.channel_info = [
-            [{"Width": 10, "Height": 10, "Frames": 100}],
-            [{"Width": 10, "Height": 10, "Frames": 100}],
+            [{"Width": 10, "Height": 10, "Frames": 100, "Pixelsize": 130}],
+            [{"Width": 10, "Height": 10, "Frames": 100, "Pixelsize": 130}],
         ]
         self.ap.channel_tags = ["chan_a", "chan_b"]
 
@@ -1446,7 +1475,9 @@ class TestAnalyseModules(unittest.TestCase):
     @patch("picasso_workflow.outpost.spinna.wrappers.single_spinna_run")
     def spinna(self, mock_sptmp):
         mock_sptmp.return_value = (0, [])
-        info = [{"Width": 1000, "Height": 1000, "Frames": 10000}]
+        info = [
+            {"Width": 1000, "Height": 1000, "Frames": 10000, "Pixelsize": 130}
+        ]
         locs_dtype = [
             ("frame", "u4"),
             ("photons", "f4"),
@@ -1518,7 +1549,9 @@ class TestAnalyseModules(unittest.TestCase):
         mock_screen.return_value = (best_unc, scan, scan_figs)
         mock_sptmp.return_value = ("spinna-results", ["nnd.png"])
 
-        info = [{"Width": 1000, "Height": 1000, "Frames": 10000}]
+        info = [
+            {"Width": 1000, "Height": 1000, "Frames": 10000, "Pixelsize": 130}
+        ]
         locs_dtype = [
             ("frame", "u4"),
             ("photons", "f4"),
@@ -1660,7 +1693,9 @@ class TestAnalyseModules(unittest.TestCase):
             0.08,
         )
 
-        info = [{"Width": 1000, "Height": 1000, "Frames": 10000}]
+        info = [
+            {"Width": 1000, "Height": 1000, "Frames": 10000, "Pixelsize": 130}
+        ]
         locs_dtype = [
             ("frame", "u4"),
             ("photons", "f4"),
@@ -1932,7 +1967,9 @@ class TestAnalyseModules(unittest.TestCase):
         fp_figs = [os.path.join(result_dir, "run1_NND_CD86_CD86.png")]
         mock_spinna_batch.return_value = (result_dir, fp_summary, fp_figs)
 
-        info = [{"Width": 1000, "Height": 1000, "Frames": 10000}]
+        info = [
+            {"Width": 1000, "Height": 1000, "Frames": 10000, "Pixelsize": 130}
+        ]
         locs_dtype = [("frame", "u4"), ("x", "f4"), ("y", "f4")]
         locs = pd.DataFrame(
             np.rec.array([(i, 0.0, 0.0) for i in range(5)], dtype=locs_dtype)
@@ -2004,7 +2041,9 @@ class TestAnalyseModules(unittest.TestCase):
                 dtype=[("frame", "u4"), ("x", "f4"), ("y", "f4")],
             )
         )
-        self.ap.info = [{"Width": 1000, "Height": 1000, "Frames": 10000}]
+        self.ap.info = [
+            {"Width": 1000, "Height": 1000, "Frames": 10000, "Pixelsize": 130}
+        ]
 
         parameters = {
             "fp_spinna_batch_config": cfg_fp,
@@ -2060,7 +2099,9 @@ class TestAnalyseModules(unittest.TestCase):
             }
         ).to_csv(cfg_fp, index=False)
 
-        info = [{"Width": 1000, "Height": 1000, "Frames": 10000}]
+        info = [
+            {"Width": 1000, "Height": 1000, "Frames": 10000, "Pixelsize": 130}
+        ]
         locs = pd.DataFrame(
             np.rec.array(
                 [(i, 0.0, 0.0) for i in range(5)],
@@ -2099,7 +2140,9 @@ class TestAnalyseModules(unittest.TestCase):
 
     # @patch("picasso_workflow.analyse.picasso_outpost.spinna_temp", MagicMock)
     def spinna_manual(self):
-        info = [{"Width": 1000, "Height": 1000, "Frames": 10000}]
+        info = [
+            {"Width": 1000, "Height": 1000, "Frames": 10000, "Pixelsize": 130}
+        ]
         locs_dtype = [
             ("frame", "u4"),
             ("photons", "f4"),
@@ -2979,8 +3022,10 @@ class TestAnalyseModules(unittest.TestCase):
         )
 
     @patch("picasso_workflow.analyse.io.save_locs", MagicMock())
-    @patch("picasso_workflow.analyse.postprocess.link", MagicMock())
-    def link_locs(self):
+    @patch("picasso_workflow.analyse.postprocess.link")
+    def link_locs(self, mock_link):
+        # picasso 1.0: link returns (locs, info).
+        mock_link.return_value = (self.ap.locs, self.ap.info)
         parameters = {"d_max": 2, "tolerance": 3}
 
         parameters, results = self.ap.link_locs(0, parameters)

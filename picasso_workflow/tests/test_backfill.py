@@ -39,7 +39,11 @@ from picasso_workflow.backfill.csv_import import (
     load_label_index,
     read_label_rows,
 )
-from picasso_workflow.backfill.ingest import ingest_dataset, ingest_paths
+from picasso_workflow.backfill.ingest import (
+    ingest_dataset,
+    ingest_paths,
+    load_locs_lenient,
+)
 from picasso_workflow.backfill.metrics import locs_signature
 from picasso_workflow.backfill.parser import parse_folder_tokens
 from pathlib import Path
@@ -70,7 +74,8 @@ requires_registry = unittest.skipUnless(
 def _run_id_for(fp: str) -> str:
     """The content-aware run_id the ingest mints for a dataset (keys label CSVs
     in tests the same way :func:`ingest.ingest_dataset` does)."""
-    locs, info = io.load_locs(fp)
+    # Match ingest: the lenient loader tolerates pre-1.0 Pixelsize-less files.
+    locs, info = load_locs_lenient(fp)
     return synth_run_id(fp, info, locs_signature(locs))
 
 
@@ -101,6 +106,44 @@ def _make_locs(
     ``pixelsize=None`` omits ``Pixelsize`` from the info → a metadata-INcomplete
     dataset (the saver still needs Width/Height/Frames).
     """
+    locs, info = _synth_locs_and_info(pixelsize=pixelsize, seed=seed, n=n)
+    fp = os.path.join(dirpath, name)
+    if pixelsize is None:
+        # picasso 1.0 io.save_locs requires Pixelsize, so to produce a genuine
+        # pre-1.0 (camera-pixel) file with no pixel size, save with a nominal
+        # one, then strip the 1.0 format marker + Pixelsize so io.load_locs
+        # reads it as a legacy file and raises MissingPixelsizeError without a
+        # pixelsize= (exercising ingest's lenient-load path).
+        import h5py
+        import yaml
+
+        io.save_locs(fp, locs, [dict(info[0], Pixelsize=PIXELSIZE_NM)])
+        with h5py.File(fp, "a") as f:
+            for attr in list(f.attrs):
+                if "picasso_format" in attr:
+                    del f.attrs[attr]
+        yfp = os.path.splitext(fp)[0] + ".yaml"
+        with open(yfp) as y:
+            docs = list(yaml.safe_load_all(y))
+        for doc in docs:
+            if isinstance(doc, dict):
+                doc.pop("Pixelsize", None)
+        with open(yfp, "w") as y:
+            yaml.dump_all(docs, y)
+    else:
+        io.save_locs(fp, locs, info)
+    return fp
+
+
+def _synth_locs_and_info(
+    *, pixelsize=PIXELSIZE_NM, seed: int = 0, n: int = N_LOCS
+):
+    """Build the synthetic (locs, info) pair that :func:`_make_locs` writes.
+
+    Exposed so a test can exercise a Pixelsize-less dataset in memory:
+    picasso 1.0 ``io.save_locs`` / ``io.load_locs`` require ``Pixelsize``, so
+    a genuinely Pixelsize-less dataset can no longer round-trip through a file.
+    """
     rng = np.random.default_rng(seed)
     locs = pd.DataFrame(
         {
@@ -124,9 +167,7 @@ def _make_locs(
     }
     if pixelsize is not None:
         info["Pixelsize"] = pixelsize
-    fp = os.path.join(dirpath, name)
-    io.save_locs(fp, locs, [info])
-    return fp
+    return locs, [info]
 
 
 class TestFolderTokenParser(unittest.TestCase):
@@ -171,10 +212,11 @@ class TestMetricsFromHdf5(unittest.TestCase):
             self.assertNotIn(key, m)
 
     def test_missing_pixelsize_drops_nm_metrics(self):
-        with tempfile.TemporaryDirectory() as d:
-            fp = _make_locs(d, "nopix_locs.hdf5", pixelsize=None)
-            locs, info = io.load_locs(fp)
-            m = compute_metrics(locs, info)
+        # picasso 1.0 io.save_locs / io.load_locs require Pixelsize, so a
+        # genuinely Pixelsize-less dataset can't round-trip through a file;
+        # build it in memory to exercise compute_metrics' incomplete path.
+        locs, info = _synth_locs_and_info(pixelsize=None)
+        m = compute_metrics(locs, info)
         # Without a pixel size, nm-scaled metrics can't be computed → absent.
         for key in ("lp_x_nm", "lp_y_nm", "density_locs_um2", "nena_nm"):
             self.assertNotIn(key, m)
@@ -375,7 +417,10 @@ class TestPerTaxonRanges(unittest.TestCase):
             self.assertTrue(
                 parse_dataset(complete[0], info_c).metadata_complete
             )
-            _, info_i = io.load_locs(incomplete)
+            # picasso 1.0 io.load_locs raises on the Pixelsize-less file; the
+            # lenient loader (what ingest uses) parses it and leaves Pixelsize
+            # absent so the gate still classifies it metadata-incomplete.
+            _, info_i = load_locs_lenient(incomplete)
             feats_i = parse_dataset(incomplete, info_i)
             self.assertFalse(feats_i.metadata_complete)
             self.assertIn("pixelsize_nm", feats_i.metadata_missing)

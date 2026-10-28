@@ -27,6 +27,7 @@ import re
 import string
 import subprocess
 import sys
+import threading
 import time
 from functools import wraps
 
@@ -38,7 +39,6 @@ import pandas as pd
 import psutil
 import yaml
 from matplotlib import colormaps
-from memory_profiler import memory_usage
 from picasso_workflow._picasso_api import CONFIG as pCONFIG
 from picasso_workflow._picasso_api import __version__ as picassoversion
 from picasso_workflow._picasso_api import (
@@ -951,6 +951,21 @@ def _positive_or_none(value, cast):
     return value if value > 0 else None
 
 
+def _net_gradient_method(min_gradient):
+    """Wrap a net-gradient threshold as a picasso 1.0 identification method.
+
+    picasso 1.0 replaced the bare ``minimum_ng`` number with an
+    :class:`~picasso.localize.IdentificationMethod` (here
+    :class:`~picasso.localize.NetGradient`). A per-channel/per-ROI list of
+    thresholds becomes a list of methods, which both
+    :class:`~picasso.localize.IdentificationParameters` and the channel-
+    registration calibration accept.
+    """
+    if isinstance(min_gradient, (list, tuple, np.ndarray)):
+        return [localize.NetGradient(float(g)) for g in min_gradient]
+    return localize.NetGradient(float(min_gradient))
+
+
 def _load_calibration(calibration, loader):
     """Resolve a picasso calibration given as a dict or a file path.
 
@@ -1060,62 +1075,61 @@ def profile_resource_usage(method):
     def wrapper(self, i, parameters, calling_module_dir=None, suffix=""):
         profiling_results = {"peak_memory_gb": 0.0, "peak_cpu_cores": 0.0}
 
-        # Memory profiling function
-        def memory_measure(self, i, parameters, calling_module_dir, suffix):
-            start_cpu = time.process_time()
-            start_real = time.time()
-            _ = psutil.cpu_percent()
-            # Call the actual function
-            results = method(self, i, parameters, calling_module_dir, suffix)
-            cpu_time = time.process_time() - start_cpu
-            real_time = time.time() - start_real
-            cpu_percent_end = psutil.cpu_percent()
-            # Store CPU usage for access in wrapper
-            wrapper.cpu_usage = cpu_time / max(real_time, 0.001)
-            wrapper.mean_cpu_percent = cpu_percent_end
-            return results
+        # Run the module body EXACTLY ONCE and sample this process's RSS in a
+        # background thread for the peak. We do NOT hand the callable to
+        # memory_profiler.memory_usage: with a (func, args) proc it re-runs the
+        # function several times to collect samples (7x for a fast module in
+        # memory_profiler 0.61), which silently corrupts any *stateful* module
+        # that mutates self.locs -- e.g. g5m replaces the 'group' column with
+        # 'group_input', so the second run fails "Localizations must be
+        # grouped". Sampling ourselves keeps the single run that modules assume.
+        proc = psutil.Process()
+        peak_mib = proc.memory_info().rss / (1024.0**2)
+        stop = threading.Event()
 
+        def _sample_memory():
+            nonlocal peak_mib
+            while not stop.is_set():
+                try:
+                    rss_mib = proc.memory_info().rss / (1024.0**2)
+                    if rss_mib > peak_mib:
+                        peak_mib = rss_mib
+                except Exception:
+                    pass
+                stop.wait(0.5)
+
+        sampler = threading.Thread(target=_sample_memory, daemon=True)
+        sampler.start()
+        start_cpu = time.process_time()
+        start_real = time.time()
+        _ = psutil.cpu_percent()
         try:
-            # Measure memory usage
-            mem_usage = memory_usage(
-                proc=(
-                    memory_measure,
-                    [self, i, parameters, calling_module_dir, suffix],
-                ),
-                interval=0.5,
-                timeout=None,
-                max_usage=True,
-                retval=True,
+            parameters, results = method(
+                self, i, parameters, calling_module_dir, suffix
             )
+        finally:
+            stop.set()
+            sampler.join(timeout=2.0)
+        cpu_time = time.process_time() - start_cpu
+        real_time = time.time() - start_real
+        cpu_usage = cpu_time / max(real_time, 0.001)
+        wrapper.cpu_usage = cpu_usage
+        wrapper.mean_cpu_percent = psutil.cpu_percent()
 
-            # Extract memory results
-            peak_memory = mem_usage[0]  # First element is peak memory
-            # Convert MiB to GiB
-            profiling_results["peak_memory_gb"] = peak_memory / 1024.0
-
-            # Calculate peak CPU usage in terms of cores
-            total_cores = psutil.cpu_count(logical=True)  # total logical cores
-            profiling_results["peak_cpu_cores"] = min(
-                wrapper.cpu_usage * total_cores, total_cores
-            )
-            profiling_results["peak_cpu_usage"] = wrapper.cpu_usage
-            profiling_results["mean_cpu_usage"] = wrapper.mean_cpu_percent
-            pcpuc = profiling_results["peak_cpu_cores"]
-            logger.debug(
-                f"profiled cpu usage: {wrapper.cpu_usage}, "
-                + f"total cores: {total_cores}, "
-                + f"peak_cpu_cores: {pcpuc}"
-            )
-
-            # Get the results from the memory_measure function
-            # Second element is the actual results
-            parameters, results = mem_usage[1]
-
-        except Exception as e:
-            raise e
-            # print(f"Profiling error: {e}")
-            # return None, profiling_results  # Return None for results on
-            # error
+        # Convert MiB to GiB.
+        profiling_results["peak_memory_gb"] = peak_mib / 1024.0
+        total_cores = psutil.cpu_count(logical=True)  # total logical cores
+        profiling_results["peak_cpu_cores"] = min(
+            cpu_usage * total_cores, total_cores
+        )
+        profiling_results["peak_cpu_usage"] = cpu_usage
+        profiling_results["mean_cpu_usage"] = wrapper.mean_cpu_percent
+        pcpuc = profiling_results["peak_cpu_cores"]
+        logger.debug(
+            f"profiled cpu usage: {cpu_usage}, "
+            + f"total cores: {total_cores}, "
+            + f"peak_cpu_cores: {pcpuc}"
+        )
 
         results["peak_memory_gb"] = profiling_results["peak_memory_gb"]
         try:
@@ -3070,8 +3084,13 @@ class AutoPicasso(
 
         for frame_number in frame_numbers:
             identifications.append(
+                # picasso 1.0 takes an identification method, not a bare
+                # net-gradient number.
                 localize.identify_by_frame_number(
-                    self.movie, start_ng, box_size, frame_number
+                    self.movie,
+                    localize.NetGradient(start_ng),
+                    box_size,
+                    frame_number,
                 )
             )
         # id_list = identifications
@@ -3339,39 +3358,50 @@ class AutoPicasso(
         # those: an empty-string roi/frame_bounds is not None, and *any* truthy
         # temporal_median_window switches the filter on - a window of 1 is a
         # no-op median that still forces the slower filtered read path.
+        # picasso 1.0 bundles the net-gradient threshold and the optional
+        # background-suppression filters into one IdentificationParameters; the
+        # ROIs / frame bounds and the progress/abort hooks stay call-level.
+        id_param_kwargs = {}
+        # temporal-median background: a window needs >= 2 frames to do
+        # anything; the stride only matters alongside a window.
+        tmw = parameters.get("temporal_median_window")
+        if tmw is not None and int(tmw) >= 2:
+            id_param_kwargs["temporal_median_window"] = int(tmw)
+            tms = parameters.get("temporal_median_stride")
+            if tms is not None and int(tms) >= 1:
+                id_param_kwargs["temporal_median_stride"] = int(tms)
+        # spatial Gaussian pre-filter: a sigma of 0 (or less) means off.
+        gfs = parameters.get("gaussian_filter_sigma")
+        if gfs is not None and float(gfs) > 0:
+            id_param_kwargs["gaussian_filter_sigma"] = float(gfs)
+        id_parameters = localize.IdentificationParameters(
+            method=_net_gradient_method(parameters["min_gradient"]),
+            box=parameters["box_size"],
+            **id_param_kwargs,
+        )
+
         identify_kwargs = {}
         # roi / frame_bounds: a real selection is a non-empty list/tuple.
         for key in ("roi", "frame_bounds"):
             if parameters.get(key):
                 identify_kwargs[key] = parameters[key]
-        # temporal-median background: a window needs >= 2 frames to do
-        # anything; the stride only matters alongside a window.
-        tmw = parameters.get("temporal_median_window")
-        if tmw is not None and int(tmw) >= 2:
-            identify_kwargs["temporal_median_window"] = int(tmw)
-            tms = parameters.get("temporal_median_stride")
-            if tms is not None and int(tms) >= 1:
-                identify_kwargs["temporal_median_stride"] = int(tms)
-        # spatial Gaussian pre-filter: a sigma of 0 (or less) means off.
-        gfs = parameters.get("gaussian_filter_sigma")
-        if gfs is not None and float(gfs) > 0:
-            identify_kwargs["gaussian_filter_sigma"] = float(gfs)
 
-        # forward intra-module progress / abort when the runner wired them in
+        # forward intra-module progress / abort when the runner wired them in.
+        # The proxy satisfies picasso 1.0's lib.Progress interface, so it is
+        # passed as the single ``progress`` argument (0.11's progress_callback).
         proxy = self._make_progress_proxy(
             total=len(self.movie), phase="identify"
         )
         if proxy is not None:
-            identify_kwargs["progress_callback"] = proxy
+            identify_kwargs["progress"] = proxy
             if (abort := self._picasso_abort()) is not None:
                 identify_kwargs["abort_callback"] = abort
 
-        # identify returns (identifications, info); return_info defaults True.
+        # identify always returns (identifications, info) in picasso 1.0.
         _id_result = localize.identify(
             self.movie,
-            parameters["min_gradient"],
-            parameters["box_size"],
-            threaded=bool(parameters.get("identify_parallel", True)),
+            parameters=id_parameters,
+            parallel=bool(parameters.get("identify_parallel", True)),
             **identify_kwargs,
         )
         if _id_result is None:
@@ -3413,11 +3443,12 @@ class AutoPicasso(
         # threading.Lock (via the ProgressManager) that io.save_locs ->
         # save_info -> yaml.dump cannot serialize ("cannot pickle
         # '_thread.lock' object").
+        new_info.update(id_param_kwargs)
         new_info.update(
             {
                 k: v
                 for k, v in identify_kwargs.items()
-                if k not in ("progress_callback", "abort_callback")
+                if k not in ("progress", "abort_callback")
             }
         )
         self.info = self.info + [new_info]
@@ -3564,12 +3595,10 @@ class AutoPicasso(
         fit_progress_kw = {}
         proxy = self._make_progress_proxy(total=n_spots, phase="localize")
         if proxy is not None:
-            fit_progress_kw["progress_callback"] = proxy
-            fit_progress_kw["cut_progress_callback"] = (
-                self._make_progress_proxy(
-                    total=n_spots, phase="localize (extract spots)"
-                )
-            )
+            # picasso 1.0 reports the whole fit (spot extraction + the fit) via
+            # a single ``progress`` tracker, so the separate 0.11
+            # progress_callback / cut_progress_callback collapse into one.
+            fit_progress_kw["progress"] = proxy
             if (abort := self._picasso_abort()) is not None:
                 fit_progress_kw["abort_callback"] = abort
 
@@ -3596,7 +3625,7 @@ class AutoPicasso(
             fitting_method=fitting_method,
             spline_calibration=spline_calibration,
             camera_calibration=camera_calibration,
-            multiprocess=multiprocess,
+            parallel=multiprocess,
             eps=eps,
             max_it=max_it,
             **fit_progress_kw,
@@ -3790,7 +3819,7 @@ class AutoPicasso(
             pixelsize=pixelsize,
             fitting_method=fitting_method,
             filter=parameters.get("filter", 0),
-            multiprocess=True,
+            parallel=True,
             gpu=gpu,
         )
         if self.locs is None:
@@ -4091,7 +4120,9 @@ class AutoPicasso(
             all_x = np.concatenate([lcs["x"] for lcs in locs_list])
             all_y = np.concatenate([lcs["y"] for lcs in locs_list])
 
-            roi_size = parameters.get("ctrmass_fov_nm", 10000.0) / pixelsize
+            # picasso 1.0: locs are in nm, so the ROI size is the nm FOV
+            # directly (0.11 divided by pixelsize to get a camera-pixel span).
+            roi_size = parameters.get("ctrmass_fov_nm", 10000.0)
             if roi_size <= 0:
                 roi_size = 100.0  # fallback
 
@@ -4216,7 +4247,8 @@ class AutoPicasso(
         x_mean_clipped = x_mean
         y_mean_clipped = y_mean
         if parameters.get("ctrmass_fov_nm"):
-            zoom_size = parameters.get("ctrmass_fov_nm") / pixelsize
+            # nm FOV directly (picasso 1.0 locs are nm).
+            zoom_size = parameters.get("ctrmass_fov_nm")
             if (x_max - x_min) >= zoom_size:
                 x_mean_clipped = np.clip(
                     x_mean, x_min + zoom_size / 2.0, x_max - zoom_size / 2.0
@@ -4238,10 +4270,11 @@ class AutoPicasso(
             for idx, (_, _, t_xmin, t_xmax, t_ymin, t_ymax) in enumerate(
                 selected_rois
             ):
-                x_min_um = (t_xmin * pixelsize) / 1000.0
-                x_max_um = (t_xmax * pixelsize) / 1000.0
-                y_min_um = (t_ymin * pixelsize) / 1000.0
-                y_max_um = (t_ymax * pixelsize) / 1000.0
+                # coords are nm (picasso 1.0) -> µm.
+                x_min_um = t_xmin / 1000.0
+                x_max_um = t_xmax / 1000.0
+                y_min_um = t_ymin / 1000.0
+                y_max_um = t_ymax / 1000.0
 
                 width_um = x_max_um - x_min_um
                 height_um = y_max_um - y_min_um
@@ -4275,16 +4308,19 @@ class AutoPicasso(
             # Draw standard Zoom-In outline on overview image
             import matplotlib.patches as patches
 
+            # picasso 1.0: locs (and thus x_mean_clipped) are nm, so the nm
+            # half-FOV is subtracted directly (no /pixelsize), and the nm
+            # extents convert to µm by /1000.
             fov_half = parameters.get("ctrmass_fov_nm") / 2
-            x_min_zoom = x_mean_clipped - fov_half / pixelsize
-            x_max_zoom = x_mean_clipped + fov_half / pixelsize
-            y_min_zoom = y_mean_clipped - fov_half / pixelsize
-            y_max_zoom = y_mean_clipped + fov_half / pixelsize
+            x_min_zoom = x_mean_clipped - fov_half
+            x_max_zoom = x_mean_clipped + fov_half
+            y_min_zoom = y_mean_clipped - fov_half
+            y_max_zoom = y_mean_clipped + fov_half
 
-            x_min_um = (x_min_zoom * pixelsize) / 1000.0
-            x_max_um = (x_max_zoom * pixelsize) / 1000.0
-            y_min_um = (y_min_zoom * pixelsize) / 1000.0
-            y_max_um = (y_max_zoom * pixelsize) / 1000.0
+            x_min_um = x_min_zoom / 1000.0
+            x_max_um = x_max_zoom / 1000.0
+            y_min_um = y_min_zoom / 1000.0
+            y_max_um = y_max_zoom / 1000.0
 
             width_um = x_max_um - x_min_um
             height_um = y_max_um - y_min_um
@@ -4406,12 +4442,14 @@ class AutoPicasso(
         # info[1]["Pixelsize"]
         self.info[1]["Pixelsize"] = pixelsize
 
+        # picasso 1.0 takes intersect_d / roi_r in nm directly (0.11 took
+        # camera pixels, hence the former division by the pixel size).
         self.locs, self.info, self.drift = aim.aim(
             self.locs,
             self.info,
             segmentation=parameters["segmentation"],
-            intersect_d=parameters["intersect_d"] / pixelsize,
-            roi_r=parameters["roi_r"] / pixelsize,
+            intersect_d=parameters["intersect_d"],
+            roi_r=parameters["roi_r"],
             progress=progress,
         )
 
@@ -4480,22 +4518,20 @@ class AutoPicasso(
         for i in range(parameters.get("max_iter_segmentations", 3)):
             # if the segmentation is too low, the process raises an error
             # adaptively increase the value.
-            # forward the runner's progress proxy if wired, else a no-op.
-            seg_cb = (
-                self._make_progress_proxy(
-                    total=parameters["segmentation"], phase="undrift (rcc)"
-                )
-                or lib.MockProgress().set_value
+            # forward the runner's progress proxy if wired (None -> picasso
+            # uses a no-op tracker). picasso 1.0 reports RCC undrift through a
+            # single ``progress`` (0.11 had segmentation_callback + rcc_callback)
+            # and returns (locs, info, drift) rather than (drift, locs).
+            progress = self._make_progress_proxy(
+                total=parameters["segmentation"], phase="undrift (rcc)"
             )
-            rcc_cb = seg_cb
             try:
-                self.drift, self.locs = postprocess.undrift(
+                self.locs, self.info, self.drift = postprocess.undrift(
                     self.locs,
                     self.info,
                     segmentation=parameters["segmentation"],
                     display=False,
-                    segmentation_callback=seg_cb,
-                    rcc_callback=rcc_cb,
+                    progress=progress,
                 )
                 results["success"] = True
                 break
@@ -4600,19 +4636,17 @@ class AutoPicasso(
         for i, dim in enumerate(dimensions):
             color = colors[i % len(colors)]
 
+            # picasso 1.0 returns the drift already in nm (0.11: camera pixels),
+            # so it is plotted as-is on the nm axis.
             if isinstance(drift, np.recarray):
-                drift_values = drift[dim] * pixelsize
+                drift_values = drift[dim]
                 uncertainty_values = (
-                    uncertainty[dim] * pixelsize
-                    if uncertainty is not None
-                    else None
+                    uncertainty[dim] if uncertainty is not None else None
                 )
             else:
-                drift_values = drift[:, i] * pixelsize
+                drift_values = drift[:, i]
                 uncertainty_values = (
-                    uncertainty[:, i] * pixelsize
-                    if uncertainty is not None
-                    else None
+                    uncertainty[:, i] if uncertainty is not None else None
                 )
 
             # Plot drift trajectory
@@ -4679,10 +4713,11 @@ class AutoPicasso(
         frames = np.arange(drift.shape[0])
         for i, dim in enumerate(dimensions):
             factor = 1e-3 if dim == "z" else 1
+            # picasso 1.0 drift is already in nm (0.11: camera pixels).
             if isinstance(drift, pd.DataFrame):
-                ax.plot(frames, drift[dim] * pixelsize * factor, label=dim)
+                ax.plot(frames, drift[dim] * factor, label=dim)
             else:
-                ax.plot(frames, drift[:, i] * pixelsize * factor, label=dim)
+                ax.plot(frames, drift[:, i] * factor, label=dim)
         ax.set_xlabel("frame")
         ax.set_ylabel("drift [nm]")
         ax.set_title(f"undrift by {method}")
@@ -4870,9 +4905,12 @@ class AutoPicasso(
         for meth, meth_pars in parameters["methods"].items():
             if meth.lower() == "nena":
                 try:
+                    # picasso 1.0: nena returns the precision (best_val) and
+                    # its distance axis (res["d"]) in nm; 0.11 returned camera
+                    # pixels. nm is now the native value; px is derived.
                     res, best_val = postprocess.nena(self.locs, self.info)
                     fp_plot = os.path.join(results["folder"], "nena.png")
-                    self._plot_nena(res, fp_plot, pixelsize)
+                    self._plot_nena(res, fp_plot)
                     all_best_vals = {
                         "delta_a": res["best_values"]["delta_a"],
                         "s": res["best_values"]["s"],
@@ -4884,11 +4922,11 @@ class AutoPicasso(
                         "res": str(all_best_vals),
                         # "chisqr": res.chisqr,
                         "NeNa": (
-                            f"{best_val:.3f} px;"
-                            + f" {pixelsize*best_val:.3f} nm "
+                            f"{best_val / pixelsize:.3f} px;"
+                            + f" {best_val:.3f} nm "
                         ),
-                        "nena-px": best_val,
-                        "nena-nm": pixelsize * best_val,
+                        "nena-px": best_val / pixelsize,
+                        "nena-nm": best_val,
                         "filepath_plot": fp_plot,
                     }
                 except ValueError as e:
@@ -4907,9 +4945,11 @@ class AutoPicasso(
                     ).mean(1)
                 )
                 median_lp = median_lp / meth_pars.get("qe_correction", 1)
+                # picasso 1.0: lpx/lpy are in nm (0.11: camera pixels), so the
+                # median is nm; derive px from the pixel size.
                 results["median-loc-precision"] = {
-                    "median_lp-px": median_lp,
-                    "median_lp-nm": median_lp * pixelsize,
+                    "median_lp-px": median_lp / pixelsize,
+                    "median_lp-nm": median_lp,
                 }
             else:
                 raise NotImplementedError(
@@ -4917,25 +4957,20 @@ class AutoPicasso(
                 )
         return parameters, results
 
-    def _plot_nena(self, nena_result, filepath_plot, pixelsize=None):
+    def _plot_nena(self, nena_result, filepath_plot):
         """Plot the NeNa fit of the nearest-neighbour distance distribution.
 
         Parameters
         ----------
         nena_result : object
-            The NeNa fit result from ``postprocess.nena``.
+            The NeNa fit result from ``postprocess.nena``. In picasso 1.0 its
+            distance axis (``"d"``) is already in nm.
         filepath_plot : str
             Path to save the plot to.
-        pixelsize : float, optional
-            Pixel size in nm, for a secondary nm axis.
         """
         fig, ax = plt.subplots()
         d = nena_result["d"]
-        if pixelsize is None:
-            xlabel = "Distance [px]"
-        else:
-            d = d * pixelsize
-            xlabel = "Distance [nm]"
+        xlabel = "Distance [nm]"
         ax.set_title("Next frame neighbor distance histogram")
         ax.plot(d, nena_result["data"], label="Data")
         ax.plot(d, nena_result["best_fit"], label="Fit")
@@ -4991,8 +5026,13 @@ class AutoPicasso(
             Module results (see
             :class:`~picasso_workflow.util.AbstractModuleCollection`).
         """
-        self.locs = postprocess.compute_local_density(
-            self.locs, self.info, parameters["radius"]
+        # picasso 1.0 takes the radius in nm and returns (locs, info); 0.11
+        # took camera pixels (the value was passed straight through), so
+        # multiply by the pixel size to keep the same physical radius.
+        self.locs, _ = postprocess.compute_local_density(
+            self.locs,
+            self.info,
+            radius=parameters["radius"] * self.pixelsize,
         )
         density_info = {
             "Generated by": "Picasso Density",
@@ -5045,19 +5085,21 @@ class AutoPicasso(
             Results updated with ``fp_fig_clustersizes`` (cluster-size
             distribution figure) and ``fp_centers`` (cluster centers file).
         """
-        pixelsize = int(self.pixelsize)
-        radius = parameters["radius"] / pixelsize
         min_samples = parameters["min_samples"]
         min_locs = parameters["min_locs"]
-        # label locs according to clusters
-        self.locs, dbscan_info = clusterer.dbscan(
+        # label locs according to clusters. picasso 1.0 takes the radius in nm
+        # (0.11 took camera pixels + a pixelsize to convert), so the config
+        # value, already in nm, is passed straight through. It returns
+        # (locs, info) with the whole info list; the dbscan step is its last
+        # entry.
+        self.locs, _dbscan_info = clusterer.dbscan(
             self.locs,
-            radius,
-            min_samples,
-            min_locs,
-            pixelsize,
-            return_info=True,
+            self.info,
+            radius=parameters["radius"],
+            min_samples=min_samples,
+            min_locs=min_locs,
         )
+        dbscan_info = dict(_dbscan_info[-1])
         dbscan_info["Wrapped by"] = "picasso-workflow : dbscan"
         self.info.append(dbscan_info)
         # results["fp_locs"] = os.path.join(
@@ -5077,7 +5119,9 @@ class AutoPicasso(
         )
         fig.savefig(results["fp_fig_clustersizes"])
 
-        cluster_centers = clusterer.find_cluster_centers(self.locs, pixelsize)
+        cluster_centers, _ = clusterer.find_cluster_centers(
+            self.locs, self.info
+        )
         results["fp_centers"] = os.path.join(
             results["folder"], "centers_dbscan.hdf5"
         )
@@ -5116,18 +5160,23 @@ class AutoPicasso(
         """
         min_cluster = parameters["min_cluster"]
         min_samples = parameters["min_samples"]
-        pixelsize = self.pixelsize
 
-        # label locs according to clusters
-        self.locs, hdbscan_info = clusterer.hdbscan(
-            self.locs, min_cluster, min_samples, pixelsize, return_info=True
+        # label locs according to clusters. min_cluster_size / min_samples are
+        # counts (not lengths), so no unit change; picasso 1.0 drops the
+        # pixelsize argument and returns (locs, info) with the whole info list.
+        self.locs, _hdbscan_info = clusterer.hdbscan(
+            self.locs,
+            self.info,
+            min_cluster_size=min_cluster,
+            min_samples=min_samples,
         )
+        hdbscan_info = dict(_hdbscan_info[-1])
         hdbscan_info["Wrapped by"] = "picasso-workflow : hdbscan"
         self.info.append(hdbscan_info)
         filepath = os.path.join(results["folder"], "locs_hdbscan.hdf5")
         self._save_locs(filepath)
 
-        self.locs = clusterer.find_cluster_centers(self.locs, pixelsize)
+        self.locs, _ = clusterer.find_cluster_centers(self.locs, self.info)
         logger.warning("saving cluster centeras as locs. Is that intended?")
 
         return parameters, results
@@ -5927,8 +5976,9 @@ class AutoPicasso(
         logger.debug(f"  Memory limit: {max_memory_gb} GB per chunk")
 
         # Extract coordinates
-        x_coords = self.locs["x"] * self.pixelsize  # Convert to nm
-        y_coords = self.locs["y"] * self.pixelsize
+        # picasso 1.0 localizations are already in nm (0.11: camera pixels).
+        x_coords = self.locs["x"]
+        y_coords = self.locs["y"]
 
         logger.debug(f"  Processing {len(x_coords)} localizations")
         x_range = x_coords.max() - x_coords.min()
@@ -7003,27 +7053,25 @@ class AutoPicasso(
             locs-per-cluster histogram). In the multi-channel case a
             ``per_channel`` list carries the same counts per channel.
         """
-        pixelsize = self.pixelsize
-        radius = parameters["radius"] / pixelsize
+        # picasso 1.0 takes radius_xy / radius_z in nm and drops the pixelsize
+        # argument (0.11 took camera pixels + a pixelsize). The config radii
+        # are already in nm, so they are passed straight through.
+        radius = parameters["radius"]
         min_locs = parameters["min_locs"]
         basic_fa = parameters.get("basic_fa", False)
         parameters["basic_fa"] = basic_fa
         radius_z = parameters.get("radius_z", None)
-        # make sure pxsiz is ok here
-        if radius_z is not None:
-            radius_z = radius_z / pixelsize
         parameters["radius_z"] = radius_z
-        pixelsize = self.pixelsize
 
         # cluster locs or channel_locs,
         # depending on whether this is a single target workflow
         if self.locs is not None:
             kwargs = {
                 "locs": self.locs,
+                "info": self.info,
                 "radius_xy": radius,
                 "min_locs": min_locs,
                 "frame_analysis": basic_fa,
-                "pixelsize": pixelsize,
             }
             if radius_z is not None:  # 3D
                 kwargs["radius_z"] = radius_z
@@ -7045,9 +7093,8 @@ class AutoPicasso(
             # logger.debug(
             #     f"starting clusterer on self.locs with kwargs {kwargs}"
             # )
-            self.locs, smlm_cluster_info = clusterer.cluster(
-                **kwargs, return_info=True
-            )
+            self.locs, _smlm_cluster_info = clusterer.cluster(**kwargs)
+            smlm_cluster_info = dict(_smlm_cluster_info[-1])
             smlm_cluster_info["Wrapped by"] = (
                 "picasso-workflow : smlm_clusterer"
             )
@@ -7063,7 +7110,7 @@ class AutoPicasso(
                 1
             ]
 
-            self.locs = clusterer.find_cluster_centers(self.locs, pixelsize)
+            self.locs, _ = clusterer.find_cluster_centers(self.locs, self.info)
             logger.warning(
                 "saving cluster centeras as locs. Is that intended?"
             )
@@ -7093,10 +7140,10 @@ class AutoPicasso(
             ):
                 kwargs = {
                     "locs": locs,
+                    "info": info,
                     "radius_xy": radius,
                     "min_locs": min_locs,
                     "frame_analysis": basic_fa,
-                    "pixelsize": pixelsize,
                 }
                 if radius_z is not None:  # 3D
                     kwargs["radius_z"] = radius_z
@@ -7111,9 +7158,10 @@ class AutoPicasso(
                 n_locs_in = len(locs)
 
                 # label locs according to clusters
-                clustered_locs, smlm_cluster_info = clusterer.cluster(
-                    **kwargs, return_info=True
+                clustered_locs, _smlm_cluster_info = clusterer.cluster(
+                    **kwargs
                 )
+                smlm_cluster_info = dict(_smlm_cluster_info[-1])
                 smlm_cluster_info["Wrapped by"] = (
                     "picasso-workflow : smlm_clusterer"
                 )
@@ -7127,8 +7175,8 @@ class AutoPicasso(
                     clustered_locs["group"], return_counts=True
                 )[1]
 
-                cc_locs = clusterer.find_cluster_centers(
-                    clustered_locs, pixelsize
+                cc_locs, _ = clusterer.find_cluster_centers(
+                    clustered_locs, info
                 )
 
                 filepath = os.path.join(
@@ -7237,10 +7285,10 @@ class AutoPicasso(
             ``asynch`` : bool
                 If True, run the GMM search in parallel via multiprocessing
                 (default True).
-            ``callback_parent`` : function
-                Parent object for the progress-bar callback. If None, the bar
-                is shown on the console; if ``'silent'``, nothing is shown
-                (default ``'silent'``).
+            ``progress`` : picasso progress tracker
+                picasso 1.0 ``progress`` (``lib.Progress`` object or
+                ``"console"``). ``'silent'``/``'None'`` (and None) mean no
+                progress output (default silent).
             ``sigma_bounds`` : tuple of float
                 Lower and upper bounds on the Gaussian-component standard
                 deviation, as (min, max). With ``loc_prec_handle="local"``
@@ -7262,8 +7310,9 @@ class AutoPicasso(
             ("bootstrap_check", False),
             ("calibration", None),
             ("mode", "auto"),
-            ("asynch", True),
-            ("callback_parent", None),  # "silent"),
+            # picasso 1.0: asynch -> parallel, callback_parent -> progress.
+            ("parallel", True),
+            ("progress", None),  # "silent"),
             ("sigma_bounds", (g5m.MIN_SIGMA_FACTOR, g5m.MAX_SIGMA_FACTOR)),
             ("loc_prec_handle", "local"),
         ]
@@ -7282,9 +7331,7 @@ class AutoPicasso(
                 with open(fp_calib, "r") as f:
                     z_calibration = yaml.full_load(f)
                 setval = z_calibration
-            elif oa == "callback_parent" and (
-                setval == "silent" or setval == "None"
-            ):
+            elif oa == "progress" and (setval == "silent" or setval == "None"):
                 setval = None
             elif oa == "mode" and setval in (None, "", "auto"):
                 # g5m's z model: 'spline' reads lpz straight from the locs
@@ -7299,11 +7346,13 @@ class AutoPicasso(
 
         results["g5m_args"] = str(kwargs)
 
-        center_locs, clustered_locs, gmm_info = g5m.g5m(
+        # picasso 1.0 returns (centers, info, clustered_locs) -- the info and
+        # the clustered locs swapped order relative to 0.11.
+        center_locs, gmm_info, clustered_locs = g5m.g5m(
             self.locs, self.info, **kwargs
         )
 
-        # picasso.g5m returns (None, None, info) when no molecules are found,
+        # picasso.g5m returns (None, info, None) when no molecules are found,
         # and an empty centers table when its postprocess filters remove them
         # all. Either way there is nothing to keep as new localizations, so
         # the downstream plotting/statistics (center_locs["n_events"],
@@ -7453,12 +7502,9 @@ class AutoPicasso(
             # points = np.array(
             #     locs[parameters["dims"]].tolist()
             # )  # c-locs[0] only for now, before sgl/agg workflow refactoring!!
+            # picasso 1.0 localizations are already in nm (x, y and z), so no
+            # per-dimension conversion is needed.
             points = locs[list(parameters["dims"])].to_numpy()
-            # convert all dimensions to nanometers
-            pixelsize = self.pixelsize
-            for i, dim in enumerate(parameters["dims"]):
-                if dim in ["x", "y"]:
-                    points[:, i] = points[:, i] * pixelsize
 
             # logger.debug(points)
             # logger.debug(points.shape)
@@ -8810,8 +8856,10 @@ class AutoPicasso(
         reference = int(parameters.get("reference", 0))
         calibration = registration.calibrate_channel_registration_from_beads(
             bead_movies,
-            parameters["box_size"],
-            parameters["min_gradient"],
+            box=parameters["box_size"],
+            identification_method=_net_gradient_method(
+                parameters["min_gradient"]
+            ),
             model=model,
             reference=reference,
         )
@@ -9072,7 +9120,6 @@ class AutoPicasso(
                 density[i] = density[i] / le
 
         # locs, but as np.ndarray
-        pixelsize = self.pixelsize
         exp_data = {}
         exp_n_targets = np.zeros(len(self.channel_tags))
         for i, target in enumerate(self.channel_tags):
@@ -9080,13 +9127,11 @@ class AutoPicasso(
             exp_n_targets[i] = len(locs)
             if "z" in locs.columns:
                 exp_data[target] = np.stack(
-                    (locs["x"] * pixelsize, locs["y"] * pixelsize, locs["z"])
+                    (locs["x"], locs["y"], locs["z"])
                 ).T
                 # dim = 3
             else:
-                exp_data[target] = np.stack(
-                    (locs["x"] * pixelsize, locs["y"] * pixelsize)
-                ).T
+                exp_data[target] = np.stack((locs["x"], locs["y"])).T
 
         data_2d = "z" not in self.channel_locs[0].columns
         if not data_2d:
@@ -10211,7 +10256,6 @@ class AutoPicasso(
         # # homo-analysis (proportions of 1- or 2-mers of the same kind)
         # props = {}
         dimensionality = 2
-        pixelsize = self.pixelsize
         if isinstance(parameters["density"], list):
             density = {
                 tag: parameters["density"][cid]
@@ -10310,16 +10354,14 @@ class AutoPicasso(
                 if "z" in locs.columns:
                     exp_data[target] = np.stack(
                         (
-                            locs["x"] * pixelsize,
-                            locs["y"] * pixelsize,
+                            locs["x"],
+                            locs["y"],
                             locs["z"],
                         )
                     ).T
                     # dim = 3
                 else:
-                    exp_data[target] = np.stack(
-                        (locs["x"] * pixelsize, locs["y"] * pixelsize)
-                    ).T
+                    exp_data[target] = np.stack((locs["x"], locs["y"])).T
                     # dim = 2
             structures = self._create_spinna_structure(
                 [A], [[1, 2]], parameters["structure_distance"]
@@ -13506,8 +13548,13 @@ class AutoPicasso(
             Module results (see
             :class:`~picasso_workflow.util.AbstractModuleCollection`).
         """
-        self.locs = postprocess.link(
-            self.locs, self.info, parameters["d_max"], parameters["tolerance"]
+        # picasso 1.0 takes r_max in nm (0.11 took camera pixels) and returns
+        # (locs, info); d_max is in camera pixels, so convert to nm.
+        self.locs, _ = postprocess.link(
+            self.locs,
+            self.info,
+            r_max=parameters["d_max"] * self.pixelsize,
+            max_dark_time=parameters["tolerance"],
         )
         link_info = {
             "Maximum Distance": parameters["d_max"],
@@ -13785,7 +13832,6 @@ class AutoPicasso(
         # # homo-analysis (proportions of 1- or 2-mers of the same kind)
         # props = {}
         dimensionality = 2
-        pixelsize = self.pixelsize
 
         if isinstance(parameters["density"], list):
             density = {
@@ -13814,14 +13860,10 @@ class AutoPicasso(
         for i, tgt in zip([i_target, i_reference], [target, reference]):
             locs = self.channel_locs[i]
             if "z" in locs.columns:
-                exp_data[tgt] = np.stack(
-                    (locs["x"] * pixelsize, locs["y"] * pixelsize, locs["z"])
-                ).T
+                exp_data[tgt] = np.stack((locs["x"], locs["y"], locs["z"])).T
                 # dim = 3
             else:
-                exp_data[tgt] = np.stack(
-                    (locs["x"] * pixelsize, locs["y"] * pixelsize)
-                ).T
+                exp_data[tgt] = np.stack((locs["x"], locs["y"])).T
                 # dim = 2
 
         compound_density = (
@@ -13887,7 +13929,7 @@ class AutoPicasso(
             height=sim_width,
             depth=None,
             random_rot_mode="2D",
-            asynch=True,
+            parallel=True,  # picasso 1.0: asynch -> parallel
             # savedir left empty on purpose. When labeling uncertainty is
             # screened, picasso's fit_le scores each candidate on a
             # single-structure target sub-model whose search space has one
@@ -13980,7 +14022,7 @@ class AutoPicasso(
                     results["folder"],
                     f"interaction-{target}-{reference}_le_fit_scores.csv",
                 ),
-                asynch=True,
+                parallel=True,  # picasso 1.0: asynch -> parallel
                 bootstrap=True,
             )
             prop_t, prop_r, prop_tr = (

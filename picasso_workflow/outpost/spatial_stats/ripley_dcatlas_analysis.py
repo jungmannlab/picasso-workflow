@@ -383,9 +383,14 @@ def get_cell_density_mask(
 
 def convert_picasso_to_coords(mols, pixelsize=PIXELSIZE):
     """Converts the Picasso-format np.rec.array to a 2D numpy array with
-    spatial coordinates in nm."""
+    spatial coordinates in nm.
 
-    return np.array([mols["x"], mols["y"]]).T * pixelsize
+    picasso 1.0 localizations are already in nm (0.11: camera pixels), so the
+    coordinates are returned as-is; ``pixelsize`` is kept for signature
+    compatibility.
+    """
+
+    return np.array([mols["x"], mols["y"]]).T
 
 
 def analyze_2_channels(

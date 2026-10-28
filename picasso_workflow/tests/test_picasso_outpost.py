@@ -252,6 +252,10 @@ class TestPicassoOutpost(unittest.TestCase):
                 "Width": width,
                 "Height": height,
                 "Data Type": "u4",
+                # Pixelsize 1 keeps the pick fixtures unit-consistent under
+                # picasso 1.0: the locs, centres and pick_diameter are in one
+                # coordinate unit and the px->nm pick conversion is a no-op.
+                "Pixelsize": 1,
             }
         ]
         return locs, info
