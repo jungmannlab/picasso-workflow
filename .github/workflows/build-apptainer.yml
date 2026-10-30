@@ -39,7 +39,10 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    # ubuntu-22.04 (jammy), NOT ubuntu-latest (now 24.04/noble): the Apptainer
+    # .deb depends on libfuse3-3, which noble replaced with libfuse3-4 -> the
+    # install fails with "libfuse3-3 … not installable". jammy still ships it.
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
 
