@@ -1,0 +1,119 @@
+# Build the cluster Apptainer image (register C10 / WP-9) in CI.
+#
+# Builds the `.sif` from `deploy/apptainer/paint.def` on a hosted runner (which
+# has the privilege Apptainer's fakeroot build needs) and publishes it. The
+# image is NOT auto-deployed to the cluster: compute nodes have no internet, so
+# someone pulls the published artifact on the LOGIN node to the shared path
+# (e.g. /sw/picasso-workflow-<version>.sif) and jobs `apptainer exec` from there
+# (C48 distribution scheme).
+#
+# Naming (C48): the published file carries the PRIMARY CONSUMER's version
+# (picasso_workflow.__version__) — that is the key the submitter matches on
+# (WP-9 cluster_submit resolves its installed __version__ -> image_path):
+#   • release build  -> picasso-workflow-<version>.sif
+#   • rolling develop -> picasso-workflow-develop-<short-sha>.sif
+# The login-node pull is what (re)points the `picasso-workflow-develop.sif`
+# symlink; CI only produces the sha-stamped file.
+
+name: build-apptainer-image
+
+on:
+  workflow_dispatch:
+    inputs:
+      pw_ref:
+        description: "picasso-workflow git ref to bake in (tag for a release build)"
+        required: true
+        default: "develop"      # picasso-1.0 migration merged to develop (PR #77, 2026-10-28)
+  release:
+    types: [published]          # build on each GitHub release (reproducible = a tag)
+  # Build-smoke on any change to the recipe or this workflow: proves paint.def
+  # still builds + imports headlessly before it merges. Scoped by path so the
+  # ~1-2 GB build only runs when these files change (they rarely do).
+  pull_request:
+    paths:
+      - "deploy/apptainer/**"
+      - ".github/workflows/build-apptainer.yml"
+
+permissions:
+  contents: write               # upload the .sif as a release asset
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The image is ~1-2 GB (numba + scipy + the picasso stack); free runner disk.
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android \
+                      /opt/hostedtoolcache/CodeQL || true
+          df -h /
+
+      # Pin to <= the cluster's Apptainer (hpcl8 = 1.4.1): a .sif built by an
+      # equal/older Apptainer runs on the cluster; a much newer one may not.
+      - uses: eWaterCycle/setup-apptainer@v2
+        with:
+          apptainer-version: 1.3.6
+
+      - name: Build the image
+        env:
+          # release build pins the ref to the tag; dispatch uses the input.
+          PW_REF: ${{ github.event.inputs.pw_ref || github.ref_name }}
+        run: |
+          export APPTAINER_TMPDIR="$RUNNER_TEMP/apptainer-tmp"
+          mkdir -p "$APPTAINER_TMPDIR"
+          # bake the chosen ref into the def (paint.def hard-codes PW_REF):
+          sed -i "s|^    PW_REF=.*|    PW_REF=\"${PW_REF}\"|" deploy/apptainer/paint.def
+          apptainer build build.sif deploy/apptainer/paint.def
+
+      - name: Smoke-test the image (imports the stack headlessly)
+        run: apptainer test build.sif
+
+      # C48 naming: filename = picasso_workflow.__version__ (the submit-time match
+      # key). Read it straight from the baked-in _version.py to avoid importing
+      # the whole package just to resolve a string.
+      - name: Resolve C48 image name
+        id: name
+        run: |
+          VERSION=$(apptainer exec build.sif \
+            python -c "from picasso_workflow._version import __version__; print(__version__)")
+          if [ "${{ github.event_name }}" = "release" ]; then
+            OUT="picasso-workflow-${VERSION}.sif"
+          else
+            OUT="picasso-workflow-develop-${GITHUB_SHA::7}.sif"
+          fi
+          mv build.sif "$OUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "sif=$OUT"         >> "$GITHUB_OUTPUT"
+          echo "Built $OUT (picasso_workflow $VERSION)"
+
+      # --- publish -------------------------------------------------------------
+      # A) ephemeral CI artifact (always; good for verifying a build / dispatch).
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.name.outputs.sif }}
+          path: ${{ steps.name.outputs.sif }}
+
+      # B) durable GitHub release asset (login node pulls it with curl/wget).
+      - uses: softprops/action-gh-release@v2
+        if: github.event_name == 'release'
+        with:
+          files: ${{ steps.name.outputs.sif }}
+
+      # C) ghcr via ORAS — the C48-RECOMMENDED target (enables an automated
+      #    login-node refresh: `apptainer pull oras://ghcr.io/<owner>/picasso-workflow:<tag>`).
+      #    Needs `packages: write` in `permissions:` above; left off by default so
+      #    this PR makes no org-package/visibility decision. To enable, uncomment:
+      # - name: Push to ghcr
+      #   run: |
+      #     echo "${{ secrets.GITHUB_TOKEN }}" | \
+      #       apptainer registry login -u ${{ github.actor }} --password-stdin oras://ghcr.io
+      #     apptainer push "${{ steps.name.outputs.sif }}" \
+      #       oras://ghcr.io/${{ github.repository_owner }}/picasso-workflow:${{ steps.name.outputs.version }}
+
+# --- Private-repo adaptation (only if a jungmannlab repo becomes private) -------
+# Don't put a git token inside %post (it can leak into the image). Instead:
+#   1. actions/checkout the repo(s) with a PAT into ./ctx/picasso-workflow etc.
+#   2. use a CI def with a `%files` section that COPIES ./ctx/* into the image and
+#      `pip install`s from those local paths (no in-image git auth).

@@ -1,0 +1,84 @@
+Bootstrap: docker
+From: python:3.11-slim-bookworm
+
+# DNA-PAINT analysis image for the SLURM cluster (register C10 / WP-9).
+#
+# This is the cluster counterpart of the dev-container Dockerfile: the same
+# foundation (Python 3.11 + Debian bookworm + the headless-Qt runtime libs),
+# with the picasso 1.0 analysis stack baked in, so the undrift-first aggregation
+# (WP-9 Phase C) runs inside this image exactly as it does in the dev container.
+# The .sif is a single file -- it avoids the inode blow-up a conda env causes on
+# an HPC home quota.
+#
+# ⚠️ BUMP THESE in %post when things move:
+#   PW_REF        -- picasso-workflow git ref. The picasso-1.0 migration (C47)
+#                    landed on `develop` 2026-10-28 (PR #77); PW_REF now tracks
+#                    `develop`. Switch to a release tag if/when one is cut.
+#   REGISTRY_REF  -- match the tag your live registry (the write-back target) is
+#                    deployed at. Now v0.7.0 -- the first tag with the 0005/0005b
+#                    handoff + cohort_metric_range migrations Gate-5 needs.
+
+%labels
+    org.opencontainers.image.title        DNA-PAINT cluster analysis (picasso 1.0)
+    org.opencontainers.image.description  picassosr 1.0 + picasso-workflow + registry client (C10 / WP-9 aggregation)
+
+%post
+    set -eux
+    export DEBIAN_FRONTEND=noninteractive
+
+    # --- system deps (runtime subset of the dev-container Dockerfile) ---------
+    # cmake / build-essential cover any source builds. The libegl/libgl/
+    # libxkbcommon/libdbus libs let PyQt6 import headlessly -- only needed if you
+    # build the optional [gui] variant (PW_EXTRAS="[gui]"); the Qt GUI is a
+    # picasso-workflow extra now, so the default cluster image installs no PyQt6.
+    # They are tiny, so they stay in for both variants.
+    apt-get update
+    apt-get install -y --no-install-recommends \
+        git ca-certificates \
+        cmake build-essential \
+        libegl1 libgl1 libxkbcommon0 libdbus-1-3
+    rm -rf /var/lib/apt/lists/*
+
+    python -m pip install --no-cache-dir --upgrade pip setuptools wheel setuptools-scm
+
+    # --- the picasso 1.0 analysis stack ---------------------------------------
+    # picassosr 1.0 is still an ALPHA on PyPI -> --pre; keep it on the 1.x line.
+    python -m pip install --no-cache-dir --pre "picassosr>=1.0.0a1,<2"
+
+    # picasso-workflow is not on PyPI -> pinned git ref. The picasso-1.0 migration
+    # merged to `develop` (PR #77, 2026-10-28), so PW_REF tracks `develop`.
+    #
+    # PW_EXTRAS is empty for the cluster: the Qt GUI (PyQt6 + WebEngine, ~530 MB)
+    # is a `[gui]` extra that the aggregation never imports, so the cluster image
+    # stays lean. Set PW_EXTRAS="[gui]" if you ever want a full desktop image.
+    PW_REF="develop"
+    PW_EXTRAS=""
+    python -m pip install --no-cache-dir --pre \
+        "picasso-workflow${PW_EXTRAS} @ git+https://github.com/jungmannlab/picasso-workflow.git@${PW_REF}"
+
+    # registry client for the cluster write-back (WP-9). Pinned to v0.7.0 — the
+    # first tag carrying the 0005/0005b cohort_metric_range + handoff migrations
+    # Gate-5 needs (WP-7/WP-9). Keep this matched to the deployed service's tag
+    # (C48 version-matching); redeploy the live registry to v0.7.0 too.
+    REGISTRY_REF="v0.7.0"
+    python -m pip install --no-cache-dir \
+        "picasso-registry[client] @ git+https://github.com/jungmannlab/picasso-registry.git@${REGISTRY_REF}"
+
+    # provenance: the exact resolved versions, so the registry can stamp which
+    # image produced a result (and `apptainer inspect` can show it).
+    python -m pip freeze > /opt/paint-image-freeze.txt
+    python -c "import picasso.version as v; open('/opt/paint-image-manifest.txt','w').write('picassosr '+v.__version__+'\n')"
+
+%environment
+    export QT_QPA_PLATFORM=offscreen
+    export MPLBACKEND=Agg
+
+%runscript
+    exec python "$@"
+
+%test
+    # Fail the build if the stack can't import headlessly.
+    export QT_QPA_PLATFORM=offscreen
+    python -c "import picasso.version as v; print('picassosr', v.__version__)"
+    python -c "from picasso_workflow.analyse import AutoPicasso; print('picasso_workflow import OK')"
+    python -c "import picasso_registry.client; print('registry client OK')"
