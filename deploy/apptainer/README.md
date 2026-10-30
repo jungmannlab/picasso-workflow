@@ -39,16 +39,23 @@ key a run matches on (the submitter resolves its installed `__version__` →
 `picassosr` / registry-client versions are **not** inferable from the filename —
 read them from `/opt/paint-image-freeze.txt` + `apptainer inspect` labels.
 
-CI builds the `.sif`; it does **not** auto-appear on the cluster. Pull it on the
-**login node** (compute nodes have no internet) to the shared path WP-9's submit
-template expects, then jobs `apptainer exec` from there:
+CI builds the `.sif` and pushes it to **ghcr via ORAS** (the C48-recommended
+target); it does **not** auto-appear on the cluster. Pull it on the **login
+node** (compute nodes have no internet) to the shared path WP-9's submit template
+expects, then jobs `apptainer exec` from there:
 
 ```bash
-# e.g. match image_path= in ClusterSubmitConfig / the Gate-5 runbook:
-curl -L -o /sw/picasso-workflow-<version>.sif <release-asset-or-oras-url>
 module load apptainer/1.4.1
+# rolling develop builds are tagged :develop and :develop-<sha>; releases :<version>
+apptainer pull /sw/picasso-workflow-<version>.sif \
+    oras://ghcr.io/jungmannlab/picasso-workflow:<version>
+# (release builds are also attached as a GitHub release asset: curl -L -o … works too)
+# then, matching image_path= in ClusterSubmitConfig / the Gate-5 runbook:
 apptainer exec /sw/picasso-workflow-<version>.sif python -m picasso_workflow …
 ```
+
+The ghcr package starts **private** — make it public (or give the login node a
+read token) so pulls work.
 
 The full reference recipe (`build.sh` + extended notes) lives in the planning
 repo at `dev-environment/apptainer/`.

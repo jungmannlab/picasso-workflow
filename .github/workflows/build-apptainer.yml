@@ -36,6 +36,7 @@ on:
 
 permissions:
   contents: write               # upload the .sif as a release asset
+  packages: write               # push the image to ghcr via ORAS
 
 jobs:
   build:
@@ -92,13 +93,19 @@ jobs:
             python -c "from importlib.metadata import version; print(version('picasso_workflow'))")
           if [ "${{ github.event_name }}" = "release" ]; then
             OUT="picasso-workflow-${VERSION}.sif"
+            TAG="$VERSION"
           else
             OUT="picasso-workflow-develop-${GITHUB_SHA::7}.sif"
+            TAG="develop-${GITHUB_SHA::7}"
           fi
+          # OCI tags can't contain '+'; setuptools-scm local versions do (e.g.
+          # 0.3.4.dev5+g1a2b3c4) -> sanitize for the ghcr tag.
+          TAG=$(echo "$TAG" | tr '+' '-')
           mv build.sif "$OUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "sif=$OUT"         >> "$GITHUB_OUTPUT"
-          echo "Built $OUT (picasso_workflow $VERSION)"
+          echo "tag=$TAG"         >> "$GITHUB_OUTPUT"
+          echo "Built $OUT (picasso_workflow $VERSION), ghcr tag $TAG"
 
       # --- publish -------------------------------------------------------------
       # A) ephemeral CI artifact (always; good for verifying a build / dispatch).
@@ -113,16 +120,26 @@ jobs:
         with:
           files: ${{ steps.name.outputs.sif }}
 
-      # C) ghcr via ORAS — the C48-RECOMMENDED target (enables an automated
-      #    login-node refresh: `apptainer pull oras://ghcr.io/<owner>/picasso-workflow:<tag>`).
-      #    Needs `packages: write` in `permissions:` above; left off by default so
-      #    this PR makes no org-package/visibility decision. To enable, uncomment:
-      # - name: Push to ghcr
-      #   run: |
-      #     echo "${{ secrets.GITHUB_TOKEN }}" | \
-      #       apptainer registry login -u ${{ github.actor }} --password-stdin oras://ghcr.io
-      #     apptainer push "${{ steps.name.outputs.sif }}" \
-      #       oras://ghcr.io/${{ github.repository_owner }}/picasso-workflow:${{ steps.name.outputs.version }}
+      # C) ghcr via ORAS — the C48-RECOMMENDED target. The login node pulls with
+      #    `apptainer pull oras://ghcr.io/<owner>/picasso-workflow:<tag>`. Skipped on
+      #    pull_request: a PR smoke-build must not publish, and a fork PR's
+      #    GITHUB_TOKEN has no packages:write anyway.
+      #    NOTE: the first push creates a PRIVATE ghcr package — make it public (or
+      #    give the login node a pull token) so compute-node pulls work.
+      - name: Publish to ghcr (ORAS)
+        if: github.event_name != 'pull_request'
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "$GHCR_TOKEN" | \
+            apptainer registry login -u "${{ github.actor }}" --password-stdin oras://ghcr.io
+          repo="oras://ghcr.io/${{ github.repository_owner }}/picasso-workflow"
+          apptainer push "${{ steps.name.outputs.sif }}" "${repo}:${{ steps.name.outputs.tag }}"
+          # keep a moving :develop tag at the latest rolling build (release pushes
+          # only the immutable :<version> tag).
+          if [ "${{ github.event_name }}" != "release" ]; then
+            apptainer push "${{ steps.name.outputs.sif }}" "${repo}:develop"
+          fi
 
 # --- Private-repo adaptation (only if a jungmannlab repo becomes private) -------
 # Don't put a git token inside %post (it can leak into the image). Instead:
