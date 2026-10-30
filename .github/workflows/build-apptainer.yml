@@ -61,13 +61,20 @@ jobs:
 
       - name: Build the image
         env:
-          # release build pins the ref to the tag; dispatch uses the input.
-          PW_REF: ${{ github.event.inputs.pw_ref || github.ref_name }}
+          # Override PW_REF only for release (bake the tag) and dispatch (bake the
+          # input). On pull_request github.ref_name is the synthetic "<n>/merge"
+          # ref, which is NOT a fetchable git ref — leave PW_REF empty so the def's
+          # own pin (develop) is used and the clone resolves.
+          PW_REF: ${{ github.event.inputs.pw_ref || (github.event_name == 'release' && github.ref_name) || '' }}
         run: |
           export APPTAINER_TMPDIR="$RUNNER_TEMP/apptainer-tmp"
           mkdir -p "$APPTAINER_TMPDIR"
-          # bake the chosen ref into the def (paint.def hard-codes PW_REF):
-          sed -i "s|^    PW_REF=.*|    PW_REF=\"${PW_REF}\"|" deploy/apptainer/paint.def
+          # bake the chosen ref into the def (paint.def hard-codes PW_REF); skip on
+          # PR builds, which validate the def exactly as written (PW_REF=develop).
+          if [ -n "$PW_REF" ]; then
+            sed -i "s|^    PW_REF=.*|    PW_REF=\"${PW_REF}\"|" deploy/apptainer/paint.def
+          fi
+          echo "Building with PW_REF=$(grep -oP '^\s*PW_REF=\"\K[^\"]+' deploy/apptainer/paint.def)"
           apptainer build build.sif deploy/apptainer/paint.def
 
       - name: Smoke-test the image (imports the stack headlessly)
