@@ -80,14 +80,16 @@ jobs:
       - name: Smoke-test the image (imports the stack headlessly)
         run: apptainer test build.sif
 
-      # C48 naming: filename = picasso_workflow.__version__ (the submit-time match
-      # key). Read it straight from the baked-in _version.py to avoid importing
-      # the whole package just to resolve a string.
+      # C48 naming: filename = the picasso-workflow version (the submit-time match
+      # key). Read it from the installed package METADATA via importlib.metadata,
+      # not from picasso_workflow._version — that file is setuptools-scm-generated
+      # and gitignored, so it isn't reliably shipped in the wheel (hence the
+      # try/except in __init__). The dist-info version is always present.
       - name: Resolve C48 image name
         id: name
         run: |
           VERSION=$(apptainer exec build.sif \
-            python -c "from picasso_workflow._version import __version__; print(__version__)")
+            python -c "from importlib.metadata import version; print(version('picasso_workflow'))")
           if [ "${{ github.event_name }}" = "release" ]; then
             OUT="picasso-workflow-${VERSION}.sif"
           else
