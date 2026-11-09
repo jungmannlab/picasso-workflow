@@ -505,6 +505,45 @@ class TestFilterAdvisor:
         assert payload["n_total"] == len(locs)
         assert payload["n_kept"] + payload["n_removed"] == payload["n_total"]
 
+    def test_filter_precision_is_nm_not_px(self):
+        # picasso 1.0 stores lpx/lpy in NM, so the suggested precision is the
+        # p95 of 0.5*(lpx+lpy) directly -- NOT scaled by the pixel size.
+        # Build locs with all lpx=lpy=3.0 nm inside the zoom ROI: the mean
+        # precision is a constant 3.0 nm, so p95 == 3.0 (and must NOT be
+        # 3.0 * 130).
+        dtype = [
+            ("x", "f4"),
+            ("y", "f4"),
+            ("photons", "f4"),
+            ("sx", "f4"),
+            ("sy", "f4"),
+            ("lpx", "f4"),
+            ("lpy", "f4"),
+        ]
+        n = 200
+        locs = np.zeros(n, dtype=dtype)
+        rng = np.random.default_rng(0)
+        locs["x"] = 30 + rng.normal(0, 0.5, n)
+        locs["y"] = 30 + rng.normal(0, 0.5, n)
+        locs["photons"] = rng.normal(5000, 500, n)
+        locs["sx"] = rng.normal(1.2, 0.05, n)
+        locs["sy"] = rng.normal(1.2, 0.05, n)
+        locs["lpx"] = 3.0
+        locs["lpy"] = 3.0
+        names = list(locs.dtype.names)
+        fs = filter_suggestions(
+            locs, names, vp_zoom=[(28, 28), (32, 32)], px=130.0
+        )
+        # p95 of a constant 3.0 nm precision is 3.0 nm -- NOT 3.0 * 130.
+        assert fs["precision_max_nm"] == 3.0
+        assert fs["precision_max_nm"] != 3.0 * 130.0
+        # keep_mask treats the threshold in nm too: locs whose
+        # 0.5*(lpx+lpy) <= precision_max_nm are kept.
+        keep = filter_keep_mask(locs, names, fs, 130.0)
+        lp = 0.5 * (locs["lpx"].astype(float) + locs["lpy"].astype(float))
+        assert keep.all()  # all 3.0 nm <= 3.0 nm threshold
+        assert np.array_equal(keep, lp <= fs["precision_max_nm"])
+
     def test_write_filter_suggestions_to_qc(self, tmp_path):
         qc_path = str(tmp_path / "qc.json")
         # start with an existing qc.json holding other content

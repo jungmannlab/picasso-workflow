@@ -88,7 +88,7 @@ N_LOCS = 3000
 PHOTONS = 2500.0
 BG = 75.0
 SX = SY = 1.2
-LPX = LPY = 0.1  # px → 13 nm
+LPX = LPY = 0.1  # picasso 1.0: lpx/lpy are in nm already
 
 
 def _make_locs(
@@ -196,8 +196,10 @@ class TestMetricsFromHdf5(unittest.TestCase):
         self.assertAlmostEqual(m["background"], BG, places=3)
         self.assertAlmostEqual(m["psf_sigma_x"], SX, places=3)
         self.assertAlmostEqual(m["psf_sigma_y"], SY, places=3)
-        self.assertAlmostEqual(m["lp_x_nm"], LPX * PIXELSIZE_NM, places=3)
-        self.assertAlmostEqual(m["lp_y_nm"], LPY * PIXELSIZE_NM, places=3)
+        # picasso 1.0 stores lpx/lpy in nm already → the nm metrics are the
+        # median lpx/lpy DIRECTLY, no pixelsize scaling.
+        self.assertAlmostEqual(m["lp_x_nm"], LPX, places=3)
+        self.assertAlmostEqual(m["lp_y_nm"], LPY, places=3)
         # Density: n_locs / FOV area (µm²).
         area_um2 = (WIDTH * PIXELSIZE_NM) * (HEIGHT * PIXELSIZE_NM) / 1e6
         self.assertAlmostEqual(
@@ -217,12 +219,36 @@ class TestMetricsFromHdf5(unittest.TestCase):
         # build it in memory to exercise compute_metrics' incomplete path.
         locs, info = _synth_locs_and_info(pixelsize=None)
         m = compute_metrics(locs, info)
-        # Without a pixel size, nm-scaled metrics can't be computed → absent.
-        for key in ("lp_x_nm", "lp_y_nm", "density_locs_um2", "nena_nm"):
+        # Without a pixel size, the metrics that still NEED it (FOV density,
+        # NeNA computed through picasso) can't be computed → absent.
+        for key in ("density_locs_um2", "nena_nm"):
             self.assertNotIn(key, m)
-        # But the pixel-free primaries still land.
+        # But lp_x_nm/lp_y_nm are the median lpx/lpy in nm DIRECTLY now
+        # (picasso 1.0), so they no longer depend on a pixel size and are
+        # still emitted here.
+        self.assertAlmostEqual(m["lp_x_nm"], LPX, places=3)
+        self.assertAlmostEqual(m["lp_y_nm"], LPY, places=3)
+        # And the pixel-free primaries still land.
         self.assertEqual(m["n_locs"], N_LOCS)
         self.assertAlmostEqual(m["photons_median"], PHOTONS, places=3)
+
+    def test_lp_nm_is_median_lpx_not_scaled_by_pixelsize(self):
+        # Regression: picasso 1.0 stores lpx/lpy in nm, so lp_x_nm/lp_y_nm are
+        # the median lpx/lpy DIRECTLY (NOT median * pixelsize), and they are
+        # emitted even when the Pixelsize metadata is absent.
+        # With a pixel size present, lp_x_nm is median(lpx), NOT * pixelsize.
+        locs, info = _synth_locs_and_info(pixelsize=PIXELSIZE_NM)
+        m = compute_metrics(locs, info, with_nena=False)
+        self.assertAlmostEqual(m["lp_x_nm"], LPX, places=3)
+        self.assertAlmostEqual(m["lp_y_nm"], LPY, places=3)
+        self.assertNotAlmostEqual(m["lp_x_nm"], LPX * PIXELSIZE_NM, places=3)
+        # And with NO Pixelsize metadata, lp_x_nm/lp_y_nm are STILL emitted
+        # (they moved out of the pixelsize-gated block).
+        locs_np, info_np = _synth_locs_and_info(pixelsize=None)
+        m_np = compute_metrics(locs_np, info_np, with_nena=False)
+        self.assertIn("lp_x_nm", m_np)
+        self.assertIn("lp_y_nm", m_np)
+        self.assertAlmostEqual(m_np["lp_x_nm"], LPX, places=3)
 
     def test_with_nena_false_skips_nena(self):
         with tempfile.TemporaryDirectory() as d:
