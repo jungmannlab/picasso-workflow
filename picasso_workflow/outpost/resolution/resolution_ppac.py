@@ -44,7 +44,8 @@ def resolution_ppac(
     locs : pd.DataFrame
         Localizations with ``x`` and ``y`` columns.
     pixelsize : float
-        Pixel size in physical units (e.g. nm).
+        Pixel size in physical units (e.g. nm). Unused since picasso 1.0
+        (locs are already nm); retained for signature compatibility.
     delta_r : float
         Grid spacing for the autocorrelation calculation.
     r_max : float

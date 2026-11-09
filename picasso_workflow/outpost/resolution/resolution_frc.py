@@ -80,7 +80,8 @@ def render_image_histogram(
     locs : structured array
         Localization data with ``x`` and ``y`` fields (in nm, picasso 1.0).
     pixelsize : float
-        Camera pixel size in nm.
+        Camera pixel size in nm. Unused since picasso 1.0 (locs are
+        already nm); retained for signature compatibility.
     pixelsize_render : float
         Rendered pixel size in nm.
     bounds : tuple of float or None, optional
@@ -298,7 +299,8 @@ def compute_frc_resolution(
     locs : structured array
         Localization data.
     pixelsize : float
-        Camera pixel size in nm.
+        Camera pixel size in nm. Unused since picasso 1.0 (locs are
+        already nm); retained for signature compatibility.
     pixelsize_render : float, optional
         Rendered pixel size in nm. Default is 5.
     smoothing_sigma : float or None, optional
@@ -396,7 +398,8 @@ def render_image_chunked_parallel(
     locs : structured array
         Localization data with ``x`` and ``y`` fields (in nm, picasso 1.0).
     pixelsize : float
-        Camera pixel size in nm.
+        Camera pixel size in nm. Unused since picasso 1.0 (locs are
+        already nm); retained for signature compatibility.
     pixelsize_render : float
         Rendered pixel size in nm.
     bounds : tuple of float or None, optional
@@ -779,14 +782,31 @@ def compute_frc_curve_parallel(fft1, fft2, pixelsize_render, n_processes=4):
     return compute_frc_curve_vectorized(fft1, fft2, pixelsize_render)
 
 
+# Per-process localization table shared with split workers via the pool
+# initializer, so the (potentially huge) array is pickled once per worker
+# process instead of once per split task.
+_FRC_SPLIT_LOCS = None
+
+
+def _init_frc_split_worker(locs):
+    """ProcessPoolExecutor initializer: cache ``locs`` in the worker process."""
+    global _FRC_SPLIT_LOCS
+    _FRC_SPLIT_LOCS = locs
+
+
 def _process_single_split_worker(task):
     """Process one FRC split: render, FFT, FRC, resolution.
 
     Module-level (not a closure) so it is picklable by
-    ``ProcessPoolExecutor``. ``task`` is a dict bundling every input the split
-    needs, built by ``compute_frc_averaged`` in the parent process.
+    ``ProcessPoolExecutor``. ``task`` carries the per-split config; the
+    localization table comes from ``task["locs"]`` when present (the
+    in-process sequential path) or otherwise the process-cached
+    ``_FRC_SPLIT_LOCS`` set by :func:`_init_frc_split_worker` (the parallel
+    path), so ``locs`` is not re-pickled for every split.
     """
-    locs = task["locs"]
+    locs = task.get("locs")
+    if locs is None:
+        locs = _FRC_SPLIT_LOCS
     common_bounds = task["common_bounds"]
     pixelsize = task["pixelsize"]
     pixelsize_render = task["pixelsize_render"]
@@ -870,7 +890,8 @@ def compute_frc_averaged(
     locs : structured array
         Localization data.
     pixelsize : float
-        Camera pixel size in nm.
+        Camera pixel size in nm. Unused since picasso 1.0 (locs are
+        already nm); retained for signature compatibility.
     pixelsize_render : float, optional
         Rendered pixel size in nm. Default is 5.0.
     smoothing_sigma : float or None, optional
@@ -947,12 +968,13 @@ def compute_frc_averaged(
             stacklevel=2,
         )
 
-    # Bundle each split's inputs into a picklable task dict so the parallel
+    # Bundle each split's config into a picklable task dict so the parallel
     # path can ship work to the module-level worker (nested closures can't be
-    # pickled by ProcessPoolExecutor).
+    # pickled by ProcessPoolExecutor). ``locs`` is NOT put in the task: the
+    # parallel path shares it once via the pool initializer, the sequential
+    # path adds it below (free in-process).
     def _make_task(split_idx):
         return {
-            "locs": locs,
             "common_bounds": common_bounds,
             "pixelsize": pixelsize,
             "pixelsize_render": pixelsize_render,
@@ -976,7 +998,13 @@ def compute_frc_averaged(
         )
 
         tasks = [_make_task(i) for i in range(n_splits)]
-        with ProcessPoolExecutor(max_workers=max_workers) as executor:
+        # Share locs once per worker process via the initializer rather than
+        # pickling it into every task.
+        with ProcessPoolExecutor(
+            max_workers=max_workers,
+            initializer=_init_frc_split_worker,
+            initargs=(locs,),
+        ) as executor:
             split_results = list(
                 executor.map(_process_single_split_worker, tasks)
             )
@@ -996,12 +1024,15 @@ def compute_frc_averaged(
         for split_idx in range(n_splits):
             logger.debug(f"  Processing split {split_idx + 1}/{n_splits}...")
 
+            # In-process: pass locs directly in the task (no pickling cost).
+            task = _make_task(split_idx)
+            task["locs"] = locs
             (
                 frc_curve,
                 spatial_frequencies,
                 resolution,
                 cutoff_frequency,
-            ) = _process_single_split_worker(_make_task(split_idx))
+            ) = _process_single_split_worker(task)
 
             frc_curves.append(frc_curve)
             resolutions.append(resolution)
@@ -1295,7 +1326,8 @@ def compute_frc_spatial(
     locs : structured array
         Localization data with ``x`` and ``y`` fields.
     pixelsize : float
-        Camera pixel size in nm.
+        Camera pixel size in nm. Unused since picasso 1.0 (locs are
+        already nm); retained for signature compatibility.
     pixelsize_render : float, optional
         Rendered pixel size in nm. Default is 5.0.
     smoothing_sigma : float or None, optional

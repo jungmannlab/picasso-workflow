@@ -72,7 +72,9 @@ def filter_keep_mask(
     """Boolean mask of localizations ``s`` that PASS the suggested filter ``fs``.
 
     ``s`` is a structured array (picasso locs recarray) with columns ``names``;
-    ``fs`` is a filter dict as returned by :func:`filter_suggestions`.
+    ``fs`` is a filter dict as returned by :func:`filter_suggestions`. ``px``
+    is unused since picasso 1.0 (lpx/lpy are already nm); retained for
+    signature compatibility.
     """
     keep = np.ones(len(s), dtype=bool)
     if "photons" in names:

@@ -430,6 +430,50 @@ class TestResolutionFRC(unittest.TestCase):
         pickled = pickle.dumps(resolution_frc._process_single_split_worker)
         self.assertIsInstance(pickled, bytes)
 
+    def test_20_split_worker_shares_locs_via_global(self):
+        """The parallel path shares locs once via the pool initializer.
+
+        ``_process_single_split_worker`` reads ``task['locs']`` when present
+        (the sequential path) and otherwise the process-cached
+        ``_FRC_SPLIT_LOCS`` set by ``_init_frc_split_worker`` (the parallel
+        path). Both must yield identical output. ``_init_frc_split_worker``
+        must also be picklable (it is shipped as the pool initializer).
+        """
+        x = self.locs["x"].to_numpy()
+        y = self.locs["y"].to_numpy()
+        margin = 10 * self.pixelsize_render
+        bounds = (
+            x.min() - margin,
+            x.max() + margin,
+            y.min() - margin,
+            y.max() + margin,
+        )
+        base = {
+            "common_bounds": bounds,
+            "pixelsize": self.pixelsize,
+            "pixelsize_render": self.pixelsize_render,
+            "smoothing_sigma": None,
+            "use_chunking": False,
+            "chunk_size_nm": 10000,
+            "n_processes": 1,
+            "threshold": 1 / 7,
+            "max_frc_range_nm": None,
+            "split_idx": 1,
+        }
+        out_task = resolution_frc._process_single_split_worker(
+            {**base, "locs": self.locs}
+        )
+        resolution_frc._init_frc_split_worker(self.locs)
+        out_global = resolution_frc._process_single_split_worker(dict(base))
+        for a, b in zip(out_task, out_global):
+            if isinstance(a, np.ndarray):
+                np.testing.assert_array_equal(a, b)
+            else:
+                self.assertTrue(a == b or (np.isnan(a) and np.isnan(b)))
+        self.assertIsInstance(
+            pickle.dumps(resolution_frc._init_frc_split_worker), bytes
+        )
+
 
 class TestResolutionFRCEdgeCases(unittest.TestCase):
     """Test edge cases and error handling"""

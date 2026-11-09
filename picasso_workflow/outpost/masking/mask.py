@@ -108,7 +108,10 @@ class CellMask:
         # mask = np.rot90(mask)
 
         blur = blursize / binsize
-        factor = int(binsize / upsample)
+        # max(1, ...) guards a degenerate binsize < upsample config: factor 0
+        # would make zoom() return an empty array and the /factor**2 density
+        # correction below divide by zero.
+        factor = max(1, int(binsize / upsample))
 
         initial_density = gaussian_filter(mask, blur)
         # zoom() interpolates (preserving per-pixel magnitude), so it inflates
