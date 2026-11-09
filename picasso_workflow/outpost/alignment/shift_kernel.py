@@ -526,7 +526,18 @@ def _find_peak_center_of_mass(
         sigma_y = bin_size_y
         shift_x_error = bin_size_x / 2
         shift_y_error = bin_size_y / 2
-        return shift_x, shift_y, sigma_x, sigma_y, shift_x_error, shift_y_error
+        # Return the full 8-tuple (threshold, use_threshold) the callers
+        # unpack, mirroring the empty-histogram fallback above.
+        return (
+            shift_x,
+            shift_y,
+            sigma_x,
+            sigma_y,
+            shift_x_error,
+            shift_y_error,
+            0.0,
+            False,
+        )
 
     # Get coordinate values for the neighborhood
     x_coords = x_centers[x_indices]

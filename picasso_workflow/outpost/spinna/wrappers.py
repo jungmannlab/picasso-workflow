@@ -41,7 +41,9 @@ def spinna_batch(parameters_filename):
     fp_fig : list of str
         Filepaths of the NND figures.
     """
-    result_dir = parameters_filename.replace(".csv", "_fitting_results")
+    # picasso writes the results to "<basename>__fitting_results" (DOUBLE
+    # underscore); a single underscore points at a non-existent directory.
+    result_dir = parameters_filename.replace(".csv", "__fitting_results")
     if os.path.isdir(result_dir):
         i = 1
         while os.path.isdir(f"{result_dir}_{i}"):

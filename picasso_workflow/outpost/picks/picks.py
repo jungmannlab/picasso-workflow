@@ -70,7 +70,7 @@ def prep_pick_similar_kwargs(locs, info, diameter):
     return kwargs
 
 
-def pick_gold(locs, info, diameter=2, std_range=1.4, mean_rmsd=0.4):
+def pick_gold(locs, info, diameter=2, std_range=1.4, mean_rmsd=50.0):
     """Search for picks similar to gold clusters.
 
     Focuses on the number of locs and their root-mean-square displacement
@@ -87,7 +87,10 @@ def pick_gold(locs, info, diameter=2, std_range=1.4, mean_rmsd=0.4):
     std_range : float, optional
         The pick-similar std range identifying gold. Default is 1.4.
     mean_rmsd : float, optional
-        The pick-similar mean RMSD identifying gold. Default is 0.4.
+        The pick-similar mean RMSD (in nm) identifying gold. picasso 1.0
+        localizations are in nm, so ``rmsd_at_com`` returns nm; the default
+        50.0 nm replaces the pre-1.0 pixel-scale value (0.4 px). Default is
+        50.0.
 
     Returns
     -------
@@ -104,7 +107,10 @@ def pick_gold(locs, info, diameter=2, std_range=1.4, mean_rmsd=0.4):
     # calculate min and max n_locs and rmsd for picking similar
     mean_n_locs = maxframe
     std_n_locs = 0.25 * mean_n_locs
-    std_rmsd = 0.25 * mean_n_locs
+    # RMSD spread must scale with the RMSD, not the loc count: the previous
+    # ``0.25 * mean_n_locs`` made the [min_rmsd, max_rmsd] window enormous, so
+    # the RMSD criterion was a no-op.
+    std_rmsd = 0.25 * mean_rmsd
     min_n_locs = mean_n_locs - std_range * std_n_locs
     max_n_locs = mean_n_locs + std_range * std_n_locs
     min_rmsd = mean_rmsd - std_range * std_rmsd

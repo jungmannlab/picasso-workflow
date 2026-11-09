@@ -269,7 +269,13 @@ class TestPicassoOutpost(unittest.TestCase):
             nframes=100,
             locs_per_frame=4,
         )
-        gold_picks = picks_mod.pick_gold(locs, info)
+        # The gold clusters here are tight (noise=0.5), so their RMSD-at-COM
+        # is ~0.7 (in the fixture's unit, Pixelsize=1). The default
+        # ``mean_rmsd=50.0`` nm window [32.5, 67.5] would exclude them (it
+        # targets real nm-scale localizations); pass a ``mean_rmsd`` matched to
+        # this synthetic fixture so the RMSD criterion (now a real filter, not
+        # the old no-op) still admits the gold picks.
+        gold_picks = picks_mod.pick_gold(locs, info, mean_rmsd=1.0)
         print(gold_picks)
         # round the picks for assertion
         gold_picks = [
@@ -278,6 +284,53 @@ class TestPicassoOutpost(unittest.TestCase):
         print(gold_picks)
         for center in centers:
             assert center in gold_picks
+
+    def test_06a2_pick_gold_rmsd_window_is_nm_scaled(self):
+        """pick_gold's RMSD window must scale with ``mean_rmsd``, not nlocs.
+
+        Regression for the ``std_rmsd = 0.25 * mean_rmsd`` fix (was
+        ``0.25 * mean_n_locs``, which made the [min_rmsd, max_rmsd] window
+        enormous and the RMSD criterion a no-op). The window passed to
+        ``_pick_similar`` must be centered on ``mean_rmsd`` with full width
+        ``2 * std_range * 0.25 * mean_rmsd``.
+        """
+        info = [{"Frames": 100, "Width": 20, "Height": 42, "Pixelsize": 1}]
+        std_range = 1.4
+        mean_rmsd = 50.0
+
+        captured = {}
+
+        def _capture_pick_similar(**kwargs):
+            captured.update(kwargs)
+            return np.array([]), np.array([])
+
+        def _fake_get_internal(name):
+            if name == "_pick_similar":
+                return _capture_pick_similar
+            raise AssertionError(f"unexpected get_internal({name!r})")
+
+        with (
+            patch.object(
+                picks_mod, "prep_pick_similar_kwargs", return_value={}
+            ),
+            patch.object(
+                picks_mod, "get_internal", side_effect=_fake_get_internal
+            ),
+        ):
+            picks_mod.pick_gold(
+                None, info, std_range=std_range, mean_rmsd=mean_rmsd
+            )
+
+        width = captured["max_rmsd"] - captured["min_rmsd"]
+        expected_width = 2 * std_range * 0.25 * mean_rmsd  # 35.0
+        center = (captured["min_rmsd"] + captured["max_rmsd"]) / 2
+
+        assert np.isclose(width, expected_width)
+        assert np.isclose(width, 35.0)
+        assert np.isclose(center, mean_rmsd)
+        # The old, loc-count-scaled width was 2 * std_range * 0.25 * Frames
+        # = 140 -- far larger than this nm-scaled window.
+        assert width < 2 * std_range * 0.25 * info[0]["Frames"]
 
     def test_06b_index_locs(self):
         locs, info = self.get_locs_with_gold([], [])
