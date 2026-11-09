@@ -258,8 +258,10 @@ def extract_resolution_decorr(
     # Converting to 1/nm: (r_cutoff * 0.5) / pixelsize_render
     kc_max = (r_cutoff * 0.5) / pixelsize_render
 
-    # Resolution = 2 / kc_max (from Descloux paper)
-    resolution = 2.0 / kc_max if kc_max > 0 else np.nan
+    # Resolution is the inverse of the cutoff frequency: 1 / kc_max, i.e.
+    # 2 * pixelsize_render / r_cutoff. The previous ``2 / kc_max`` reported
+    # twice the Descloux resolution.
+    resolution = 1.0 / kc_max if kc_max > 0 else np.nan
 
     logger.debug(
         f"    Resolution: {resolution:.2f} nm (kc_max: {kc_max:.4f} 1/nm)"
@@ -415,9 +417,9 @@ def compute_decorr_spatial(
     """
     from concurrent.futures import ProcessPoolExecutor
 
-    # Convert to physical coordinates
-    x_nm = locs["x"] * pixelsize
-    y_nm = locs["y"] * pixelsize
+    # picasso 1.0: locs["x"]/["y"] are already in nm; no pixelsize scaling.
+    x_nm = locs["x"]
+    y_nm = locs["y"]
 
     # Determine overall bounds
     x_min, x_max = x_nm.min(), x_nm.max()
