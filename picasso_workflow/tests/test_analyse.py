@@ -2801,11 +2801,91 @@ class TestAnalyseModules(unittest.TestCase):
             os.path.join(self.results_folder, "00_ripleysk_average2")
         )
 
-    def protein_interactions(self):
-        return
+    @patch("picasso_workflow.analyse.spinna.generate_N_structures")
+    @patch(
+        "picasso_workflow.outpost.spinna.wrappers.load_structures_from_dict"
+    )
+    @patch("picasso_workflow.outpost.spinna.wrappers.single_spinna_run")
+    def protein_interactions(
+        self, mock_single_spinna_run, mock_load_structures, mock_gen_N
+    ):
+        """Drive AutoPicasso.protein_interactions end-to-end with the heavy
+        picasso calls patched, and assert single_spinna_run is invoked with
+        keyword args (NND_bin / NND_maxdist, not the old fit_* names, and not
+        a single positional dict)."""
+        # load_structures_from_dict -> (structures, targets)
+        mock_load_structures.return_value = (["struct"], ["CD80", "CD86"])
+        # generate_N_structures -> simulated structure counts (opaque)
+        mock_gen_N.return_value = {"CD80": 1, "CD86": 1}
+        # single_spinna_run -> (result_dict, fp_fig_list); the result dict
+        # must carry the fitted proportions. For a hetero pair A != B the
+        # downstream code expects a length-6 vector (A, AA, B, BB, AB, AABB).
+        mock_single_spinna_run.return_value = (
+            {"Fitted proportions of structures": [10, 5, 8, 4, 3, 2]},
+            ["interaction-CD80-CD86.png"],
+        )
+
+        info = [
+            {"Width": 1000, "Height": 1000, "Frames": 10000, "Pixelsize": 130}
+        ]
+        locs_dtype = [
+            ("frame", "u4"),
+            ("photons", "f4"),
+            ("x", "f4"),
+            ("y", "f4"),
+            ("lpx", "f4"),
+            ("lpy", "f4"),
+        ]
+
+        def _mklocs():
+            return pd.DataFrame(
+                np.rec.array(
+                    [
+                        tuple([i] + list(np.random.rand(len(locs_dtype) - 1)))
+                        for i in range(len(self.ap.movie))
+                    ],
+                    dtype=locs_dtype,
+                )
+            )
+
+        self.ap.channel_locs = [_mklocs(), _mklocs()]
+        self.ap.channel_info = [info, info]
+        self.ap.channel_tags = ["CD80", "CD86"]
+
+        parameters = {
+            "channel_map": {"CD80": 0, "CD86": 1},
+            "labeling_efficiency": {"CD80": 0.5, "CD86": 0.6},
+            "labeling_uncertainty": 5,
+            "n_simulate": 50000,
+            "density": [0.00009, 0.00009],
+            "nn_nth": 4,
+            "structure_distance": 10.0,
+            "res_factor": 10,
+            "sim_repeats": 5,
+            "interaction_pairs": [["CD80", "CD86"]],
+        }
+
+        parameters, results = self.ap.protein_interactions(0, parameters)
+
+        # single_spinna_run must have been reached and called.
+        self.assertTrue(mock_single_spinna_run.called)
+        # It must be called with keyword args, not a single positional dict.
+        self.assertEqual(len(mock_single_spinna_run.call_args.args), 0)
+        kwargs = mock_single_spinna_run.call_args.kwargs
+        # The dict keys were renamed from fit_NND_* to NND_*.
+        self.assertIn("NND_bin", kwargs)
+        self.assertIn("NND_maxdist", kwargs)
+        self.assertNotIn("fit_NND_bin", kwargs)
+        self.assertNotIn("fit_NND_maxdist", kwargs)
+
         shutil.rmtree(
             os.path.join(self.results_folder, "00_protein_interactions")
         )
+
+    def test_protein_interactions(self):
+        """Collected entry point for the patched protein_interactions
+        exercise above (the patch decorators inject the mocks)."""
+        self.protein_interactions()
 
     def create_mask(self):
         """Create a density mask"""

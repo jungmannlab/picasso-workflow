@@ -9584,10 +9584,11 @@ class AutoPicasso(
                 uz = np.array([0, 0, 1])
                 edgelength = int(np.ceil(n ** (1 / dimensionality)))
                 for i in range(n):
-                    iz = i // (edgelength**2)
-                    iy = i % (edgelength**2)
                     ix = i % edgelength
-                    positions[:, i] = ix * ux + iy * uy + iz * uz
+                    iy = (i // edgelength) % edgelength
+                    iz = i // (edgelength**2)
+                    # scale lattice indices to physical spacing (nm)
+                    positions[:, i] = (ix * ux + iy * uy + iz * uz) * distance
                 positions[0, :] -= np.mean(positions[0, :])
                 positions[1, :] -= np.mean(positions[1, :])
                 positions[2, :] -= np.mean(positions[2, :])
@@ -10453,8 +10454,8 @@ class AutoPicasso(
                 "random_rot_mode": "2D",
                 "exp_data": exp_data,
                 "sim_repeats": parameters["sim_repeats"],
-                "fit_NND_bin": fit_NND_bin,
-                "fit_NND_maxdist": fit_NND_maxdist,
+                "NND_bin": fit_NND_bin,
+                "NND_maxdist": fit_NND_maxdist,
                 "N_structures": N_structures,
                 "save_filename": os.path.join(
                     results["folder"], f"interaction-{A}-{B}"
@@ -10468,7 +10469,7 @@ class AutoPicasso(
             }
 
             result, fp_fig = spinna_wrappers.single_spinna_run(
-                spinna_parameters
+                **spinna_parameters
             )
             plt.close("all")
             props[f"{A},{B}"] = result["Fitted proportions of structures"]

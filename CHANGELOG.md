@@ -131,6 +131,61 @@ This file was started after v0.5.6; earlier history is in the git log.
   +2 regression tests; 25 self-optimize tests; 864 pass. Determinism + the
   minimize/maximize direction were confirmed sound (mutation-tested).
 
+- **Outpost / QC bug sweep (finder -> verify -> fix).** A review of the
+  `outpost/`, `qc_advisor/` and `backfill/` modules the picasso-1.0 migration
+  diff never touched found a second wave of the same nm↔px double-conversion
+  plus several independent correctness bugs:
+  - **nm double-scaling removed** (picasso 1.0 stores `x`/`y`/`lpx`/`lpy` in
+    nm, so a leftover `* pixelsize` was a ~130x error): the FRC renderer
+    (`resolution_frc.render_image_histogram` + all render paths), image
+    **decorrelation** coordinate bounds, **PPAC** KDTree coords, the CellMask
+    coordinate conversion (`masking.mask.picassolocs_to_coords`), the
+    `qc_advisor.filter_advisor` precision filter/suggestion (`lpx/lpy`), and
+    the `backfill.metrics` `lp_x_nm`/`lp_y_nm` registry metrics. (The
+    shift-kernel and binding-event SBR "pixel" constants were checked and are
+    correct — they act on genuinely px-valued shifts / PSF widths `sx`,`sy`.)
+  - **Image decorrelation resolution halved:** `extract_resolution_decorr`
+    returned `2 / kc_max`, i.e. twice the Descloux resolution; it now returns
+    `1 / kc_max` (`= 2 * pixelsize / r_cutoff`). (A faithful switch from the
+    threshold-crossing to the paper's peak-tracking needs a rewrite of the
+    decorrelation function itself — phase-whitening — validated against
+    reference data, and is deferred.)
+  - **Ripley's K `deltar` sign:** `radial_distribution_function` /
+    `overpopulation` built the trailing radius bin with a *negative* width
+    (`r[1]-r[2]`), corrupting the last RDF bin and the overpopulation
+    baseline; now a positive bin width.
+  - **CSR k-NN (`spatial_stats.csr_knn`):** `fit_bkg=True` raised in L-BFGS-B
+    (`x0` length 2 vs `bounds` length 1) — the background fraction now gets its
+    `(0, 1)` bound; and the CSR+background model is now a normalized mixture
+    `(1-f)·CSR + f·uniform` (the CSR term was previously left at weight 1).
+  - **SPINNA batch results:** the wrapper looked for `<name>_fitting_results`
+    but picasso writes `<name>__fitting_results` (double underscore) — results
+    were silently not found.
+  - **Protein-interaction map (`analyse.protein_interactions`):** called
+    `single_spinna_run(dict)` positionally with the wrong keys
+    (`fit_NND_bin`/`fit_NND_maxdist`) — a guaranteed `TypeError`; now
+    `single_spinna_run(**params)` with `NND_bin`/`NND_maxdist`. The homodimer
+    structure geometry ignored `structure_distance` and mis-indexed the
+    lattice (wrong row index); it now scales to the physical spacing and
+    matches the heterodimer convention. A real (now collected)
+    `test_protein_interactions` replaces the no-op stub that hid the crash.
+  - **`pick_gold` RMSD window:** `std_rmsd` was tied to the localization count
+    (`0.25 * n_locs`), making the RMSD criterion a no-op; it now scales with
+    the RMSD, and the `mean_rmsd` default moved from the pre-1.0 pixel value
+    (0.4) to an explicit nm value (50 nm).
+  - **FRC parallel splits:** `compute_frc_averaged(parallel_splits=True)`
+    passed an unpicklable nested closure to `ProcessPoolExecutor`; the split
+    worker is now a module-level, picklable function.
+  - **Shift-kernel fallback arity:** the `total_mass == 0` branch of
+    `_find_peak_center_of_mass` returned 6 values where callers unpack 8 (a
+    `ValueError`); it now returns the full 8-tuple like the other paths.
+  - **CellMask density:** `from_mol_coords` zoomed the density with
+    `scipy.ndimage.zoom` (which interpolates, not conserving the integral),
+    over-estimating `mean_density`/`densities` by `factor**2` (4x by default);
+    the zoom is now divided back by `factor**2`. And `random_points` built its
+    coordinate grid with `meshgrid(..., indexing="xy")`, transposing x/y for
+    non-square masks — now `indexing="ij"`.
+
 ### Added
 
 - **WP-11 offline parameter self-optimization (`self_optimize.py`):** an
