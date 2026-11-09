@@ -39,9 +39,51 @@ def test_measurement_constructor_accepts_call_site_kwargs():
     from picasso_workflow.outpost.binding_events.analysis import Measurement
 
     params = inspect.signature(Measurement.__init__).parameters
-    for kwarg in ("in_path", "save_path", "saving_name", "total_n_frames"):
+    for kwarg in (
+        "in_path",
+        "save_path",
+        "saving_name",
+        "total_n_frames",
+        "pixelsize",
+    ):
         assert kwarg in params, kwarg
     assert "saving_path" not in params
+
+
+def test_sbr_integration_bound_scales_with_pixelsize():
+    """CalcMaxPhotonsPixel integrates over +/- 0.5 camera pixel. sx/sy are in
+    nm (picasso 1.0), so the bound must be 0.5*pixelsize nm; a bare 0.5 nm
+    collapses the integral to ~0 for a ~100 nm PSF.
+    """
+    from picasso_workflow.outpost.binding_events.analysis import Measurement
+
+    row = {"center_photons": 1000.0, "sx": 120.0, "sy": 130.0}
+    m_px = Measurement(pixelsize=130.0)
+    m_bad = Measurement(pixelsize=1.0)  # mimics the old bare-0.5 bug
+    peak_px = m_px.CalcMaxPhotonsPixel(row)
+    peak_bad = m_bad.CalcMaxPhotonsPixel(row)
+    # A realistic pixel bound collects a meaningful fraction of the photons;
+    # the 1 nm bound collects a vanishing sliver.
+    assert peak_px > 50.0
+    assert peak_bad < 1.0
+    assert peak_px > 100 * peak_bad
+
+
+def test_cleaning_bg_removes_nonpositive_background():
+    """cleaning_bg drops bg <= 0 rows (fit errors). Begin must assign its
+    return (it does not mutate in place), else negatives reach the SBR.
+    """
+    import pandas as pd
+
+    from picasso_workflow.outpost.binding_events.analysis import Measurement
+
+    m = Measurement()
+    m.table = pd.DataFrame(
+        {"group": [0, 0, 1], "frame": [0, 1, 2], "bg": [5.0, -1.0, 0.0]}
+    )
+    cleaned = m.cleaning_bg()
+    assert (cleaned["bg"] > 0).all()
+    assert len(cleaned) == 1  # only the bg=5.0 row survives
 
 
 def test_plotting_api_matches_call_site():

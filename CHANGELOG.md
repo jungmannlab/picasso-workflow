@@ -141,9 +141,30 @@ This file was started after v0.5.6; earlier history is in the git log.
     **decorrelation** coordinate bounds, **PPAC** KDTree coords, the CellMask
     coordinate conversion (`masking.mask.picassolocs_to_coords`), the
     `qc_advisor.filter_advisor` precision filter/suggestion (`lpx/lpy`), and
-    the `backfill.metrics` `lp_x_nm`/`lp_y_nm` registry metrics. (The
-    shift-kernel and binding-event SBR "pixel" constants were checked and are
-    correct — they act on genuinely px-valued shifts / PSF widths `sx`,`sy`.)
+    the `backfill.metrics` `lp_x_nm`/`lp_y_nm` registry metrics.
+  - **Binding-event SBR used a 1 nm integration bound:** `sx`/`sy` are in nm
+    in picasso 1.0, so `CalcMaxPhotonsPixel`'s `bounds = 0.5` integrated the
+    PSF over ±0.5 nm instead of ±0.5 camera pixel, collapsing the peak-pixel
+    photon count (and thus SBR) to ~0. `Measurement` now takes `pixelsize`
+    and uses `bounds = 0.5 * pixelsize`.
+  - **Negative backgrounds reached the SBR:** `binding_events` `Begin`
+    discarded the `cleaning_bg()` return (it filters `bg <= 0` rows but does
+    not mutate in place); now `self.table = self.cleaning_bg()`.
+  - **Pick block-scan off-by-one:** `picks._get_block_locs_at` used the
+    count-variant's strict `0 < k < K` / `0 < lx < L`, skipping block row and
+    column 0; the retrieval variant needs inclusive `0 <= …` (matching
+    picasso's `_get_block_locs_at`).
+  - **`compute_frc_spatial` tuple/UnboundLocalError:** `extract_resolution`
+    returns `(resolution, cutoff)` — the smoothed/mean values were stored as
+    the tuple (so `results["resolution"]` was a tuple, not a float); and
+    `resolution_mean_fromcurve` was undefined in the `smoothing_window <= 0`
+    branch, raising `UnboundLocalError`. Both fixed.
+  - **Shift-kernel px/nm (deferred):** `outpost/alignment/shift_kernel.py`
+    and the RSSO path use camera-pixel constants (0.1-px bins, 0.5/0.01-px
+    Gaussian seeds) and an ambiguously px-vs-nm `max_shift` radius on nm
+    coordinates. A correct fix is a px/nm audit of the whole alignment fork,
+    which picasso 1.0's `postprocess.align(method="points")` replaces; folded
+    into the deferred picasso-1.0 API migration rather than patched here.
   - **Image decorrelation resolution halved:** `extract_resolution_decorr`
     returned `2 / kc_max`, i.e. twice the Descloux resolution; it now returns
     `1 / kc_max` (`= 2 * pixelsize / r_cutoff`). (A faithful switch from the

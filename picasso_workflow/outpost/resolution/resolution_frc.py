@@ -1597,22 +1597,27 @@ def compute_frc_spatial(
                 frc_curve_mean[-(i + half_window + 1) :]
             )
 
-        # Extract resolution from smoothed curve
-        resolution_smoothed = extract_resolution(
+        # Extract resolution from smoothed curve. extract_resolution returns
+        # (resolution, cutoff_frequency); keep only the scalar resolution so
+        # results["resolution"] is a float, not a tuple.
+        resolution_smoothed, _ = extract_resolution(
             frc_curve_smoothed, spatial_frequencies, threshold
         )
-        resolution_mean_fromcurve = extract_resolution(
+        resolution_mean_fromcurve, _ = extract_resolution(
             frc_curve_mean, spatial_frequencies, threshold
         )
 
         logger.debug(
-            f"  Smoothed resolution: {resolution_smoothed[0]:.2f} nm "
+            f"  Smoothed resolution: {resolution_smoothed:.2f} nm "
             f"(unsmoothed: {resolution_mean:.2f} nm)"
-            f"(mean from curve: {resolution_mean_fromcurve[0]:.2f} nm)"
+            f"(mean from curve: {resolution_mean_fromcurve:.2f} nm)"
         )
     else:
         frc_curve_smoothed = frc_curve_mean.copy()
         resolution_smoothed = resolution_mean
+        # Also define the unsmoothed-from-curve value so the results dict
+        # below doesn't hit an UnboundLocalError when smoothing_window <= 0.
+        resolution_mean_fromcurve = resolution_mean
 
     logger.debug(
         f"  Mean resolution: {resolution_mean:.2f} ± {resolution_std:.2f} nm"

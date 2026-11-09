@@ -22,12 +22,20 @@ from pandarallel import pandarallel
 
 class Measurement:
     def __init__(
-        self, in_path="", save_path="", saving_name="", total_n_frames=20000
+        self,
+        in_path="",
+        save_path="",
+        saving_name="",
+        total_n_frames=20000,
+        pixelsize=130.0,
     ):
         self.in_path = in_path
         self.save_path = save_path
         self.saving_name = saving_name
         self.total_n_frames = total_n_frames
+        # Camera pixel size in nm. picasso 1.0 stores sx/sy in nm, so the
+        # 1x1-camera-pixel integration bound must be scaled by it.
+        self._pixelsize = pixelsize
 
         self.table = []
         self.table_g = []
@@ -35,7 +43,9 @@ class Measurement:
 
     def Begin(self):
         self.Import()
-        self.cleaning_bg()
+        # cleaning_bg returns a filtered copy; assign it back (it does not
+        # mutate self.table in place) so negative-bg rows don't reach the SBR.
+        self.table = self.cleaning_bg()
         pandarallel.initialize(nb_workers=min(30, multiprocessing.cpu_count()))
         self.table_g = self.table.groupby("group").parallel_apply(
             self.GroupCalcs
@@ -104,7 +114,10 @@ class Measurement:
         N = row["center_photons"]
         sx = row["sx"]
         sy = row["sy"]
-        bounds = 0.5
+        # Integrate over the 1x1 central camera pixel: +/- 0.5 pixel. sx/sy
+        # are in nm (picasso 1.0), so the half-pixel bound is 0.5*pixelsize nm
+        # (previously a bare 0.5 nm, collapsing the integral to ~0).
+        bounds = 0.5 * self._pixelsize
         result = (
             2
             * math.pi

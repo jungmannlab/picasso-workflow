@@ -5221,6 +5221,7 @@ class AutoPicasso(
             save_path=results["folder"],
             saving_name=file_nameonly,
             total_n_frames=self.frames,
+            pixelsize=self.pixelsize,
         )
         Meas.Begin()
         Meas.FileSaver()

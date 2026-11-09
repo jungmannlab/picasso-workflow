@@ -792,9 +792,11 @@ def _get_block_locs_at(
 ):
     step = 0
     for k in range(y_range - 1, y_range + 2):
-        if 0 < k < K:
+        # retrieval variant uses inclusive 0 <= k < K (unlike the count-only
+        # _n_block_locs_at); 0 < k skipped block row/column 0.
+        if 0 <= k < K:
             for lx in range(x_range - 1, x_range + 2):
-                if 0 < lx < L:
+                if 0 <= lx < L:
                     if block_ends[k, lx] - block_starts[k, lx] > 0:
                         # numba does not work if you attach arange to an
                         # empty list, so the first step is different; this
