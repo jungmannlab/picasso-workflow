@@ -101,7 +101,7 @@ def get_workflow(datasets):
             {
                 "diameter": 2,
                 "std_range": 1.4,
-                "mean_rmsd": 0.4,
+                "mean_rmsd": 50.0,
                 "remove_gold": False,
             },
         ),
@@ -119,7 +119,7 @@ def get_workflow(datasets):
             {
                 "diameter": 2,
                 "std_range": 1.4,
-                "mean_rmsd": 0.4,
+                "mean_rmsd": 50.0,
                 "remove_gold": True,
             },
         ),
