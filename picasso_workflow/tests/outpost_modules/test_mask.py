@@ -74,6 +74,92 @@ def test_filter_mask_default_selects_largest():
     assert np.array_equal(cell_mask._binary_mask, expected)
 
 
+def _uniform_cellmask(shape, total_count, upsample=10):
+    """Build a CellMask with an all-True binary mask whose initial density
+    holds a uniform, count-conserving per-pixel localization density.
+
+    ``from_mol_coords`` divides the zoomed density by ``factor**2`` so the
+    summed density conserves the localization count; ``_initial_density`` is
+    therefore in units of localizations-per-mask-pixel. Replicate that here
+    directly (no Otsu / zoom needed) by distributing ``total_count`` evenly
+    over the mask.
+    """
+    cell_mask = mask.CellMask()
+    cell_mask._upsample = upsample
+    cell_mask._binary_mask = np.ones(shape, dtype=bool)
+    n_pixels = shape[0] * shape[1]
+    cell_mask._initial_density = np.full(
+        shape, total_count / n_pixels, dtype=np.float64
+    )
+    cell_mask._recalc_density_mask_from_binary()
+    return cell_mask
+
+
+def test_mean_density_equals_count_over_area():
+    """mean_density must equal the true localization count / area.
+
+    Regression for the density fix: ``from_mol_coords`` now divides the
+    zoomed density by ``factor**2`` (factor = binsize / upsample = 2 for the
+    defaults), so the reported density no longer over-estimates by
+    ``factor**2`` (4x for binsize=20 / upsample=10). With a count-conserving
+    ``_initial_density``, ``mean_density`` (spots / nm^2) must equal
+    ``total_count / area_nm2`` exactly, not 4x that.
+    """
+    upsample = 10  # nm per mask pixel
+    shape = (30, 30)
+    total_count = 900.0
+    cell_mask = _uniform_cellmask(shape, total_count, upsample=upsample)
+
+    area_nm2 = shape[0] * shape[1] * upsample**2
+    expected = total_count / area_nm2  # 0.01 spots / nm^2
+
+    assert np.isclose(cell_mask.mean_density, expected)
+    # Not the pre-fix 4x over-estimate (factor**2 == 4 for the defaults).
+    assert not np.isclose(cell_mask.mean_density, 4 * expected)
+
+    # The densities array must likewise conserve the count: summing the
+    # per-pixel density times the pixel area recovers total_count.
+    pixel_area = upsample**2
+    recovered = cell_mask.densities.sum() * pixel_area
+    assert np.isclose(recovered, total_count)
+
+
+def test_random_points_not_transposed_on_nonsquare_mask():
+    """random_points on a NON-square mask must not swap x and y.
+
+    Regression for the ``indexing="ij"`` meshgrid fix. Mask shape (40, 20)
+    gives x_max (dim 0) = 400 nm wider than y_max (dim 1) = 200 nm. Simulated
+    points must fall within [0, x_max] x [0, y_max] with x_max != y_max, and
+    the x extent must match the (wider) x axis, not be capped at y_max as the
+    transposed (default "xy") meshgrid produced.
+    """
+    upsample = 10
+    nx, ny = 40, 20  # x range wider than y range
+    cell_mask = mask.CellMask()
+    cell_mask._upsample = upsample
+    cell_mask._binary_mask = np.ones((nx, ny), dtype=bool)
+    cell_mask._initial_density = np.ones((nx, ny), dtype=np.float64)
+    cell_mask._recalc_density_mask_from_binary()
+
+    x_max = nx * upsample  # 400
+    y_max = ny * upsample  # 200
+    assert x_max != y_max
+
+    np.random.seed(1)
+    X = cell_mask.random_points(5000, binary=False)
+
+    # Points stay within the (correctly oriented) bounds.
+    assert np.all((X[:, 0] >= 0) & (X[:, 0] <= x_max))
+    assert np.all((X[:, 1] >= 0) & (X[:, 1] <= y_max))
+
+    # The x extent reaches into the wider axis (> y_max): if x/y were swapped
+    # the x coordinates would be capped at y_max = 200.
+    assert X[:, 0].max() > y_max
+    assert X[:, 1].max() <= y_max
+    # x point cloud is wider than the y point cloud.
+    assert X[:, 0].max() > X[:, 1].max()
+
+
 if __name__ == "__main__":
     fps = []
     channel_locs = [io.load_locs(fp)[0] for fp in fps]
