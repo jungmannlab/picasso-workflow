@@ -23,6 +23,17 @@ from picasso_workflow.outpost.picks.picks import get_pick_similar_vals
 _SITE_EPS_FRAC = 0.2
 
 
+def _rotation_matrix(theta):
+    """2x2 rotation matrix for angle ``theta`` (radians).
+
+    Retained (the rest of the forked ICP moved to
+    ``picasso.registration.register_to_template``) because
+    ``outpost/origami/origami.py`` still uses it for its own rotation sweep.
+    """
+    c, s = np.cos(theta), np.sin(theta)
+    return np.array([[c, -s], [s, c]])
+
+
 def _median_nn_spacing(sites):
     """Median nearest-neighbour distance of a point set."""
     sites = np.asarray(sites, dtype=float).reshape(-1, 2)
