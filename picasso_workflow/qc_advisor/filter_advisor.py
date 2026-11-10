@@ -72,7 +72,9 @@ def filter_keep_mask(
     """Boolean mask of localizations ``s`` that PASS the suggested filter ``fs``.
 
     ``s`` is a structured array (picasso locs recarray) with columns ``names``;
-    ``fs`` is a filter dict as returned by :func:`filter_suggestions`.
+    ``fs`` is a filter dict as returned by :func:`filter_suggestions`. ``px``
+    is unused since picasso 1.0 (lpx/lpy are already nm); retained for
+    signature compatibility.
     """
     keep = np.ones(len(s), dtype=bool)
     if "photons" in names:
@@ -92,7 +94,8 @@ def filter_keep_mask(
         ell = 1.0 - np.minimum(_sx, _sy) / np.maximum(_sx, _sy)
         keep &= ell <= float(fs["ellipticity_max"])
     if fs.get("precision_max_nm") is not None and {"lpx", "lpy"} <= set(names):
-        lp = 0.5 * (s["lpx"].astype(float) + s["lpy"].astype(float)) * px
+        # picasso 1.0: lpx/lpy are already in nm (do not scale by px).
+        lp = 0.5 * (s["lpx"].astype(float) + s["lpy"].astype(float))
         keep &= lp <= float(fs["precision_max_nm"])
     return keep
 
@@ -213,7 +216,8 @@ def filter_suggestions(
         if p95 is not None:
             out["ellipticity_max"] = round(min(0.6, p95), 2)
     if {"lpx", "lpy"} <= set(names):
-        lp = 0.5 * (sig["lpx"].astype(float) + sig["lpy"].astype(float)) * px
+        # picasso 1.0: lpx/lpy are already in nm (do not scale by px).
+        lp = 0.5 * (sig["lpx"].astype(float) + sig["lpy"].astype(float))
         p95 = _pct_safe(lp, 95)
         if p95 is not None:
             out["precision_max_nm"] = round(p95, 1)

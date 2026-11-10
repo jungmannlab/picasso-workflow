@@ -163,7 +163,7 @@ def compute_metrics(
     Primaries straight from the hdf5 columns:
 
     * ``n_locs``           — row count
-    * ``lp_x_nm`` / ``lp_y_nm`` — median ``lpx`` / ``lpy`` × pixel size
+    * ``lp_x_nm`` / ``lp_y_nm`` — median ``lpx`` / ``lpy`` (nm, picasso 1.0)
     * ``photons_median``   — median ``photons``
     * ``background``       — median ``bg``
     * ``psf_sigma_x`` / ``psf_sigma_y`` — median ``sx`` / ``sy``
@@ -192,12 +192,10 @@ def compute_metrics(
     out["psf_sigma_y"] = _median(locs, "sy")
     out["net_gradient_median"] = _median(locs, "net_gradient")
 
-    # Localization precision: median lpx/lpy (px) scaled to nm by pixel size.
-    if pixelsize is not None:
-        lp_x_px = _median(locs, "lpx")
-        lp_y_px = _median(locs, "lpy")
-        out["lp_x_nm"] = lp_x_px * pixelsize if lp_x_px is not None else None
-        out["lp_y_nm"] = lp_y_px * pixelsize if lp_y_px is not None else None
+    # Localization precision: picasso 1.0 stores lpx/lpy in nm already, so the
+    # medians are the nm metrics directly (no pixelsize scaling needed).
+    out["lp_x_nm"] = _median(locs, "lpx")
+    out["lp_y_nm"] = _median(locs, "lpy")
 
     # Density: locs per µm² over the FOV extent from the .yaml. Requires
     # n_locs > 0 — an empty (zero-loc) dataset is not a real density sample and

@@ -7,6 +7,7 @@ Author: Generated for picasso-workflow
 Date: 2025
 """
 
+import pickle
 import unittest
 import numpy as np
 import pandas as pd
@@ -26,8 +27,9 @@ class TestResolutionFRC(unittest.TestCase):
         self.locs = pd.DataFrame(
             {
                 "frame": np.random.randint(0, 100, n_locs),
-                "x": np.random.uniform(0, 100, n_locs),  # in camera pixels
-                "y": np.random.uniform(0, 100, n_locs),
+                # picasso 1.0: x/y are in nm (no pixelsize scaling).
+                "x": np.random.uniform(0, 100, n_locs),  # in nm
+                "y": np.random.uniform(0, 100, n_locs),  # in nm
                 "photons": np.random.uniform(500, 2000, n_locs),
             }
         )
@@ -373,6 +375,104 @@ class TestResolutionFRC(unittest.TestCase):
         valid_frc = frc_values[~np.isnan(frc_values)]
         # Mean should be close to 0 for uncorrelated data
         self.assertLess(np.abs(np.mean(valid_frc)), 0.3)
+
+    def test_18_render_uses_nm_not_pixelsize(self):
+        """Render uses nm coords directly (no pixelsize scaling).
+
+        picasso 1.0: locs["x"]/["y"] are already in nm, so the rendered
+        image bounds equal the nm coordinate span plus a margin and no
+        longer scale with ``pixelsize``. The rendered image must therefore
+        be identical whether pixelsize=1 or pixelsize=130.
+        """
+        pixelsize_render = self.pixelsize_render
+
+        # Bounds should equal nm span (coord min/max) ± a margin of
+        # 10 * pixelsize_render, with NO multiplication by pixelsize.
+        image, bounds = resolution_frc.render_image_histogram(
+            self.locs, self.pixelsize, pixelsize_render
+        )
+        x_min, x_max, y_min, y_max = bounds
+        margin = 10 * pixelsize_render
+
+        self.assertAlmostEqual(x_min, self.locs["x"].min() - margin)
+        self.assertAlmostEqual(x_max, self.locs["x"].max() + margin)
+        self.assertAlmostEqual(y_min, self.locs["y"].min() - margin)
+        self.assertAlmostEqual(y_max, self.locs["y"].max() + margin)
+
+        # The coord span here is ~100 nm, so with a 100 nm margin on each
+        # side the image is ~30 px wide. The old ``* pixelsize`` scaling
+        # would have made it ~(100 * 130)/10 ≈ 1300 px wide instead.
+        span_x_nm = self.locs["x"].max() - self.locs["x"].min()
+        expected_dim = (span_x_nm + 2 * margin) / pixelsize_render
+        self.assertAlmostEqual(image.shape[0], expected_dim, delta=1)
+        self.assertLess(image.shape[0], 50)  # not ~1300
+
+        # Same image regardless of pixelsize (it is no longer used for
+        # coordinate scaling).
+        image_1, bounds_1 = resolution_frc.render_image_histogram(
+            self.locs, 1.0, pixelsize_render
+        )
+        image_130, bounds_130 = resolution_frc.render_image_histogram(
+            self.locs, 130.0, pixelsize_render
+        )
+        self.assertEqual(bounds_1, bounds_130)
+        self.assertEqual(image_1.shape, image_130.shape)
+        np.testing.assert_array_equal(image_1, image_130)
+
+    def test_19_split_worker_is_picklable(self):
+        """The split worker must be picklable for ProcessPoolExecutor.
+
+        ``compute_frc_averaged(parallel_splits=True)`` ships the per-split
+        work to ``_process_single_split_worker`` via ProcessPoolExecutor,
+        which pickles the callable. A nested closure (the previous
+        implementation) would raise here; a module-level function does not.
+        """
+        pickled = pickle.dumps(resolution_frc._process_single_split_worker)
+        self.assertIsInstance(pickled, bytes)
+
+    def test_20_split_worker_shares_locs_via_global(self):
+        """The parallel path shares locs once via the pool initializer.
+
+        ``_process_single_split_worker`` reads ``task['locs']`` when present
+        (the sequential path) and otherwise the process-cached
+        ``_FRC_SPLIT_LOCS`` set by ``_init_frc_split_worker`` (the parallel
+        path). Both must yield identical output. ``_init_frc_split_worker``
+        must also be picklable (it is shipped as the pool initializer).
+        """
+        x = self.locs["x"].to_numpy()
+        y = self.locs["y"].to_numpy()
+        margin = 10 * self.pixelsize_render
+        bounds = (
+            x.min() - margin,
+            x.max() + margin,
+            y.min() - margin,
+            y.max() + margin,
+        )
+        base = {
+            "common_bounds": bounds,
+            "pixelsize": self.pixelsize,
+            "pixelsize_render": self.pixelsize_render,
+            "smoothing_sigma": None,
+            "use_chunking": False,
+            "chunk_size_nm": 10000,
+            "n_processes": 1,
+            "threshold": 1 / 7,
+            "max_frc_range_nm": None,
+            "split_idx": 1,
+        }
+        out_task = resolution_frc._process_single_split_worker(
+            {**base, "locs": self.locs}
+        )
+        resolution_frc._init_frc_split_worker(self.locs)
+        out_global = resolution_frc._process_single_split_worker(dict(base))
+        for a, b in zip(out_task, out_global):
+            if isinstance(a, np.ndarray):
+                np.testing.assert_array_equal(a, b)
+            else:
+                self.assertTrue(a == b or (np.isnan(a) and np.isnan(b)))
+        self.assertIsInstance(
+            pickle.dumps(resolution_frc._init_frc_split_worker), bytes
+        )
 
 
 class TestResolutionFRCEdgeCases(unittest.TestCase):

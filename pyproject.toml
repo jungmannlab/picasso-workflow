@@ -26,7 +26,7 @@ dependencies = [
     # picasso 1.0 is the first release with a stability promise; the workflow is
     # migrated to its nm-everywhere / IdentificationParameters / unified-progress
     # API (see the picasso 1.0 migration).
-    "picassosr>=1.0.0a1,<2",
+    "picassosr>=1.0.0rc1,<2",
     # The Qt GUI (PyQt6 + the embedded WebEngine report viewer) is a `[gui]`
     # EXTRA, not a base dep: it is lazy-imported, so headless/cluster/analysis
     # installs don't need it, and PyQt6 + its Qt6/WebEngine binaries are ~530 MB

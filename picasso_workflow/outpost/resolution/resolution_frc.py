@@ -78,9 +78,10 @@ def render_image_histogram(
     Parameters
     ----------
     locs : structured array
-        Localization data with ``x`` and ``y`` fields (in camera pixels).
+        Localization data with ``x`` and ``y`` fields (in nm, picasso 1.0).
     pixelsize : float
-        Camera pixel size in nm.
+        Camera pixel size in nm. Unused since picasso 1.0 (locs are
+        already nm); retained for signature compatibility.
     pixelsize_render : float
         Rendered pixel size in nm.
     bounds : tuple of float or None, optional
@@ -96,8 +97,9 @@ def render_image_histogram(
         The actual bounds used, ``(x_min, x_max, y_min, y_max)`` in nm.
     """
     # Convert to physical coordinates (nm)
-    x_nm = locs["x"] * pixelsize
-    y_nm = locs["y"] * pixelsize
+    # picasso 1.0: locs["x"]/["y"] are already in nm; no pixelsize scaling.
+    x_nm = locs["x"]
+    y_nm = locs["y"]
 
     # Calculate bounds if not provided
     if bounds is None:
@@ -297,7 +299,8 @@ def compute_frc_resolution(
     locs : structured array
         Localization data.
     pixelsize : float
-        Camera pixel size in nm.
+        Camera pixel size in nm. Unused since picasso 1.0 (locs are
+        already nm); retained for signature compatibility.
     pixelsize_render : float, optional
         Rendered pixel size in nm. Default is 5.
     smoothing_sigma : float or None, optional
@@ -393,9 +396,10 @@ def render_image_chunked_parallel(
     Parameters
     ----------
     locs : structured array
-        Localization data with ``x`` and ``y`` fields (in camera pixels).
+        Localization data with ``x`` and ``y`` fields (in nm, picasso 1.0).
     pixelsize : float
-        Camera pixel size in nm.
+        Camera pixel size in nm. Unused since picasso 1.0 (locs are
+        already nm); retained for signature compatibility.
     pixelsize_render : float
         Rendered pixel size in nm.
     bounds : tuple of float or None, optional
@@ -419,8 +423,9 @@ def render_image_chunked_parallel(
     from concurrent.futures import ThreadPoolExecutor
 
     # Convert to physical coordinates (nm)
-    x_nm = locs["x"] * pixelsize
-    y_nm = locs["y"] * pixelsize
+    # picasso 1.0: locs["x"]/["y"] are already in nm; no pixelsize scaling.
+    x_nm = locs["x"]
+    y_nm = locs["y"]
 
     # Calculate bounds if not provided
     if bounds is None:
@@ -497,8 +502,9 @@ def render_image_chunked_parallel(
         ) = task
 
         # Extract localizations in this chunk
-        x_nm = locs["x"] * pixelsize
-        y_nm = locs["y"] * pixelsize
+        # picasso 1.0: locs["x"]/["y"] are already in nm; no pixelsize scaling.
+        x_nm = locs["x"]
+        y_nm = locs["y"]
 
         mask = (
             (x_nm >= chunk_bounds[0])
@@ -776,6 +782,91 @@ def compute_frc_curve_parallel(fft1, fft2, pixelsize_render, n_processes=4):
     return compute_frc_curve_vectorized(fft1, fft2, pixelsize_render)
 
 
+# Per-process localization table shared with split workers via the pool
+# initializer, so the (potentially huge) array is pickled once per worker
+# process instead of once per split task.
+_FRC_SPLIT_LOCS = None
+
+
+def _init_frc_split_worker(locs):
+    """ProcessPoolExecutor initializer: cache ``locs`` in the worker process."""
+    global _FRC_SPLIT_LOCS
+    _FRC_SPLIT_LOCS = locs
+
+
+def _process_single_split_worker(task):
+    """Process one FRC split: render, FFT, FRC, resolution.
+
+    Module-level (not a closure) so it is picklable by
+    ``ProcessPoolExecutor``. ``task`` carries the per-split config; the
+    localization table comes from ``task["locs"]`` when present (the
+    in-process sequential path) or otherwise the process-cached
+    ``_FRC_SPLIT_LOCS`` set by :func:`_init_frc_split_worker` (the parallel
+    path), so ``locs`` is not re-pickled for every split.
+    """
+    locs = task.get("locs")
+    if locs is None:
+        locs = _FRC_SPLIT_LOCS
+    common_bounds = task["common_bounds"]
+    pixelsize = task["pixelsize"]
+    pixelsize_render = task["pixelsize_render"]
+    smoothing_sigma = task["smoothing_sigma"]
+    use_chunking = task["use_chunking"]
+    chunk_size_nm = task["chunk_size_nm"]
+    n_processes = task["n_processes"]
+    threshold = task["threshold"]
+    max_frc_range_nm = task["max_frc_range_nm"]
+    split_idx = task["split_idx"]
+
+    locs_1, locs_2 = split_localizations_random(locs, seed=split_idx)
+
+    if use_chunking:
+        image_1, _ = render_image_chunked_parallel(
+            locs_1,
+            pixelsize,
+            pixelsize_render,
+            bounds=common_bounds,
+            smoothing_sigma=smoothing_sigma,
+            chunk_size_nm=chunk_size_nm,
+            n_processes=n_processes,
+        )
+        image_2, _ = render_image_chunked_parallel(
+            locs_2,
+            pixelsize,
+            pixelsize_render,
+            bounds=common_bounds,
+            smoothing_sigma=smoothing_sigma,
+            chunk_size_nm=chunk_size_nm,
+            n_processes=n_processes,
+        )
+    else:
+        image_1, _ = render_image_histogram(
+            locs_1,
+            pixelsize,
+            pixelsize_render,
+            bounds=common_bounds,
+            smoothing_sigma=smoothing_sigma,
+        )
+        image_2, _ = render_image_histogram(
+            locs_2,
+            pixelsize,
+            pixelsize_render,
+            bounds=common_bounds,
+            smoothing_sigma=smoothing_sigma,
+        )
+
+    fft_1 = compute_fft(image_1)
+    fft_2 = compute_fft(image_2)
+
+    frc_curve, spatial_frequencies = compute_frc_curve_vectorized(
+        fft_1, fft_2, pixelsize_render, max_frc_range_nm=max_frc_range_nm
+    )
+    resolution, cutoff_frequency = extract_resolution(
+        frc_curve, spatial_frequencies, threshold
+    )
+    return frc_curve, spatial_frequencies, resolution, cutoff_frequency
+
+
 def compute_frc_averaged(
     locs,
     pixelsize,
@@ -799,7 +890,8 @@ def compute_frc_averaged(
     locs : structured array
         Localization data.
     pixelsize : float
-        Camera pixel size in nm.
+        Camera pixel size in nm. Unused since picasso 1.0 (locs are
+        already nm); retained for signature compatibility.
     pixelsize_render : float, optional
         Rendered pixel size in nm. Default is 5.0.
     smoothing_sigma : float or None, optional
@@ -848,35 +940,11 @@ def compute_frc_averaged(
     resolutions = []
     cutoff_frequencies = []
 
-    # Determine rendering function
-    if use_chunking:
-
-        def render_func(locs_subset, bounds):
-            return render_image_chunked_parallel(
-                locs_subset,
-                pixelsize,
-                pixelsize_render,
-                bounds=bounds,
-                smoothing_sigma=smoothing_sigma,
-                chunk_size_nm=chunk_size_nm,
-                n_processes=n_processes,
-            )
-
-    else:
-
-        def render_func(locs_subset, bounds):
-            return render_image_histogram(
-                locs_subset,
-                pixelsize,
-                pixelsize_render,
-                bounds=bounds,
-                smoothing_sigma=smoothing_sigma,
-            )
-
     # Determine bounds from full dataset (without rendering)
     # This is much faster than rendering the full image
-    x_nm = locs["x"] * pixelsize
-    y_nm = locs["y"] * pixelsize
+    # picasso 1.0: locs["x"]/["y"] are already in nm; no pixelsize scaling.
+    x_nm = locs["x"]
+    y_nm = locs["y"]
     x_min, x_max = x_nm.min(), x_nm.max()
     y_min, y_max = y_nm.min(), y_nm.max()
 
@@ -900,31 +968,24 @@ def compute_frc_averaged(
             stacklevel=2,
         )
 
-    # Define worker function for a single split
-    def process_single_split(split_idx):
-        """Process one split: render, FFT, FRC"""
-        # Split localizations
-        locs_1, locs_2 = split_localizations_random(locs, seed=split_idx)
-
-        # Render images with common bounds
-        image_1, _ = render_func(locs_1, common_bounds)
-        image_2, _ = render_func(locs_2, common_bounds)
-
-        # Compute FFTs
-        fft_1 = compute_fft(image_1)
-        fft_2 = compute_fft(image_2)
-
-        # Compute FRC curve
-        frc_curve, spatial_frequencies = compute_frc_curve_vectorized(
-            fft_1, fft_2, pixelsize_render, max_frc_range_nm=max_frc_range_nm
-        )
-
-        # Extract resolution
-        resolution, cutoff_frequency = extract_resolution(
-            frc_curve, spatial_frequencies, threshold
-        )
-
-        return frc_curve, spatial_frequencies, resolution, cutoff_frequency
+    # Bundle each split's config into a picklable task dict so the parallel
+    # path can ship work to the module-level worker (nested closures can't be
+    # pickled by ProcessPoolExecutor). ``locs`` is NOT put in the task: the
+    # parallel path shares it once via the pool initializer, the sequential
+    # path adds it below (free in-process).
+    def _make_task(split_idx):
+        return {
+            "common_bounds": common_bounds,
+            "pixelsize": pixelsize,
+            "pixelsize_render": pixelsize_render,
+            "smoothing_sigma": smoothing_sigma,
+            "use_chunking": use_chunking,
+            "chunk_size_nm": chunk_size_nm,
+            "n_processes": n_processes,
+            "threshold": threshold,
+            "max_frc_range_nm": max_frc_range_nm,
+            "split_idx": split_idx,
+        }
 
     # Process splits (parallel or sequential)
     if parallel_splits and n_splits > 1:
@@ -936,9 +997,16 @@ def compute_frc_averaged(
             f"  Processing {n_splits} splits in parallel ({max_workers} workers)..."
         )
 
-        with ProcessPoolExecutor(max_workers=max_workers) as executor:
+        tasks = [_make_task(i) for i in range(n_splits)]
+        # Share locs once per worker process via the initializer rather than
+        # pickling it into every task.
+        with ProcessPoolExecutor(
+            max_workers=max_workers,
+            initializer=_init_frc_split_worker,
+            initargs=(locs,),
+        ) as executor:
             split_results = list(
-                executor.map(process_single_split, range(n_splits))
+                executor.map(_process_single_split_worker, tasks)
             )
 
         # Unpack results
@@ -956,12 +1024,15 @@ def compute_frc_averaged(
         for split_idx in range(n_splits):
             logger.debug(f"  Processing split {split_idx + 1}/{n_splits}...")
 
+            # In-process: pass locs directly in the task (no pickling cost).
+            task = _make_task(split_idx)
+            task["locs"] = locs
             (
                 frc_curve,
                 spatial_frequencies,
                 resolution,
                 cutoff_frequency,
-            ) = process_single_split(split_idx)
+            ) = _process_single_split_worker(task)
 
             frc_curves.append(frc_curve)
             resolutions.append(resolution)
@@ -1255,7 +1326,8 @@ def compute_frc_spatial(
     locs : structured array
         Localization data with ``x`` and ``y`` fields.
     pixelsize : float
-        Camera pixel size in nm.
+        Camera pixel size in nm. Unused since picasso 1.0 (locs are
+        already nm); retained for signature compatibility.
     pixelsize_render : float, optional
         Rendered pixel size in nm. Default is 5.0.
     smoothing_sigma : float or None, optional
@@ -1290,8 +1362,9 @@ def compute_frc_spatial(
     from concurrent.futures import ProcessPoolExecutor
 
     # Convert to physical coordinates
-    x_nm = locs["x"] * pixelsize
-    y_nm = locs["y"] * pixelsize
+    # picasso 1.0: locs["x"]/["y"] are already in nm; no pixelsize scaling.
+    x_nm = locs["x"]
+    y_nm = locs["y"]
 
     # Determine overall bounds
     x_min, x_max = x_nm.min(), x_nm.max()
@@ -1524,22 +1597,27 @@ def compute_frc_spatial(
                 frc_curve_mean[-(i + half_window + 1) :]
             )
 
-        # Extract resolution from smoothed curve
-        resolution_smoothed = extract_resolution(
+        # Extract resolution from smoothed curve. extract_resolution returns
+        # (resolution, cutoff_frequency); keep only the scalar resolution so
+        # results["resolution"] is a float, not a tuple.
+        resolution_smoothed, _ = extract_resolution(
             frc_curve_smoothed, spatial_frequencies, threshold
         )
-        resolution_mean_fromcurve = extract_resolution(
+        resolution_mean_fromcurve, _ = extract_resolution(
             frc_curve_mean, spatial_frequencies, threshold
         )
 
         logger.debug(
-            f"  Smoothed resolution: {resolution_smoothed[0]:.2f} nm "
+            f"  Smoothed resolution: {resolution_smoothed:.2f} nm "
             f"(unsmoothed: {resolution_mean:.2f} nm)"
-            f"(mean from curve: {resolution_mean_fromcurve[0]:.2f} nm)"
+            f"(mean from curve: {resolution_mean_fromcurve:.2f} nm)"
         )
     else:
         frc_curve_smoothed = frc_curve_mean.copy()
         resolution_smoothed = resolution_mean
+        # Also define the unsmoothed-from-curve value so the results dict
+        # below doesn't hit an UnboundLocalError when smoothing_window <= 0.
+        resolution_mean_fromcurve = resolution_mean
 
     logger.debug(
         f"  Mean resolution: {resolution_mean:.2f} ± {resolution_std:.2f} nm"

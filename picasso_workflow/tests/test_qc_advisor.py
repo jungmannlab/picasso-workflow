@@ -448,16 +448,18 @@ def _make_locs(n_signal=500, n_noise=200, seed=0):
     locs["photons"][:n_signal] = rng.normal(5000, 500, n_signal)
     locs["sx"][:n_signal] = rng.normal(1.2, 0.05, n_signal)
     locs["sy"][:n_signal] = rng.normal(1.2, 0.05, n_signal)
-    locs["lpx"][:n_signal] = rng.normal(0.02, 0.003, n_signal)
-    locs["lpy"][:n_signal] = rng.normal(0.02, 0.003, n_signal)
+    # picasso 1.0: lpx/lpy are in nm. Tight signal ~ 6 nm precision.
+    locs["lpx"][:n_signal] = rng.normal(6.0, 1.0, n_signal)
+    locs["lpy"][:n_signal] = rng.normal(6.0, 1.0, n_signal)
     # noise: spread out, dim, distorted PSFs
     locs["x"][n_signal:] = rng.uniform(0, 100, n_noise)
     locs["y"][n_signal:] = rng.uniform(0, 100, n_noise)
     locs["photons"][n_signal:] = rng.normal(500, 200, n_noise)
     locs["sx"][n_signal:] = rng.normal(2.5, 0.5, n_noise)
     locs["sy"][n_signal:] = rng.normal(1.0, 0.3, n_noise)
-    locs["lpx"][n_signal:] = rng.normal(0.08, 0.02, n_noise)
-    locs["lpy"][n_signal:] = rng.normal(0.08, 0.02, n_noise)
+    # noise: poor ~ 25 nm precision (well above the signal threshold).
+    locs["lpx"][n_signal:] = rng.normal(25.0, 5.0, n_noise)
+    locs["lpy"][n_signal:] = rng.normal(25.0, 5.0, n_noise)
     names = list(locs.dtype.names)
     return locs, names
 
@@ -504,6 +506,47 @@ class TestFilterAdvisor:
         payload = filter_preview_counts(locs, names, fs, 130.0)
         assert payload["n_total"] == len(locs)
         assert payload["n_kept"] + payload["n_removed"] == payload["n_total"]
+
+    def test_filter_precision_is_nm_not_px(self):
+        # picasso 1.0 stores lpx/lpy in NM, so the suggested precision is the
+        # p95 of 0.5*(lpx+lpy) directly -- NOT scaled by the pixel size.
+        # Build locs with all lpx=lpy=3.0 nm inside the zoom ROI: the mean
+        # precision is a constant 3.0 nm, so p95 == 3.0 (and must NOT be
+        # 3.0 * 130).
+        # No sx/sy column: isolate the precision criterion. (With sx/sy
+        # present, the suggested sx_range_px rounds to a float64 bound that a
+        # constant float32 sx can round just above, tripping the sx filter and
+        # masking what this test is about.)
+        dtype = [
+            ("x", "f4"),
+            ("y", "f4"),
+            ("photons", "f4"),
+            ("lpx", "f4"),
+            ("lpy", "f4"),
+        ]
+        n = 200
+        locs = np.zeros(n, dtype=dtype)
+        rng = np.random.default_rng(0)
+        locs["x"] = 30 + rng.normal(0, 0.5, n)
+        locs["y"] = 30 + rng.normal(0, 0.5, n)
+        # Constant photons so its percentile range admits everything and only
+        # the precision criterion can filter.
+        locs["photons"] = 5000.0
+        locs["lpx"] = 3.0
+        locs["lpy"] = 3.0
+        names = list(locs.dtype.names)
+        fs = filter_suggestions(
+            locs, names, vp_zoom=[(28, 28), (32, 32)], px=130.0
+        )
+        # p95 of a constant 3.0 nm precision is 3.0 nm -- NOT 3.0 * 130.
+        assert fs["precision_max_nm"] == 3.0
+        assert fs["precision_max_nm"] != 3.0 * 130.0
+        # keep_mask treats the threshold in nm too: locs whose
+        # 0.5*(lpx+lpy) <= precision_max_nm are kept.
+        keep = filter_keep_mask(locs, names, fs, 130.0)
+        lp = 0.5 * (locs["lpx"].astype(float) + locs["lpy"].astype(float))
+        assert keep.all()  # all 3.0 nm <= 3.0 nm threshold
+        assert np.array_equal(keep, lp <= fs["precision_max_nm"])
 
     def test_write_filter_suggestions_to_qc(self, tmp_path):
         qc_path = str(tmp_path / "qc.json")

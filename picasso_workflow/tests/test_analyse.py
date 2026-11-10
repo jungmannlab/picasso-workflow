@@ -2801,11 +2801,91 @@ class TestAnalyseModules(unittest.TestCase):
             os.path.join(self.results_folder, "00_ripleysk_average2")
         )
 
-    def protein_interactions(self):
-        return
+    @patch("picasso_workflow.analyse.spinna.generate_N_structures")
+    @patch(
+        "picasso_workflow.outpost.spinna.wrappers.load_structures_from_dict"
+    )
+    @patch("picasso_workflow.outpost.spinna.wrappers.single_spinna_run")
+    def protein_interactions(
+        self, mock_single_spinna_run, mock_load_structures, mock_gen_N
+    ):
+        """Drive AutoPicasso.protein_interactions end-to-end with the heavy
+        picasso calls patched, and assert single_spinna_run is invoked with
+        keyword args (NND_bin / NND_maxdist, not the old fit_* names, and not
+        a single positional dict)."""
+        # load_structures_from_dict -> (structures, targets)
+        mock_load_structures.return_value = (["struct"], ["CD80", "CD86"])
+        # generate_N_structures -> simulated structure counts (opaque)
+        mock_gen_N.return_value = {"CD80": 1, "CD86": 1}
+        # single_spinna_run -> (result_dict, fp_fig_list); the result dict
+        # must carry the fitted proportions. For a hetero pair A != B the
+        # downstream code expects a length-6 vector (A, AA, B, BB, AB, AABB).
+        mock_single_spinna_run.return_value = (
+            {"Fitted proportions of structures": [10, 5, 8, 4, 3, 2]},
+            ["interaction-CD80-CD86.png"],
+        )
+
+        info = [
+            {"Width": 1000, "Height": 1000, "Frames": 10000, "Pixelsize": 130}
+        ]
+        locs_dtype = [
+            ("frame", "u4"),
+            ("photons", "f4"),
+            ("x", "f4"),
+            ("y", "f4"),
+            ("lpx", "f4"),
+            ("lpy", "f4"),
+        ]
+
+        def _mklocs():
+            return pd.DataFrame(
+                np.rec.array(
+                    [
+                        tuple([i] + list(np.random.rand(len(locs_dtype) - 1)))
+                        for i in range(len(self.ap.movie))
+                    ],
+                    dtype=locs_dtype,
+                )
+            )
+
+        self.ap.channel_locs = [_mklocs(), _mklocs()]
+        self.ap.channel_info = [info, info]
+        self.ap.channel_tags = ["CD80", "CD86"]
+
+        parameters = {
+            "channel_map": {"CD80": 0, "CD86": 1},
+            "labeling_efficiency": {"CD80": 0.5, "CD86": 0.6},
+            "labeling_uncertainty": 5,
+            "n_simulate": 50000,
+            "density": [0.00009, 0.00009],
+            "nn_nth": 4,
+            "structure_distance": 10.0,
+            "res_factor": 10,
+            "sim_repeats": 5,
+            "interaction_pairs": [["CD80", "CD86"]],
+        }
+
+        parameters, results = self.ap.protein_interactions(0, parameters)
+
+        # single_spinna_run must have been reached and called.
+        self.assertTrue(mock_single_spinna_run.called)
+        # It must be called with keyword args, not a single positional dict.
+        self.assertEqual(len(mock_single_spinna_run.call_args.args), 0)
+        kwargs = mock_single_spinna_run.call_args.kwargs
+        # The dict keys were renamed from fit_NND_* to NND_*.
+        self.assertIn("NND_bin", kwargs)
+        self.assertIn("NND_maxdist", kwargs)
+        self.assertNotIn("fit_NND_bin", kwargs)
+        self.assertNotIn("fit_NND_maxdist", kwargs)
+
         shutil.rmtree(
             os.path.join(self.results_folder, "00_protein_interactions")
         )
+
+    def test_protein_interactions(self):
+        """Collected entry point for the patched protein_interactions
+        exercise above (the patch decorators inject the mocks)."""
+        self.protein_interactions()
 
     def create_mask(self):
         """Create a density mask"""
@@ -3769,17 +3849,43 @@ class TestAnalyse(unittest.TestCase):
 
         os.remove(os.path.join(self.results_folder, "samplemov.mp4"))
 
-    @patch("picasso_workflow.analyse.localize.get_spots")
-    def test_04_AutoPicasso_auto_min_netgrad(self, mock_get_spots):
-        mock_get_spots.return_value = [
-            np.random.randint(0, 1000, size=(7, 7), dtype=np.uint16)
-        ] * 48
+    @patch("picasso_workflow.analyse.localize.estimate_min_net_gradient")
+    @patch("picasso_workflow.analyse.localize.identify_by_frame_number")
+    @patch("picasso_workflow.analyse.AutoPicasso._draw_sample_spots")
+    def test_04_AutoPicasso_auto_min_netgrad(
+        self, mock_draw, mock_identify, mock_estimate
+    ):
+        # picasso 1.0 provides the estimator as a public API; the workflow
+        # delegates to it and maps min_net_gradient -> estd_net_grad.
+        edges = np.linspace(-3000.0, 5000.0, num=500)
+        mock_estimate.return_value = {
+            "min_net_gradient": 4123.7,
+            "background": 100.0,
+            "background_width": 50.0,
+            "histogram": np.ones(len(edges) - 1),
+            "bin_edges": edges,
+            "frames": np.array([9]),
+        }
+        mock_identify.return_value = pd.DataFrame(
+            {"frame": [9], "net_gradient": [4123.7]}
+        )
+        mock_draw.return_value = (
+            np.zeros((28, 84), dtype=np.uint8),
+            100.0,
+            9000.0,
+        )
         fn = os.path.join(self.results_folder, "autominnet.png")
         results = self.ap._auto_min_netgrad(
             box_size=7, frame_numbers=[9], filename=fn
         )
         logger.debug(results)
+        assert results["estd_net_grad"] == 4123.7
         assert results["filename"] == fn
+        mock_estimate.assert_called_once()
+        # box + start_net_gradient forwarded with the API's keyword names
+        _, kwargs = mock_estimate.call_args
+        assert kwargs["box"] == 7
+        assert kwargs["start_net_gradient"] == -3000
 
         os.remove(fn)
 

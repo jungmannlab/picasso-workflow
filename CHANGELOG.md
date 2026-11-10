@@ -11,6 +11,40 @@ This file was started after v0.5.6; earlier history is in the git log.
 ## [Unreleased]
 
 ### Changed
+- **Adopt picasso 1.0 public APIs for the formerly-private reach-ins; pin
+  `picassosr>=1.0.0rc1`.** picasso 1.0.0rc1 removed the four private symbols
+  the workflow reached into, so `_picasso_api` now routes through the public
+  replacements: `_FIT_METHOD_MAP` → `localize.resolve_fit_method` /
+  `FIT_METHOD_ALIASES`; `__main__._spinna_batch_analysis` →
+  `spinna.batch_analysis` (which returns the `__fitting_results` folder, so
+  the SPINNA wrapper no longer reconstructs it); `localize._to_photons` →
+  `localize.to_photons`; `spinna._targets_from_structures` →
+  `spinna.targets_from_structures`. `INTERNAL_SYMBOLS` shrinks to the two
+  still-private seams (`_pick_similar`, `_n_block_locs_at`); the new public
+  calls are pinned in `SIGNATURE_CONTRACT`.
+
+- **Net-gradient estimation delegates to `localize.estimate_min_net_gradient`.**
+  picasso 1.0 upstreamed `AutoPicasso._auto_min_netgrad`'s background-peak
+  method as a public API; the workflow now delegates to it (mapping
+  `min_net_gradient` → `estd_net_grad`) and keeps the QC plot. (The separate
+  Otsu-based `qc_advisor.filter_advisor.estimate_min_net_gradient` is a
+  different advisor heuristic and is unchanged.)
+
+- **Correspondence-free registration delegates to
+  `registration.register_to_template`.** The forked ICP in
+  `outpost/registration/icp.py` (rotation sweep + Kabsch + Hungarian match +
+  ICP refine) is now a thin adapter over picasso 1.0's public
+  `registration.register_to_template`, preserving the origami dict contract.
+
+- Remaining outpost forks still to migrate to their picasso 1.0 public
+  replacements (each changes scientific output; tracked for follow-up PRs):
+  `spatial_stats/csr_knn` → `postprocess.knn_density`,
+  `resolution/resolution_decorrelation` → `postprocess.decorrelation`,
+  `binding_events` → `postprocess.signal_to_background`/`dye_performance`,
+  `alignment` → `postprocess.align(method="points")`, SPINNA label-uncertainty
+  → `spinna.fit_label_uncertainty`/`fit_le(bootstrap=True)`, CellMask
+  morphology → `masking.*`, and the pick scan → `postprocess.pick_similar_candidates`.
+
 - **The Qt GUI is now a `[gui]` extra, not a base dependency.** `PyQt6` +
   `PyQt6-WebEngine` (≈530 MB of Qt6/WebEngine binaries) moved out of the base
   `dependencies` into a `gui` optional-dependency. They are lazy-imported — the
@@ -130,6 +164,82 @@ This file was started after v0.5.6; earlier history is in the git log.
     lexicographic enumeration, which could exclude the optimum).
   +2 regression tests; 25 self-optimize tests; 864 pass. Determinism + the
   minimize/maximize direction were confirmed sound (mutation-tested).
+
+- **Outpost / QC bug sweep (finder -> verify -> fix).** A review of the
+  `outpost/`, `qc_advisor/` and `backfill/` modules the picasso-1.0 migration
+  diff never touched found a second wave of the same nm↔px double-conversion
+  plus several independent correctness bugs:
+  - **nm double-scaling removed** (picasso 1.0 stores `x`/`y`/`lpx`/`lpy` in
+    nm, so a leftover `* pixelsize` was a ~130x error): the FRC renderer
+    (`resolution_frc.render_image_histogram` + all render paths), image
+    **decorrelation** coordinate bounds, **PPAC** KDTree coords, the CellMask
+    coordinate conversion (`masking.mask.picassolocs_to_coords`), the
+    `qc_advisor.filter_advisor` precision filter/suggestion (`lpx/lpy`), and
+    the `backfill.metrics` `lp_x_nm`/`lp_y_nm` registry metrics.
+  - **Binding-event SBR used a 1 nm integration bound:** `sx`/`sy` are in nm
+    in picasso 1.0, so `CalcMaxPhotonsPixel`'s `bounds = 0.5` integrated the
+    PSF over ±0.5 nm instead of ±0.5 camera pixel, collapsing the peak-pixel
+    photon count (and thus SBR) to ~0. `Measurement` now takes `pixelsize`
+    and uses `bounds = 0.5 * pixelsize`.
+  - **Negative backgrounds reached the SBR:** `binding_events` `Begin`
+    discarded the `cleaning_bg()` return (it filters `bg <= 0` rows but does
+    not mutate in place); now `self.table = self.cleaning_bg()`.
+  - **Pick block-scan off-by-one:** `picks._get_block_locs_at` used the
+    count-variant's strict `0 < k < K` / `0 < lx < L`, skipping block row and
+    column 0; the retrieval variant needs inclusive `0 <= …` (matching
+    picasso's `_get_block_locs_at`).
+  - **`compute_frc_spatial` tuple/UnboundLocalError:** `extract_resolution`
+    returns `(resolution, cutoff)` — the smoothed/mean values were stored as
+    the tuple (so `results["resolution"]` was a tuple, not a float); and
+    `resolution_mean_fromcurve` was undefined in the `smoothing_window <= 0`
+    branch, raising `UnboundLocalError`. Both fixed.
+  - **Shift-kernel px/nm (deferred):** `outpost/alignment/shift_kernel.py`
+    and the RSSO path use camera-pixel constants (0.1-px bins, 0.5/0.01-px
+    Gaussian seeds) and an ambiguously px-vs-nm `max_shift` radius on nm
+    coordinates. A correct fix is a px/nm audit of the whole alignment fork,
+    which picasso 1.0's `postprocess.align(method="points")` replaces; folded
+    into the deferred picasso-1.0 API migration rather than patched here.
+  - **Image decorrelation resolution halved:** `extract_resolution_decorr`
+    returned `2 / kc_max`, i.e. twice the Descloux resolution; it now returns
+    `1 / kc_max` (`= 2 * pixelsize / r_cutoff`). (A faithful switch from the
+    threshold-crossing to the paper's peak-tracking needs a rewrite of the
+    decorrelation function itself — phase-whitening — validated against
+    reference data, and is deferred.)
+  - **Ripley's K `deltar` sign:** `radial_distribution_function` /
+    `overpopulation` built the trailing radius bin with a *negative* width
+    (`r[1]-r[2]`), corrupting the last RDF bin and the overpopulation
+    baseline; now a positive bin width.
+  - **CSR k-NN (`spatial_stats.csr_knn`):** `fit_bkg=True` raised in L-BFGS-B
+    (`x0` length 2 vs `bounds` length 1) — the background fraction now gets its
+    `(0, 1)` bound; and the CSR+background model is now a normalized mixture
+    `(1-f)·CSR + f·uniform` (the CSR term was previously left at weight 1).
+  - **SPINNA batch results:** the wrapper looked for `<name>_fitting_results`
+    but picasso writes `<name>__fitting_results` (double underscore) — results
+    were silently not found.
+  - **Protein-interaction map (`analyse.protein_interactions`):** called
+    `single_spinna_run(dict)` positionally with the wrong keys
+    (`fit_NND_bin`/`fit_NND_maxdist`) — a guaranteed `TypeError`; now
+    `single_spinna_run(**params)` with `NND_bin`/`NND_maxdist`. The homodimer
+    structure geometry ignored `structure_distance` and mis-indexed the
+    lattice (wrong row index); it now scales to the physical spacing and
+    matches the heterodimer convention. A real (now collected)
+    `test_protein_interactions` replaces the no-op stub that hid the crash.
+  - **`pick_gold` RMSD window:** `std_rmsd` was tied to the localization count
+    (`0.25 * n_locs`), making the RMSD criterion a no-op; it now scales with
+    the RMSD, and the `mean_rmsd` default moved from the pre-1.0 pixel value
+    (0.4) to an explicit nm value (50 nm).
+  - **FRC parallel splits:** `compute_frc_averaged(parallel_splits=True)`
+    passed an unpicklable nested closure to `ProcessPoolExecutor`; the split
+    worker is now a module-level, picklable function.
+  - **Shift-kernel fallback arity:** the `total_mass == 0` branch of
+    `_find_peak_center_of_mass` returned 6 values where callers unpack 8 (a
+    `ValueError`); it now returns the full 8-tuple like the other paths.
+  - **CellMask density:** `from_mol_coords` zoomed the density with
+    `scipy.ndimage.zoom` (which interpolates, not conserving the integral),
+    over-estimating `mean_density`/`densities` by `factor**2` (4x by default);
+    the zoom is now divided back by `factor**2`. And `random_points` built its
+    coordinate grid with `meshgrid(..., indexing="xy")`, transposing x/y for
+    non-square masks — now `indexing="ij"`.
 
 ### Added
 

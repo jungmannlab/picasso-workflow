@@ -142,6 +142,15 @@ SIGNATURE_CONTRACT = {
         "box",
         "identification_method",
     ),
+    "registration.register_to_template": (
+        "points",
+        "template",
+        "mirror",
+        "gate",
+        "angle_step",
+        "n_seeds",
+        "max_iter",
+    ),
     "spline.calibrate_spline": (
         "movie",
         "info",
@@ -150,6 +159,13 @@ SIGNATURE_CONTRACT = {
         "identification_method",
         "d",
     ),
+    # picasso 1.0 public replacements for formerly-private reach-ins
+    # (_FIT_METHOD_MAP, _to_photons, _spinna_batch_analysis,
+    # _targets_from_structures).
+    "localize.resolve_fit_method": ("name",),
+    "localize.to_photons": ("spots", "camera_info"),
+    "spinna.batch_analysis": ("parameters_filename",),
+    "spinna.targets_from_structures": ("structures",),
 }
 
 #: Private picasso symbols picasso-workflow currently depends on, mapped to
@@ -157,12 +173,8 @@ SIGNATURE_CONTRACT = {
 #: no public API yet.  Each is reached only through an accessor below; track
 #: upstreaming so this set can shrink.
 INTERNAL_SYMBOLS = {
-    "_FIT_METHOD_MAP": "picasso.__main__._FIT_METHOD_MAP",
-    "_spinna_batch_analysis": "picasso.__main__._spinna_batch_analysis",
     "_pick_similar": "picasso.postprocess._pick_similar",
     "_n_block_locs_at": "picasso.postprocess._n_block_locs_at",
-    "_to_photons": "picasso.localize._to_photons",
-    "_targets_from_structures": "picasso.spinna._targets_from_structures",
 }
 
 
@@ -193,24 +205,6 @@ def get_internal(name: str):
         return getattr(module, attr)
     except (ImportError, AttributeError) as exc:
         raise _missing(dotted) from exc
-
-
-def get_fit_method_map() -> dict:
-    """Return picasso's ``_FIT_METHOD_MAP`` (fit-method name -> internal key).
-
-    Guards the private ``picasso.__main__._FIT_METHOD_MAP`` that the
-    localisation core uses to translate a configured fit-method string.
-    """
-    return get_internal("_FIT_METHOD_MAP")
-
-
-def get_spinna_batch_analysis():
-    """Return picasso's private ``_spinna_batch_analysis`` callable.
-
-    Guards ``picasso.__main__._spinna_batch_analysis`` used by the SPINNA
-    aggregation path in :mod:`picasso_workflow.outpost.spinna.wrappers`.
-    """
-    return get_internal("_spinna_batch_analysis")
 
 
 def set_config(config) -> None:

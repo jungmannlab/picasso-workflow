@@ -3035,7 +3035,6 @@ class AutoPicasso(
         filename=None,
         start_ng=-3000,
         zscore=5,
-        bins=None,
     ):
         """Calculate histograms of the net gradient at local maxima of n
         frames. For the automatic calculation of a threshold net_gradient for
@@ -3059,8 +3058,6 @@ class AutoPicasso(
         zscore : float, optional
             Number of sigmas above the background net-gradient peak to set as
             the estimated min net-gradient threshold. Default is 5.
-        bins : None, int or array, optional
-            The histogram bins.
 
         Returns
         -------
@@ -3068,80 +3065,48 @@ class AutoPicasso(
             With keys ``filename`` (the generated plot) and ``estd_net_grad``
             (the estimated min net gradient).
         """
-        results = {}
-        identifications = []
-
-        if isinstance(frame_numbers, int):
-            n_sample = frame_numbers
-            start_sample_pct = 0
-            if len(self.movie) < n_sample:
-                n_sample = len(self.movie)
-
-            start_idx = int(start_sample_pct / 100 * len(self.movie))
-            len_subsample = len(self.movie) - start_idx
-            dn = int(len_subsample / (n_sample - 1))
-            frame_numbers = np.arange(start_idx, len_subsample, dn)
-
-        for frame_number in frame_numbers:
-            identifications.append(
-                # picasso 1.0 takes an identification method, not a bare
-                # net-gradient number.
-                localize.identify_by_frame_number(
-                    self.movie,
-                    localize.NetGradient(start_ng),
-                    box_size,
-                    frame_number,
-                )
-            )
-        # id_list = identifications
-        # identifications = np.hstack(identifications).view(np.recarray)
-        # identifications.sort(kind="mergesort", order="frame")
-        identifications = pd.concat(identifications)
-        identifications.sort_values("frame", kind="mergesort")
-
-        # calculate histogram
-        if bins is None:
-            hi = np.quantile(identifications["net_gradient"], 0.9995)
-            bins = np.linspace(start_ng, hi, num=500)
-        hist, edges = np.histogram(
-            identifications["net_gradient"], bins=bins, density=True
+        # picasso 1.0 ships this estimator as a public API
+        # (localize.estimate_min_net_gradient), a verbatim port of the
+        # histogram / FWHM / z-score method that used to live here. Delegate
+        # the threshold + histogram to it; `box_size` and the net gradient
+        # are camera-pixel / camera-count quantities, exactly what the API
+        # expects, so no unit conversion is needed.
+        api_res = localize.estimate_min_net_gradient(
+            self.movie,
+            box=box_size,
+            frames=frame_numbers,
+            zscore=zscore,
+            start_net_gradient=start_ng,
         )
+        results = {"estd_net_grad": float(api_res["min_net_gradient"])}
 
-        # find the background peak, assume it to be Gaussian and the
-        # highest peak in the histogram: find max and FWHM
-        # FWHM as the most robust detection for peak width
-        # only use the lower half for FWHM calculation, as the higher
-        # tail is confounded by non-background spots
-        bkg_peak_height, bkg_peak_pos = np.max(hist), np.argmax(hist)
-        logger.debug(f"bkg_peak_height: {bkg_peak_height}")
-        logger.debug(f"bkg_peak_pos: {bkg_peak_pos}")
-        bkg_half_lo = np.argsort(
-            np.abs(hist[:bkg_peak_pos] - bkg_peak_height / 2)
-        )
-        logger.debug(f"bkg_half_lo: {bkg_half_lo}")
-        if len(bkg_half_lo) == 0:
-            bkg_half_lo = [bkg_peak_pos - 1]
-        bkg_fwhm = 2 * np.abs(bkg_peak_pos - bkg_half_lo[0])
-        bkg_sigma = bkg_fwhm / np.sqrt(4 * np.log(2))
-        # threshold at zscore * bkg_sigma
-        ng_est_idx = int(zscore * bkg_sigma) + bkg_peak_pos
-        if ng_est_idx >= len(edges):
-            ng_est_idx = len(edges) - 1
-        results["estd_net_grad"] = edges[ng_est_idx]
-        bkg_peak = edges[bkg_peak_pos]
-        lo_idx = int(bkg_peak_pos - bkg_sigma)
-        if lo_idx < 0:
-            lo_idx = 0
-        bkg_sigma = bkg_peak - edges[lo_idx]
-
-        # plot results
+        # plot results (the public API returns the histogram but no figure;
+        # the sample-spots montage needs the raw identifications, so re-run
+        # the identify loop over the frames the API actually used only when a
+        # plot is requested).
         if filename:
+            hist = api_res["histogram"]
+            edges = api_res["bin_edges"]
+            bkg_peak = api_res["background"]
+            bkg_sigma = api_res["background_width"]
+
+            identifications = pd.concat(
+                [
+                    # picasso 1.0 takes an identification method, not a bare
+                    # net-gradient number.
+                    localize.identify_by_frame_number(
+                        self.movie,
+                        localize.NetGradient(start_ng),
+                        box_size,
+                        int(frame_number),
+                    )
+                    for frame_number in api_res["frames"]
+                ]
+            )
+            identifications.sort_values("frame", kind="mergesort")
+
             fig, ax = plt.subplots(nrows=2)
             ax[0].plot(edges[:-1], hist, color="b", label="combined histogram")
-            # for i, frame_number in enumerate(frame_numbers):
-            #     hi, ed = np.histogram(
-            #         id_list[i]['net_gradient'], bins=bins, density=True)
-            #     ax.plot(ed[:-1], hi, color='gray')
             ylims = ax[0].get_ylim()
             ax[0].set_title("Net Gradient histogram of subsampled frames")
             ax[0].set_xlabel("net gradient")
@@ -3155,13 +3120,12 @@ class AutoPicasso(
                 ),
             )
             ax[0].plot(
-                [edges[bkg_peak_pos], edges[bkg_peak_pos]],
+                [bkg_peak, bkg_peak],
                 ylims,
                 color="gray",
                 label=f"background: {bkg_peak:.0f}+/-{bkg_sigma:.0f}",
             )
             ax[0].legend()
-            # plt.show()
 
             sample_spots, ng_start, ng_end = self._draw_sample_spots(
                 identifications, results["estd_net_grad"], box_size
@@ -3337,7 +3301,6 @@ class AutoPicasso(
                 "filename",
                 "start_ng",
                 "zscore",
-                "bins",
             ]
             pars_to_pass = {
                 k: autograd_pars[k]
@@ -5221,6 +5184,7 @@ class AutoPicasso(
             save_path=results["folder"],
             saving_name=file_nameonly,
             total_n_frames=self.frames,
+            pixelsize=self.pixelsize,
         )
         Meas.Begin()
         Meas.FileSaver()
@@ -9584,10 +9548,11 @@ class AutoPicasso(
                 uz = np.array([0, 0, 1])
                 edgelength = int(np.ceil(n ** (1 / dimensionality)))
                 for i in range(n):
-                    iz = i // (edgelength**2)
-                    iy = i % (edgelength**2)
                     ix = i % edgelength
-                    positions[:, i] = ix * ux + iy * uy + iz * uz
+                    iy = (i // edgelength) % edgelength
+                    iz = i // (edgelength**2)
+                    # scale lattice indices to physical spacing (nm)
+                    positions[:, i] = (ix * ux + iy * uy + iz * uz) * distance
                 positions[0, :] -= np.mean(positions[0, :])
                 positions[1, :] -= np.mean(positions[1, :])
                 positions[2, :] -= np.mean(positions[2, :])
@@ -10453,8 +10418,8 @@ class AutoPicasso(
                 "random_rot_mode": "2D",
                 "exp_data": exp_data,
                 "sim_repeats": parameters["sim_repeats"],
-                "fit_NND_bin": fit_NND_bin,
-                "fit_NND_maxdist": fit_NND_maxdist,
+                "NND_bin": fit_NND_bin,
+                "NND_maxdist": fit_NND_maxdist,
                 "N_structures": N_structures,
                 "save_filename": os.path.join(
                     results["folder"], f"interaction-{A}-{B}"
@@ -10468,7 +10433,7 @@ class AutoPicasso(
             }
 
             result, fp_fig = spinna_wrappers.single_spinna_run(
-                spinna_parameters
+                **spinna_parameters
             )
             plt.close("all")
             props[f"{A},{B}"] = result["Fitted proportions of structures"]

@@ -71,7 +71,7 @@ def radial_distribution_function(X1, X2, r, univariate):
     tree2 = KDTree(X2)
     n1 = X1.shape[0]
     # n2 = X2.shape[0]
-    deltar = r[1] - r[2]
+    deltar = r[2] - r[1]  # positive bin width (r is ascending)
     rs = np.append(r, np.max(r) + deltar)
     n_means = tree1.count_neighbors(tree2, rs) / n1
     if univariate:
@@ -113,7 +113,7 @@ def overpopulation(X1, X2, r, univariate):
     # for every X1 spot, find the X2 spots and calculate their densities
     tree1 = KDTree(X1)
     tree2 = KDTree(X2)
-    deltar = r[-2] - r[-1]
+    deltar = r[-1] - r[-2]  # positive bin width (r is ascending)
     rs = np.append(r, np.max(r) + deltar)
     nbrs = np.zeros((tree1.n, len(rs)))
     for ir, radius in enumerate(rs):

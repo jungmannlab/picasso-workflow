@@ -108,10 +108,19 @@ class CellMask:
         # mask = np.rot90(mask)
 
         blur = blursize / binsize
-        factor = int(binsize / upsample)
+        # max(1, ...) guards a degenerate binsize < upsample config: factor 0
+        # would make zoom() return an empty array and the /factor**2 density
+        # correction below divide by zero.
+        factor = max(1, int(binsize / upsample))
 
         initial_density = gaussian_filter(mask, blur)
-        initial_density = zoom(initial_density.astype(np.float64), factor)
+        # zoom() interpolates (preserving per-pixel magnitude), so it inflates
+        # the summed counts by factor**2; divide it back out so the density
+        # conserves the localization count. The Otsu-based binary mask below is
+        # scale-invariant, so this only corrects the reported densities.
+        initial_density = (
+            zoom(initial_density.astype(np.float64), factor) / factor**2
+        )
         initial_density[initial_density < 0] = 0
         instance._initial_density = initial_density
 
@@ -489,7 +498,12 @@ class CellMask:
         counts = rng.multinomial(n_points, pvals=mask.ravel())
         bins_x_left = np.arange(x_min, x_max, self._upsample)
         bins_y_left = np.arange(y_min, y_max, self._upsample)
-        bins_x_left, bins_y_left = np.meshgrid(bins_x_left, bins_y_left)
+        # indexing="ij" so the meshgrid ravel order (x-major) matches
+        # mask.ravel() / the multinomial pvals; the default "xy" transposes
+        # x and y for non-square masks.
+        bins_x_left, bins_y_left = np.meshgrid(
+            bins_x_left, bins_y_left, indexing="ij"
+        )
         lows_x = np.repeat(bins_x_left.ravel(), counts)
         lows_y = np.repeat(bins_y_left.ravel(), counts)
         highs_x = lows_x + self._upsample
@@ -585,5 +599,9 @@ class CellMask:
 
 def picassolocs_to_coords(mols, pixelsize):
     """Converts the Picasso-format np.rec.array to a 2D numpy array with
-    spatial coordinates in nm."""
-    return np.array([mols["x"].copy(), mols["y"].copy()]).T * pixelsize
+    spatial coordinates in nm.
+
+    picasso 1.0 stores ``x``/``y`` in nm already, so no pixelsize scaling is
+    applied. ``pixelsize`` is retained for signature compatibility.
+    """
+    return np.array([mols["x"].copy(), mols["y"].copy()]).T

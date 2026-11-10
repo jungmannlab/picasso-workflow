@@ -44,7 +44,8 @@ def resolution_ppac(
     locs : pd.DataFrame
         Localizations with ``x`` and ``y`` columns.
     pixelsize : float
-        Pixel size in physical units (e.g. nm).
+        Pixel size in physical units (e.g. nm). Unused since picasso 1.0
+        (locs are already nm); retained for signature compatibility.
     delta_r : float
         Grid spacing for the autocorrelation calculation.
     r_max : float
@@ -100,8 +101,8 @@ def resolution_ppac(
         intensities = np.zeros((grid_size, grid_size))
         using_sparse = False
 
-    # Convert to physical coordinates once
-    xy = np.column_stack([locs["x"] * pixelsize, locs["y"] * pixelsize])
+    # picasso 1.0: locs["x"]/["y"] are already in nm; no pixelsize scaling.
+    xy = np.column_stack([locs["x"], locs["y"]])
 
     # Auto-detect number of threads
     if n_processes is None:

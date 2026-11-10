@@ -113,6 +113,9 @@ def estimate_density_from_neighbordists(
     ]  # rho must be positive
     if fit_bkg:
         x0 = [rho_init, bkg_fraction]
+        # L-BFGS-B requires len(bounds) == len(x0); bound the fitted
+        # background fraction to [0, 1].
+        bounds.append((0.0, 1.0))
     else:
         x0 = [rho_init]
     mle_rho = minimize(
@@ -295,10 +298,18 @@ def nndistribution_from_csr(
 
     lam = rho * np.pi ** (d / 2) / _gamma(d / 2 + 1)
     factor = d / _factorial(k - 1) * lam**k * r ** (d * k - 1)
-    dist = factor * np.exp(-lam * r**d)
-    # add am even background of observed nn distances, at all distances
+    csr = factor * np.exp(-lam * r**d)
+    # Normalized two-component mixture: (1 - f) * CSR + f * uniform, with the
+    # background fraction f = bkg_fraction / (1 + bkg_fraction). Both
+    # components integrate to ~1 so the mixture does too; previously the CSR
+    # term kept weight 1 while only the uniform term was down-weighted,
+    # leaving the model unnormalized.
     if len(r) > 1:
-        dist += (bkg_fraction / (np.max(r) - np.min(r))) / (1 + bkg_fraction)
+        f = bkg_fraction / (1 + bkg_fraction)
+        uniform = 1.0 / (np.max(r) - np.min(r))
+        dist = (1 - f) * csr + f * uniform
+    else:
+        dist = csr
     dist[dist <= 0] = 1e-200  # np.finfo().eps
     # re-normalize
     if min_dist > 0 or max_dist < np.inf:
