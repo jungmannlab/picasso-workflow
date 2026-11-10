@@ -5,8 +5,9 @@ See the package docstring. `promote` candidate #3 -- pure numpy/scipy/sklearn.
 
 import numpy as np
 from scipy.spatial import KDTree
-from scipy.optimize import linear_sum_assignment
 from sklearn.cluster import DBSCAN
+
+from picasso_workflow import _picasso_api
 
 # ``get_pick_similar_vals`` is a picks helper (``outpost/picks/``);
 # ``_candidate_centers_cluster_of_clusters`` scores candidate clusters with it.
@@ -104,48 +105,6 @@ def subcluster_docking_sites(
     return centers
 
 
-def _rotation_matrix(theta):
-    """2x2 rotation matrix for angle ``theta`` (radians)."""
-    c, s = np.cos(theta), np.sin(theta)
-    return np.array([[c, -s], [s, c]])
-
-
-def _rigid_fit(src, dst):
-    """Least-squares proper-rotation + translation mapping src onto dst.
-
-    Kabsch/Umeyama without scaling or reflection: returns ``R`` (det=+1)
-    and ``t`` minimizing ``||R @ src.T + t - dst.T||``.
-    """
-    src = np.asarray(src, dtype=float)
-    dst = np.asarray(dst, dtype=float)
-    src_c = src - src.mean(axis=0)
-    dst_c = dst - dst.mean(axis=0)
-    h = src_c.T @ dst_c
-    u, _, vt = np.linalg.svd(h)
-    d = np.sign(np.linalg.det(vt.T @ u.T))
-    correction = np.diag([1.0, d])
-    rot = vt.T @ correction @ u.T
-    trans = dst.mean(axis=0) - rot @ src.mean(axis=0)
-    return rot, trans
-
-
-def _match_within_gate(transformed, template, gate):
-    """Optimal one-to-one assignment of points within a distance gate.
-
-    Returns matched ``(src_indices, template_indices, distances)``.
-    """
-    if len(transformed) == 0 or len(template) == 0:
-        empty = np.empty(0, dtype=int)
-        return empty, empty, np.empty(0)
-    cost = np.linalg.norm(
-        transformed[:, None, :] - template[None, :, :], axis=2
-    )
-    rows, cols = linear_sum_assignment(cost)
-    dists = cost[rows, cols]
-    keep = dists <= gate
-    return rows[keep], cols[keep], dists[keep]
-
-
 def register_to_template(
     observed_nm,
     template_nm,
@@ -156,11 +115,14 @@ def register_to_template(
 ):
     """Register observed docking sites onto a design template.
 
-    Finds the best rigid alignment (rotation + translation, optional
-    mirror) of ``observed_nm`` onto ``template_nm`` under an unknown
-    correspondence, tolerating missing/extra observed sites. A coarse
-    rotation sweep with gated optimal assignment seeds a Kabsch + ICP
-    refinement.
+    Thin adapter over :func:`picasso.registration.register_to_template`
+    (picassosr >= 1.0), reached through the ``_picasso_api`` boundary. The
+    picasso function finds the best rigid alignment (rotation + translation,
+    optional mirror) of ``observed_nm`` onto ``template_nm`` under an unknown
+    correspondence, tolerating missing/extra observed sites, and returns a
+    :class:`picasso.transforms.RigidTransform`. This wrapper preserves the
+    dict contract picasso-workflow's origami callers expect (nanometre
+    coordinates throughout; picasso 1.0 is nm-based).
 
     Parameters
     ----------
@@ -176,10 +138,7 @@ def register_to_template(
     angle_step_deg : float, optional
         Coarse rotation-sweep step in degrees. Default 2.
     n_refine : int, optional
-        Number of best coarse seeds to ICP-refine. The rotation sweep is
-        scored cheaply (one gated assignment per seed) and only the best
-        ``n_refine`` seeds get the full ICP, instead of ICP-ing every seed.
-        Default 4.
+        Number of best coarse seeds to ICP-refine. Default 4.
 
     Returns
     -------
@@ -189,13 +148,9 @@ def register_to_template(
         ``rmse_nm``, ``mean_spacing_nm``, ``orientation_deg``, ``mirror``,
         ``R`` and ``t``.
     """
+    registration = _picasso_api.registration
     observed = np.asarray(observed_nm, dtype=float).reshape(-1, 2)
     template = np.asarray(template_nm, dtype=float).reshape(-1, 2)
-    template = template - template.mean(axis=0)
-    if match_gate_nm is None:
-        match_gate_nm = 0.5 * _median_nn_spacing(template)
-    if match_gate_nm <= 0:
-        match_gate_nm = np.inf
 
     def _empty_result():
         return {
@@ -210,85 +165,37 @@ def register_to_template(
             "t": np.zeros(2),
         }
 
-    if len(observed) == 0:
+    # picasso needs >= 2 observed and >= 2 template points; below that the
+    # fork returned an all-empty result rather than raising.
+    if len(observed) < 2 or len(template) < 2:
         return _empty_result()
 
-    mirror_options = [False, True] if allow_mirror else [False]
-
-    # Stage 1 - cheaply score every rotation seed with a single gated
-    # assignment (no ICP). Stage 2 - ICP-refine only the best `n_refine`
-    # seeds. This is ~(iters x) cheaper than ICP-ing every seed while still
-    # converging on the true alignment (the coarse best is within
-    # angle_step/2 of it).
-    seeds = []  # (n_matched, -rmse0, mirror, rot0, trans0)
-    for mirror in mirror_options:
-        src = observed * np.array([-1.0, 1.0]) if mirror else observed
-        src_mean = src.mean(axis=0)
-        for angle in np.arange(0.0, 360.0, angle_step_deg):
-            rot0 = _rotation_matrix(np.deg2rad(angle))
-            trans0 = -(rot0 @ src_mean)
-            transformed = src @ rot0.T + trans0
-            rows, cols, dists = _match_within_gate(
-                transformed, template, match_gate_nm
-            )
-            rmse0 = float(np.sqrt(np.mean(dists**2))) if len(dists) else np.inf
-            seeds.append((len(rows), -rmse0, mirror, rot0, trans0))
-    seeds.sort(key=lambda s: (s[0], s[1]), reverse=True)
-
-    best = None  # (n_matched, rmse, rot, trans, mirror, rows, cols)
-    for n0, _negrmse0, mirror, rot0, trans0 in seeds[: max(1, n_refine)]:
-        src = observed * np.array([-1.0, 1.0]) if mirror else observed
-        rot, trans, rows, cols, rmse = _icp_refine(
-            src, template, rot0, trans0, match_gate_nm
-        )
-        n_matched = len(rows)
-        key = (n_matched, -rmse)
-        if best is None or key > (best[0], -best[1]):
-            best = (n_matched, rmse, rot, trans, mirror, rows, cols)
-
-    if best is None or best[0] == 0:
+    result = registration.register_to_template(
+        observed,
+        template,
+        mirror=allow_mirror,
+        gate=match_gate_nm,
+        angle_step=angle_step_deg,
+        n_seeds=n_refine,
+    )
+    transform = result["transform"]
+    if transform is None or result["n_matched"] == 0:
         return _empty_result()
 
-    n_matched, rmse, rot, trans, mirror, rows, cols = best
-    src = observed * np.array([-1.0, 1.0]) if mirror else observed
-    matched_obs = src[rows]
-    orientation = float(np.degrees(np.arctan2(rot[1, 0], rot[0, 0])))
+    rows = np.asarray(result["point_indices"], dtype=int)
+    cols = np.asarray(result["template_indices"], dtype=int)
+    matched_obs = observed[rows]
     return {
-        "n_resolved": int(n_matched),
+        "n_resolved": int(result["n_matched"]),
         "matched_template_indices": cols,
         "matched_observed_indices": rows,
-        "rmse_nm": float(rmse),
+        "rmse_nm": float(result["rmse"]),
         "mean_spacing_nm": _median_nn_spacing(matched_obs),
-        "orientation_deg": orientation,
-        "mirror": bool(mirror),
-        "R": rot,
-        "t": trans,
+        "orientation_deg": float(transform.rotation_deg),
+        "mirror": bool(transform.mirror),
+        "R": transform.linear,
+        "t": transform.shift,
     }
-
-
-def _icp_refine(src, template, rot, trans, gate, iters=5):
-    """Iterative closest-point refinement of a rigid alignment.
-
-    Returns ``(rot, trans, matched_src_idx, matched_template_idx, rmse)``.
-    """
-    rows = cols = np.empty(0, dtype=int)
-    rmse = np.inf
-    for _ in range(iters):
-        transformed = src @ rot.T + trans
-        rows, cols, dists = _match_within_gate(transformed, template, gate)
-        if len(rows) < 2:
-            rmse = float(np.sqrt(np.mean(dists**2))) if len(dists) else np.inf
-            break
-        rmse = float(np.sqrt(np.mean(dists**2)))
-        new_rot, new_trans = _rigid_fit(src[rows], template[cols])
-        if np.allclose(new_rot, rot) and np.allclose(new_trans, trans):
-            rot, trans = new_rot, new_trans
-            transformed = src @ rot.T + trans
-            rows, cols, dists = _match_within_gate(transformed, template, gate)
-            rmse = float(np.sqrt(np.mean(dists**2))) if len(dists) else np.inf
-            break
-        rot, trans = new_rot, new_trans
-    return rot, trans, rows, cols, rmse
 
 
 def classify_candidate(

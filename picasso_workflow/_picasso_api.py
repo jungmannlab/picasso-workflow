@@ -142,6 +142,15 @@ SIGNATURE_CONTRACT = {
         "box",
         "identification_method",
     ),
+    "registration.register_to_template": (
+        "points",
+        "template",
+        "mirror",
+        "gate",
+        "angle_step",
+        "n_seeds",
+        "max_iter",
+    ),
     "spline.calibrate_spline": (
         "movie",
         "info",
