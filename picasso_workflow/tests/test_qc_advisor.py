@@ -448,16 +448,18 @@ def _make_locs(n_signal=500, n_noise=200, seed=0):
     locs["photons"][:n_signal] = rng.normal(5000, 500, n_signal)
     locs["sx"][:n_signal] = rng.normal(1.2, 0.05, n_signal)
     locs["sy"][:n_signal] = rng.normal(1.2, 0.05, n_signal)
-    locs["lpx"][:n_signal] = rng.normal(0.02, 0.003, n_signal)
-    locs["lpy"][:n_signal] = rng.normal(0.02, 0.003, n_signal)
+    # picasso 1.0: lpx/lpy are in nm. Tight signal ~ 6 nm precision.
+    locs["lpx"][:n_signal] = rng.normal(6.0, 1.0, n_signal)
+    locs["lpy"][:n_signal] = rng.normal(6.0, 1.0, n_signal)
     # noise: spread out, dim, distorted PSFs
     locs["x"][n_signal:] = rng.uniform(0, 100, n_noise)
     locs["y"][n_signal:] = rng.uniform(0, 100, n_noise)
     locs["photons"][n_signal:] = rng.normal(500, 200, n_noise)
     locs["sx"][n_signal:] = rng.normal(2.5, 0.5, n_noise)
     locs["sy"][n_signal:] = rng.normal(1.0, 0.3, n_noise)
-    locs["lpx"][n_signal:] = rng.normal(0.08, 0.02, n_noise)
-    locs["lpy"][n_signal:] = rng.normal(0.08, 0.02, n_noise)
+    # noise: poor ~ 25 nm precision (well above the signal threshold).
+    locs["lpx"][n_signal:] = rng.normal(25.0, 5.0, n_noise)
+    locs["lpy"][n_signal:] = rng.normal(25.0, 5.0, n_noise)
     names = list(locs.dtype.names)
     return locs, names
 
@@ -525,9 +527,12 @@ class TestFilterAdvisor:
         rng = np.random.default_rng(0)
         locs["x"] = 30 + rng.normal(0, 0.5, n)
         locs["y"] = 30 + rng.normal(0, 0.5, n)
-        locs["photons"] = rng.normal(5000, 500, n)
-        locs["sx"] = rng.normal(1.2, 0.05, n)
-        locs["sy"] = rng.normal(1.2, 0.05, n)
+        # Constant photons/sx/sy so only the precision criterion can filter
+        # (percentile-based photons/sx ranges would otherwise trim the tails
+        # and keep.all() would be about those, not precision).
+        locs["photons"] = 5000.0
+        locs["sx"] = 1.2
+        locs["sy"] = 1.2
         locs["lpx"] = 3.0
         locs["lpy"] = 3.0
         names = list(locs.dtype.names)

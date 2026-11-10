@@ -270,12 +270,13 @@ class TestPicassoOutpost(unittest.TestCase):
             locs_per_frame=4,
         )
         # The gold clusters here are tight (noise=0.5), so their RMSD-at-COM
-        # is ~0.7 (in the fixture's unit, Pixelsize=1). The default
-        # ``mean_rmsd=50.0`` nm window [32.5, 67.5] would exclude them (it
-        # targets real nm-scale localizations); pass a ``mean_rmsd`` matched to
-        # this synthetic fixture so the RMSD criterion (now a real filter, not
-        # the old no-op) still admits the gold picks.
-        gold_picks = picks_mod.pick_gold(locs, info, mean_rmsd=1.0)
+        # is ~sqrt(2)*0.5 ~= 0.7 (in the fixture's unit, Pixelsize=1). The
+        # default ``mean_rmsd=50.0`` nm window [32.5, 67.5] would exclude them
+        # (it targets real nm-scale localizations); pass a ``mean_rmsd`` that
+        # CENTRES the window on ~0.7 so the RMSD criterion (now a real filter,
+        # not the old no-op) admits the gold picks. ``mean_rmsd=0.7`` ->
+        # window [0.455, 0.945], comfortably bracketing the gold RMSD.
+        gold_picks = picks_mod.pick_gold(locs, info, mean_rmsd=0.7)
         print(gold_picks)
         # round the picks for assertion
         gold_picks = [
