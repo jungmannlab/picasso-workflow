@@ -21,9 +21,29 @@ This file was started after v0.5.6; earlier history is in the git log.
   `localize.to_photons`; `spinna._targets_from_structures` →
   `spinna.targets_from_structures`. `INTERNAL_SYMBOLS` shrinks to the two
   still-private seams (`_pick_similar`, `_n_block_locs_at`); the new public
-  calls are pinned in `SIGNATURE_CONTRACT`. (The remaining outpost forks —
-  csr_knn, decorrelation, binding-events, alignment, registration — still
-  work on rc1 and migrate to their public replacements separately.)
+  calls are pinned in `SIGNATURE_CONTRACT`.
+
+- **Net-gradient estimation delegates to `localize.estimate_min_net_gradient`.**
+  picasso 1.0 upstreamed `AutoPicasso._auto_min_netgrad`'s background-peak
+  method as a public API; the workflow now delegates to it (mapping
+  `min_net_gradient` → `estd_net_grad`) and keeps the QC plot. (The separate
+  Otsu-based `qc_advisor.filter_advisor.estimate_min_net_gradient` is a
+  different advisor heuristic and is unchanged.)
+
+- **Correspondence-free registration delegates to
+  `registration.register_to_template`.** The forked ICP in
+  `outpost/registration/icp.py` (rotation sweep + Kabsch + Hungarian match +
+  ICP refine) is now a thin adapter over picasso 1.0's public
+  `registration.register_to_template`, preserving the origami dict contract.
+
+- Remaining outpost forks still to migrate to their picasso 1.0 public
+  replacements (each changes scientific output; tracked for follow-up PRs):
+  `spatial_stats/csr_knn` → `postprocess.knn_density`,
+  `resolution/resolution_decorrelation` → `postprocess.decorrelation`,
+  `binding_events` → `postprocess.signal_to_background`/`dye_performance`,
+  `alignment` → `postprocess.align(method="points")`, SPINNA label-uncertainty
+  → `spinna.fit_label_uncertainty`/`fit_le(bootstrap=True)`, CellMask
+  morphology → `masking.*`, and the pick scan → `postprocess.pick_similar_candidates`.
 
 - **The Qt GUI is now a `[gui]` extra, not a base dependency.** `PyQt6` +
   `PyQt6-WebEngine` (≈530 MB of Qt6/WebEngine binaries) moved out of the base
