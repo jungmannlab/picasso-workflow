@@ -156,8 +156,7 @@ def register_to_template(
     dict
         Registration result with keys ``n_resolved``,
         ``matched_template_indices``, ``matched_observed_indices``,
-        ``rmse_nm``, ``mean_spacing_nm``, ``orientation_deg``, ``mirror``,
-        ``R`` and ``t``.
+        ``rmse_nm``, ``mean_spacing_nm``, ``orientation_deg`` and ``mirror``.
     """
     registration = _picasso_api.registration
     observed = np.asarray(observed_nm, dtype=float).reshape(-1, 2)
@@ -172,8 +171,6 @@ def register_to_template(
             "mean_spacing_nm": 0.0,
             "orientation_deg": 0.0,
             "mirror": False,
-            "R": np.eye(2),
-            "t": np.zeros(2),
         }
 
     # picasso needs >= 2 observed and >= 2 template points; below that the
@@ -181,14 +178,21 @@ def register_to_template(
     if len(observed) < 2 or len(template) < 2:
         return _empty_result()
 
-    result = registration.register_to_template(
-        observed,
-        template,
-        mirror=allow_mirror,
-        gate=match_gate_nm,
-        angle_step=angle_step_deg,
-        n_seeds=n_refine,
-    )
+    try:
+        result = registration.register_to_template(
+            observed,
+            template,
+            mirror=allow_mirror,
+            gate=match_gate_nm,
+            angle_step=angle_step_deg,
+            n_seeds=n_refine,
+        )
+    except ValueError:
+        # picasso raises on a non-positive gate -- an explicit gate <= 0, or
+        # a degenerate template (coincident sites) whose auto gate
+        # (0.5 * median_nn) is 0. The fork returned an empty result for
+        # these rather than crashing; preserve that contract.
+        return _empty_result()
     transform = result["transform"]
     if transform is None or result["n_matched"] == 0:
         return _empty_result()
@@ -204,8 +208,6 @@ def register_to_template(
         "mean_spacing_nm": _median_nn_spacing(matched_obs),
         "orientation_deg": float(transform.rotation_deg),
         "mirror": bool(transform.mirror),
-        "R": transform.linear,
-        "t": transform.shift,
     }
 
 

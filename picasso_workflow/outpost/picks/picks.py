@@ -792,8 +792,9 @@ def _get_block_locs_at(
 ):
     step = 0
     for k in range(y_range - 1, y_range + 2):
-        # retrieval variant uses inclusive 0 <= k < K (unlike the count-only
-        # _n_block_locs_at); 0 < k skipped block row/column 0.
+        # inclusive 0 <= k < K, matching picasso's _get_block_locs_at and
+        # _n_block_locs_at; the old strict 0 < k skipped block row/column 0
+        # (and could leave `indices` unassigned -> UnboundLocalError).
         if 0 <= k < K:
             for lx in range(x_range - 1, x_range + 2):
                 if 0 <= lx < L:

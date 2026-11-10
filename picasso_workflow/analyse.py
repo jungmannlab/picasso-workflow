@@ -3035,7 +3035,6 @@ class AutoPicasso(
         filename=None,
         start_ng=-3000,
         zscore=5,
-        bins=None,
     ):
         """Calculate histograms of the net gradient at local maxima of n
         frames. For the automatic calculation of a threshold net_gradient for
@@ -3059,8 +3058,6 @@ class AutoPicasso(
         zscore : float, optional
             Number of sigmas above the background net-gradient peak to set as
             the estimated min net-gradient threshold. Default is 5.
-        bins : None, int or array, optional
-            The histogram bins.
 
         Returns
         -------
@@ -3068,13 +3065,6 @@ class AutoPicasso(
             With keys ``filename`` (the generated plot) and ``estd_net_grad``
             (the estimated min net gradient).
         """
-        if bins is not None:
-            logger.warning(
-                "_auto_min_netgrad no longer honors an explicit `bins`; "
-                "picasso.localize.estimate_min_net_gradient always uses 500 "
-                "bins. Ignoring the supplied value."
-            )
-
         # picasso 1.0 ships this estimator as a public API
         # (localize.estimate_min_net_gradient), a verbatim port of the
         # histogram / FWHM / z-score method that used to live here. Delegate
@@ -3311,7 +3301,6 @@ class AutoPicasso(
                 "filename",
                 "start_ng",
                 "zscore",
-                "bins",
             ]
             pars_to_pass = {
                 k: autograd_pars[k]
