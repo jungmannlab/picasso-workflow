@@ -11,6 +11,23 @@ This file was started after v0.5.6; earlier history is in the git log.
 ## [Unreleased]
 
 ### Changed
+- **SPINNA label-uncertainty screening and labeling-efficiency bootstrap
+  delegate to picasso 1.0.0rc1 public APIs.** The home-grown per-target
+  label-uncertainty scan in `outpost/spinna/wrappers.screen_label_uncertainty`
+  (a per-candidate `spinna.compare_models_given_label_unc` loop) is replaced by
+  a single `spinna.fit_label_uncertainty` call; the returned per-candidate
+  scores still drive one screening figure per screened target, and the
+  `(best_label_unc, scan, fp_figs)` return is unchanged. In
+  `analyse.labeling_efficiency_analysis`, the manual bootstrap stoichiometry
+  refit plus error-propagation closure for the LE standard deviation is
+  replaced by `spinna.fit_le(..., bootstrap=True)`'s directly-returned
+  `le_std`. **Behaviour change:** the reported `labeling_efficiency_std` is now
+  picasso's direct-bootstrap std (which preserves the summed-to-one proportion
+  correlation) rather than the old derivative error-propagation estimate, so
+  numeric LE-std values differ. The consumed key shape
+  (`labeling_efficiency_std`, a dict of target -> std on the 0-1 scale) is
+  preserved; the previously unused `spinna_props_std` result now carries the
+  `le_std` dict.
 - **Adopt picasso 1.0 public APIs for the formerly-private reach-ins; pin
   `picassosr>=1.0.0rc1`.** picasso 1.0.0rc1 removed the four private symbols
   the workflow reached into, so `_picasso_api` now routes through the public

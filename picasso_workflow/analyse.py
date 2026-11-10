@@ -13875,14 +13875,11 @@ class AutoPicasso(
         # spinna.fit_le builds the monomer/heterodimer structures, forces
         # LE=100%, fits label uncertainty + the best heterodimer distance
         # via compare_models, and converts the fitted proportions to LE.
-        (
-            le_values,
-            fitted_label_unc,
-            best_distance,
-            _best_score,
-            best_props,
-            best_mixer,
-        ) = spinna.fit_le(
+        # With bootstrap=True it additionally returns ``le_std`` (LE std
+        # per target, in percent), computed directly from bootstrap
+        # samples of the best fit (keeping the proportion correlation).
+        do_bootstrap = bool(parameters.get("bootstrap"))
+        fit_le_result = spinna.fit_le(
             target_a=target,
             target_b=reference,
             exp_data=exp_data,
@@ -13905,7 +13902,28 @@ class AutoPicasso(
             # workflow does not consume picasso's internal fit-score CSVs.
             savedir="",
             fitting_mode="bayesian",
+            bootstrap=do_bootstrap,
         )
+        if do_bootstrap:
+            (
+                le_values,
+                fitted_label_unc,
+                best_distance,
+                _best_score,
+                best_props,
+                best_mixer,
+                le_std,
+            ) = fit_le_result
+        else:
+            (
+                le_values,
+                fitted_label_unc,
+                best_distance,
+                _best_score,
+                best_props,
+                best_mixer,
+            ) = fit_le_result
+            le_std = None
         results["best_pair_distance"] = best_distance
         results["best_labeling_uncertainty"] = fitted_label_unc
 
@@ -13956,53 +13974,18 @@ class AutoPicasso(
         le_target = le_values[target] / 100
         le_reference = le_values[reference] / 100
 
-        # error propagation for std (only meaningful when bootstrapping)
-        def le_std(prop_sglo, prop_dbl, std_sglo, std_dbl):
-            """Calculate the standard deviation of le,
-            by error propagation: sum of derivatives
-            with respect to both variables multiplied by their std
-            """
-            deriv_sglo = -2 * prop_dbl / ((2 * prop_sglo + prop_dbl) ** 2)
-            deriv_dbl = (2 * prop_sglo + prop_dbl) ** (-1) - prop_dbl / (
-                2 * prop_sglo + prop_dbl
-            ) ** 2
-            return np.abs(deriv_sglo * std_sglo) + np.abs(deriv_dbl * std_dbl)
-
-        if parameters.get("bootstrap"):
-            # fit_le does not bootstrap; run one bootstrap stoichiometry fit
-            # on the fitted mixer to recover proportion uncertainties.
-            # best_mixer.structures order is [monomer_A, monomer_B, het].
-            N_structures = spinna.generate_N_structures(
-                best_mixer.structures,
-                n_exp,
-                parameters["granularity"],
-            )
-            _, props_std = spinna.SPINNA(
-                mixer=best_mixer,
-                gt_coords=exp_data,
-                N_sim=parameters["sim_repeats"],
-            ).fit_stoichiometry(
-                N_structures,
-                save=os.path.join(
-                    results["folder"],
-                    f"interaction-{target}-{reference}_le_fit_scores.csv",
-                ),
-                parallel=True,  # picasso 1.0: asynch -> parallel
-                bootstrap=True,
-            )
-            prop_t, prop_r, prop_tr = (
-                best_props[0],
-                best_props[1],
-                best_props[2],
-            )
-            std_t, std_r, std_tr = props_std[0], props_std[1], props_std[2]
-            le_target_std = le_std(prop_r, prop_tr, std_r, std_tr)
-            le_reference_std = le_std(prop_t, prop_tr, std_t, std_tr)
+        # picasso's fit_le(bootstrap=True) returns ``le_std`` per target
+        # in percent, computed directly from bootstrap samples of the
+        # best fit (which keeps the correlation of the summed-to-one
+        # proportions). Store on the 0-1 scale. Without bootstrapping no
+        # uncertainty is available, so the std is 0.
+        if le_std is not None:
+            le_target_std = le_std[target] / 100
+            le_reference_std = le_std[reference] / 100
         else:
-            props_std = [0, 0, 0]
             le_target_std = 0.0
             le_reference_std = 0.0
-        results["spinna_props_std"] = props_std
+        results["spinna_props_std"] = le_std
 
         results["labeling_efficiency"] = {
             parameters["target_name"]: le_target,

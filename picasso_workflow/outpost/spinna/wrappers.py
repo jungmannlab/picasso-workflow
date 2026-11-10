@@ -9,7 +9,6 @@ from datetime import datetime
 
 import numpy as np
 import matplotlib.pyplot as plt
-from loguru import logger
 
 from picasso_workflow._picasso_api import spinna
 
@@ -117,10 +116,11 @@ def screen_label_uncertainty(
 
     For every molecular target whose ``label_unc`` entry lists more than
     one candidate, each candidate is scored by fitting a target-only
-    sub-model to the experimental nearest-neighbour distances. This
-    mirrors picasso's private ``spinna._fit_label_unc_for_target`` but
-    retains the per-candidate scores so a screening curve can be plotted.
-    The candidate with the lowest Kolmogorov-Smirnov score is selected.
+    sub-model to the experimental nearest-neighbour distances. The
+    scoring is delegated to picasso's ``spinna.fit_label_uncertainty``;
+    its returned per-candidate scores are retained here so a screening
+    curve can be plotted. The candidate with the lowest
+    Kolmogorov-Smirnov score is selected.
 
     Parameters
     ----------
@@ -165,70 +165,39 @@ def screen_label_uncertainty(
         Filepaths of the saved screening figures (one per screened
         target).
     """
-    targets = spinna.targets_from_structures(structures)
-    # nn_counts keys for all target pairs (reset per candidate fit)
-    nn_keys = [
-        f"{t1}-{t2}" for i, t1 in enumerate(targets) for t2 in targets[i:]
-    ]
-    # starting scalar for every target (first candidate), used for the
-    # targets that are not currently being screened
-    label_unc_start = {t: float(label_unc[t][0]) for t in targets}
+    # picasso scores every multi-candidate target in one call: for each
+    # target with >1 candidate it fits that target's monomers to the
+    # self-NND, while the other targets take their first candidate, and
+    # returns the best value per target plus the per-candidate scores of
+    # the screened targets.
+    best_label_unc, scan = spinna.fit_label_uncertainty(
+        models=[structures],
+        exp_data=exp_data,
+        granularity=granularity,
+        label_unc=label_unc,
+        le=le,
+        N_sim=sim_repeats,
+        mask_dict=mask_dict,
+        width=width,
+        height=height,
+        depth=depth,
+        random_rot_mode=random_rot_mode,
+        parallel=asynch,  # picasso 1.0: asynch -> parallel
+        # empty savedir: the single-candidate target sub-models used
+        # internally crash picasso's fit_stoichiometry CSV-save branch
+        # (2-D N_structures vs 1-D props); the workflow does not consume
+        # picasso's internal fit-score CSVs.
+        savedir="",
+        fitting_mode=fitting_mode,
+    )
 
-    best_label_unc = {}
-    scan = {}
+    # scan only holds the multi-candidate (screened) targets; plot one
+    # screening curve per screened target.
     fp_figs = []
-    for target in targets:
-        candidates = [float(c) for c in label_unc[target]]
-        if len(candidates) == 1:
-            best_label_unc[target] = candidates[0]
-            continue
-
-        # only this target's monomers matter for its self-NND scan
-        target_model = [s for s in structures if s.targets == [target]]
-        if not target_model:
-            logger.warning(
-                f"No monomer structure found for target {target}; cannot "
-                "screen its labeling uncertainty. Using the first candidate."
-            )
-            best_label_unc[target] = candidates[0]
-            continue
-
-        nn_counts = {key: 0 for key in nn_keys}
-        nn_counts[f"{target}-{target}"] = 1
-
-        scores = []
-        for k, candidate in enumerate(candidates):
-            label_unc_input = dict(label_unc_start)
-            label_unc_input[target] = candidate
-            score = spinna.compare_models_given_label_unc(
-                models=[target_model],
-                exp_data=exp_data,
-                granularity=granularity,
-                label_unc=label_unc_input,
-                le=le,
-                mask_dict=mask_dict,
-                width=width,
-                height=height,
-                depth=depth,
-                random_rot_mode=random_rot_mode,
-                nn_counts=nn_counts,
-                N_sim=sim_repeats,
-                parallel=asynch,  # picasso 1.0: asynch -> parallel
-                # empty savedir: the target sub-model here has a single
-                # candidate, which crashes picasso's fit_stoichiometry
-                # CSV-save branch (2-D N_structures vs 1-D props).
-                savedir="",
-                progress_title=(
-                    f"Screening label_unc for {target}: "
-                    f"{candidate:.2f} nm ({k + 1}/{len(candidates)})"
-                ),
-                fitting_mode=fitting_mode,
-            )[0]
-            scores.append(float(score))
-
+    for target, curve in scan.items():
+        candidates = curve["candidates"]
+        scores = curve["scores"]
         best_idx = int(np.argmin(scores))
-        best_label_unc[target] = candidates[best_idx]
-        scan[target] = {"candidates": candidates, "scores": scores}
         fp_figs.append(
             _plot_label_unc_scan(
                 target=target,
