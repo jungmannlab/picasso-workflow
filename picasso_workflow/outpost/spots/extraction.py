@@ -7,7 +7,7 @@ random-frame sampler (not a dedup of ``localize.get_spots``).
 
 import numpy as np
 
-from picasso_workflow._picasso_api import get_internal
+from picasso_workflow._picasso_api import localize
 
 
 def get_spots(movie, identifications, box, camera_info):
@@ -30,7 +30,7 @@ def get_spots(movie, identifications, box, camera_info):
         The cut spots in photons.
     """
     spots = _cut_spots(movie, identifications, box)
-    return get_internal("_to_photons")(spots, camera_info)
+    return localize.to_photons(spots, camera_info)
 
 
 def _cut_spots(movie, ids, box):

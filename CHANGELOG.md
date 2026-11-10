@@ -11,6 +11,20 @@ This file was started after v0.5.6; earlier history is in the git log.
 ## [Unreleased]
 
 ### Changed
+- **Adopt picasso 1.0 public APIs for the formerly-private reach-ins; pin
+  `picassosr>=1.0.0rc1`.** picasso 1.0.0rc1 removed the four private symbols
+  the workflow reached into, so `_picasso_api` now routes through the public
+  replacements: `_FIT_METHOD_MAP` → `localize.resolve_fit_method` /
+  `FIT_METHOD_ALIASES`; `__main__._spinna_batch_analysis` →
+  `spinna.batch_analysis` (which returns the `__fitting_results` folder, so
+  the SPINNA wrapper no longer reconstructs it); `localize._to_photons` →
+  `localize.to_photons`; `spinna._targets_from_structures` →
+  `spinna.targets_from_structures`. `INTERNAL_SYMBOLS` shrinks to the two
+  still-private seams (`_pick_similar`, `_n_block_locs_at`); the new public
+  calls are pinned in `SIGNATURE_CONTRACT`. (The remaining outpost forks —
+  csr_knn, decorrelation, binding-events, alignment, registration — still
+  work on rc1 and migrate to their public replacements separately.)
+
 - **The Qt GUI is now a `[gui]` extra, not a base dependency.** `PyQt6` +
   `PyQt6-WebEngine` (≈530 MB of Qt6/WebEngine binaries) moved out of the base
   `dependencies` into a `gui` optional-dependency. They are lazy-imported — the

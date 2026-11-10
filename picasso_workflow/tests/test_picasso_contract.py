@@ -83,17 +83,6 @@ def test_boundary_reexports_top_level_attrs():
         assert getattr(api, name) is getattr(picasso, name)
 
 
-def test_fit_method_map_accessor():
-    """The guarded ``_FIT_METHOD_MAP`` accessor returns a non-empty mapping."""
-    fit_map = api.get_fit_method_map()
-    assert isinstance(fit_map, dict) and fit_map
-
-
-def test_spinna_batch_analysis_accessor():
-    """The guarded ``_spinna_batch_analysis`` accessor returns a callable."""
-    assert callable(api.get_spinna_batch_analysis())
-
-
 @pytest.mark.parametrize("name", sorted(api.INTERNAL_SYMBOLS))
 def test_internal_symbol_resolves(name):
     """Every registered private picasso symbol still resolves upstream."""

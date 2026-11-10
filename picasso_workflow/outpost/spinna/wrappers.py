@@ -11,21 +11,16 @@ import numpy as np
 import matplotlib.pyplot as plt
 from loguru import logger
 
-from picasso_workflow._picasso_api import (
-    spinna,
-    get_internal,
-    get_spinna_batch_analysis,
-)
+from picasso_workflow._picasso_api import spinna
 
 
 def spinna_batch(parameters_filename):
     """Run a SPINNA batch analysis from a config file.
 
-    Mirrors the command-line entry point in ``picasso.__main__``. picasso's
-    ``_spinna_batch_analysis`` derives the result directory from the
-    parameters filename (appending an index if such a directory already
-    exists) and saves the summary csv and NND figures there but returns no
-    paths, so they are reconstructed here with the same logic.
+    picasso 1.0's public ``spinna.batch_analysis`` saves the summary csv and
+    NND figures under a ``<basename>__fitting_results`` subfolder and returns
+    that folder (plus the summary DataFrame), so the result directory no
+    longer has to be reconstructed.
 
     Parameters
     ----------
@@ -41,19 +36,7 @@ def spinna_batch(parameters_filename):
     fp_fig : list of str
         Filepaths of the NND figures.
     """
-    # picasso writes the results to "<basename>__fitting_results" (DOUBLE
-    # underscore); a single underscore points at a non-existent directory.
-    result_dir = parameters_filename.replace(".csv", "__fitting_results")
-    if os.path.isdir(result_dir):
-        i = 1
-        while os.path.isdir(f"{result_dir}_{i}"):
-            i += 1
-        result_dir = f"{result_dir}_{i}"
-
-    # Private picasso symbol, reached only through the declared boundary in
-    # picasso_workflow._picasso_api (see that module).
-    spinna_batch_analysis = get_spinna_batch_analysis()
-    spinna_batch_analysis(parameters_filename)
+    result_dir, _summary = spinna.batch_analysis(parameters_filename)
 
     fp_summary = os.path.join(result_dir, "summary_results.csv")
     fp_fig = sorted(glob.glob(os.path.join(result_dir, "*_NND_*.png")))
@@ -182,7 +165,7 @@ def screen_label_uncertainty(
         Filepaths of the saved screening figures (one per screened
         target).
     """
-    targets = get_internal("_targets_from_structures")(structures)
+    targets = spinna.targets_from_structures(structures)
     # nn_counts keys for all target pairs (reset per candidate fit)
     nn_keys = [
         f"{t1}-{t2}" for i, t1 in enumerate(targets) for t2 in targets[i:]
@@ -286,7 +269,7 @@ def single_spinna_run(
     """Run a single SPINNA simulation with directly-given parameters.
 
     The implementation is adapted from the SPINNA batch analysis
-    (``picasso.__main__._spinna_batch_analysis``) for a single run.
+    (``picasso.spinna.batch_analysis``) for a single run.
 
     Parameters
     ----------

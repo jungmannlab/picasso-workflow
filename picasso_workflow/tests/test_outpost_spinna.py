@@ -1,11 +1,10 @@
 #!/usr/bin/env python
 """Regression tests for the SPINNA batch wrapper.
 
-Covers the result-directory naming fix: picasso writes the batch results to
-``<basename>__fitting_results`` (DOUBLE underscore); the wrapper must
-reconstruct that exact path (a single underscore points at a non-existent
-directory), so the reconstructed ``result_dir`` and ``fp_summary`` contain
-``__fitting_results``.
+picasso 1.0's public ``spinna.batch_analysis`` returns the result folder (and
+the summary DataFrame), so the wrapper surfaces that folder's
+``summary_results.csv`` and ``*_NND_*.png`` paths rather than reconstructing
+the directory name.
 """
 
 import os
@@ -14,23 +13,19 @@ from unittest.mock import patch
 from picasso_workflow.outpost.spinna import wrappers
 
 
-@patch("picasso_workflow.outpost.spinna.wrappers.get_spinna_batch_analysis")
-def test_spinna_batch_result_dir_double_underscore(mock_get_batch, tmp_path):
-    """spinna_batch builds ``<basename>__fitting_results`` (2 underscores)."""
-    # picasso's batch-analysis callable is a no-op here; we only check the
-    # path reconstruction around it.
-    mock_get_batch.return_value = lambda fp: None
+@patch("picasso_workflow.outpost.spinna.wrappers.spinna.batch_analysis")
+def test_spinna_batch_surfaces_result_dir_paths(mock_batch, tmp_path):
+    """spinna_batch returns batch_analysis's folder + the summary/fig paths."""
+    result_dir = os.path.join(str(tmp_path), "myparams__fitting_results")
+    os.makedirs(result_dir, exist_ok=True)
+    # picasso 1.0 batch_analysis returns (result_dir, summary_df).
+    mock_batch.return_value = (result_dir, None)
 
     cfg_fp = os.path.join(str(tmp_path), "myparams.csv")
-    with open(cfg_fp, "w") as f:
-        f.write("col\n1\n")
+    rdir, fp_summary, fp_fig = wrappers.spinna_batch(cfg_fp)
 
-    result_dir, fp_summary, fp_fig = wrappers.spinna_batch(cfg_fp)
-
-    assert result_dir.endswith("__fitting_results")
-    assert os.path.basename(result_dir) == "myparams__fitting_results"
-    assert "__fitting_results" in fp_summary
-    # Guard against a regression to the single-underscore directory name.
-    assert "myparams_fitting_results" not in os.path.basename(result_dir)
+    mock_batch.assert_called_once_with(cfg_fp)
+    assert rdir == result_dir
     assert fp_summary == os.path.join(result_dir, "summary_results.csv")
+    # No NND figures in the empty folder.
     assert fp_fig == []
