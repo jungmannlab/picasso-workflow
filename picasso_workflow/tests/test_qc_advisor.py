@@ -513,12 +513,14 @@ class TestFilterAdvisor:
         # Build locs with all lpx=lpy=3.0 nm inside the zoom ROI: the mean
         # precision is a constant 3.0 nm, so p95 == 3.0 (and must NOT be
         # 3.0 * 130).
+        # No sx/sy column: isolate the precision criterion. (With sx/sy
+        # present, the suggested sx_range_px rounds to a float64 bound that a
+        # constant float32 sx can round just above, tripping the sx filter and
+        # masking what this test is about.)
         dtype = [
             ("x", "f4"),
             ("y", "f4"),
             ("photons", "f4"),
-            ("sx", "f4"),
-            ("sy", "f4"),
             ("lpx", "f4"),
             ("lpy", "f4"),
         ]
@@ -527,12 +529,9 @@ class TestFilterAdvisor:
         rng = np.random.default_rng(0)
         locs["x"] = 30 + rng.normal(0, 0.5, n)
         locs["y"] = 30 + rng.normal(0, 0.5, n)
-        # Constant photons/sx/sy so only the precision criterion can filter
-        # (percentile-based photons/sx ranges would otherwise trim the tails
-        # and keep.all() would be about those, not precision).
+        # Constant photons so its percentile range admits everything and only
+        # the precision criterion can filter.
         locs["photons"] = 5000.0
-        locs["sx"] = 1.2
-        locs["sy"] = 1.2
         locs["lpx"] = 3.0
         locs["lpy"] = 3.0
         names = list(locs.dtype.names)
