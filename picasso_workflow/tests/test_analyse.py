@@ -3849,17 +3849,43 @@ class TestAnalyse(unittest.TestCase):
 
         os.remove(os.path.join(self.results_folder, "samplemov.mp4"))
 
-    @patch("picasso_workflow.analyse.localize.get_spots")
-    def test_04_AutoPicasso_auto_min_netgrad(self, mock_get_spots):
-        mock_get_spots.return_value = [
-            np.random.randint(0, 1000, size=(7, 7), dtype=np.uint16)
-        ] * 48
+    @patch("picasso_workflow.analyse.localize.estimate_min_net_gradient")
+    @patch("picasso_workflow.analyse.localize.identify_by_frame_number")
+    @patch("picasso_workflow.analyse.AutoPicasso._draw_sample_spots")
+    def test_04_AutoPicasso_auto_min_netgrad(
+        self, mock_draw, mock_identify, mock_estimate
+    ):
+        # picasso 1.0 provides the estimator as a public API; the workflow
+        # delegates to it and maps min_net_gradient -> estd_net_grad.
+        edges = np.linspace(-3000.0, 5000.0, num=500)
+        mock_estimate.return_value = {
+            "min_net_gradient": 4123.7,
+            "background": 100.0,
+            "background_width": 50.0,
+            "histogram": np.ones(len(edges) - 1),
+            "bin_edges": edges,
+            "frames": np.array([9]),
+        }
+        mock_identify.return_value = pd.DataFrame(
+            {"frame": [9], "net_gradient": [4123.7]}
+        )
+        mock_draw.return_value = (
+            np.zeros((28, 84), dtype=np.uint8),
+            100.0,
+            9000.0,
+        )
         fn = os.path.join(self.results_folder, "autominnet.png")
         results = self.ap._auto_min_netgrad(
             box_size=7, frame_numbers=[9], filename=fn
         )
         logger.debug(results)
+        assert results["estd_net_grad"] == 4123.7
         assert results["filename"] == fn
+        mock_estimate.assert_called_once()
+        # box + start_net_gradient forwarded with the API's keyword names
+        _, kwargs = mock_estimate.call_args
+        assert kwargs["box"] == 7
+        assert kwargs["start_net_gradient"] == -3000
 
         os.remove(fn)
 
