@@ -13985,7 +13985,6 @@ class AutoPicasso(
         else:
             le_target_std = 0.0
             le_reference_std = 0.0
-        results["spinna_props_std"] = le_std
 
         results["labeling_efficiency"] = {
             parameters["target_name"]: le_target,

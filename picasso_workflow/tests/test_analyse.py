@@ -1685,6 +1685,54 @@ class TestAnalyseModules(unittest.TestCase):
         self.assertEqual(mock_plot.call_count, 1)
         self.assertEqual(figs, ["scan_A.png"])
 
+    @patch("picasso_workflow.outpost.spinna.wrappers._plot_label_unc_scan")
+    @patch(
+        "picasso_workflow.outpost.spinna.wrappers.spinna."
+        "fit_label_uncertainty"
+    )
+    def test_screen_label_uncertainty_no_monomer_fallback(
+        self, mock_fit, mock_plot
+    ):
+        """A multi-candidate target with no standalone monomer structure is
+        collapsed to its first candidate before the call (picasso would crash
+        screening it), as the pre-1.0 fallback did."""
+        Structure = spinna_wrappers.spinna.Structure
+        mono_a = Structure("mono_A")
+        mono_a.define_coordinates("A", [0.0], [0.0], [0.0])
+        het = Structure("het_AB")
+        het.define_coordinates("A", [0.0], [0.0], [0.0])
+        het.define_coordinates("B", [10.0], [0.0], [0.0])
+        structures = [mono_a, het]  # B appears only inside the dimer
+
+        # both multi-candidate, but B has no monomer -> B must be collapsed.
+        label_unc = {"A": [2.0, 4.0], "B": [3.0, 5.0]}
+        mock_fit.return_value = ({"A": 4.0, "B": 3.0}, {})
+        mock_plot.return_value = "scan.png"
+
+        exp_data = {"A": np.random.rand(20, 2) * 100}
+        spinna_wrappers.screen_label_uncertainty(
+            structures=structures,
+            label_unc=label_unc,
+            le={"A": 0.5, "B": 0.5},
+            granularity=10,
+            exp_data=exp_data,
+            mask_dict=None,
+            width=1000.0,
+            height=1000.0,
+            depth=None,
+            random_rot_mode="2D",
+            sim_repeats=1,
+            asynch=False,
+            result_dir="/tmp",
+            save_filename="/tmp/spinna-run",
+        )
+
+        kw = mock_fit.call_args.kwargs
+        self.assertEqual(kw["label_unc"]["B"], [3.0])  # collapsed to first
+        self.assertEqual(kw["label_unc"]["A"], [2.0, 4.0])  # still screened
+        # the caller's label_unc dict is not mutated
+        self.assertEqual(label_unc["B"], [3.0, 5.0])
+
     @patch("picasso_workflow.outpost.spinna.wrappers.single_spinna_run")
     @patch("picasso_workflow.outpost.spinna.wrappers.single_spinna_fit_le_run")
     def test_spinna_pair_distance_screen(self, mock_fitle, mock_sptmp):

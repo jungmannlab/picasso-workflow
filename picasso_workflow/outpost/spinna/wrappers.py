@@ -9,6 +9,7 @@ from datetime import datetime
 
 import numpy as np
 import matplotlib.pyplot as plt
+from loguru import logger
 
 from picasso_workflow._picasso_api import spinna
 
@@ -112,7 +113,7 @@ def screen_label_uncertainty(
     save_filename,
     fitting_mode="coarse-to-fine",
 ):
-    """Screen a range of labeling uncertainties, one target at a time.
+    """Screen each target's labeling uncertainty and plot the scans.
 
     For every molecular target whose ``label_unc`` entry lists more than
     one candidate, each candidate is scored by fitting a target-only
@@ -165,11 +166,26 @@ def screen_label_uncertainty(
         Filepaths of the saved screening figures (one per screened
         target).
     """
-    # picasso scores every multi-candidate target in one call: for each
-    # target with >1 candidate it fits that target's monomers to the
-    # self-NND, while the other targets take their first candidate, and
-    # returns the best value per target plus the per-candidate scores of
-    # the screened targets.
+    # picasso screens a target by fitting its standalone-monomer sub-model to
+    # the self-NND. A multi-candidate target that appears only inside complexes
+    # (no monomer structure) has an empty sub-model and crashes picasso, so
+    # fall back to its first candidate (fixed, not screened) -- as the pre-1.0
+    # implementation did, with a warning.
+    label_unc = dict(label_unc)
+    for tgt, candidates in list(label_unc.items()):
+        if len(candidates) > 1 and not any(
+            s.targets == [tgt] for s in structures
+        ):
+            logger.warning(
+                f"No monomer structure for target {tgt}; cannot screen its "
+                "labeling uncertainty. Using the first candidate."
+            )
+            label_unc[tgt] = [candidates[0]]
+
+    # picasso scores every remaining multi-candidate target in one call: for
+    # each such target it fits that target's monomers to the self-NND while
+    # the other targets take their first candidate, and returns the best value
+    # per target plus the per-candidate scores of the screened targets.
     best_label_unc, scan = spinna.fit_label_uncertainty(
         models=[structures],
         exp_data=exp_data,
