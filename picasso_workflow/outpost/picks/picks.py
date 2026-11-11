@@ -5,69 +5,10 @@ See the package docstring.
 
 import numpy as np
 import pandas as pd
-import numba as nb
 from loguru import logger
 from sklearn.cluster import OPTICS
 
-from picasso_workflow._picasso_api import postprocess, lib, get_internal
-
-# Resolved once at import time (not per-call) because the numba-jitted
-# ``pick_similar_analysis`` below calls it: nopython mode cannot call the plain
-# ``get_internal`` function, but it can call this module-level dispatcher
-# global. Still guarded + contract-tested via INTERNAL_SYMBOLS.
-_n_block_locs_at = get_internal("_n_block_locs_at")
-
-
-def prep_pick_similar_kwargs(locs, info, diameter):
-    # picasso 1.0 localizations are in nm, while Width / Height stay in camera
-    # pixels; build the whole search grid in nm so it matches the locs (0.11
-    # worked in camera pixels throughout).
-    pixelsize = lib.get_from_metadata(info, "Pixelsize", raise_error=True)
-    d = diameter * pixelsize
-
-    maxheight = info[0]["Height"] * pixelsize
-    maxwidth = info[0]["Width"] * pixelsize
-    r = d / 2
-    d2 = d**2
-
-    # extract n_locs and rmsd from current picks
-    locs_temp, r, _, _, block_starts, block_ends, K, L = (
-        postprocess.get_index_blocks(locs, info, r)
-    )
-
-    # x, y coordinates of found regions:
-    x_similar = np.array([])
-    y_similar = np.array([])
-
-    # preparations for grid search
-    x_range = np.arange(d / 2, maxwidth, np.sqrt(3) * d / 2)
-    y_range_base = np.arange(d / 2, maxheight - d / 2, d)
-    y_range_shift = y_range_base + d / 2
-
-    locs_x = locs_temp.x
-    locs_y = locs_temp.y
-    locs_xy = np.stack((locs_x, locs_y))
-    x_r = np.uint64(x_range / r)
-    y_r1 = np.uint64(y_range_shift / r)
-    y_r2 = np.uint64(y_range_base / r)
-    kwargs = {
-        "x": x_range,
-        "y_shift": y_range_shift,
-        "y_base": y_range_base,
-        "x_r": x_r,
-        "y_r1": y_r1,
-        "y_r2": y_r2,
-        "locs_xy": locs_xy,
-        "block_starts": block_starts,
-        "block_ends": block_ends,
-        "K": K,
-        "L": L,
-        "x_similar": x_similar,
-        "y_similar": y_similar,
-        "r": r,
-        "d2": d2,
-    }
-    return kwargs
+from picasso_workflow._picasso_api import postprocess, lib
 
 
 def pick_gold(locs, info, diameter=2, std_range=1.4, mean_rmsd=50.0):
@@ -116,17 +57,23 @@ def pick_gold(locs, info, diameter=2, std_range=1.4, mean_rmsd=50.0):
     min_rmsd = mean_rmsd - std_range * std_rmsd
     max_rmsd = mean_rmsd + std_range * std_rmsd
 
-    kwargs = prep_pick_similar_kwargs(locs, info, diameter)
-    kwargs["min_n_locs"] = min_n_locs
-    kwargs["max_n_locs"] = max_n_locs
-    kwargs["min_rmsd"] = min_rmsd
-    kwargs["max_rmsd"] = max_rmsd
-
-    # pick similar
-    x_similar, y_similar = get_internal("_pick_similar")(**kwargs)
-    # add picks
-    similar = list(zip(x_similar, y_similar))
-    return similar
+    # picasso 1.0: localizations are in nm while ``diameter`` is a pick size
+    # in camera pixels, so convert to the nm diameter ``pick_size`` expects.
+    # ``pick_similar`` with ``n_locs_range`` / ``rmsd_range`` (and no seed
+    # picks) scans the FOV for circular picks whose loc count and RMSD-at-COM
+    # fall inside the windows (inclusive bounds), replacing the former
+    # private ``_pick_similar`` grid scan. It returns the pick centres as a
+    # list of ``(x, y)`` tuples.
+    pixelsize = lib.get_from_metadata(info, "Pixelsize", raise_error=True)
+    similar = postprocess.pick_similar(
+        locs,
+        info,
+        pick_size=diameter * pixelsize,
+        n_locs_range=(min_n_locs, max_n_locs),
+        rmsd_range=(min_rmsd, max_rmsd),
+    )
+    # ``pick_similar`` already returns a list of ``(x, y)`` tuples.
+    return [(x, y) for x, y in similar]
 
 
 def index_locs(locs, info, pick_diameter):
@@ -672,170 +619,33 @@ def find_structures(
 
 
 def get_pick_similar_vals(locs, info, diameter, min_n_locs=1):
-    """
+    """Per-candidate centre, RMSD and loc count across the FOV.
+
+    Scans the field of view for circular candidate picks (as
+    ``pick_similar`` does, but without filtering by loc count / RMSD) and
+    returns their centres together with the RMSD-at-COM and localization
+    count of each, for selecting structures in the (RMSD, n_locs) plane.
+
+    Delegates to :func:`picasso.postprocess.pick_similar_candidates`
+    (picasso 1.0's public replacement for the former private grid scan);
+    ``diameter`` is a pick size in camera pixels, converted to the nm
+    ``pick_size`` that function expects.
+
     Usage:
     x_similar, y_similar, rmsds, nlocs = get_pick_similar_vals(
         locs, info, diameter=1.5, min_n_locs=100)
     plt.hexbin(rmsds, nlocs)
     plt.show()
     """
-    kwargs = prep_pick_similar_kwargs(locs, info, diameter)
-    kwargs["rmsds"] = np.array([])
-    kwargs["nlocs"] = np.array([])
-    kwargs["min_n_locs"] = min_n_locs
-    x_similar, y_similar, rmsds, nlocs = pick_similar_analysis(**kwargs)
-    return x_similar, y_similar, rmsds, nlocs
-
-
-@nb.jit(nopython=True, nogil=True, cache=True)
-def pick_similar_analysis(
-    x,
-    y_shift,
-    y_base,
-    x_r,
-    y_r1,
-    y_r2,
-    locs_xy,
-    block_starts,
-    block_ends,
-    K,
-    L,
-    x_similar,
-    y_similar,
-    rmsds,
-    nlocs,
-    r,
-    d2,
-    min_n_locs=1,
-):
-    for i, x_grid in enumerate(x):
-        x_range = x_r[i]
-        # y_grid is shifted for odd columns
-        if i % 2:
-            y = y_shift
-            y_r = y_r1
-        else:
-            y = y_base
-            y_r = y_r2
-        for j, y_grid in enumerate(y):
-            y_range = y_r[j]
-            n_block_locs = _n_block_locs_at(
-                x_range, y_range, K, L, block_starts, block_ends
-            )
-            if n_block_locs >= min_n_locs:
-                block_locs_xy = _get_block_locs_at(
-                    x_range,
-                    y_range,
-                    locs_xy,
-                    block_starts,
-                    block_ends,
-                    K,
-                    L,
-                )
-                # picked_locs_xy = postprocess.locs_at(
-                #     x_grid, y_grid, block_locs_xy, r
-                # )
-                picked_locs_xy = _locs_at(x_grid, y_grid, block_locs_xy, r)
-                if picked_locs_xy.shape[1] > 1:
-                    # Move to COM peak
-                    x_test_old = x_grid
-                    y_test_old = y_grid
-                    x_test = np.mean(picked_locs_xy[0])
-                    y_test = np.mean(picked_locs_xy[1])
-                    count = 0
-                    while (
-                        np.abs(x_test - x_test_old) > 1e-3
-                        or np.abs(y_test - y_test_old) > 1e-3
-                    ):
-                        count += 1
-                        # skip the locs if the loop is too long
-                        if count > 500:
-                            break
-                        x_test_old = x_test
-                        y_test_old = y_test
-                        # picked_locs_xy = postprocess.locs_at(
-                        #     x_test, y_test, block_locs_xy, r
-                        # )
-                        picked_locs_xy = _locs_at(
-                            x_test, y_test, block_locs_xy, r
-                        )
-                        if picked_locs_xy.shape[1] > 1:
-                            x_test = np.mean(picked_locs_xy[0])
-                            y_test = np.mean(picked_locs_xy[1])
-                        else:
-                            break
-                    if np.all(
-                        (x_similar - x_test) ** 2 + (y_similar - y_test) ** 2
-                        > d2
-                    ):
-                        # now, instead of filtering, record and return rmsd
-                        # and n_locs values
-                        if min_n_locs <= picked_locs_xy.shape[1]:
-                            x_similar = np.append(x_similar, x_test)
-                            y_similar = np.append(y_similar, y_test)
-                            rmsds = np.append(
-                                rmsds, _rmsd_at_com(picked_locs_xy)
-                            )
-                            nlocs = np.append(nlocs, picked_locs_xy.shape[1])
-    return x_similar, y_similar, rmsds, nlocs
-
-
-@nb.jit(nopython=True, nogil=True, cache=True)
-def _get_block_locs_at(
-    x_range,
-    y_range,
-    locs_xy,
-    block_starts,
-    block_ends,
-    K,
-    L,
-):
-    step = 0
-    for k in range(y_range - 1, y_range + 2):
-        # inclusive 0 <= k < K, matching picasso's _get_block_locs_at and
-        # _n_block_locs_at; the old strict 0 < k skipped block row/column 0
-        # (and could leave `indices` unassigned -> UnboundLocalError).
-        if 0 <= k < K:
-            for lx in range(x_range - 1, x_range + 2):
-                if 0 <= lx < L:
-                    if block_ends[k, lx] - block_starts[k, lx] > 0:
-                        # numba does not work if you attach arange to an
-                        # empty list, so the first step is different; this
-                        # is because of dtype issues
-                        if step == 0:
-                            indices = np.arange(
-                                float(block_starts[k, lx]),
-                                float(block_ends[k, lx]),
-                                dtype=np.uint32,
-                            )
-                            step = 1
-                        else:
-                            indices = np.concatenate(
-                                (
-                                    indices,
-                                    np.arange(
-                                        float(block_starts[k, lx]),
-                                        float(block_ends[k, lx]),
-                                        dtype=np.uint32,
-                                    ),
-                                )
-                            )
-    return locs_xy[:, indices]
-
-
-@nb.jit(nopython=True, nogil=True, cache=True)
-def _locs_at(x, y, locs_xy, r):
-    dx = locs_xy[0] - x
-    dy = locs_xy[1] - y
-    r2 = r**2
-    is_picked = dx**2 + dy**2 < r2
-    return locs_xy[:, is_picked]
-
-
-@nb.jit(nopython=True, nogil=True)
-def _rmsd_at_com(locs_xy):
-    com_x = np.mean(locs_xy[0])
-    com_y = np.mean(locs_xy[1])
-    return np.sqrt(
-        np.mean((locs_xy[0] - com_x) ** 2 + (locs_xy[1] - com_y) ** 2)
+    pixelsize = lib.get_from_metadata(info, "Pixelsize", raise_error=True)
+    candidates = postprocess.pick_similar_candidates(
+        locs,
+        info,
+        pick_size=diameter * pixelsize,
+        min_n_locs=int(min_n_locs),
     )
+    x_similar = candidates["x"].to_numpy()
+    y_similar = candidates["y"].to_numpy()
+    rmsds = candidates["rmsd"].to_numpy()
+    nlocs = candidates["n_locs"].to_numpy()
+    return x_similar, y_similar, rmsds, nlocs

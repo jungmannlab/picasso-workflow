@@ -82,9 +82,23 @@ This file was started after v0.5.6; earlier history is in the git log.
   `spinna.batch_analysis` (which returns the `__fitting_results` folder, so
   the SPINNA wrapper no longer reconstructs it); `localize._to_photons` →
   `localize.to_photons`; `spinna._targets_from_structures` →
-  `spinna.targets_from_structures`. `INTERNAL_SYMBOLS` shrinks to the two
-  still-private seams (`_pick_similar`, `_n_block_locs_at`); the new public
-  calls are pinned in `SIGNATURE_CONTRACT`.
+  `spinna.targets_from_structures`. With the pick-similar migration below,
+  `INTERNAL_SYMBOLS` is now empty (no remaining private picasso reach-ins);
+  the new public calls are pinned in `SIGNATURE_CONTRACT`.
+
+- **Pick-similar scanning delegates to picasso 1.0's public pick APIs.**
+  `outpost/picks/picks.py` dropped its last two private reach-ins
+  (`postprocess._pick_similar`, `postprocess._n_block_locs_at`): `pick_gold`
+  now calls `postprocess.pick_similar(..., pick_size=<nm diameter>,
+  n_locs_range=, rmsd_range=)` and `get_pick_similar_vals` calls
+  `postprocess.pick_similar_candidates(..., pick_size=, min_n_locs=)`, mapping
+  its `x`/`y`/`n_locs`/`rmsd` columns onto the `(x, y, rmsds, nlocs)` tuples
+  the callers expect. The workflow's forked numba grid scan
+  (`pick_similar_analysis`, `prep_pick_similar_kwargs`, `_get_block_locs_at`,
+  `_locs_at`, `_rmsd_at_com`) and the `numba` import are removed; the gold
+  selection and `(RMSD, n_locs)` candidate values are unchanged (verified
+  against picasso 1.0.0rc1). `postprocess.pick_similar` /
+  `pick_similar_candidates` are pinned in `SIGNATURE_CONTRACT`.
 
 - **Net-gradient estimation delegates to `localize.estimate_min_net_gradient`.**
   picasso 1.0 upstreamed `AutoPicasso._auto_min_netgrad`'s background-peak
@@ -104,8 +118,8 @@ This file was started after v0.5.6; earlier history is in the git log.
   `spatial_stats/csr_knn` → `postprocess.knn_density`,
   `binding_events` → `postprocess.signal_to_background`/`dye_performance`,
   `alignment` → `postprocess.align(method="points")`, SPINNA label-uncertainty
-  → `spinna.fit_label_uncertainty`/`fit_le(bootstrap=True)`, CellMask
-  morphology → `masking.*`, and the pick scan → `postprocess.pick_similar_candidates`.
+  → `spinna.fit_label_uncertainty`/`fit_le(bootstrap=True)`, and CellMask
+  morphology → `masking.*`.
 
 - **The Qt GUI is now a `[gui]` extra, not a base dependency.** `PyQt6` +
   `PyQt6-WebEngine` (≈530 MB of Qt6/WebEngine binaries) moved out of the base

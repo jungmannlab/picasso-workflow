@@ -290,9 +290,10 @@ class TestPicassoOutpost(unittest.TestCase):
         """pick_gold's RMSD window must scale with ``mean_rmsd``, not nlocs.
 
         Regression for the ``std_rmsd = 0.25 * mean_rmsd`` fix (was
-        ``0.25 * mean_n_locs``, which made the [min_rmsd, max_rmsd] window
-        enormous and the RMSD criterion a no-op). The window passed to
-        ``_pick_similar`` must be centered on ``mean_rmsd`` with full width
+        ``0.25 * mean_n_locs``, which made the ``rmsd_range`` enormous and
+        the RMSD criterion a no-op). The ``rmsd_range`` passed to
+        ``postprocess.pick_similar`` (picasso-1.0's public API) must be
+        centered on ``mean_rmsd`` with full width
         ``2 * std_range * 0.25 * mean_rmsd``.
         """
         info = [{"Frames": 100, "Width": 20, "Height": 42, "Pixelsize": 1}]
@@ -301,30 +302,23 @@ class TestPicassoOutpost(unittest.TestCase):
 
         captured = {}
 
-        def _capture_pick_similar(**kwargs):
+        def _capture_pick_similar(locs, info, **kwargs):
             captured.update(kwargs)
-            return np.array([]), np.array([])
+            return []
 
-        def _fake_get_internal(name):
-            if name == "_pick_similar":
-                return _capture_pick_similar
-            raise AssertionError(f"unexpected get_internal({name!r})")
-
-        with (
-            patch.object(
-                picks_mod, "prep_pick_similar_kwargs", return_value={}
-            ),
-            patch.object(
-                picks_mod, "get_internal", side_effect=_fake_get_internal
-            ),
+        with patch.object(
+            picks_mod.postprocess,
+            "pick_similar",
+            side_effect=_capture_pick_similar,
         ):
             picks_mod.pick_gold(
                 None, info, std_range=std_range, mean_rmsd=mean_rmsd
             )
 
-        width = captured["max_rmsd"] - captured["min_rmsd"]
+        min_rmsd, max_rmsd = captured["rmsd_range"]
+        width = max_rmsd - min_rmsd
         expected_width = 2 * std_range * 0.25 * mean_rmsd  # 35.0
-        center = (captured["min_rmsd"] + captured["max_rmsd"]) / 2
+        center = (min_rmsd + max_rmsd) / 2
 
         assert np.isclose(width, expected_width)
         assert np.isclose(width, 35.0)
@@ -332,6 +326,8 @@ class TestPicassoOutpost(unittest.TestCase):
         # The old, loc-count-scaled width was 2 * std_range * 0.25 * Frames
         # = 140 -- far larger than this nm-scaled window.
         assert width < 2 * std_range * 0.25 * info[0]["Frames"]
+        # pick_size is the nm diameter (diameter * Pixelsize).
+        assert np.isclose(captured["pick_size"], 2 * info[0]["Pixelsize"])
 
     def test_06b_index_locs(self):
         locs, info = self.get_locs_with_gold([], [])
