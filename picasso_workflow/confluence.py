@@ -3007,7 +3007,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         <ul><li>Start Time: {results['start time']}</li>
         <li>Duration: {results["duration"] // 60:.0f} min
         {(results["duration"] % 60):.02f} s</li>"""
-        d = parameters["dimensionality"]
+        d = parameters.get("dimensionality", 2)
         if isinstance(results["density"], list):
             text += "<li>Density fitted:"
             for density in results["density"]:

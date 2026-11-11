@@ -1113,42 +1113,44 @@ class AbstractModuleCollection(abc.ABC):
 
     @abc.abstractmethod
     def fit_csr(self, i, parameters, results):
-        """Fit a complete-spatial-randomness model to nearest neighbours.
+        """Fit a complete-spatial-randomness model to the localizations.
 
-        Fits a CSR model to nearest-neighbour distance distributions and
-        evaluates goodness-of-fit with statistical measures and visualization.
+        Estimates the molecule density per channel by edge-corrected
+        maximum likelihood from the distances to the k nearest neighbours
+        of the loaded localizations (picasso's
+        ``postprocess.knn_density``), tests for complete spatial
+        randomness (CSR) by simulation, and visualises the fit.
+
+        .. note::
+            Since the picasso 1.0 migration this module consumes the
+            loaded localizations directly; the legacy ``nneighbors``,
+            ``fit_bkg`` and ``bkg_fraction`` parameters are no longer
+            used.
 
         Parameters
         ----------
         i : int
             Index of the module in the workflow.
         parameters : dict
-            Required keys:
-
-            ``nneighbors`` : str or numpy.ndarray or list
-                A filepath to a nearest-neighbour data file, a 2D ``(N, k)``
-                array of kth nearest-neighbour distances, or a list of
-                multiple datasets / file paths.
-            ``dimensionality`` : int
-                Spatial dimensionality (2 or 3) for the CSR model.
-
             Optional keys:
 
+            ``dimensionality`` : int
+                Spatial dimensionality (2 or 3) for the CSR model. In 3D
+                the ``z`` column is used and densities are per volume.
+                Default 2.
             ``kmin`` : int
-                Minimum kth nearest-neighbour order to fit (default 1).
+                Lowest neighbour order of the pooled fit (default 1).
+            ``kmax`` : int
+                Highest neighbour order considered (default 5).
             ``min_dist`` : float
-                Minimum observable distance in nm due to technical limits.
+                Shortest neighbour distance in nm used in the fit
+                (default 0).
             ``max_dist`` : float
-                Maximum distance for filtering analysis. Bounds the fit
-                only, not the plotting range (see ``plot_max_dist``).
-            ``bkg_fraction`` : float
-                Background fraction for fitting.
-            ``fit_bkg`` : bool
-                Whether to fit the background (default False).
-            ``plot_max_dist`` : float
-                Maximum distance shown on the plot's distance axis, in nm.
-                Only affects display, not the fit. Defaults to the 95th
-                percentile of the largest-k neighbour distances.
+                Upper end in nm of the plotted distance histograms; does
+                not affect the fit.
+            ``n_simulations`` : int
+                Number of CSR simulations for the p-values and standard
+                errors (default 99).
         results : dict
             Module results (see class docstring).
 
@@ -1158,9 +1160,10 @@ class AbstractModuleCollection(abc.ABC):
             Input parameters, unchanged.
         results : dict
             Results updated with ``density`` (fitted spatial density in
-            units^(-d)), ``bkg_fraction``, ``fp_fig`` (CSR fit figure(s)),
-            ``wasserstein_distances_per_k``, ``mean_wasserstein_distance`` and
-            ``ks_pvalues_per_k`` (Kolmogorov-Smirnov p-values per kth order).
+            nm^(-d)), ``fp_fig`` (CSR fit figure(s)),
+            ``wasserstein_distances_per_k``, ``mean_wasserstein_distance``
+            and ``ks_pvalues_per_k`` (CSR-simulation p-values per kth
+            order).
         """
 
     # @abs.abstractmethod

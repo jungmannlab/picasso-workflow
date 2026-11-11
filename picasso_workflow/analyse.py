@@ -55,47 +55,7 @@ from picasso_workflow._picasso_api import (
 # from picasso_workflow.outpost_modules import g5m
 from scipy.ndimage import label
 from scipy.spatial import KDTree, distance
-from scipy.stats import kstest, norm, poisson
-
-try:
-    from scipy.stats import wasserstein_distance
-except ImportError:
-    # Fallback implementation if scipy version issues
-    def wasserstein_distance(u_values, v_values):
-        """Compute the 1D Wasserstein distance (manual fallback).
-
-        Parameters
-        ----------
-        u_values, v_values : array-like
-            The two 1D distributions to compare.
-
-        Returns
-        -------
-        float
-            The 1D Wasserstein distance between the distributions.
-        """
-        u_sorted = np.sort(u_values)
-        v_sorted = np.sort(v_values)
-        n = len(u_sorted)
-        m = len(v_sorted)
-
-        # Create cumulative distributions (not used in this implementation)
-        # u_cdf = np.arange(1, n + 1) / n
-        # v_cdf = np.arange(1, m + 1) / m
-
-        # Merge and compute distance
-        all_values = np.concatenate([u_sorted, v_sorted])
-        all_values = np.sort(all_values)
-
-        distance = 0
-        for i in range(len(all_values) - 1):
-            u_cum = np.searchsorted(u_sorted, all_values[i], side="right") / n
-            v_cum = np.searchsorted(v_sorted, all_values[i], side="right") / m
-            distance += abs(u_cum - v_cum) * (
-                all_values[i + 1] - all_values[i]
-            )
-
-        return distance
+from scipy.stats import norm, poisson, wasserstein_distance
 
 
 from picasso_workflow import (
@@ -7736,52 +7696,58 @@ class AutoPicasso(
     #    @profile_resource_usage
     @module_decorator
     def fit_csr(self, i, parameters, results):
-        """Fit a complete-spatial-randomness model to nearest neighbours.
+        """Fit a complete-spatial-randomness model to the localizations.
 
-        Fits a CSR model to nearest-neighbour distance distributions and
-        evaluates goodness-of-fit with statistical measures and visualization.
+        For each channel, the molecule density is estimated by
+        maximum likelihood from the distances to the k nearest
+        neighbours using picasso's edge-corrected
+        :func:`picasso.postprocess.knn_density`, which also tests for
+        complete spatial randomness (CSR) by simulation and returns
+        per-order Kolmogorov-Smirnov p-values. The fit is visualised by
+        overlaying the analytic CSR k-NN distribution
+        (:func:`picasso.postprocess.knn_csr_pdf`) on the measured
+        histograms.
+
+        .. note::
+            As of the picasso 1.0 migration this module consumes the
+            loaded localizations directly (``self.locs`` /
+            ``self.channel_locs``), not precomputed nearest-neighbour
+            distances. The legacy ``nneighbors``, ``fit_bkg`` and
+            ``bkg_fraction`` parameters are no longer used.
 
         Parameters
         ----------
         i : int
             Index of the module in the workflow.
         parameters : dict
-            Required keys:
-
-            ``nneighbors`` : str or numpy.ndarray or list
-                A filepath to a nearest-neighbour data file, a 2D ``(N, k)``
-                array of kth nearest-neighbour distances, or a list of
-                multiple datasets / file paths.
-            ``dimensionality`` : int
-                Spatial dimensionality (2 or 3) for the CSR model.
-
             Optional keys:
 
+            ``dimensionality`` : int
+                Spatial dimensionality (2 or 3) for the CSR model. In 3D
+                (``3``) the ``z`` column is used and densities are per
+                volume. Default 2.
             ``kmin`` : int
-                Minimum kth nearest-neighbour order to fit (default 1).
+                Lowest neighbour order of the pooled fit, from 1 to
+                ``kmax`` (maps to ``knn_density``'s ``k_min``). Default 1.
+            ``kmax`` : int
+                Highest neighbour order considered (maps to ``k_max``).
+                Default 5.
             ``min_dist`` : float
-                Minimum observable distance in nm due to technical limits.
+                Shortest neighbour distance in nm used in the fit (maps
+                to ``r_min``). Default 0.
             ``max_dist`` : float
-                Maximum distance for filtering analysis. Bounds the fit
-                only, not the plotting range (see ``plot_max_dist``).
-            ``bkg_fraction`` : float
-                Background fraction for fitting.
-            ``fit_bkg`` : bool
-                Whether to fit the background (default False).
-            ``plot_max_dist`` : float
-                Maximum distance shown on the plot's distance axis, in nm.
-                Only affects display, not the fit. Defaults to the 95th
-                percentile of the largest-k neighbour distances.
-            ``gof_window_coverage_warn`` : float
-                Warn if more than this fraction of the ``kmin``-th
-                nearest-neighbour distances fall outside the fit window
-                ``[min_dist, max_dist]`` (the window is then too narrow and
-                the density is biased). Default 0.5.
+                Upper end in nm of the plotted distance histograms (maps
+                to ``r_max``); does not affect the fit. If unset,
+                ``knn_density`` picks the 99th percentile of the largest-k
+                distances.
+            ``n_simulations`` : int
+                Number of CSR simulations for the p-values and standard
+                errors (maps to ``n_simulations``). Default 99.
             ``gof_wasserstein_warn`` : float
-                Warn if the mean Wasserstein distance between observed and
-                CSR-model neighbour distributions exceeds this fraction of
-                the median 1st-NN spacing (poor goodness of fit).
-                Default 0.3.
+                Warn if the mean Wasserstein distance between the measured
+                and analytic CSR neighbour distributions exceeds this
+                fraction of the median 1st-NN spacing (poor goodness of
+                fit). Default 0.3.
         results : dict
             Module results (see
             :class:`~picasso_workflow.util.AbstractModuleCollection`).
@@ -7792,356 +7758,179 @@ class AutoPicasso(
             Input parameters, unchanged.
         results : dict
             Results updated with ``density`` (fitted spatial density in
-            units^(-d)), ``bkg_fraction``, ``fp_fig`` (CSR fit figure(s)),
-            ``wasserstein_distances_per_k``, ``mean_wasserstein_distance`` and
-            ``ks_pvalues_per_k``.
+            nm^(-d), from ``knn_density``'s pooled ``"density"``),
+            ``fp_fig`` (CSR fit figure(s)),
+            ``wasserstein_distances_per_k``, ``mean_wasserstein_distance``
+            and ``ks_pvalues_per_k`` (the simulation p-values of
+            ``knn_density``).
         """
-        from picasso_workflow.outpost.spatial_stats import csr_knn
-
-        if isinstance(parameters["nneighbors"], str):
-            nneighbor_list = [np.loadtxt(parameters["nneighbors"])]
+        if self.locs is not None:
+            locs_list = [self.locs]
+            info_list = [self.info]
             tags = ["locs"]
             sgl_stage = True
-        elif isinstance(parameters["nneighbors"], list):
-            if isinstance(parameters["nneighbors"][0], str):
-                nneighbor_list = [
-                    np.loadtxt(fp) for fp in parameters["nneighbors"]
-                ]
-            else:
-                nneighbor_list = [parameters["nneighbors"]]
+        elif self.channel_locs is not None:
+            locs_list = self.channel_locs
+            info_list = self.channel_info
             tags = self.channel_tags
             sgl_stage = False
         else:
-            nneighbor_list = [parameters["nneighbors"]]
-            tags = ["locs"]
-            sgl_stage = True
-        nneighbors = nneighbor_list[0]
-        # print(nneighbors.shape)
-        # return
-        kmin = int(parameters.get("kmin", 1))
-        k_max = nneighbors.shape[1]
-        # nspots = nneighbors.shape[0]
+            raise KeyError("No locs loaded")
+
         d = int(parameters.get("dimensionality", 2))
-        kwargs = {
-            "kmin": kmin,
-        }
-        # "is not None", not truthiness: a value of 0 is meaningful here
-        # and used to be silently replaced by the function default.
-        if (min_dist := parameters.get("min_dist")) is not None:
-            kwargs["min_dist"] = float(min_dist)
-        if (max_dist := parameters.get("max_dist")) is not None:
-            kwargs["max_dist"] = float(max_dist)
-        if (bkg_fraction := parameters.get("bkg_fraction")) is not None:
-            kwargs["bkg_fraction"] = float(bkg_fraction)
-        kwargs["fit_bkg"] = bool(parameters.get("fit_bkg", False))
-        kwargs["d"] = d
+        use_z = d == 3
+        # molecules/nm^d -> molecules/um^d for human-readable logs/labels.
+        um_factor = 1e3**d
+        kmin = int(parameters.get("kmin", 1))
+        kmax = int(parameters.get("kmax", 5))
+        n_simulations = int(parameters.get("n_simulations", 99))
+        # "is not None", not truthiness: a value of 0 is meaningful here.
+        r_min = float(parameters.get("min_dist") or 0.0)
+        max_dist = parameters.get("max_dist")
+        r_max = None if max_dist is None else float(max_dist)
+        gof_warn = float(parameters.get("gof_wasserstein_warn", 0.3))
 
         densities = []
-        bkgs = []
         wasserstein_distances = []
         mean_wasserstein_distances = []
         ks_pvalues = []
         results["fp_fig"] = []
-        for tag, nneighbors in zip(tags, nneighbor_list):
-            kwargs["nn_dists"] = nneighbors.T[kmin - 1 :, :]
-            # rho_init must come from THIS dataset's 1st-NN distances: it
-            # seeds the fit and sets the hard density bounds
-            # [rho_init / f, rho_init * f] inside
-            # estimate_density_from_neighbordists. Computing it once from
-            # the first dataset (as before) made every channel of an
-            # aggregation inherit the first channel's density scale,
-            # silently clamping sparser/denser channels to a wrong bound.
-            rho_init = 2 / (2 * d * np.pi * np.median(nneighbors[:, 0]) ** d)
-            kwargs["rho_init"] = rho_init
-
-            # Fit; if the MLE rails against a density bound, the true
-            # density lies outside the search window and the result is a
-            # clamped, confidently-wrong value (e.g. a too-small max_dist
-            # only sees close neighbours and overestimates the density).
-            # Widen rho_bound_factor and refit instead, and warn if the
-            # fit still cannot escape the bound.
-            bound_factor = 10.0
-            max_bound_factor = 1e4
-            while True:
-                kwargs["rho_bound_factor"] = bound_factor
-                (
-                    rho_mle,
-                    fitresult,
-                ) = csr_knn.estimate_density_from_neighbordists(**kwargs)
-                lo = rho_init / bound_factor
-                hi = rho_init * bound_factor
-                at_bound = rho_mle <= lo * (1 + 1e-3) or rho_mle >= hi * (
-                    1 - 1e-3
+        for tag, locs, info in zip(tags, locs_list, info_list):
+            # Edge-corrected MLE density + CSR test over the whole field
+            # of view. knn_density derives the region from ``info``
+            # (Width x Height), so no picks are needed.
+            try:
+                result = postprocess.knn_density(
+                    locs,
+                    info,
+                    k_max=kmax,
+                    k_min=kmin,
+                    r_min=r_min,
+                    edge_correction=True,
+                    n_simulations=n_simulations,
+                    use_z=use_z,
+                    r_max=r_max,
                 )
-                if not at_bound or bound_factor >= max_bound_factor:
-                    break
+            except ValueError as exc:
+                # A too-sparse channel (no region molecules, or none with a
+                # neighbour beyond r_min) has no CSR fit; record NaN rather
+                # than aborting the whole (aggregation) module.
                 logger.warning(
-                    f"fit_csr[{tag}]: density {1e6 * rho_mle:.3g} "
-                    f"um^-2 hit the [{1e6 * lo:.3g}, {1e6 * hi:.3g}] "
-                    f"um^-2 bound (rho_bound_factor={bound_factor:g}); "
-                    f"widening and refitting."
+                    f"fit_csr[{tag}]: knn_density could not fit ({exc}); "
+                    "recording NaN density for this channel."
                 )
-                bound_factor *= 10
-            if at_bound:
-                logger.warning(
-                    f"fit_csr[{tag}]: density {1e6 * rho_mle:.3g} um^-2 "
-                    f"stays at a bound even with "
-                    f"rho_bound_factor={bound_factor:g}; the CSR fit is "
-                    f"unreliable -- check min_dist/max_dist/kmin and that "
-                    f"the neighbour distances span the true density scale."
-                )
-            # print(fitresult)
-            logger.debug(str(fitresult))
-            densities.append(rho_mle)
-            if len(fitresult.x) > 1:
-                bkgs.append(fitresult.x[1])
-            else:
-                bkgs.append(float(parameters.get("bkg_fraction", 0)))
-
-            # Calculate goodness-of-fit using Wasserstein distance and KS tests
-            k_wasserstein_distances = []
-            k_ks_pvalues = []
-            for k_idx in range(nneighbors.shape[1]):
-                k = k_idx + 1
-                if k >= kmin:  # Only calculate for fitted k values
-                    observed_distances = nneighbors[:, k_idx]
-                    # Filter distances within bounds
-                    observed_filtered = observed_distances[
-                        (observed_distances >= kwargs.get("min_dist", 0))
-                        & (
-                            observed_distances
-                            <= float(kwargs.get("max_dist", np.inf))
-                        )
-                    ]
-
-                    if len(observed_filtered) > 0:
-                        # Generate theoretical CSR samples with same size
-                        n_samples = len(observed_filtered)
-                        max_dist_theory = (
-                            np.max(observed_filtered) * 1.2
-                        )  # Extend range slightly
-                        r_theory = np.linspace(
-                            float(kwargs.get("min_dist", 0)),
-                            max_dist_theory,
-                            n_samples,
-                        )
-
-                        # Get theoretical CSR probability distribution
-                        csr_pdf = csr_knn.nndistribution_from_csr(
-                            r_theory,
-                            k,
-                            rho_mle,
-                            d=d,
-                            min_dist=float(kwargs.get("min_dist", 0)),
-                            max_dist=float(kwargs.get("max_dist", np.inf)),
-                            bkg_fraction=float(bkgs[-1]),
-                            renormalize=True,
-                        )
-
-                        # Convert PDF to samples by inverse transform sampling
-                        # Set seed for reproducibility
-                        np.random.seed(42 + k)
-                        cdf = np.cumsum(csr_pdf)
-                        if cdf[-1] > 0:
-                            cdf = cdf / cdf[-1]  # Normalize to [0,1]
-                        else:
-                            # Handle edge case where all probabilities are zero
-                            cdf = np.linspace(0, 1, len(cdf))
-                        uniform_samples = np.random.uniform(0, 1, n_samples)
-                        theoretical_samples = np.interp(
-                            uniform_samples, cdf, r_theory
-                        )
-
-                        # Calculate Wasserstein distance
-                        w_dist = wasserstein_distance(
-                            observed_filtered, theoretical_samples
-                        )
-                        k_wasserstein_distances.append(w_dist)
-
-                        # Calculate Kolmogorov-Smirnov test
-                        # Use CDF function from picasso_outpost
-                        def csr_cdf(x):
-                            return csr_knn.csr_cdf_for_ks_test(
-                                x,
-                                k,
-                                rho_mle,
-                                d=d,
-                                min_dist=kwargs.get("min_dist", 0),
-                                max_dist=kwargs.get("max_dist", np.inf),
-                                bkg_fraction=bkgs[-1],
-                            )
-
-                        # Perform KS test
-                        ks_stat, ks_pvalue = kstest(observed_filtered, csr_cdf)
-                        k_ks_pvalues.append(ks_pvalue)
-
-                        logger.debug(
-                            f"k={k}, Wasserstein distance: {w_dist:.3f}, "
-                            f"KS p-value: {ks_pvalue:.3f}"
-                        )
-
-            wasserstein_distances.append(k_wasserstein_distances)
+                densities.append(np.nan)
+                ks_pvalues.append([])
+                wasserstein_distances.append([])
+                mean_wasserstein_distances.append(np.nan)
+                continue
+            density = float(result["density"])
+            densities.append(density)
+            # p_values is None when n_simulations == 0; expose [] then.
+            p_values = result["p_values"]
+            k_ks_pvalues = (
+                [] if p_values is None else [float(p) for p in p_values]
+            )
             ks_pvalues.append(k_ks_pvalues)
+            logger.debug(
+                f"fit_csr[{tag}]: density {um_factor * density:.3g} "
+                f"um^-{d}, KS p-values {k_ks_pvalues}"
+            )
+
+            # Goodness of fit per order: Wasserstein distance between the
+            # measured neighbour histogram and the analytic CSR k-NN
+            # distribution at the fitted density. Both are densities over
+            # the same bin centres, so they are compared as weighted
+            # samples on that shared support (preserves the reporter's
+            # ``mean_wasserstein_distance``).
+            edges = result["edges"]
+            centres = 0.5 * (edges[:-1] + edges[1:])
+            histograms = result["histograms"]
+            k_wasserstein_distances = []
+            for k_idx in range(kmax):
+                k = k_idx + 1
+                if k < kmin:
+                    continue
+                measured = np.asarray(histograms[k_idx], dtype=np.float64)
+                analytic = postprocess.knn_csr_pdf(
+                    centres, density, k=k, dim=d
+                )
+                if measured.sum() <= 0 or analytic.sum() <= 0:
+                    continue
+                w_dist = wasserstein_distance(
+                    centres, centres, measured, analytic
+                )
+                k_wasserstein_distances.append(float(w_dist))
+            wasserstein_distances.append(k_wasserstein_distances)
             if k_wasserstein_distances:
                 mean_wasserstein_distances.append(
-                    np.mean(k_wasserstein_distances)
+                    float(np.mean(k_wasserstein_distances))
                 )
             else:
                 mean_wasserstein_distances.append(np.nan)
 
-            # Fit-quality warnings: both failure modes below yield a
-            # plausible density with no error, so flag them loudly.
-            #  (1) window too narrow -- if most neighbour distances lie
-            #      outside [min_dist, max_dist], the density is estimated
-            #      from a biased near-tail and comes out far too high (the
-            #      fitted curves land left of the histogram). This is the
-            #      classic "completely off" sparse-channel symptom, and it
-            #      is invisible to the in-window GoF metrics below because
-            #      those only see the retained near-tail.
-            #  (2) poor goodness of fit -- the CSR model does not match the
-            #      observed neighbour distributions even within the window
-            #      (Wasserstein distance large relative to the neighbour
-            #      spacing): an unreliable fit or genuine non-CSR structure
-            #      (clustering). KS p-values are deliberately not used here
-            #      -- with thousands of points KS rejects on any trivial
-            #      deviation, so it would warn on essentially every run.
-            min_d = float(kwargs.get("min_dist", 0))
-            max_d = float(kwargs.get("max_dist", np.inf))
-            kmin_dists = nneighbors[:, kmin - 1]
-            frac_outside = (
-                float(np.mean((kmin_dists < min_d) | (kmin_dists > max_d)))
-                if len(kmin_dists)
-                else 0.0
-            )
-            coverage_warn = float(
-                parameters.get("gof_window_coverage_warn", 0.5)
-            )
-            if frac_outside > coverage_warn:
-                logger.warning(
-                    f"fit_csr[{tag}]: {100 * frac_outside:.0f}% of the "
-                    f"k={kmin} nearest-neighbour distances fall outside "
-                    f"the fit window [{min_d:g}, {max_d:g}] nm; the fitted "
-                    f"density ({1e6 * rho_mle:.3g} um^-2) is biased "
-                    f"(likely too high). Widen max_dist / lower min_dist "
-                    f"for this dataset."
-                )
-            median_1stnn = float(np.median(nneighbors[:, 0]))
-            rel_wasserstein = (
-                mean_wasserstein_distances[-1] / median_1stnn
-                if median_1stnn > 0
+            # Poor goodness of fit: the CSR model does not match the
+            # measured neighbour distributions (mean Wasserstein distance
+            # large relative to the 1st-NN spacing) -- an unreliable fit
+            # or genuine non-CSR structure (clustering).
+            # Peak (mode) of the k=1 histogram as a cheap proxy for the
+            # typical 1st-NN spacing (knn_density returns only histograms,
+            # not the raw distances a true median would need).
+            mode_1stnn = (
+                float(centres[np.argmax(histograms[0])])
+                if np.asarray(histograms[0]).sum() > 0
                 else np.nan
             )
-            gof_warn = float(parameters.get("gof_wasserstein_warn", 0.3))
+            rel_wasserstein = (
+                mean_wasserstein_distances[-1] / mode_1stnn
+                if mode_1stnn and mode_1stnn > 0
+                else np.nan
+            )
             if np.isfinite(rel_wasserstein) and rel_wasserstein > gof_warn:
                 logger.warning(
                     f"fit_csr[{tag}]: poor CSR goodness of fit (mean "
                     f"Wasserstein distance "
                     f"{mean_wasserstein_distances[-1]:.3g} nm = "
-                    f"{rel_wasserstein:.2f}x the median 1st-NN spacing). "
-                    f"The density ({1e6 * rho_mle:.3g} um^-2) may be "
+                    f"{rel_wasserstein:.2f}x the 1st-NN spacing). The "
+                    f"density ({um_factor * density:.3g} um^-{d}) may be "
                     f"unreliable, or the data may deviate from CSR "
                     f"(clustering)."
                 )
 
-            # plot results
+            # plot results: measured histograms overlaid with the analytic
+            # CSR curve at the fitted density.
             fig, ax = plt.subplots()
-            colors = colormaps["viridis"].resampled(k_max).colors
-            # Plotting range on the distance axis. Independent of ``max_dist``
-            # (which only bounds the fit): ``plot_max_dist`` sets how far the
-            # histograms/curves are displayed. Defaults to the 95th percentile
-            # of the largest-k neighbour distances.
-            if (plot_max_dist := parameters.get("plot_max_dist")) is not None:
-                bin_max = float(plot_max_dist)
-            else:
-                bin_max = np.quantile(nneighbors[:, -1], 0.95)
-            median_1stNN = np.median(nneighbors[:, 0])
-            # sample bins such that there are 5 bins from 0 to middle of 1stNN
-            nbins = int(5 * bin_max / median_1stNN)
-            bins = np.linspace(0, bin_max, num=nbins)
-            rvals = np.linspace(0, bin_max, num=3 * nbins)
-            nnhist_obs = np.zeros((len(bins), k_max))
-            nnhist_an = np.zeros_like(nnhist_obs)
-            # The CSR model is only defined on the fit window
-            # [min_dist, max_dist]; the histograms below are drawn with
-            # density=True, i.e. normalised over ALL of a neighbour's
-            # distances, including those outside the window.
-            fit_min_dist = float(kwargs.get("min_dist", 0))
-            fit_max_dist = float(kwargs.get("max_dist", np.inf))
-            for i in range(nnhist_an.shape[1]):
-                k = i + 1
-                # nnhist_obs, edges = np.histogram(nneighbors[:, i], bins=bins)
-                # Model curve to overlay the density=True histogram, in two
-                # steps:
-                #  - renormalize=True makes the CSR model a proper density
-                #    over [min_dist, max_dist] (it integrates to 1 there);
-                #  - scaling by the empirical fraction of this neighbour's
-                #    distances inside the window matches the histogram, which
-                #    (being density=True over all distances) integrates to
-                #    exactly that fraction over the window.
-                # Without the scaling the curve is the in-window *conditional*
-                # density, which sits too high whenever the data has mass
-                # outside the window (e.g. sub-min_dist localisations) -- the
-                # observed y-exaggeration at otherwise-correct x positions.
-                in_window = (nneighbors[:, i] >= fit_min_dist) & (
-                    nneighbors[:, i] <= fit_max_dist
-                )
-                frac_in_window = (
-                    float(np.mean(in_window)) if in_window.size else 0.0
-                )
-                nnhist_an = frac_in_window * csr_knn.nndistribution_from_csr(
-                    rvals,
-                    k,
-                    rho_mle,
-                    d=d,
-                    min_dist=fit_min_dist,
-                    max_dist=fit_max_dist,
-                    renormalize=True,
-                )
-                if i == 0:
-                    lbl = f"rho_init {1E6*rho_init:.1f} um^-2"
-                else:
-                    lbl = f"observed k={k}"
-                _ = ax.hist(
-                    nneighbors[:, i],
-                    bins=bins,
-                    density=True,
-                    color=colors[i],
+            colors = colormaps["viridis"].resampled(kmax).colors
+            widths = np.diff(edges)
+            rvals = np.linspace(0, float(edges[-1]), num=3 * len(centres))
+            for k_idx in range(kmax):
+                k = k_idx + 1
+                measured = np.asarray(histograms[k_idx], dtype=np.float64)
+                ax.bar(
+                    centres,
+                    measured,
+                    width=widths,
+                    color=colors[k_idx],
                     alpha=0.2,
-                    label=lbl,
+                    label=f"observed k={k}",
                 )
+                analytic = postprocess.knn_csr_pdf(rvals, density, k=k, dim=d)
                 if k < kmin:
                     linestyle = ":"
                     lblf = f"k={k} not fitted"
                 elif k == kmin:
                     linestyle = "--"
-                    lblf = f"fit {1E6*rho_mle:.1f} µm^-2"
+                    lblf = f"fit {um_factor * density:.1f} µm^-{d}"
                 else:
                     linestyle = "--"
                     lblf = f"fit k={k}"
-                # do not draw the model outside the fit window (it is
-                # identically zero there); blank it so the curve is not drawn
-                # down to zero at the window edges.
-                if fit_min_dist > 0:
-                    nnhist_an[rvals <= fit_min_dist] = np.nan
-                if np.isfinite(fit_max_dist):
-                    nnhist_an[rvals >= fit_max_dist] = np.nan
                 ax.plot(
-                    rvals,  # + (bins[1] - bins[0]) / 2,
-                    nnhist_an,
-                    color=colors[i],
+                    rvals,
+                    analytic,
+                    color=colors[k_idx],
                     linestyle=linestyle,
                     label=lblf,
                 )
-                # now, plot the histogram below cutoff in white for shading
-                if (fit_min_dist > 0) and (i == 0):
-                    xlim = ax.get_xlim()
-                    x_fill = [xlim[0], fit_min_dist]
-                    y_fill1 = [ax.get_ylim()[0]] * 2
-                    y_fill2 = [ax.get_ylim()[1]] * 2
-                    ax.fill_between(
-                        x_fill, y_fill1, y_fill2, color="grey", alpha=0.2
-                    )
-                    ax.set_xlim(xlim)
             ax.legend(loc="upper right")
             ax.set_xlabel("Distance [nm]")
             ax.set_ylabel("probability density")
@@ -8150,14 +7939,16 @@ class AutoPicasso(
             fig.savefig(fp_fig)
             results["fp_fig"].append(fp_fig)
         results["density"] = densities
-        results["bkg_fraction"] = bkgs
         results["wasserstein_distances_per_k"] = wasserstein_distances
         results["mean_wasserstein_distance"] = mean_wasserstein_distances
         results["ks_pvalues_per_k"] = ks_pvalues
 
         if sgl_stage:
             results["density"] = results["density"][0]
-            results["fp_fig"] = results["fp_fig"][0]
+            # a failed knn_density fit skips the plot, so fp_fig may be empty
+            results["fp_fig"] = (
+                results["fp_fig"][0] if results["fp_fig"] else None
+            )
             results["wasserstein_distances_per_k"] = results[
                 "wasserstein_distances_per_k"
             ][0]

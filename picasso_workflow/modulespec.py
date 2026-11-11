@@ -573,11 +573,11 @@ _SPECS = [
     ),
     _s(
         "fit_csr",
-        requires=["nn_distances"],
+        requires=["locs_undrifted"],
         provides=["report_items"],
         relation=E,
         scopes=_BOTH,
-        summary="Fit a complete-spatial-randomness model to nearest neighbours.",
+        summary="Fit a complete-spatial-randomness model to the localizations.",
     ),
     # --- quality metrics / resolution --------------------------------------
     _s(
