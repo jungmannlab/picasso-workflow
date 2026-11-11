@@ -116,7 +116,13 @@ SIGNATURE_CONTRACT = {
         "pick_shape",
         "pick_size",
     ),
-    "postprocess.align": ("locs", "infos"),
+    "postprocess.align": (
+        "locs",
+        "infos",
+        "method",
+        "max_shift",
+        "return_shifts",
+    ),
     "postprocess.plot_drift": ("drift", "fig"),
     "clusterer.dbscan": ("locs", "info", "radius", "min_samples"),
     "clusterer.hdbscan": (

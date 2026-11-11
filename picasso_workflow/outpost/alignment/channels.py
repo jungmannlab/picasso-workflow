@@ -1,16 +1,19 @@
 """Multi-channel alignment orchestration (extracted from picasso_outpost).
 
-See the package docstring. `keep` -- glue over ``shift_kernel`` + upstream
-``imageprocess.rcc`` / ``lib.minimize_shifts``.
+See the package docstring. `keep` -- glue over upstream
+``postprocess.align`` / ``imageprocess.rcc``.
 """
 
 import numpy as np
+import pandas as pd
 import matplotlib.pyplot as plt
 from loguru import logger
 
-from picasso_workflow._picasso_api import imageprocess, lib, render
-from picasso_workflow.outpost.alignment.shift_kernel import (
-    _calculate_pairwise_shift,
+from picasso_workflow._picasso_api import (
+    imageprocess,
+    lib,
+    postprocess,
+    render,
 )
 
 from picasso_workflow.outpost.picks.picks import (
@@ -59,7 +62,12 @@ def align_channels(
         ``"filtered_RCC"`` (filtered RCC based on shift histograms).
     max_shift : float, optional
         Maximum shift between picks (when undrifting fiducials by picked) or
-        the maximum expected shift for filtered_RCC / RSSO alignment.
+        the maximum expected shift for filtered_RCC / RSSO alignment. For the
+        ``"RSSO"`` method this is the ``max_shift`` of
+        ``picasso.postprocess.align(method="points")`` and is in **nm**
+        (picasso 1.0); when None, picasso's own default (500 nm) is used. This
+        is a unit change -- the retired forked RSSO treated ``max_shift`` as
+        ambiguous "px".
     plot_histogram : bool, optional
         Whether to save 2D histogram plots for filtered_RCC alignment.
         Default is False.
@@ -113,14 +121,10 @@ def align_channels(
         shift_uncertainties = {}  # No uncertainty analysis for RCC method
     elif force_method == "RSSO":
         algo_used = "RSSO"
-        # Use max_shift parameter if provided, otherwise default to 10.0
-        max_shift_param = max_shift if max_shift is not None else 10.0
-        shift, fp_figs, shift_uncertainties = align_by_rsso(
+        shift, fp_figs, shift_uncertainties = _align_by_points(
             channel_locs,
-            channel_tags,
-            max_shift=max_shift_param,
-            plot_histogram=plot_histogram,
-            plot_dir=plot_dir,
+            channel_info,
+            max_shift=max_shift,
         )
         # Create cumulative_shift array for compatibility
         cumulative_shift = np.array(shift)[..., np.newaxis]
@@ -369,275 +373,111 @@ def shift_from_rcc(channel_locs, channel_info):
     return imageprocess.rcc(images, progress=progress)
 
 
-def align_by_rsso(
-    channel_locs,
-    channel_tags=None,
-    max_shift=10.0,
-    plot_histogram=False,
-    plot_dir=None,
-):
-    """Align channels using redundant spot-shift overrepresentation (RSSO).
+def _align_by_points(channel_locs, channel_info, max_shift=None):
+    """Align channels by displacements via ``postprocess.align``.
 
-    Computes shifts between all channel pairs (redundant measurements) from
-    their shift histograms, then solves for the optimal alignment by least
-    squares. Assumes localizations in different channels correspond to each
-    other but are shifted by ``delta_x``/``delta_y`` with normally distributed
-    error.
+    Adapter around ``picasso.postprocess.align(method="points")`` (picasso
+    1.0): it cross-correlates the localizations of every channel pair, fits
+    the shift of each pair and solves the per-channel shifts by weighted least
+    squares (``lib.minimize_shifts``), with the first channel as the
+    reference. The shifts carry a jackknife uncertainty (nm).
+
+    This replaces the retired forked RSSO (``shift_kernel`` cross-correlation
+    + ``_solve_optimal_shifts``) while reproducing the output contract that
+    :func:`align_channels` and the reporter expect. The channel
+    localizations are mutated in place -- the subtracted shift is applied to
+    ``channel_locs`` -- matching the retired RSSO branch.
 
     Parameters
     ----------
-    channel_locs : list of np.rec.array
-        Localization arrays for the different channels; each must have ``x``
-        and ``y`` fields.
-    channel_tags : list of str or None, optional
-        The names of the channels.
-    max_shift : float, optional
-        Maximum expected shift in pixels for alignment. Default is 10.0.
-    plot_histogram : bool, optional
-        Whether to save 2D histogram plots for each channel pair. Default is
-        False.
-    plot_dir : str, optional
-        Directory to save histogram plots. If None and ``plot_histogram`` is
-        True, saves to the current directory.
+    channel_locs : list of recarray
+        The localizations of the different channels; each has ``x`` and ``y``
+        fields (nm). Shifted in place.
+    channel_info : list of list of dict
+        The infos of the different channels (picasso's ``list[list[dict]]``
+        shape per channel).
+    max_shift : float or None, optional
+        Largest shift searched for, in **nm** (picasso 1.0). When None,
+        picasso's own default (500 nm) is used. Note the unit change: the
+        retired forked RSSO treated ``max_shift`` as ambiguous "px" and
+        defaulted to 10.
 
     Returns
     -------
-    shifts : tuple
-        The channel shifts as ``(shift_y, shift_x)`` for compatibility with
-        existing code.
+    shift : list of list
+        ``[list(shift_x), list(shift_y)]`` -- the shift subtracted from each
+        channel (nm); channel 0 is the reference (0).
     fp_figs : list
-        File paths to saved histogram plots (empty if ``plot_histogram`` is
-        False).
+        Always empty -- the forked per-pair histogram figures are not
+        produced.
     shift_uncertainties : dict
-        Uncertainty information for the channel shifts.
+        ``mean_x_uncertainty`` / ``mean_y_uncertainty`` /
+        ``max_x_uncertainty`` / ``max_y_uncertainty`` (nm), aggregated over
+        the non-reference channels from the jackknife standard errors picasso
+        records in the appended info.
     """
-    n_channels = len(channel_locs)
-    if n_channels < 2:
-        return (np.zeros(n_channels), np.zeros(n_channels)), [], {}
+    # picasso's points-align takes DataFrames and does not mutate them.
+    locs_df = [pd.DataFrame(locs) for locs in channel_locs]
+    # channel_info[i] is already picasso's list[dict] (io.load_locs returns a
+    # list and analyse.py .append()s to it), so pass it as-is; wrap a bare
+    # dict defensively.
+    infos = [
+        info if isinstance(info, list) else [info] for info in channel_info
+    ]
 
-    logger.debug(
-        f"Aligning {n_channels} channels using RSSO method "
-        "with all channel combinations"
-    )
-
-    # Calculate pairwise shifts between all channel combinations
-    pairwise_shifts = {}
-    pairwise_uncertainties = {}
-    fp_figs = []
-    n_pairs = 0
-    if channel_tags is None:
-        channel_tags = [str(i) for i in range(n_channels)]
-    for i in range(n_channels):
-        for j in range(i + 1, n_channels):
-            shift_x, shift_y, plot_filepath, uncertainty_info = (
-                _calculate_pairwise_shift(
-                    channel_locs[i],
-                    channel_locs[j],
-                    max_shift,
-                    plot_histogram=plot_histogram,
-                    plot_dir=plot_dir,
-                    channel_pair=(channel_tags[i], channel_tags[j]),
-                )
-            )
-
-            if shift_x is not None and shift_y is not None:
-                # Store shift from channel i to channel j
-                pairwise_shifts[(i, j)] = (shift_x, shift_y)
-                pairwise_uncertainties[(i, j)] = uncertainty_info
-                n_pairs += 1
-                x_unc = uncertainty_info.get("shift_x_uncertainty", np.nan)
-                y_unc = uncertainty_info.get("shift_y_uncertainty", np.nan)
-                logger.debug(
-                    f"Channels {i}->{j} shift: "
-                    f"dx={shift_x:.3f}, dy={shift_y:.3f}, "
-                    f"uncertainty: dx_err={x_unc:.3f}, "
-                    f"dy_err={y_unc:.3f}"
-                )
-
-                # Collect figure file paths if plotting is enabled
-                if plot_filepath is not None:
-                    fp_figs.append(plot_filepath)
-
-    if n_pairs == 0:
-        logger.warning("No valid pairwise shifts found")
-        return (np.zeros(n_channels), np.zeros(n_channels)), [], {}
-
-    # Solve for optimal channel shifts using least squares
-    shifts_x, shifts_y, shift_uncertainties = _solve_optimal_shifts(
-        pairwise_shifts, n_channels, pairwise_uncertainties
-    )
-
-    # Apply shifts to align channels
-    for i in range(len(channel_locs)):
-        channel_locs[i].x -= shifts_x[i]
-        channel_locs[i].y -= shifts_y[i]
-
-    logger.debug(f"Final channel shifts: x={shifts_x}, y={shifts_y}")
-
-    # Return shifts in format compatible with existing code (y, x order)
-    # and any figure file paths created during plotting
-    return (shifts_x, shifts_y), fp_figs, shift_uncertainties
-
-
-def _solve_optimal_shifts(
-    pairwise_shifts, n_channels, pairwise_uncertainties=None
-):
-    """Solve for optimal channel shifts from pairwise measurements.
-
-    Uses least squares under the constraint ``shift_j - shift_i =
-    measured_shift_ij`` for all pairs ``(i, j)``. The first channel is set as
-    the reference (shift = 0) and the others are solved for.
-
-    Parameters
-    ----------
-    pairwise_shifts : dict
-        Keys ``(i, j)``, values ``(shift_x, shift_y)``.
-    n_channels : int
-        Number of channels.
-    pairwise_uncertainties : dict, optional
-        Keys ``(i, j)``, values containing uncertainty information.
-
-    Returns
-    -------
-    shifts_x, shifts_y : np.ndarray
-        Optimal shifts for each channel.
-    shift_uncertainties : dict
-        Uncertainty information for the channel shifts.
-    """
-    if len(pairwise_shifts) == 0:
-        return np.zeros(n_channels), np.zeros(n_channels), {}
-
-    # Build linear system: A * shifts = b
-    # Each pairwise measurement gives us: shift_j - shift_i = measured_shift
-    n_equations = len(pairwise_shifts)
-    n_unknowns = n_channels - 1  # First channel is reference (shift = 0)
-
-    A_x = np.zeros((n_equations, n_unknowns))
-    A_y = np.zeros((n_equations, n_unknowns))
-    b_x = np.zeros(n_equations)
-    b_y = np.zeros(n_equations)
-
-    # Build weight matrices for uncertainty propagation if available
-    W_x = np.eye(n_equations)  # Default to identity (equal weights)
-    W_y = np.eye(n_equations)
-    if pairwise_uncertainties is not None:
-        for eq_idx, (i, j) in enumerate(pairwise_shifts.keys()):
-            uncertainty_info = pairwise_uncertainties.get((i, j), {})
-            shift_x_uncertainty = uncertainty_info.get(
-                "shift_x_uncertainty", 1.0
-            )
-            shift_y_uncertainty = uncertainty_info.get(
-                "shift_y_uncertainty", 1.0
-            )
-
-            # Use inverse variance weighting (higher precision = higher weight)
-            if shift_x_uncertainty > 0:
-                W_x[eq_idx, eq_idx] = 1.0 / (shift_x_uncertainty**2)
-            if shift_y_uncertainty > 0:
-                W_y[eq_idx, eq_idx] = 1.0 / (shift_y_uncertainty**2)
-
-    eq_idx = 0
-    for (i, j), (shift_x, shift_y) in pairwise_shifts.items():
-        # Equation: shift_j - shift_i = measured_shift
-
-        # Handle reference channel (channel 0 has shift = 0)
-        if i > 0:  # shift_i is unknown
-            A_x[eq_idx, i - 1] = -1
-            A_y[eq_idx, i - 1] = -1
-
-        if j > 0:  # shift_j is unknown
-            A_x[eq_idx, j - 1] = 1
-            A_y[eq_idx, j - 1] = 1
-
-        b_x[eq_idx] = shift_x
-        b_y[eq_idx] = shift_y
-        eq_idx += 1
-
-    # Solve weighted least squares problem
-    shift_x_uncertainties = np.zeros(n_channels)
-    shift_y_uncertainties = np.zeros(n_channels)
-
+    align_kwargs = {"method": "points", "return_shifts": True}
+    if max_shift is not None:
+        align_kwargs["max_shift"] = max_shift
     try:
-        if n_unknowns > 0:
-            # Weighted least squares: (A^T W A)^-1 A^T W b
-            AtWA_x = A_x.T @ W_x @ A_x
-            AtWb_x = A_x.T @ W_x @ b_x
-            AtWA_y = A_y.T @ W_y @ A_y
-            AtWb_y = A_y.T @ W_y @ b_y
-
-            # Solve for shifts
-            shifts_x_unknowns = np.linalg.solve(AtWA_x, AtWb_x)
-            shifts_y_unknowns = np.linalg.solve(AtWA_y, AtWb_y)
-
-            # Calculate uncertainties from covariance matrix
-            # Covariance = (A^T W A)^-1
-            cov_x = np.linalg.inv(AtWA_x)
-            cov_y = np.linalg.inv(AtWA_y)
-
-            # Diagonal elements give variances, sqrt gives standard errors
-            shift_x_uncertainties[1:] = np.sqrt(np.diag(cov_x))
-            shift_y_uncertainties[1:] = np.sqrt(np.diag(cov_y))
-
-        else:
-            shifts_x_unknowns = np.array([])
-            shifts_y_unknowns = np.array([])
-    except (np.linalg.LinAlgError, np.linalg.LinAlgError):
-        logger.warning(
-            "Failed to solve weighted least squares system, "
-            "using first valid pairwise shift"
+        _, infos_out, (shift_x, shift_y) = postprocess.align(
+            locs_df, infos, **align_kwargs
         )
-        # Fallback: use first available pairwise shift
-        (i, j), (shift_x, shift_y) = next(iter(pairwise_shifts.items()))
-        shifts_x_unknowns = np.zeros(n_unknowns)
-        shifts_y_unknowns = np.zeros(n_unknowns)
-        if j > 0:
-            shifts_x_unknowns[j - 1] = shift_x
-            shifts_y_unknowns[j - 1] = shift_y
+    except ValueError as exc:
+        # picasso raises when it can't find the displacement peak between
+        # enough channel pairs (sparse / non-overlapping channels, or a shift
+        # beyond max_shift). The retired RSSO returned a zero-shift no-op
+        # instead of aborting the workflow; preserve that graceful fallback.
+        logger.warning(
+            f"Points alignment could not be computed ({exc}); leaving "
+            "channels unshifted."
+        )
+        n = len(channel_locs)
+        return [[0.0] * n, [0.0] * n], [], {}
 
-        # Use fallback uncertainty if available
-        if pairwise_uncertainties is not None:
-            uncertainty_info = pairwise_uncertainties.get((i, j), {})
-            if j > 0:
-                shift_x_uncertainties[j] = uncertainty_info.get(
-                    "shift_x_uncertainty", 1.0
-                )
-                shift_y_uncertainties[j] = uncertainty_info.get(
-                    "shift_y_uncertainty", 1.0
-                )
+    # Apply the shifts in place, matching the retired RSSO branch
+    # (channel_locs[i].x -= shift). picasso subtracts the same shift.
+    for i in range(len(channel_locs)):
+        channel_locs[i].x -= shift_x[i]
+        channel_locs[i].y -= shift_y[i]
 
-    # Reconstruct full shift arrays (with reference channel = 0)
-    shifts_x = np.zeros(n_channels)
-    shifts_y = np.zeros(n_channels)
+    shift = [list(shift_x), list(shift_y)]
 
-    if n_unknowns > 0:
-        shifts_x[1:] = shifts_x_unknowns
-        shifts_y[1:] = shifts_y_unknowns
-
-    # Create uncertainty summary
+    # Aggregate the jackknife uncertainties (nm) over the non-reference
+    # channels (channel 0 is the reference and has uncertainty 0).
+    x_unc = np.array(
+        [
+            info[-1].get("Shift x uncertainty (nm)", np.nan)
+            for info in infos_out[1:]
+        ]
+    )
+    y_unc = np.array(
+        [
+            info[-1].get("Shift y uncertainty (nm)", np.nan)
+            for info in infos_out[1:]
+        ]
+    )
+    if x_unc.size == 0:
+        mean_x = mean_y = max_x = max_y = np.nan
+    else:
+        mean_x = np.nanmean(x_unc)
+        mean_y = np.nanmean(y_unc)
+        max_x = np.nanmax(x_unc)
+        max_y = np.nanmax(y_unc)
     shift_uncertainties = {
-        "shift_x_uncertainties": shift_x_uncertainties,
-        "shift_y_uncertainties": shift_y_uncertainties,
-        "mean_x_uncertainty": (
-            np.mean(shift_x_uncertainties[shift_x_uncertainties > 0])
-            if np.any(shift_x_uncertainties > 0)
-            else np.nan
-        ),
-        "mean_y_uncertainty": (
-            np.mean(shift_y_uncertainties[shift_y_uncertainties > 0])
-            if np.any(shift_y_uncertainties > 0)
-            else np.nan
-        ),
-        "max_x_uncertainty": (
-            np.max(shift_x_uncertainties)
-            if len(shift_x_uncertainties) > 0
-            else np.nan
-        ),
-        "max_y_uncertainty": (
-            np.max(shift_y_uncertainties)
-            if len(shift_y_uncertainties) > 0
-            else np.nan
-        ),
-        "pairwise_uncertainties": pairwise_uncertainties or {},
+        "mean_x_uncertainty": mean_x,
+        "mean_y_uncertainty": mean_y,
+        "max_x_uncertainty": max_x,
+        "max_y_uncertainty": max_y,
     }
 
-    return shifts_x, shifts_y, shift_uncertainties
+    return shift, [], shift_uncertainties

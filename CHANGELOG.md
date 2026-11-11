@@ -11,6 +11,22 @@ This file was started after v0.5.6; earlier history is in the git log.
 ## [Unreleased]
 
 ### Changed
+- **RSSO channel alignment now runs on `picasso.postprocess.align(method=
+  "points")` + `lib.minimize_shifts` (nm-native, jackknife uncertainties).**
+  The `align_channels` `"RSSO"` method retires the forked
+  `outpost/alignment/shift_kernel.py` cross-correlation (and its global
+  `_solve_optimal_shifts` solve) in favour of picasso 1.0's points-align, which
+  cross-correlates the localizations of each channel pair, fits each shift and
+  solves the per-channel shifts by weighted least squares. The per-pair shift
+  histograms and the per-channel confidence figure are no longer produced; the
+  reported shift uncertainties are now picasso's jackknife standard errors (nm).
+  `max_shift` is now unambiguously **nm** (the old forked value was treated as
+  ambiguous "px" and defaulted to 10); when unset it uses picasso's default of
+  500 nm. The now-dead per-frame RSSO workers
+  (`_compute_frame_to_dataset_shift` /
+  `_compute_frame_to_dataset_shift_memory_efficient`) were removed, and the
+  Confluence shift/uncertainty labels are corrected to nm.
+
 - **Adopt picasso 1.0 public APIs for the formerly-private reach-ins; pin
   `picassosr>=1.0.0rc1`.** picasso 1.0.0rc1 removed the four private symbols
   the workflow reached into, so `_picasso_api` now routes through the public
@@ -41,7 +57,7 @@ This file was started after v0.5.6; earlier history is in the git log.
   `spatial_stats/csr_knn` → `postprocess.knn_density`,
   `resolution/resolution_decorrelation` → `postprocess.decorrelation`,
   `binding_events` → `postprocess.signal_to_background`/`dye_performance`,
-  `alignment` → `postprocess.align(method="points")`, SPINNA label-uncertainty
+  SPINNA label-uncertainty
   → `spinna.fit_label_uncertainty`/`fit_le(bootstrap=True)`, CellMask
   morphology → `masking.*`, and the pick scan → `postprocess.pick_similar_candidates`.
 

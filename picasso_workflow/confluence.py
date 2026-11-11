@@ -3217,13 +3217,21 @@ class ConfluenceReporter(AbstractModuleCollection):
             False.
         """
         logger.debug("Reporting align_channels.")
+        # Shift units: RSSO (picasso points-align) and by-picked shifts are in
+        # nm (picasso 1.0 localization coordinates are nm); RCC shifts are in
+        # rendered-image pixels.
+        if results.get("alignment_algorithm") == "RCC":
+            shift_unit = "px"
+        else:
+            shift_unit = "nm"
         shifttxt = f"""
-        <li>Shifts in x [px]: {results.get('shifts')[0, :]}</li>
-        <li>Shifts in y [px]: {results.get('shifts')[1, :]}</li>
+        <li>Shifts in x [{shift_unit}]: {results.get('shifts')[0, :]}</li>
+        <li>Shifts in y [{shift_unit}]: {results.get('shifts')[1, :]}</li>
         """
         try:
             shifttxt += f"""
-                <li>Shifts in z [px]: {results.get('shifts')[2, :]}</li>"""
+                <li>Shifts in z [{shift_unit}]: """
+            shifttxt += f"""{results.get('shifts')[2, :]}</li>"""
         except TypeError:
             pass
         except IndexError:
@@ -3253,13 +3261,13 @@ class ConfluenceReporter(AbstractModuleCollection):
                 confidence_txt = f"""
                 <li><strong>Confidence Analysis (RSSO method):</strong></li>
                 <ul>
-                <li>Mean X shift uncertainty: {mean_x_uncertainty:.3f} px</li>
-                <li>Mean Y shift uncertainty: {mean_y_uncertainty:.3f} px</li>
-                <li>Max X shift uncertainty: {max_x_uncertainty:.3f} px</li>
-                <li>Max Y shift uncertainty: {max_y_uncertainty:.3f} px</li>
+                <li>Mean X shift uncertainty: {mean_x_uncertainty:.3f} nm</li>
+                <li>Mean Y shift uncertainty: {mean_y_uncertainty:.3f} nm</li>
+                <li>Max X shift uncertainty: {max_x_uncertainty:.3f} nm</li>
+                <li>Max Y shift uncertainty: {max_y_uncertainty:.3f} nm</li>
                 <li>95% confidence intervals:
                 ±{1.96*np.mean([mean_x_uncertainty, mean_y_uncertainty]):.3f}
-                px</li>
+                nm</li>
                 </ul>
                 """
         text = f"""
@@ -3294,9 +3302,6 @@ class ConfluenceReporter(AbstractModuleCollection):
         if fp_figs := results.get("fp_figs"):
             fig_fps += fp_figs
             titles += [f"Shift plot {i}" for i in range(len(fp_figs))]
-        if fp_fig := results.get("fig_confidence_filepath"):
-            fig_fps.append(fp_fig)
-            titles.append("Channel shifts with confidence intervals")
 
         if len(fig_fps) > 1:
             fn_figs = []
