@@ -1449,8 +1449,12 @@ class TestAnalyseModules(unittest.TestCase):
         }
 
     @patch("picasso_workflow.analyse.postprocess.knn_density")
-    def test_fit_csr_single_dataset_from_locs(self, mock_knn):
+    def fit_csr(self, mock_knn):
         """fit_csr reads self.locs and maps knn_density outputs.
+
+        Named ``fit_csr`` (not ``test_*``) so the ``test_modules`` coverage
+        sweep invokes it for the ``fit_csr`` module; the aggregation and
+        no-locs cases are the separate ``test_fit_csr_*`` methods below.
 
         Density comes from the pooled ``"density"`` and the KS p-values
         from ``"p_values"``; no precomputed nn-distances are used.
