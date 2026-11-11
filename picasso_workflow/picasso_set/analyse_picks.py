@@ -173,7 +173,7 @@ class PicassoSetPicksMixin:
         similar = postprocess.pick_similar(
             self.locs,
             self.info,
-            picks,
+            picks=picks,
             pick_shape=pick_shape,
             pick_size=pick_size,
             std_range=std_range,

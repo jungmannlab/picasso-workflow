@@ -118,6 +118,24 @@ SIGNATURE_CONTRACT = {
     ),
     "postprocess.align": ("locs", "infos"),
     "postprocess.plot_drift": ("drift", "fig"),
+    # picasso 1.0 public pick-similar APIs (replace the former private
+    # ``_pick_similar`` / ``_n_block_locs_at`` reach-ins).
+    "postprocess.pick_similar": (
+        "locs",
+        "info",
+        "picks",
+        "pick_shape",
+        "pick_size",
+        "std_range",
+        "n_locs_range",
+        "rmsd_range",
+    ),
+    "postprocess.pick_similar_candidates": (
+        "locs",
+        "info",
+        "pick_size",
+        "min_n_locs",
+    ),
     "clusterer.dbscan": ("locs", "info", "radius", "min_samples"),
     "clusterer.hdbscan": (
         "locs",
@@ -171,11 +189,11 @@ SIGNATURE_CONTRACT = {
 #: Private picasso symbols picasso-workflow currently depends on, mapped to
 #: their upstream location.  These are the fragile seams -- leading underscore,
 #: no public API yet.  Each is reached only through an accessor below; track
-#: upstreaming so this set can shrink.
-INTERNAL_SYMBOLS = {
-    "_pick_similar": "picasso.postprocess._pick_similar",
-    "_n_block_locs_at": "picasso.postprocess._n_block_locs_at",
-}
+#: upstreaming so this set can shrink.  Empty since the picasso-1.0 migration
+#: moved the pick-similar reach-ins (``_pick_similar``, ``_n_block_locs_at``)
+#: onto the public ``postprocess.pick_similar`` / ``pick_similar_candidates``;
+#: ``get_internal`` stays as the single accessor for any future reach-in.
+INTERNAL_SYMBOLS: dict[str, str] = {}
 
 
 def _missing(symbol: str) -> RuntimeError:

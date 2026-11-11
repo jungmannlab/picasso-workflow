@@ -129,22 +129,24 @@ def test_picked_locs_matches_upstream_membership():
     assert _membership(fork) == _membership(upstream)
 
 
-def test_pick_similar_analysis_numba_compiles():
-    """The numba-jitted pick_similar path runs end-to-end.
+def test_get_pick_similar_vals_on_public_candidates():
+    """``get_pick_similar_vals`` runs end-to-end on the public picasso API.
 
-    Regression guard: ``pick_similar_analysis`` is ``@nb.jit(nopython=True)`` and
-    calls picasso's private ``_n_block_locs_at``. That reach-in is routed through
-    the boundary (INTERNAL_SYMBOLS) but must be resolved to a *module-level*
-    dispatcher global -- nopython mode cannot call ``get_internal`` directly.
-    The unit tier mocks ``AutoPicasso``, so nothing else actually invokes this
-    jitted function; this test does, forcing numba to compile it.
+    After the picasso-1.0 migration this is backed by
+    ``picasso.postprocess.pick_similar_candidates`` (not the former private
+    ``_n_block_locs_at`` / numba fork), so no private reach-in remains. It
+    still returns four equal-length arrays ``(x, y, rmsds, nlocs)`` and
+    recovers the planted cluster centres.
     """
     locs, info = _synthetic_locs()
     x_sim, y_sim, rmsds, nlocs = picks_mod.get_pick_similar_vals(
         locs, info, diameter=_PICK_DIAMETER
     )
     assert len(x_sim) == len(y_sim) == len(rmsds) == len(nlocs)
-    assert len(x_sim) >= 1
+    assert len(x_sim) >= len(_CENTERS)
+    for cx, cy in _CENTERS:
+        dist = np.sqrt((x_sim - cx) ** 2 + (y_sim - cy) ** 2)
+        assert dist.min() < 0.5
 
 
 def _fork_otsu(image):
