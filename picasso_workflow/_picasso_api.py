@@ -136,6 +136,14 @@ SIGNATURE_CONTRACT = {
         "pick_size",
         "min_n_locs",
     ),
+    "postprocess.signal_to_background": ("locs", "info"),
+    "postprocess.localization_rate_drop": ("locs", "info", "fraction"),
+    "postprocess.docking_site_damage": (
+        "picked_locs",
+        "info",
+        "max_dark_time",
+        "cutoff",
+    ),
     "clusterer.dbscan": ("locs", "info", "radius", "min_samples"),
     "clusterer.hdbscan": (
         "locs",

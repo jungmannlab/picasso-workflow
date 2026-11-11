@@ -74,6 +74,11 @@ This file was started after v0.5.6; earlier history is in the git log.
   this module (still imported by its own unit test for
   `extract_resolution_decorr`); it is left in place, not deleted.
 
+- **`binding_event_analysis` computes SBR via
+  `picasso.postprocess.signal_to_background`** (retiring the hand-rolled erf
+  integral), and additionally reports `loc_rate_drop`
+  (`picasso.postprocess.localization_rate_drop`) and `destroyed_fraction`
+  (`picasso.postprocess.docking_site_damage`), per the picasso-1.0 migration.
 - **Adopt picasso 1.0 public APIs for the formerly-private reach-ins; pin
   `picassosr>=1.0.0rc1`.** picasso 1.0.0rc1 removed the four private symbols
   the workflow reached into, so `_picasso_api` now routes through the public
