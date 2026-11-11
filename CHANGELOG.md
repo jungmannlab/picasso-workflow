@@ -11,6 +11,32 @@ This file was started after v0.5.6; earlier history is in the git log.
 ## [Unreleased]
 
 ### Changed
+- **`fit_csr` now fits CSR on the localizations via picasso 1.0's public
+  `postprocess.knn_density`, replacing the precomputed-nn-distances input and
+  the forked `csr_knn` fitter.** The module reads `self.locs` /
+  `self.channel_locs` (+ `self.channel_info`) directly instead of the
+  `nneighbors` array/file; density now comes from `knn_density`'s pooled,
+  edge-corrected MLE (`result["density"]`, in nm^(-d)) and the per-order KS
+  p-values from its CSR simulations (`result["p_values"]`). The plot overlay
+  uses `postprocess.knn_csr_pdf` on the returned histograms/edges.
+  - The **`fit_bkg` / `bkg_fraction` background feature is dropped** (not part
+    of `knn_density`); the `nneighbors` input and the `plot_max_dist` /
+    `gof_window_coverage_warn` / `rho_bound` tuning knobs are removed. New
+    knobs map straight onto `knn_density`: `kmin`→`k_min`, `kmax`→`k_max`,
+    `min_dist`→`r_min`, `max_dist`→`r_max`, `dimensionality=3`→`use_z`,
+    plus `n_simulations`.
+  - **Wasserstein goodness-of-fit is preserved** (option a): per-order
+    Wasserstein distance is recomputed between the measured histogram and the
+    analytic `knn_csr_pdf` on the shared bin centres, so
+    `wasserstein_distances_per_k` / `mean_wasserstein_distance` and the
+    Confluence reporter are unaffected.
+  - The `modulespec` `fit_csr` now `requires=["locs_undrifted"]` (was
+    `["nn_distances"]`). The `outpost/spatial_stats/csr_knn` fitter
+    (`estimate_density_from_neighbordists`, `nndistribution_from_csr`,
+    `minimization_loglike`) is no longer called by the workflow (kept in-tree,
+    its own tests retained). **Behaviour-changing redesign: real-data
+    validation required** — CI only checks the wiring (picasso partly mocked).
+
 - **Adopt picasso 1.0 public APIs for the formerly-private reach-ins; pin
   `picassosr>=1.0.0rc1`.** picasso 1.0.0rc1 removed the four private symbols
   the workflow reached into, so `_picasso_api` now routes through the public

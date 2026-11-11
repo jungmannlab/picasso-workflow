@@ -1413,64 +1413,111 @@ class TestAnalyseModules(unittest.TestCase):
 
         shutil.rmtree(os.path.join(self.results_folder, "00_nneighbor"))
 
-    def fit_csr(self):
-        self.ap.info = []
-        neighbors = np.array([[2, 5, 7], [3, 5, 8], [2, 4, 6], [2, 4, 7]])
-        parameters = {
-            "nneighbors": neighbors,
-            "dimensionality": 2,
+    @staticmethod
+    def _knn_density_result(density=1e-4, kmax=5, steps=8):
+        """A representative ``postprocess.knn_density`` return dict."""
+        edges = np.linspace(0.0, 80.0, steps + 1)
+        centres = 0.5 * (edges[:-1] + edges[1:])
+        # per-order histograms: a plausible unimodal shape per k.
+        histograms = np.array(
+            [
+                np.exp(-((centres - 10.0 * k) ** 2) / (2 * 8.0**2))
+                for k in range(1, kmax + 1)
+            ]
+        )
+        histograms /= histograms.sum(axis=1, keepdims=True) * np.diff(edges)[0]
+        return {
+            "k": np.arange(1, kmax + 1),
+            "densities": np.full(kmax, density),
+            "density": density,
+            "count_density": density,
+            "densities_se": np.full(kmax, density * 0.05),
+            "density_se": density * 0.05,
+            "ks_distances": np.full(kmax, 0.05),
+            "p_values": np.linspace(0.2, 0.9, kmax),
+            "n_distances": np.full(kmax, 100),
+            "n_censored": np.zeros(kmax, dtype=int),
+            "edges": edges,
+            "histograms": histograms,
+            "n_molecules": 100,
+            "n_regions": 1,
+            "n_simulations": 99,
+            "k_min": 1,
+            "r_min": 0.0,
+            "edge_correction": True,
+            "use_z": False,
         }
 
-        parameters, results = self.ap.fit_csr(0, parameters)
-        # logger.debug(f'parameters: {parameters}')
-        logger.debug(f"results: {results}")
-        assert results["duration"] > -1
+    @patch("picasso_workflow.analyse.postprocess.knn_density")
+    def test_fit_csr_single_dataset_from_locs(self, mock_knn):
+        """fit_csr reads self.locs and maps knn_density outputs.
 
+        Density comes from the pooled ``"density"`` and the KS p-values
+        from ``"p_values"``; no precomputed nn-distances are used.
+        """
+        mock_knn.return_value = self._knn_density_result(density=1e-4)
+        self.ap.locs = pd.DataFrame(
+            {
+                "x": np.linspace(0, 1000, 50),
+                "y": np.linspace(0, 1000, 50),
+            }
+        )
+        self.ap.info = [{"Width": 512, "Height": 512, "Pixelsize": 130}]
+        self.ap.channel_locs = None
+
+        _, results = self.ap.fit_csr(0, {"dimensionality": 2})
+
+        # single-dataset stage: scalars, not lists
+        self.assertAlmostEqual(results["density"], 1e-4)
+        self.assertEqual(
+            results["ks_pvalues_per_k"],
+            list(np.linspace(0.2, 0.9, 5)),
+        )
+        self.assertIsInstance(results["fp_fig"], str)
+        # knn_density was called on the locs, not on nn-distances
+        args, kwargs = mock_knn.call_args
+        self.assertIs(args[0], self.ap.locs)
+        self.assertIs(args[1], self.ap.info)
+        self.assertEqual(kwargs["k_min"], 1)
         shutil.rmtree(os.path.join(self.results_folder, "00_fit_csr"))
 
-    @patch(
-        "picasso_workflow.outpost.spatial_stats.csr_knn.nndistribution_from_csr"
-    )
-    def test_fit_csr_plot_max_dist_controls_display_range(self, mock_nnd):
-        """plot_max_dist sets the plotting range, independent of the fit.
+    @patch("picasso_workflow.analyse.postprocess.knn_density")
+    def test_fit_csr_aggregation_from_channel_locs(self, mock_knn):
+        """fit_csr iterates channel_locs/channel_info in the agg stage."""
+        mock_knn.side_effect = [
+            self._knn_density_result(density=1e-4),
+            self._knn_density_result(density=2e-4),
+        ]
+        self.ap.locs = None
+        self.ap.channel_locs = [
+            pd.DataFrame(
+                {"x": np.linspace(0, 1000, 40), "y": np.linspace(0, 500, 40)}
+            )
+            for _ in range(2)
+        ]
+        self.ap.channel_info = [
+            [{"Width": 512, "Height": 512, "Pixelsize": 130}],
+            [{"Width": 512, "Height": 512, "Pixelsize": 130}],
+        ]
+        self.ap.channel_tags = ["c0", "c1"]
 
-        The plotting loop evaluates the CSR curve on ``rvals`` spanning
-        0..bin_max; capturing that range shows whether the display extent
-        follows the data (default) or the explicit plot_max_dist.
-        """
-        captured = []
+        _, results = self.ap.fit_csr(0, {"dimensionality": 2, "kmin": 2})
 
-        def _fake(r, *a, **k):
-            r = np.asarray(r, dtype=float)
-            captured.append(float(np.max(r)) if r.size else 0.0)
-            return np.zeros_like(r)
+        # aggregation stage: per-channel lists
+        self.assertEqual(results["density"], [1e-4, 2e-4])
+        self.assertEqual(len(results["fp_fig"]), 2)
+        self.assertEqual(len(results["ks_pvalues_per_k"]), 2)
+        self.assertEqual(mock_knn.call_count, 2)
+        # kmin forwarded as knn_density's k_min
+        self.assertEqual(mock_knn.call_args_list[0].kwargs["k_min"], 2)
+        shutil.rmtree(os.path.join(self.results_folder, "00_fit_csr"))
 
-        mock_nnd.side_effect = _fake
-        self.ap.info = []
-        neighbors = np.array([[2, 5, 7], [3, 5, 8], [2, 4, 6], [2, 4, 7]])
-        folder = os.path.join(self.results_folder, "00_fit_csr")
-
-        # default: display range driven by the (small) data distances
-        captured.clear()
-        self.ap.fit_csr(0, {"nneighbors": neighbors, "dimensionality": 2})
-        default_max = max(captured)
-        shutil.rmtree(folder)
-
-        # explicit plot_max_dist extends the display far beyond the data
-        captured.clear()
-        self.ap.fit_csr(
-            0,
-            {
-                "nneighbors": neighbors,
-                "dimensionality": 2,
-                "plot_max_dist": 500,
-            },
-        )
-        plot_max = max(captured)
-        shutil.rmtree(folder)
-
-        self.assertLess(default_max, 100)
-        self.assertAlmostEqual(plot_max, 500.0, places=6)
+    def test_fit_csr_no_locs_raises(self):
+        """fit_csr raises when no localizations are loaded."""
+        self.ap.locs = None
+        self.ap.channel_locs = None
+        with self.assertRaises(KeyError):
+            self.ap.fit_csr(0, {"dimensionality": 2})
 
     @patch("picasso_workflow.outpost.spinna.wrappers.single_spinna_run")
     def spinna(self, mock_sptmp):

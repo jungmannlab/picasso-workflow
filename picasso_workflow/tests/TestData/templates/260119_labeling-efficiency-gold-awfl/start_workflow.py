@@ -210,11 +210,9 @@ def get_workflow(datasets):
         (  # 13
             "fit_csr",
             {
-                "nneighbors": ("$get_previous_module_result", "nneighbors"),
                 "dimensionality": 2,
                 "min_dist": 50,
                 "max_dist": 300,
-                "bkg_fraction": 0.01,
                 "kmin": 2,
                 "save_locs": True,
             },
@@ -364,14 +362,11 @@ def get_workflow(datasets):
         (  # 08
             "fit_csr",
             {
-                "nneighbors": ("$get_previous_module_result", "nneighbors"),
                 "dimensionality": 2,
                 "min_dist": 30,
                 # "max_dist": 350,
-                "bkg_fraction": 0.01,
                 "kmin": 2,
                 "save_locs": True,
-                "fit_bkg": True,
             },
         ),
         (  # 09
