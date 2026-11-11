@@ -2540,30 +2540,20 @@ class ModuleDescriptor(util.AbstractModuleCollection):
         parameters: dict
             with required keys:
                 fp_locs : str
-                    file path to input locs
-                n_frames
+                    file path to the input (clustered) locs .hdf5
+
+        Notes
+        -----
+        The acquisition's frame count and pixel size come from the dataset
+        (``self.frames`` / ``self.pixelsize``), not from parameters. The
+        former ``radius`` / ``min_binding_time`` form fields were removed: the
+        analysis now lives in ``outpost.binding_events.Measurement``, which
+        does not take them.
         """
         parameters_spec = {
-            "radius": {
-                "type": "float",
-                "description": "Clustering radius in nm",
-                "unit": "nm",
-                "min": 1.0,
-                "max": 1000.0,
-                "default": 20.0,
-                "required": True,
-            },
-            "min_binding_time": {
-                "type": "float",
-                "description": "Minimum binding time threshold",
-                "min": 0.0,
-                "max": 10.0,
-                "default": 0.1,
-                "required": False,
-            },
             "fp_locs": {
                 "type": "path",
-                "description": "The filepath of the .hdf5 file to write",
+                "description": "Filepath of the clustered .hdf5 locs to read",
                 "required": False,
             },
         }
