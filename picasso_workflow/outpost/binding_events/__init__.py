@@ -6,7 +6,9 @@ DNA-PAINT binding-event analysis + plotting (Steen, Unterauer, Masullo et al.,
 * ``analysis``  -- the ``Measurement`` class (kinetics/photon/SBR extraction).
 * ``plotting``  -- the ``Plotting`` class (per-metric figures + results export).
 
-Self-contained (no picasso/sibling coupling). Requires the optional
+SBR and the two aggregate metrics (localization-rate drop, docking-site
+damage) come from ``picasso.postprocess`` via the ``_picasso_api`` boundary.
+Requires the optional
 ``[binding-events]`` extra (``lmfit``, ``pandarallel``); imported lazily by the
 ``binding_event_analysis`` workflow module, so the package import stays cheap.
 See ``../MANIFEST.md`` (a `promote` candidate).

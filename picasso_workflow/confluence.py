@@ -2567,7 +2567,13 @@ class ConfluenceReporter(AbstractModuleCollection):
         <ul><li>Start Time: {results['start time']}</li>
         <li>Duration: {results["duration"] // 60:.0f} min
         {(results["duration"] % 60):.02f} s</li>
-        </ul>
+        <li>Localization-rate drop: """
+        text += (
+            f"{results.get('loc_rate_drop', float('nan')):.3f}</li>\n"
+            "        <li>Destroyed docking sites: "
+            f"{results.get('destroyed_fraction', float('nan')):.3f}</li>\n"
+        )
+        text += f"""        </ul>
         {parameter_text}
         {result_text}
         """

@@ -13,11 +13,11 @@ import pandas as pd
 from lmfit import Model
 from itertools import groupby
 from operator import itemgetter
-from scipy.special import erf
-import math
 import os
 import multiprocessing
 from pandarallel import pandarallel
+
+from picasso_workflow._picasso_api import postprocess
 
 
 class Measurement:
@@ -36,10 +36,19 @@ class Measurement:
         # Camera pixel size in nm. picasso 1.0 stores sx/sy in nm, so the
         # 1x1-camera-pixel integration bound must be scaled by it.
         self._pixelsize = pixelsize
+        # Metadata list expected by picasso.postprocess (SBR needs
+        # ``Pixelsize``; the rate/damage metrics need ``Frames``).
+        self.info = [
+            {"Frames": int(total_n_frames), "Pixelsize": float(pixelsize)}
+        ]
 
         self.table = []
         self.table_g = []
         self.table_k = []
+        # Aggregate picasso-1.0 metrics, populated in Begin(); NaN until then
+        # and on sparse/degenerate data (fit failure).
+        self.loc_rate_drop = float("nan")
+        self.destroyed_fraction = float("nan")
 
     def Begin(self):
         self.Import()
@@ -49,6 +58,16 @@ class Measurement:
         pandarallel.initialize(nb_workers=min(30, multiprocessing.cpu_count()))
         self.table_g = self.table.groupby("group").parallel_apply(
             self.GroupCalcs
+        )
+        # SBR via picasso.postprocess (computed here in the main process, not
+        # inside the pandarallel workers). The old hand-rolled integral used
+        # center_photons (0 on edge frames), so edge rows had sbr=0; on center
+        # frames center_photons == photons, so signal_to_background matches the
+        # old integral exactly. Masking to center_frame reproduces that
+        # "0 on edge frames" semantics identically.
+        sbr_all = postprocess.signal_to_background(self.table_g, self.info)
+        self.table_g["sbr"] = np.where(
+            self.table_g["center_frame"], sbr_all, 0.0
         )
         # Table g contains photon and SBR information
         self.table_k = self.table.groupby("group").parallel_apply(
@@ -64,6 +83,29 @@ class Measurement:
             self.table_k["end_times"] / self.table_k["mean_dark"]
         )
         # Table k contains kinetics information
+
+        # Aggregate picasso-1.0 metrics. Real acquisitions can be sparse and
+        # the underlying curve fits can fail or degenerate; docking_site_damage
+        # also needs localized columns (x/y/lpx/lpy) on each pick to link
+        # binding events. Each call is guarded and falls back to NaN (the fork
+        # already tolerates fit failure) -- so a table missing a required
+        # column yields NaN rather than raising. picasso raises a bare KeyError
+        # for an absent column/metadata key, so both guards include KeyError.
+        try:
+            self.loc_rate_drop = float(
+                postprocess.localization_rate_drop(self.table, self.info)
+            )
+        except (ValueError, RuntimeError, KeyError):
+            self.loc_rate_drop = float("nan")
+        try:
+            picked_locs = [grp for _, grp in self.table.groupby("group")]
+            self.destroyed_fraction = float(
+                postprocess.docking_site_damage(picked_locs, self.info)[
+                    "fraction_destroyed"
+                ]
+            )
+        except (ValueError, RuntimeError, KeyError):
+            self.destroyed_fraction = float("nan")
 
     def Import(self):
         """Imports clustered .hdf5 from Picasso. Requires group info."""
@@ -107,33 +149,9 @@ class Measurement:
             tau = -1
         return tau
 
-    def CalcMaxPhotonsPixel(self, row):
-        """Calculates the photons collected over the 1x1 pixel central area
-        of a given localization.
-        """
-        N = row["center_photons"]
-        sx = row["sx"]
-        sy = row["sy"]
-        # Integrate over the 1x1 central camera pixel: +/- 0.5 pixel. sx/sy
-        # are in nm (picasso 1.0), so the half-pixel bound is 0.5*pixelsize nm
-        # (previously a bare 0.5 nm, collapsing the integral to ~0).
-        bounds = 0.5 * self._pixelsize
-        result = (
-            2
-            * math.pi
-            * sx
-            * sy
-            * erf(bounds / (np.sqrt(2) * sx))
-            * erf(bounds / (np.sqrt(2) * sy))
-        )
-        entire = 2 * math.pi * sx * sy
-        scale_factor = N / entire
-        peak_pixel_value = scale_factor * result
-        return peak_pixel_value
-
     def GroupCalcs(self, group_df):
-        """Finds consecutive binding events, center frames,
-        photon counts and sbr.
+        """Finds consecutive binding events, center frames and
+        photon counts. SBR is computed vectorized in ``Begin``.
         """
 
         # Create a new column that numbers binding events consecutively
@@ -155,10 +173,6 @@ class Measurement:
         group_df["center_photons"] = np.where(
             group_df["center_frame"], group_df["photons"], 0
         )
-        group_df["peak_pixel_photons"] = group_df.apply(
-            self.CalcMaxPhotonsPixel, axis=1
-        )
-        group_df["sbr"] = group_df["peak_pixel_photons"] / group_df["bg"]
         return group_df
 
     def KineticsCalcs(self, group_df):

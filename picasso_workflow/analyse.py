@@ -5163,6 +5163,15 @@ class AutoPicasso(
         results : dict
             Module results (see
             :class:`~picasso_workflow.util.AbstractModuleCollection`).
+            In addition to the per-metric figures, this sets two aggregate
+            scalars (NaN on sparse/degenerate data):
+
+            ``loc_rate_drop`` : float
+                Relative localization-rate drop over the acquisition
+                (``picasso.postprocess.localization_rate_drop``).
+            ``destroyed_fraction`` : float
+                Fraction of destroyed docking sites
+                (``picasso.postprocess.docking_site_damage``).
 
         References
         ----------
@@ -5188,6 +5197,10 @@ class AutoPicasso(
         )
         Meas.Begin()
         Meas.FileSaver()
+
+        # Aggregate picasso-1.0 metrics (NaN on sparse/degenerate data).
+        results["loc_rate_drop"] = Meas.loc_rate_drop
+        results["destroyed_fraction"] = Meas.destroyed_fraction
 
         Plotter = Plotting(
             table_g=Meas.table_g,
