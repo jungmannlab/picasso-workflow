@@ -3346,6 +3346,91 @@ class TestAnalyseModules(unittest.TestCase):
 
         shutil.rmtree(os.path.join(self.results_folder, "00_filter_locs"))
 
+    def _set_monotonic_locs(self):
+        """Give self.ap.locs deterministic, monotonic photons / x columns.
+
+        Row i has photons = 10*i (0..990) and x = i/10 (0..9.9), so every
+        quantile maps to a known row. Returns the photons array for building
+        expected thresholds.
+        """
+        photons = np.arange(100, dtype="f4") * 10.0
+        locs = pd.DataFrame(
+            {
+                "frame": np.arange(100, dtype="u4"),
+                "photons": photons,
+                "x": photons / 100.0,
+                "y": photons / 100.0,
+            }
+        )
+        self.ap.locs = locs
+        return photons
+
+    @patch("picasso_workflow.analyse.io.save_locs", MagicMock)
+    def test_filter_locs_quantile_single_field(self):
+        """Quantile mode keeps the [q_min, q_max] band, not [q_min, q_min].
+
+        Regression for the bug where the max threshold was computed from the
+        min quantiles, collapsing the band and discarding nearly everything.
+        """
+        photons = self._set_monotonic_locs()
+        q_lo = np.quantile(photons, 0.1)
+        q_hi = np.quantile(photons, 0.9)
+
+        parameters = {
+            "field": "photons",
+            "minval": 0.1,
+            "maxval": 0.9,
+            "mode": "quantile",
+        }
+        _, results = self.ap.filter_locs(0, parameters)
+        shutil.rmtree(os.path.join(self.results_folder, "00_filter_locs"))
+
+        retained = self.ap.locs["photons"].to_numpy()
+        # The band is wide (~80% of rows), not collapsed to a point.
+        assert results["nlocs_after"] > 50
+        assert results["nlocs_after"] < results["nlocs_before"]
+        assert retained.min() >= q_lo - 1e-6
+        assert retained.max() <= q_hi + 1e-6
+
+    @patch("picasso_workflow.analyse.io.save_locs", MagicMock)
+    def test_filter_locs_quantile_multi_field_uses_own_stats(self):
+        """Each field is filtered by its OWN per-field quantiles.
+
+        Regression for the bug where the enumerate loop applied the last
+        field's statistics to every field. Here photons (0..990) and x
+        (0..9.9) live on different scales, so cross-applying one field's
+        absolute thresholds to the other would discard everything.
+        """
+        self._set_monotonic_locs()
+
+        parameters = {
+            "field": ["photons", "x"],
+            "minval": [0.1, 0.1],
+            "maxval": [0.9, 0.9],
+            "mode": "quantile",
+        }
+        _, results = self.ap.filter_locs(0, parameters)
+        shutil.rmtree(os.path.join(self.results_folder, "00_filter_locs"))
+
+        # The caller's min/max lists must not be mutated into absolute values:
+        # the single-dataset runner records them to WorkflowRunner.yaml and a
+        # re-run must still see the original quantile spec.
+        assert parameters["minval"] == [0.1, 0.1]
+        assert parameters["maxval"] == [0.9, 0.9]
+
+        # photons and x are perfectly correlated, so both per-field bands
+        # select the same ~80 rows; a cross-applied threshold would leave 0.
+        assert results["nlocs_after"] > 50
+        retained = self.ap.locs
+        assert (
+            retained["photons"].min()
+            >= np.quantile(np.arange(100, dtype="f4") * 10.0, 0.1) - 1e-6
+        )
+        assert (
+            retained["x"].max()
+            <= np.quantile(np.arange(100, dtype="f4") / 10.0, 0.9) + 1e-6
+        )
+
     def filter_transient_binding(self):
         parameters = {}
         locs_dtype = [

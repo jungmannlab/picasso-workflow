@@ -10634,25 +10634,25 @@ class Window(QtWidgets.QMainWindow):
         self.files_box.addWidget(self.files_mode_label, 0, 0)
         self.files_box.addWidget(self.files_mode_combo, 0, 1, 1, 2)
 
-        # Create button container for dynamic button layout
+        # Create button container for dynamic button layout. A grid (rather
+        # than a single row) lets the many aggregation buttons wrap onto
+        # several rows so their labels stay readable on a narrow window.
         self.file_buttons_widget = QtWidgets.QWidget()
-        self.file_buttons_layout = QtWidgets.QHBoxLayout(
+        self.file_buttons_layout = QtWidgets.QGridLayout(
             self.file_buttons_widget
         )
         self.file_buttons_layout.setContentsMargins(0, 0, 0, 0)
         self.files_box.addWidget(self.file_buttons_widget, 1, 0, 1, 3)
 
-        # Initial buttons for Single Workflow (will be managed by _update_file_buttons)
+        # Initial buttons for Single Workflow. These are (re)created and laid
+        # out by _update_file_buttons, called once during setup via
+        # _on_workflow_type_changed.
         self.add_files_button = QtWidgets.QPushButton("Add files")
         self.add_files_button.clicked.connect(self.add_files)
         self.remove_files_button = QtWidgets.QPushButton("Remove selected")
         self.remove_files_button.clicked.connect(self.remove_selected_files)
         self.clear_files_button = QtWidgets.QPushButton("Clear list")
         self.clear_files_button.clicked.connect(self.clear_file_list)
-
-        self.file_buttons_layout.addWidget(self.add_files_button)
-        self.file_buttons_layout.addWidget(self.remove_files_button)
-        self.file_buttons_layout.addWidget(self.clear_files_button)
 
         d = {"Name1": "/path/to/file1.txt", "Name2": "/path/to/file2.txt"}
         self.files_table = DroppableTableWidget()
@@ -10664,8 +10664,14 @@ class Window(QtWidgets.QMainWindow):
         header.setSectionResizeMode(
             0, QtWidgets.QHeaderView.ResizeMode.ResizeToContents
         )
+        # Size the File Path column to its content (rather than stretching to
+        # fit) so long paths overflow and a horizontal scrollbar appears,
+        # keeping the full path reachable on a narrow window.
         header.setSectionResizeMode(
-            1, QtWidgets.QHeaderView.ResizeMode.Stretch
+            1, QtWidgets.QHeaderView.ResizeMode.ResizeToContents
+        )
+        self.files_table.setHorizontalScrollMode(
+            QtWidgets.QAbstractItemView.ScrollMode.ScrollPerPixel
         )
         dict_to_table(d, self.files_table)
         # Store delegate as instance variable to prevent garbage collection
@@ -10694,8 +10700,15 @@ class Window(QtWidgets.QMainWindow):
         header_agg.setSectionResizeMode(
             1, QtWidgets.QHeaderView.ResizeMode.ResizeToContents
         )
+        # Let the File Path column grow past the viewport (and scroll) rather
+        # than stretch-to-fit; the last section stretches by default on trees,
+        # so turn that off first.
+        header_agg.setStretchLastSection(False)
         header_agg.setSectionResizeMode(
-            2, QtWidgets.QHeaderView.ResizeMode.Stretch
+            2, QtWidgets.QHeaderView.ResizeMode.ResizeToContents
+        )
+        self.files_tree_agg.setHorizontalScrollMode(
+            QtWidgets.QAbstractItemView.ScrollMode.ScrollPerPixel
         )
         self.file_path_delegate_tree_agg = FilePathDelegate(self)
         self.files_tree_agg.setItemDelegateForColumn(
@@ -10722,11 +10735,19 @@ class Window(QtWidgets.QMainWindow):
         header_inv.setSectionResizeMode(
             1, QtWidgets.QHeaderView.ResizeMode.ResizeToContents
         )
+        # Size the File Path column to content so long paths overflow and a
+        # horizontal scrollbar appears instead of truncating. The path is not
+        # the last column here, so leave stretchLastSection on: the trailing
+        # Condition column absorbs the slack when paths are short (no dead
+        # band), while a long path still overflows and triggers the scrollbar.
         header_inv.setSectionResizeMode(
-            2, QtWidgets.QHeaderView.ResizeMode.Stretch
+            2, QtWidgets.QHeaderView.ResizeMode.ResizeToContents
         )
         header_inv.setSectionResizeMode(
-            3, QtWidgets.QHeaderView.ResizeMode.ResizeToContents
+            3, QtWidgets.QHeaderView.ResizeMode.Stretch
+        )
+        self.files_tree_inv.setHorizontalScrollMode(
+            QtWidgets.QAbstractItemView.ScrollMode.ScrollPerPixel
         )
         self.file_path_delegate_tree_inv = FilePathDelegate(self)
         self.files_tree_inv.setItemDelegateForColumn(
@@ -10954,6 +10975,11 @@ class Window(QtWidgets.QMainWindow):
         self.modules_splitter.addWidget(self.workflow_tabs)
         self.modules_splitter.setStretchFactor(0, 0)
         self.modules_splitter.setStretchFactor(1, 1)
+        # Give the workflow module list the larger initial share: the editor
+        # above only needs room for the combobox, description and a few
+        # parameter rows, while the list grows with the workflow. (Qt
+        # distributes these as proportions scaled to the real height.)
+        self.modules_splitter.setSizes([320, 520])
         # Connect tab change signal
         self.workflow_tabs.currentChanged.connect(
             self._on_workflow_tab_changed
@@ -12010,17 +12036,26 @@ class Window(QtWidgets.QMainWindow):
         self.files_mode_combo.setCurrentIndex(mode)
         self._apply_files_mode_state()
 
-    def _update_file_buttons(self, workflow_type_index):
-        """Update button layout based on workflow type."""
-        # Clear existing buttons
+    def _lay_out_file_buttons(self, buttons, columns):
+        """Clear the file-buttons grid and lay ``buttons`` out, wrapping.
+
+        Buttons fill left-to-right, top-to-bottom at ``columns`` per row, so a
+        long list wraps onto several rows instead of being squeezed into one
+        unreadably narrow row.
+        """
         while self.file_buttons_layout.count():
             item = self.file_buttons_layout.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
+        for idx, button in enumerate(buttons):
+            self.file_buttons_layout.addWidget(
+                button, idx // columns, idx % columns
+            )
 
+    def _update_file_buttons(self, workflow_type_index):
+        """Update button layout based on workflow type."""
         self.find_files_button = QtWidgets.QPushButton("Find in folder")
         self.find_files_button.clicked.connect(self.find_dataset_files)
-        self.file_buttons_layout.addWidget(self.find_files_button)
 
         if workflow_type_index == 0:  # Single Workflow
             self.add_files_button = QtWidgets.QPushButton("Add files")
@@ -12032,9 +12067,16 @@ class Window(QtWidgets.QMainWindow):
             self.clear_files_button = QtWidgets.QPushButton("Clear list")
             self.clear_files_button.clicked.connect(self.clear_file_list)
 
-            self.file_buttons_layout.addWidget(self.add_files_button)
-            self.file_buttons_layout.addWidget(self.remove_files_button)
-            self.file_buttons_layout.addWidget(self.clear_files_button)
+            # Few buttons: a single row is readable.
+            self._lay_out_file_buttons(
+                [
+                    self.find_files_button,
+                    self.add_files_button,
+                    self.remove_files_button,
+                    self.clear_files_button,
+                ],
+                columns=4,
+            )
 
             # Buttons were just recreated - re-apply the files-mode state
             self._apply_files_mode_state()
@@ -12071,16 +12113,23 @@ class Window(QtWidgets.QMainWindow):
             self.clear_tree_button = QtWidgets.QPushButton("Clear")
             self.clear_tree_button.clicked.connect(self.clear_tree)
 
-            # Grouped by verb, and within each verb dataset before
-            # channel - matching the tree's parent/child nesting.
-            self.file_buttons_layout.addWidget(self.add_dataset_button)
-            self.file_buttons_layout.addWidget(self.add_channel_button)
-            self.file_buttons_layout.addWidget(self.rename_dataset_button)
-            self.file_buttons_layout.addWidget(self.rename_channel_button)
-            self.file_buttons_layout.addWidget(self.remove_dataset_button)
-            self.file_buttons_layout.addWidget(self.remove_channel_button)
-            self.file_buttons_layout.addWidget(self.tile_params_button)
-            self.file_buttons_layout.addWidget(self.clear_tree_button)
+            # Many buttons: wrap to 3 columns so labels stay readable.
+            # Grouped by verb, and within each verb dataset before channel -
+            # matching the tree's parent/child nesting.
+            self._lay_out_file_buttons(
+                [
+                    self.find_files_button,
+                    self.add_dataset_button,
+                    self.add_channel_button,
+                    self.rename_dataset_button,
+                    self.rename_channel_button,
+                    self.remove_dataset_button,
+                    self.remove_channel_button,
+                    self.tile_params_button,
+                    self.clear_tree_button,
+                ],
+                columns=3,
+            )
 
     def manage_tile_params(self):
         """Open the per-channel / per-cell tile-parameter editor."""
@@ -12400,6 +12449,17 @@ class Window(QtWidgets.QMainWindow):
         """Clear all rows from the table."""
         if self.files_table.rowCount() == 0:
             return
+
+        reply = QtWidgets.QMessageBox.question(
+            self,
+            "Clear list",
+            "Remove all files from the list?",
+            QtWidgets.QMessageBox.StandardButton.Yes
+            | QtWidgets.QMessageBox.StandardButton.No,
+        )
+        if reply != QtWidgets.QMessageBox.StandardButton.Yes:
+            return
+
         self.files_table.setRowCount(0)
         self._log_workflow_config_event("files_table.clear")
 
@@ -14950,30 +15010,98 @@ class Window(QtWidgets.QMainWindow):
                 return
 
     def _show_workflow_context_menu(self, list_widget, phase, pos):
-        """Context menu on a workflow module: run stepwise up to it."""
+        """Context menu on a workflow module: duplicate it, or run stepwise."""
         item = list_widget.itemAt(pos)
         if item is None:
             return
         node = item.data(self._WF_NODE_ROLE)
         if not node or node.get("kind") != "module":
-            return  # branch sub-modules are not stepwise targets
-        if not self.stepwise_enable.isEnabled():
-            return  # stepwise not supported (e.g. Investigation workflows)
+            return  # branch sub-modules are not duplicable / stepwise targets
         menu = QtWidgets.QMenu(list_widget)
-        act_local = menu.addAction("Run up to this module locally")
-        act_cluster = menu.addAction("Run up to this module on cluster")
-        menu.addSeparator()
-        menu.addAction("Set as stepwise run target")
+        # Duplicate is always available for a top-level module, so a workflow
+        # can hold the same module twice in a row without having to add it
+        # elsewhere and move it.
+        act_duplicate = menu.addAction("Duplicate module")
+        act_local = act_cluster = None
+        if self.stepwise_enable.isEnabled():
+            menu.addSeparator()
+            act_local = menu.addAction("Run up to this module locally")
+            act_cluster = menu.addAction("Run up to this module on cluster")
+            menu.addSeparator()
+            menu.addAction("Set as stepwise run target")
         action = menu.exec(list_widget.mapToGlobal(pos))
         if action is None:
             return
-        # every action points the stepwise controls at this module; the run
-        # actions additionally launch ("set as target" only sets it)
+        if action == act_duplicate:
+            self._duplicate_module(list_widget, phase, node["top"])
+            return
+        # every remaining action points the stepwise controls at this module;
+        # the run actions additionally launch ("set as target" only sets it)
         self._set_stepwise_target(phase, node["top"])
         if action == act_local:
             self.start_locally()
         elif action == act_cluster:
             self.start_slurm()
+
+    def _duplicate_module(self, list_widget, phase, top):
+        """Insert a copy of the top-level module at ``top`` right after it.
+
+        The copy carries the same parameters (deep-copied so the two entries
+        are independent) and becomes the new selection, loaded into the editor
+        in "Save module" mode. Mirrors :meth:`add_module`'s insert/renumber
+        bookkeeping.
+        """
+        import copy
+
+        if phase == "single":
+            modules = self.single_workflow_modules
+            scope = wfref.SINGLE
+        elif phase == "aggregation":
+            modules = self.aggregation_workflow_modules
+            scope = wfref.AGGREGATION
+        else:
+            return
+        if not (0 <= top < len(modules)):
+            return
+
+        # Flush any unsaved editor edits first so the copy is faithful.
+        self._update_editing_workflow_item()
+
+        module_name, param_values = modules[top]
+        insert_idx = top + 1
+        old_len = len(modules)
+        modules.insert(insert_idx, (module_name, copy.deepcopy(param_values)))
+
+        # Inserting renumbers later modules, so shift any back-references that
+        # point at them (as add_module does).
+        ref_changes = self._remap_references_after_change(
+            scope, wfref.insertion_index_map(insert_idx, old_len)
+        )
+        if ref_changes:
+            self._populate_stored_parameters(modules[insert_idx][1])
+
+        # Clear the editing pointer before rebuilding: the insert shifted later
+        # indices, so a stale pointer would make the selection handler's
+        # pre-load flush write the editor back to the wrong module. With it
+        # cleared the flush is a no-op and the handler re-derives the state.
+        self.editing_workflow_index = -1
+        self.editing_workflow_tab = -1
+        self.editing_workflow_subnode = None
+
+        # Rebuild the list and select the copy; letting the selection signal
+        # fire loads it into the Current Module editor (in "Save module" mode).
+        self._refresh_workflow_list(list_widget, modules)
+        list_widget.setCurrentRow(
+            self._module_item_row(list_widget, insert_idx)
+        )
+
+        self._log_workflow_config_event(
+            "modules.duplicate",
+            tab=phase,
+            index=insert_idx,
+            module=module_name,
+        )
+        self._refresh_module_palette()
 
     # def on_cluster_use_module_state_change(self, state):
     #     if not self.cluster_use_module.isChecked():
@@ -17939,6 +18067,20 @@ class Window(QtWidgets.QMainWindow):
         else:
             return
 
+        # "Previous Module Result" resolves relative to where this module sits
+        # in the workflow. When editing an existing module, that is its own
+        # index. When composing a NEW module (not yet added), it will be
+        # inserted right after the current selection - or appended when nothing
+        # is selected - so point the dialog at that prospective slot (mirroring
+        # add_module's insert math); otherwise it would offer the results of
+        # the module two positions back.
+        if self._editing_existing_module():
+            prev_ref_index = curr_module_index
+        elif curr_module_index >= 0:
+            prev_ref_index = curr_module_index + 1
+        else:
+            prev_ref_index = len(workflow_modules)
+
         # Read the parameter's current value so the dialog can open on an
         # existing command (e.g. to review/edit a per-channel mapping).
         current_value = None
@@ -17958,7 +18100,7 @@ class Window(QtWidgets.QMainWindow):
         dialog = ParameterCmdDialog(
             workflow_modules,
             self.module_descriptor,
-            curr_module_index,
+            prev_ref_index,
             self,
             param_name=param_name,
             current_value=current_value,
