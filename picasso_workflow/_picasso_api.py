@@ -169,6 +169,10 @@ SIGNATURE_CONTRACT = {
     "g5m.g5m": ("locs", "info", "min_locs", "parallel", "group_column"),
     "masking.mask_locs": ("locs", "info", "mask"),
     "masking.generate_image": ("locs", "info", "disp_px_size", "blur"),
+    "masking.label_components": ("mask",),
+    "masking.fill_holes": ("mask",),
+    "masking.erode": ("mask", "distance", "pixel_size"),
+    "masking.dilate": ("mask", "distance", "pixel_size"),
     "registration.calibrate_channel_registration_from_beads": (
         "movies",
         "box",

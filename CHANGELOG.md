@@ -94,6 +94,21 @@ This file was started after v0.5.6; earlier history is in the git log.
   (`_compute_frame_to_dataset_shift` /
   `_compute_frame_to_dataset_shift_memory_efficient`) were removed, and the
   Confluence shift/uncertainty labels are corrected to nm.
+- **CellMask morphology now runs on `picasso.masking`.** The four CellMask
+  morphology primitives (`erode` / `dilate` / `filter_mask` /
+  `component_masks`) now route through `picasso.masking`
+  (`erode` / `dilate` / `fill_holes` / `label_components`, via the
+  `_picasso_api` boundary), dropping the `scipy.ndimage` morphology ops
+  (`binary_erosion` / `binary_dilation` / `binary_fill_holes` / `label`; the
+  density-mask `zoom` / `gaussian_filter` stay). **Two behaviour changes:**
+  (1) `erode` / `dilate` are now true-Euclidean and nm-accurate (picasso takes
+  the distance in nm plus `pixel_size`, so the old nm→px rounding is gone), and
+  they treat the image border as *not* a mask edge — a mask filling the whole
+  array no longer erodes inward from the array boundary the way
+  `scipy.binary_erosion` did. (2) Connected-component labelling is now
+  **8-connected** (diagonal-touching regions merge into one component), vs
+  scipy's 4-connected default. `SIGNATURE_CONTRACT` pins the four new
+  `masking.*` signatures.
 
 - **Adopt picasso 1.0 public APIs for the formerly-private reach-ins; pin
   `picassosr>=1.0.0rc1`.** picasso 1.0.0rc1 removed the four private symbols

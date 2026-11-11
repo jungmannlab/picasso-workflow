@@ -14,10 +14,6 @@ import matplotlib.pyplot as plt
 from scipy.ndimage import (
     zoom,
     gaussian_filter,
-    label,
-    binary_fill_holes,
-    binary_dilation,
-    binary_erosion,
 )
 import pickle
 
@@ -279,7 +275,7 @@ class CellMask:
         """
         binary_mask = self.binary_mask
         # print('binary mask shape in', binary_mask.shape)
-        labeled_array, num_features = label(binary_mask)
+        labeled_array, _counts = picasso_masking.label_components(binary_mask)
         labeled_nobkg = labeled_array.ravel()
         labeled_nobkg = labeled_nobkg[labeled_nobkg > 0]
         feature, counts = np.unique(labeled_nobkg, return_counts=True)
@@ -325,9 +321,9 @@ class CellMask:
         ).astype(np.int8)
 
         if fill_holes:
-            # fill holes in the mask
-            largest_component_mask = binary_fill_holes(
-                largest_component_mask
+            # fill holes in the mask (picasso_masking.fill_holes needs bool)
+            largest_component_mask = picasso_masking.fill_holes(
+                largest_component_mask.astype(np.bool_)
             ).astype(int)
 
         self._binary_mask = largest_component_mask.astype(np.bool_)
@@ -356,7 +352,7 @@ class CellMask:
         list of CellMask
             One mask per surviving component, largest first.
         """
-        labeled_array, _ = label(self.binary_mask)
+        labeled_array, _ = picasso_masking.label_components(self.binary_mask)
         labeled_nobkg = labeled_array.ravel()
         labeled_nobkg = labeled_nobkg[labeled_nobkg > 0]
         feature, counts = np.unique(labeled_nobkg, return_counts=True)
@@ -368,7 +364,7 @@ class CellMask:
             component_index = feature[rank]
             component = labeled_array == component_index
             if fill_holes:
-                component = binary_fill_holes(component)
+                component = picasso_masking.fill_holes(component)
             component = component.astype(np.bool_)
             area = component.sum() * pixel_area_um2
             if area < min_area_um2:
@@ -391,19 +387,17 @@ class CellMask:
         return masks
 
     def erode(self, erode_nm):
-        """Focus the mask by a given number of nanometers"""
-        erode_px = int(np.round(erode_nm / self._upsample))
-        self._binary_mask = binary_erosion(
-            self.binary_mask, iterations=erode_px
+        """Shrink the mask by a Euclidean (true-distance) erosion in nm."""
+        self._binary_mask = picasso_masking.erode(
+            self.binary_mask, erode_nm, pixel_size=self._upsample
         ).astype(np.bool_)
 
         self._recalc_density_mask_from_binary()
 
     def dilate(self, dilate_nm):
-        """Focus the mask by a given number of nanometers"""
-        dilate_px = int(np.round(dilate_nm / self._upsample))
-        self._binary_mask = binary_dilation(
-            self.binary_mask, iterations=dilate_px
+        """Grow the mask by a Euclidean (true-distance) dilation in nm."""
+        self._binary_mask = picasso_masking.dilate(
+            self.binary_mask, dilate_nm, pixel_size=self._upsample
         ).astype(np.bool_)
 
         self._recalc_density_mask_from_binary()
