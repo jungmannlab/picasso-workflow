@@ -4359,6 +4359,117 @@ class TestAnalyse(unittest.TestCase):
             os.path.join(self.results_folder, "03_conditional_branch")
         )
 
+    @patch("picasso_workflow.analyse.postprocess.decorrelation")
+    def test_12_resolution_decorr_spatial(self, mock_decorr):
+        """resolution_decorr_spatial tiles the FOV and calls picasso's
+        postprocess.decorrelation per region viewport.
+
+        Locs span a 20 um x 10 um extent (nm units); with region_size=10
+        um that is a 2x1 grid. Each region exceeds min_locs_per_region, so
+        both are processed; the mock returns a fixed resolution per call.
+        """
+        # locs in nm: x in [0, 20000), y in [0, 10000).
+        n = 2000
+        rng = np.random.default_rng(0)
+        self.ap.locs = pd.DataFrame(
+            {
+                "x": rng.uniform(0, 20000, n),
+                "y": rng.uniform(0, 10000, n),
+            }
+        )
+        self.ap.info = [{"Width": 200, "Height": 100, "Pixelsize": 100.0}]
+
+        mock_decorr.return_value = {"resolution": 25.0}
+
+        parameters, results = self.ap.resolution_decorr_spatial(
+            0,
+            {
+                "region_size": 10.0,
+                "min_locs_per_region": 100,
+                "n_radii": 40,
+                "n_filters": 8,
+            },
+        )
+
+        # 2x1 grid, both regions valid.
+        assert results["n_regions_total"] == 2
+        assert results["n_regions"] == 2
+        assert results["resolution_decorr_spatial"] == 25.0
+        assert results["resolution_std"] == 0.0
+        assert results["resolutions_per_region"] == [25.0, 25.0]
+        assert os.path.isfile(results["fig_decorr"])
+
+        # Param mapping n_r->n_radii, n_gauss->n_filters is passed through;
+        # dropped render params are not forwarded.
+        _, call_kwargs = mock_decorr.call_args
+        assert call_kwargs["n_radii"] == 40
+        assert call_kwargs["n_filters"] == 8
+        assert "pixelsize_render" not in call_kwargs
+        assert "apod_edge_width" not in call_kwargs
+        # viewport is ((y_min, x_min), (y_max, x_max)) in nm.
+        (y0, x0), (y1, x1) = call_kwargs["viewport"]
+        assert y1 > y0 and x1 > x0
+
+        shutil.rmtree(
+            os.path.join(self.results_folder, "00_resolution_decorr_spatial")
+        )
+
+    @patch("picasso_workflow.analyse.postprocess.decorrelation")
+    def test_12b_resolution_decorr_spatial_nan_region(self, mock_decorr):
+        """A NaN resolution from a region is excluded from the mean, and a
+        ValueError (region too small to render) is skipped, not raised."""
+        n = 2000
+        rng = np.random.default_rng(1)
+        self.ap.locs = pd.DataFrame(
+            {
+                "x": rng.uniform(0, 20000, n),
+                "y": rng.uniform(0, 10000, n),
+            }
+        )
+        self.ap.info = [{"Width": 200, "Height": 100, "Pixelsize": 100.0}]
+
+        # first region -> valid, second -> NaN.
+        mock_decorr.side_effect = [
+            {"resolution": 30.0},
+            {"resolution": np.nan},
+        ]
+        parameters, results = self.ap.resolution_decorr_spatial(
+            0, {"region_size": 10.0, "min_locs_per_region": 100}
+        )
+        assert results["n_regions"] == 2  # both counted
+        # mean/std over the single non-NaN value.
+        assert results["resolution_decorr_spatial"] == 30.0
+        assert results["resolution_std"] == 0.0
+        shutil.rmtree(
+            os.path.join(self.results_folder, "00_resolution_decorr_spatial")
+        )
+
+    @patch("picasso_workflow.analyse.postprocess.decorrelation")
+    def test_12c_resolution_decorr_spatial_empty_locs(self, mock_decorr):
+        """Empty locs degrade to NaN (guarded min/max reduction) rather than
+        crashing, and decorrelation is never called."""
+        self.ap.locs = pd.DataFrame({"x": [], "y": []}, dtype=float)
+        self.ap.info = [{"Width": 200, "Height": 100, "Pixelsize": 100.0}]
+        _, results = self.ap.resolution_decorr_spatial(
+            0, {"region_size": 10.0, "min_locs_per_region": 100}
+        )
+        mock_decorr.assert_not_called()
+        assert np.isnan(results["resolution_decorr_spatial"])
+        assert np.isnan(results["resolution_std"])
+        shutil.rmtree(
+            os.path.join(self.results_folder, "00_resolution_decorr_spatial")
+        )
+
+    def test_12d_resolution_decorr_spatial_bad_config_raises(self):
+        """A misconfigured n_radii/n_filters surfaces a clear ValueError
+        instead of being swallowed by the per-region catch (silent NaN)."""
+        self.ap.locs = pd.DataFrame({"x": [1.0, 2.0], "y": [1.0, 2.0]})
+        self.ap.info = [{"Width": 200, "Height": 100, "Pixelsize": 100.0}]
+        with self.assertRaises(ValueError):
+            self.ap.resolution_decorr_spatial(0, {"n_radii": 5})
+        with self.assertRaises(ValueError):
+            self.ap.resolution_decorr_spatial(0, {"n_filters": 1})
+
 
 def test_footprint_viewport_centres_on_com():
     """The render viewport is centred on the localizations' centre of mass,
