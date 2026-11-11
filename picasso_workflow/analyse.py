@@ -6769,9 +6769,14 @@ class AutoPicasso(
     def resolution_decorr_spatial(self, i, parameters, results):
         """Estimate resolution using spatial image decorrelation.
 
-        Implements the image-decorrelation analysis of Descloux et al.
-        (Nat Methods 2019), dividing the FOV into spatial regions and
-        computing a decorrelation-based resolution for each.
+        Uses picasso 1.0's ``postprocess.decorrelation`` (true Descloux
+        et al., Nat Methods 2019 / Commun Biol 2021), dividing the FOV
+        into spatial regions and computing a decorrelation-based
+        resolution per region. ``postprocess.decorrelation`` renders the
+        localizations internally (bilinear histogram) and auto-sweeps a
+        set of pixel sizes, reporting the smallest resolution for each
+        region's viewport -- so no rendering/apodization/filter geometry
+        is tuned here (see the dropped parameters below).
 
         Parameters
         ----------
@@ -6780,24 +6785,24 @@ class AutoPicasso(
         parameters : dict
             Optional keys:
 
-            ``pixelsize_render`` : float
-                Pixel size for rendered images in nm (default 5).
-            ``smoothing_sigma`` : float or None
-                Gaussian smoothing sigma in pixels (default None).
             ``region_size`` : float
-                Size of each spatial region in micrometers (default 10.0 µm).
+                Size of each spatial region in micrometers (default 10.0
+                µm). Regions tile the localization x/y extent (nm).
             ``min_locs_per_region`` : int
                 Minimum localizations per region to process (default 500).
-            ``n_processes`` : int
-                Number of parallel processes (default 4).
-            ``r_min``, ``r_max`` : float
-                Min/max normalized frequency (defaults 0.0 and 1.0).
-            ``n_r`` : int
-                Number of radial sampling points (default 50).
-            ``n_gauss`` : int
-                Number of Gaussian filter strengths (default 10).
-            ``apod_edge_width`` : int
-                Edge apodization width in pixels (default 20).
+            ``n_radii`` : int
+                Number of decorrelation radii, passed to
+                ``postprocess.decorrelation`` (default 50). Maps from the
+                old ``n_r``.
+            ``n_filters`` : int
+                Number of high-pass filters, passed to
+                ``postprocess.decorrelation`` (default 10). Maps from the
+                old ``n_gauss``.
+
+            Dropped relative to the former home-grown implementation
+            (they no longer apply, as picasso renders internally):
+            ``pixelsize_render``, ``smoothing_sigma``, ``n_processes``,
+            ``r_min``, ``r_max`` and ``apod_edge_width``.
         results : dict
             Module results (see
             :class:`~picasso_workflow.util.AbstractModuleCollection`).
@@ -6808,120 +6813,134 @@ class AutoPicasso(
             Input parameters, possibly updated for consistency.
         results : dict
             Results updated with ``resolution_decorr_spatial`` (mean
-            resolution, nm), ``resolution_std``, ``n_regions``,
-            ``decorr_curve_mean``, ``decorr_curve_std``, ``r_values`` and
-            ``fig_decorr``.
+            resolution over valid regions, nm, ignoring NaN),
+            ``resolution_std``, ``n_regions``, ``n_regions_total``,
+            ``resolutions_per_region`` and ``fig_decorr`` (a per-region
+            resolution histogram).
         """
-        from picasso_workflow.outpost.resolution.resolution_decorrelation import (
-            compute_decorr_spatial,
-        )
-
-        # Get parameters with defaults
-        pixelsize_render = parameters.get("pixelsize_render", 5.0)
-        smoothing_sigma = parameters.get("smoothing_sigma", None)
+        # Parameters with defaults. picasso 1.0 renders internally and
+        # auto-sweeps pixel sizes, so the old render/apodization/filter
+        # geometry (pixelsize_render, smoothing_sigma, r_min, r_max,
+        # apod_edge_width) and the multiprocessing fan-out (n_processes)
+        # are dropped. n_r -> n_radii and n_gauss -> n_filters carry over.
         region_size = parameters.get("region_size", 10.0)
         min_locs_per_region = parameters.get("min_locs_per_region", 500)
-        n_processes = parameters.get("n_processes", 4)
-        r_min = parameters.get("r_min", 0.0)
-        r_max = parameters.get("r_max", 1.0)
-        n_r = parameters.get("n_r", 50)
-        n_gauss = parameters.get("n_gauss", 10)
-        apod_edge_width = parameters.get("apod_edge_width", 20)
+        n_radii = parameters.get("n_radii", 50)
+        n_filters = parameters.get("n_filters", 10)
 
-        # Compute spatial decorrelation
-        logger.debug("Using spatial image decorrelation approach")
-        decorr_results = compute_decorr_spatial(
-            self.locs,
-            self.pixelsize,
-            pixelsize_render=pixelsize_render,
-            smoothing_sigma=smoothing_sigma,
-            region_size=region_size,
-            min_locs_per_region=min_locs_per_region,
-            n_processes=n_processes,
-            r_min=r_min,
-            r_max=r_max,
-            n_r=n_r,
-            n_gauss=n_gauss,
-            apod_edge_width=apod_edge_width,
+        logger.debug("Using picasso postprocess.decorrelation (Descloux).")
+
+        # In picasso 1.0 locs["x"]/["y"] are already in nm, and the
+        # decorrelation viewport is ((y_min, x_min), (y_max, x_max)) in
+        # nm (see picasso.postprocess.decorrelation). Tile the loc extent.
+        x_nm = np.asarray(self.locs["x"], dtype=np.float64)
+        y_nm = np.asarray(self.locs["y"], dtype=np.float64)
+        x_min, x_max = float(x_nm.min()), float(x_nm.max())
+        y_min, y_max = float(y_nm.min()), float(y_nm.max())
+        x_range = x_max - x_min
+        y_range = y_max - y_min
+
+        region_size_nm = region_size * 1000.0
+        n_regions_x = max(1, int(np.ceil(x_range / region_size_nm)))
+        n_regions_y = max(1, int(np.ceil(y_range / region_size_nm)))
+        region_width = x_range / n_regions_x
+        region_height = y_range / n_regions_y
+        n_total = n_regions_x * n_regions_y
+
+        logger.debug(
+            f"  FOV: {x_range:.1f} x {y_range:.1f} nm, "
+            f"{n_regions_x}x{n_regions_y} regions "
+            f"(target {region_size:.1f} um)"
         )
 
-        # Store results
-        results["resolution_decorr_spatial"] = decorr_results["resolution"]
-        results["resolution_std"] = decorr_results["resolution_std"]
-        results["n_regions"] = decorr_results["n_regions"]
-        results["n_regions_total"] = decorr_results["n_regions_total"]
-        results["decorr_curve_mean"] = decorr_results["decorr_curve_mean"]
-        results["decorr_curve_std"] = decorr_results["decorr_curve_std"]
-        results["r_values"] = decorr_results["r_values"]
-        results["resolutions_per_region"] = decorr_results[
-            "resolutions_per_region"
-        ]
+        resolutions_per_region = []
+        for ix in range(n_regions_x):
+            rx_min = x_min + ix * region_width
+            rx_max = rx_min + region_width
+            for iy in range(n_regions_y):
+                ry_min = y_min + iy * region_height
+                ry_max = ry_min + region_height
 
-        # Create decorrelation curve plot
-        fig, ax = plt.subplots(figsize=(8, 6))
-
-        # Plot mean decorrelation curve with error band
-        decorr_curve_mean = decorr_results["decorr_curve_mean"]
-        decorr_curve_std = decorr_results["decorr_curve_std"]
-        r_values = decorr_results["r_values"]
-
-        ax.plot(
-            r_values,
-            decorr_curve_mean,
-            "b-",
-            linewidth=2,
-            label="Mean Decorrelation",
-        )
-        ax.fill_between(
-            r_values,
-            decorr_curve_mean - decorr_curve_std,
-            decorr_curve_mean + decorr_curve_std,
-            alpha=0.3,
-            color="blue",
-            label=f'±1 SD ({decorr_results["n_regions"]} regions)',
-        )
-
-        # Plot threshold line
-        ax.axhline(
-            y=0.5,
-            color="r",
-            linestyle="--",
-            linewidth=2,
-            label="Threshold (0.5)",
-        )
-
-        # Mark resolution
-        resolution = decorr_results["resolution"]
-        if not np.isnan(resolution):
-            # Convert resolution to normalized frequency
-            # resolution = 2 * pixelsize / kc_max
-            # kc_max = 2 * pixelsize / resolution (in 1/nm)
-            # normalized kc = kc_max * pixelsize * 2 (since r=1 corresponds to Nyquist = 0.5/pixel)
-            r_cutoff = resolution / (4 * pixelsize_render)
-            if np.any(r_cutoff < r_values):
-                ax.axvline(
-                    x=r_cutoff,
-                    color="g",
-                    linestyle=":",
-                    linewidth=2,
-                    label=f"Resolution: {resolution:.1f} nm",
+                in_region = (
+                    (x_nm >= rx_min)
+                    & (x_nm < rx_max)
+                    & (y_nm >= ry_min)
+                    & (y_nm < ry_max)
                 )
+                n_locs_region = int(np.count_nonzero(in_region))
+                if n_locs_region < min_locs_per_region:
+                    continue
 
-        ax.set_xlabel("Normalized Frequency", fontsize=12)
-        ax.set_ylabel("Decorrelation", fontsize=12)
-        n_regions_x = decorr_results["n_regions_x"]
-        n_regions_y = decorr_results["n_regions_y"]
+                viewport = ((ry_min, rx_min), (ry_max, rx_max))
+                try:
+                    dec = postprocess.decorrelation(
+                        self.locs,
+                        self.info,
+                        viewport=viewport,
+                        n_radii=n_radii,
+                        n_filters=n_filters,
+                    )
+                    resolutions_per_region.append(float(dec["resolution"]))
+                except ValueError as exc:
+                    # e.g. a region too small to render at any allowed
+                    # pixel size; skip it rather than abort the module.
+                    logger.debug(f"  Region ({ix},{iy}) skipped: {exc}")
+
+        resolutions = np.asarray(resolutions_per_region, dtype=np.float64)
+        valid = resolutions[~np.isnan(resolutions)]
+        n_regions = int(resolutions.size)
+        if valid.size > 0:
+            resolution_mean = float(np.mean(valid))
+            resolution_std = float(np.std(valid)) if valid.size > 1 else 0.0
+        else:
+            resolution_mean = np.nan
+            resolution_std = np.nan
+
+        logger.debug(
+            f"  Mean resolution: {resolution_mean:.2f} +/- "
+            f"{resolution_std:.2f} nm over {valid.size}/{n_total} regions"
+        )
+
+        results["resolution_decorr_spatial"] = resolution_mean
+        results["resolution_std"] = resolution_std
+        results["n_regions"] = n_regions
+        results["n_regions_total"] = n_total
+        results["resolutions_per_region"] = resolutions.tolist()
+
+        # Per-region resolution histogram (replaces the former averaged
+        # decorrelation-curve figure: picasso's per-pixel-size results
+        # do not expose a single averaged curve).
+        fig, ax = plt.subplots(figsize=(8, 6))
+        if valid.size > 0:
+            ax.hist(valid, bins=min(20, max(3, valid.size)), color="blue")
+            ax.axvline(
+                resolution_mean,
+                color="g",
+                linestyle=":",
+                linewidth=2,
+                label=f"Mean: {resolution_mean:.1f} nm",
+            )
+            ax.legend(fontsize=10)
+        else:
+            ax.text(
+                0.5,
+                0.5,
+                "No valid regions",
+                ha="center",
+                va="center",
+                transform=ax.transAxes,
+            )
+        ax.set_xlabel("Resolution (nm)", fontsize=12)
+        ax.set_ylabel("Number of regions", fontsize=12)
         ax.set_title(
-            f"Image Decorrelation Analysis ({n_regions_x}×{n_regions_y} regions)",
+            f"Decorrelation Resolution per Region "
+            f"({n_regions_x}x{n_regions_y} grid, "
+            f"{valid.size} valid)",
             fontsize=14,
         )
-        ax.legend(fontsize=10)
         ax.grid(True, alpha=0.3)
-        ax.set_ylim([-0.1, 1.1])
-
         plt.tight_layout()
 
-        # Save plot
         plot_path = os.path.join(
             results["folder"], "resolution_decorr_spatial.png"
         )

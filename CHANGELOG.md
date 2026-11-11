@@ -11,6 +11,27 @@ This file was started after v0.5.6; earlier history is in the git log.
 ## [Unreleased]
 
 ### Changed
+- **`resolution_decorr_spatial` now uses picasso 1.0's public
+  `postprocess.decorrelation` (true Descloux), not the home-grown fork.**
+  The module previously called the known-buggy, non-Descloux fork
+  `outpost/resolution/resolution_decorrelation.compute_decorr_spatial`,
+  which rendered each region itself and ran a custom FFT-decorrelation.
+  It now tiles the loc x/y extent into `region_size` µm regions and calls
+  `postprocess.decorrelation` per region with a `((y_min, x_min),
+  (y_max, x_max))`-nm `viewport`; picasso renders internally and
+  auto-sweeps pixel sizes, returning the best Descloux resolution per
+  region. Parameters: `n_r` → `n_radii`, `n_gauss` → `n_filters` (passed
+  through); `pixelsize_render`, `smoothing_sigma`, `n_processes`,
+  `r_min`/`r_max` and `apod_edge_width` are dropped (picasso owns
+  rendering/apodization/filter geometry). Results keys `decorr_curve_mean`,
+  `decorr_curve_std` and `r_values` and the averaged-curve figure are
+  dropped (picasso's per-pixel-size results expose no single averaged
+  curve); `fig_decorr` is now a per-region resolution histogram. No
+  reporter consumed the dropped keys, so reporting is unaffected. The
+  `outpost/resolution/resolution_decorrelation.py` fork is now unused by
+  this module (still imported by its own unit test for
+  `extract_resolution_decorr`); it is left in place, not deleted.
+
 - **Adopt picasso 1.0 public APIs for the formerly-private reach-ins; pin
   `picassosr>=1.0.0rc1`.** picasso 1.0.0rc1 removed the four private symbols
   the workflow reached into, so `_picasso_api` now routes through the public
@@ -39,7 +60,6 @@ This file was started after v0.5.6; earlier history is in the git log.
 - Remaining outpost forks still to migrate to their picasso 1.0 public
   replacements (each changes scientific output; tracked for follow-up PRs):
   `spatial_stats/csr_knn` → `postprocess.knn_density`,
-  `resolution/resolution_decorrelation` → `postprocess.decorrelation`,
   `binding_events` → `postprocess.signal_to_background`/`dye_performance`,
   `alignment` → `postprocess.align(method="points")`, SPINNA label-uncertainty
   → `spinna.fit_label_uncertainty`/`fit_le(bootstrap=True)`, CellMask
