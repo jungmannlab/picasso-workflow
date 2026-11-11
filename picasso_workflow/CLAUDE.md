@@ -95,8 +95,9 @@ Tests are located in `picasso_workflow/tests/` with test data in `TestData/`:
 
 ## Key Dependencies
 
-- **picassosr**: Core analysis engine (>=0.12.0a3,<0.13; the 0.12 line
-  requires Python >=3.11)
+- **picassosr**: Core analysis engine (>=1.0.0rc1,<2 — see pyproject.toml;
+  picasso 1.0 is the first release with a stability promise, and the workflow
+  migrated to its public APIs. Requires Python >=3.11)
 - **atlassian-python-api**: Confluence integration
 - **mpi4py**: Cluster computing support (optional)
 - **scipy**, **numpy**, **pandas**: Scientific computing
