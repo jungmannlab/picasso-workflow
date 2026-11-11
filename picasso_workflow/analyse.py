@@ -55,47 +55,7 @@ from picasso_workflow._picasso_api import (
 # from picasso_workflow.outpost_modules import g5m
 from scipy.ndimage import label
 from scipy.spatial import KDTree, distance
-from scipy.stats import norm, poisson
-
-try:
-    from scipy.stats import wasserstein_distance
-except ImportError:
-    # Fallback implementation if scipy version issues
-    def wasserstein_distance(u_values, v_values):
-        """Compute the 1D Wasserstein distance (manual fallback).
-
-        Parameters
-        ----------
-        u_values, v_values : array-like
-            The two 1D distributions to compare.
-
-        Returns
-        -------
-        float
-            The 1D Wasserstein distance between the distributions.
-        """
-        u_sorted = np.sort(u_values)
-        v_sorted = np.sort(v_values)
-        n = len(u_sorted)
-        m = len(v_sorted)
-
-        # Create cumulative distributions (not used in this implementation)
-        # u_cdf = np.arange(1, n + 1) / n
-        # v_cdf = np.arange(1, m + 1) / m
-
-        # Merge and compute distance
-        all_values = np.concatenate([u_sorted, v_sorted])
-        all_values = np.sort(all_values)
-
-        distance = 0
-        for i in range(len(all_values) - 1):
-            u_cum = np.searchsorted(u_sorted, all_values[i], side="right") / n
-            v_cum = np.searchsorted(v_sorted, all_values[i], side="right") / m
-            distance += abs(u_cum - v_cum) * (
-                all_values[i + 1] - all_values[i]
-            )
-
-        return distance
+from scipy.stats import norm, poisson, wasserstein_distance
 
 
 from picasso_workflow import (
@@ -7819,6 +7779,8 @@ class AutoPicasso(
 
         d = int(parameters.get("dimensionality", 2))
         use_z = d == 3
+        # molecules/nm^d -> molecules/um^d for human-readable logs/labels.
+        um_factor = 1e3**d
         kmin = int(parameters.get("kmin", 1))
         kmax = int(parameters.get("kmax", 5))
         n_simulations = int(parameters.get("n_simulations", 99))
@@ -7837,17 +7799,31 @@ class AutoPicasso(
             # Edge-corrected MLE density + CSR test over the whole field
             # of view. knn_density derives the region from ``info``
             # (Width x Height), so no picks are needed.
-            result = postprocess.knn_density(
-                locs,
-                info,
-                k_max=kmax,
-                k_min=kmin,
-                r_min=r_min,
-                edge_correction=True,
-                n_simulations=n_simulations,
-                use_z=use_z,
-                r_max=r_max,
-            )
+            try:
+                result = postprocess.knn_density(
+                    locs,
+                    info,
+                    k_max=kmax,
+                    k_min=kmin,
+                    r_min=r_min,
+                    edge_correction=True,
+                    n_simulations=n_simulations,
+                    use_z=use_z,
+                    r_max=r_max,
+                )
+            except ValueError as exc:
+                # A too-sparse channel (no region molecules, or none with a
+                # neighbour beyond r_min) has no CSR fit; record NaN rather
+                # than aborting the whole (aggregation) module.
+                logger.warning(
+                    f"fit_csr[{tag}]: knn_density could not fit ({exc}); "
+                    "recording NaN density for this channel."
+                )
+                densities.append(np.nan)
+                ks_pvalues.append([])
+                wasserstein_distances.append([])
+                mean_wasserstein_distances.append(np.nan)
+                continue
             density = float(result["density"])
             densities.append(density)
             # p_values is None when n_simulations == 0; expose [] then.
@@ -7857,8 +7833,8 @@ class AutoPicasso(
             )
             ks_pvalues.append(k_ks_pvalues)
             logger.debug(
-                f"fit_csr[{tag}]: density {1e6 * density:.3g} um^-{d}, "
-                f"KS p-values {k_ks_pvalues}"
+                f"fit_csr[{tag}]: density {um_factor * density:.3g} "
+                f"um^-{d}, KS p-values {k_ks_pvalues}"
             )
 
             # Goodness of fit per order: Wasserstein distance between the
@@ -7897,14 +7873,17 @@ class AutoPicasso(
             # measured neighbour distributions (mean Wasserstein distance
             # large relative to the 1st-NN spacing) -- an unreliable fit
             # or genuine non-CSR structure (clustering).
-            median_1stnn = (
+            # Peak (mode) of the k=1 histogram as a cheap proxy for the
+            # typical 1st-NN spacing (knn_density returns only histograms,
+            # not the raw distances a true median would need).
+            mode_1stnn = (
                 float(centres[np.argmax(histograms[0])])
                 if np.asarray(histograms[0]).sum() > 0
                 else np.nan
             )
             rel_wasserstein = (
-                mean_wasserstein_distances[-1] / median_1stnn
-                if median_1stnn and median_1stnn > 0
+                mean_wasserstein_distances[-1] / mode_1stnn
+                if mode_1stnn and mode_1stnn > 0
                 else np.nan
             )
             if np.isfinite(rel_wasserstein) and rel_wasserstein > gof_warn:
@@ -7913,7 +7892,7 @@ class AutoPicasso(
                     f"Wasserstein distance "
                     f"{mean_wasserstein_distances[-1]:.3g} nm = "
                     f"{rel_wasserstein:.2f}x the 1st-NN spacing). The "
-                    f"density ({1e6 * density:.3g} um^-{d}) may be "
+                    f"density ({um_factor * density:.3g} um^-{d}) may be "
                     f"unreliable, or the data may deviate from CSR "
                     f"(clustering)."
                 )
@@ -7941,7 +7920,7 @@ class AutoPicasso(
                     lblf = f"k={k} not fitted"
                 elif k == kmin:
                     linestyle = "--"
-                    lblf = f"fit {1e6 * density:.1f} µm^-{d}"
+                    lblf = f"fit {um_factor * density:.1f} µm^-{d}"
                 else:
                     linestyle = "--"
                     lblf = f"fit k={k}"
@@ -7966,7 +7945,10 @@ class AutoPicasso(
 
         if sgl_stage:
             results["density"] = results["density"][0]
-            results["fp_fig"] = results["fp_fig"][0]
+            # a failed knn_density fit skips the plot, so fp_fig may be empty
+            results["fp_fig"] = (
+                results["fp_fig"][0] if results["fp_fig"] else None
+            )
             results["wasserstein_distances_per_k"] = results[
                 "wasserstein_distances_per_k"
             ][0]

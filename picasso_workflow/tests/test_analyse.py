@@ -1469,7 +1469,17 @@ class TestAnalyseModules(unittest.TestCase):
         self.ap.info = [{"Width": 512, "Height": 512, "Pixelsize": 130}]
         self.ap.channel_locs = None
 
-        _, results = self.ap.fit_csr(0, {"dimensionality": 2})
+        _, results = self.ap.fit_csr(
+            0,
+            {
+                "dimensionality": 2,
+                "kmin": 2,
+                "kmax": 4,
+                "min_dist": 10,
+                "max_dist": 200,
+                "n_simulations": 50,
+            },
+        )
 
         # single-dataset stage: scalars, not lists
         self.assertAlmostEqual(results["density"], 1e-4)
@@ -1478,11 +1488,20 @@ class TestAnalyseModules(unittest.TestCase):
             list(np.linspace(0.2, 0.9, 5)),
         )
         self.assertIsInstance(results["fp_fig"], str)
-        # knn_density was called on the locs, not on nn-distances
+        # Wasserstein GoF is recomputed (option a) and exposed.
+        self.assertIsInstance(results["mean_wasserstein_distance"], float)
+        self.assertIsInstance(results["wasserstein_distances_per_k"], list)
+        # knn_density was called on the locs, not on nn-distances, and the
+        # workflow params are translated to the knn_density kwargs.
         args, kwargs = mock_knn.call_args
         self.assertIs(args[0], self.ap.locs)
         self.assertIs(args[1], self.ap.info)
-        self.assertEqual(kwargs["k_min"], 1)
+        self.assertEqual(kwargs["k_min"], 2)
+        self.assertEqual(kwargs["k_max"], 4)
+        self.assertEqual(kwargs["r_min"], 10.0)
+        self.assertEqual(kwargs["r_max"], 200.0)
+        self.assertEqual(kwargs["n_simulations"], 50)
+        self.assertFalse(kwargs["use_z"])
         shutil.rmtree(os.path.join(self.results_folder, "00_fit_csr"))
 
     @patch("picasso_workflow.analyse.postprocess.knn_density")
