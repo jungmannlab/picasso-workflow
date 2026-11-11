@@ -1129,11 +1129,78 @@ class TestAnalyseModules(unittest.TestCase):
         shutil.rmtree(os.path.join(self.results_folder, "00_hdbscan"))
 
     def binding_event_analysis(self):
-        # parameters, results = self.ap.binding_event_analysis(0, parameters)
+        """Exercise the binding_event_analysis module (mocked).
 
-        # shutil.rmtree(os.path.join(
-        #     self.results_folder, "00_binding_event_analysis"))
-        pass
+        The heavy ``Measurement`` / ``Plotting`` classes (and the optional
+        ``[binding-events]`` extra they import) are replaced by mock modules
+        via ``sys.modules``, so this runs in the unit tier without lmfit /
+        pandarallel. It guards the module's return contract: the
+        ``module_decorator`` wrapper unpacks ``parameters, results =
+        method(...)``, so a missing ``return`` would raise ``TypeError`` here
+        (the bug fixed in the binding-events migration), and it checks the new
+        ``loc_rate_drop`` / ``destroyed_fraction`` metrics are surfaced.
+        """
+        import sys
+        import types
+        from unittest.mock import PropertyMock
+
+        meas_cls = MagicMock()
+        meas = meas_cls.return_value
+        meas.loc_rate_drop = 0.12
+        meas.destroyed_fraction = 0.05
+        meas.table_g = None
+        meas.table_k = None
+
+        plot_cls = MagicMock()
+        plotter = plot_cls.return_value
+        for name in (
+            "Plot_photons",
+            "Plot_bg",
+            "Plot_sbr",
+            "Plot_tb",
+            "Plot_td",
+            "Plot_r",
+            "Plot_locs",
+        ):
+            getattr(plotter, name).return_value = (None, name + ".png")
+        plotter.SaveAllResults.return_value = {}
+
+        analysis_path = "picasso_workflow.outpost.binding_events.analysis"
+        plotting_path = "picasso_workflow.outpost.binding_events.plotting"
+        analysis_mod = types.ModuleType(analysis_path)
+        analysis_mod.Measurement = meas_cls
+        plotting_mod = types.ModuleType(plotting_path)
+        plotting_mod.Plotting = plot_cls
+
+        parameters = {
+            "fp_locs": os.path.join(self.results_folder, "locs.hdf5")
+        }
+        ap_cls = type(self.ap)
+        with (
+            patch.object(
+                ap_cls, "frames", new_callable=PropertyMock, return_value=20000
+            ),
+            patch.object(
+                ap_cls,
+                "pixelsize",
+                new_callable=PropertyMock,
+                return_value=130.0,
+            ),
+            patch.dict(
+                sys.modules,
+                {analysis_path: analysis_mod, plotting_path: plotting_mod},
+            ),
+        ):
+            parameters, results = self.ap.binding_event_analysis(0, parameters)
+
+        assert isinstance(results, dict)
+        assert results["loc_rate_drop"] == 0.12
+        assert results["destroyed_fraction"] == 0.05
+        assert results["fig_photons"] == "Plot_photons.png"
+
+        shutil.rmtree(
+            os.path.join(self.results_folder, "00_binding_event_analysis")
+        )
 
     @patch("picasso_workflow.analyse.clusterer.find_cluster_centers")
     @patch("picasso_workflow.analyse.clusterer.cluster")
