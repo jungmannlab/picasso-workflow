@@ -223,6 +223,24 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Fixed
 
+- **GUI module-parameter forms corrected to match what `analyse.py` actually
+  reads.** The hand-coded `ModuleDescriptor` forms in `gui.py` had drifted from
+  the real `AutoPicasso.<module>` parameter contract. This fixes two `KeyError`
+  hazards (`find_cluster_motifs` was missing the required `cellfraction_threshold`;
+  `dbscan_molint` exposed dead `radius`/`min_samples`/`interaction_threshold`
+  instead of its real `[]`-accessed keys), renames pre-migration/misnamed keys
+  (`ripleysk2` `fraction_exclude` -> `fraction_exclude_self` plus the added
+  `normalize_to_bulkfraction`/`aggfun`; `link_locs` `max_distance`/`max_frame_gap`
+  -> `d_max`/`tolerance`), fills in forms whose real params were empty `{}` stubs
+  (`resolution_analysis`, `resolution_frc_spatial`, `create_mask`,
+  `ripleysk_average2`, `manual`, `protein_interactions`, `interaction_graph`,
+  `pairwise_module_executor`), and removes dead fields across `find_gold`,
+  `find_similar`, `find_structures`, `nneighbor`, `create_mask2` and adds missing
+  `pick_origami` (`contour_threshold`/`n_plot_columns`) and
+  `labeling_efficiency_analysis` (`bootstrap`) keys. A new
+  `tests/test_gui_form_contracts.py` pins each form to its analyse param set.
+  Pre-existing drift found during the picasso-1.0 migration wrap-up; unrelated
+  to that migration.
 - **Ripley's K edge correction again excludes the field-of-view border.**
   After the CellMask morphology migration to `picasso.masking.erode` (which,
   unlike the former scipy erosion, does not treat the image border as a mask

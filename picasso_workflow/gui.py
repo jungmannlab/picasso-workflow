@@ -2063,36 +2063,17 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             in the decorator wrapper
         """
         parameters_spec = {
-            "message": {
+            "prompt": {
                 "type": "str",
-                "description": "Message to display to user",
-                "required": False,
+                "description": "The user prompt",
+                "required": True,
                 "multiline": True,
             },
-            "wait_for_input": {
-                "type": "bool",
-                "description": "Whether to wait for user confirmation",
-                "default": True,
-                "required": False,
+            "filename": {
+                "type": "str",
+                "description": "The file the user should provide",
+                "required": True,
             },
-            # "prompt": {
-            #     # TODO: Add type, description, min, max, default,
-            #     #     required, step, extensions, properties
-            #     # Hint: type appears to be str
-            #     # Hint: required = True
-            # },
-            # "filename": {
-            #     # TODO: Add type, description, min, max, default,
-            #     # required, step, extensions, properties
-            #     # Hint: type appears to be str
-            #     # Hint: required = True
-            # },
-            # "save_locs": {
-            #     # TODO: Add type, description, min, max, default,
-            #     # required, step, extensions, properties
-            #     # Hint: type appears to be bool
-            #     # Hint: required = False (optional)
-            # },
         }
 
         results_spec = {
@@ -2857,17 +2838,11 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             in the decorator wrapper
         """
         parameters_spec = {
-            "save_data": {
-                "type": "bool",
-                "description": "Whether to save nearest neighbor data",
-                "default": True,
-                "required": False,
-            },
             "dims": {
                 "type": "list",
                 "description": "the distance dimensions, e.g. ['x', 'y']",
                 "default": ["x", "y"],
-                "required": False,
+                "required": True,
             },
             "nth_NN": {
                 "type": "int",
@@ -4193,99 +4168,129 @@ class ModuleDescriptor(util.AbstractModuleCollection):
 
         """
         parameters_spec = {
-            "radii": {
-                "type": "list",
-                "description": "List of analysis radii in nm",
-                "unit": "nm",
-                "element_type": "float",
-                "min": 1.0,
-                "max": 1000.0,
+            "metric": {
+                "type": "str",
+                "description": "Analysis type: 'RK' (standard Ripley's K), "
+                "'RDF' (radial distribution function) or 'FRC' (fraction "
+                "of molecular types within the radii)",
+                "options": ["RK", "RDF", "FRC"],
                 "required": True,
             },
-            "algorithm": {
-                "type": "str",
-                "description": "Algorithm variant to use",
-                "options": ["fast", "accurate", "parallel"],
-                "default": "fast",
+            "ripleys_n_random_controls": {
+                "type": "int",
+                "description": "Number of random controls",
+                "default": 100,
                 "required": False,
             },
-            "ripleys_n_random_controls": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: number of random controls, default: 100
-                # Hint: type appears to be int
-            },
             "ripleys_rmax": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the maximum radius, default 200
-                # Hint: type appears to be int
+                "type": "int",
+                "description": "The maximum radius (ignored if 'radii' "
+                "is given)",
+                "default": 200,
+                "required": False,
             },
             "ripleys_dr": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the radius interval, default 5
-                # Hint: type appears to be float
+                "type": "float",
+                "description": "The radius interval (ignored if 'radii' "
+                "is given)",
+                "default": 5,
+                "required": False,
+            },
+            "radii": {
+                "type": "list",
+                "description": "The radius values in nm. If given, "
+                "ripleys_rmax and ripleys_dr are ignored",
+                "unit": "nm",
+                "element_type": "float",
+                "required": False,
             },
             "ripleys_threshold": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the threshold of ripleys integrals above which the interaction is deemed significant.
-                # Hint: type appears to be float
+                "type": "float",
+                "description": "Threshold on the integrals above which an "
+                "interaction is significant",
+                "required": False,
             },
             "area": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the cell area in µm^2 optional. only used with controltype=CSR
-                # Hint: type appears to be float
+                "type": "float",
+                "description": "Cell area in µm^2 (only with "
+                "controltype='CSR')",
+                "default": 1,
+                "required": False,
             },
             "fp_mask": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the filepath to the cell mask. optional, only used with CSR. can be binary or density mask
-                # Hint: type appears to be str
-            },
-            "mask_pixel_size": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the pixel size of mask pixels (move to mask class which internally keeps this information) optional, only used with controltype=CSR
-                # Hint: type appears to be float
-            },
-            "metric": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the type of analysis: 'RK' for the standard Ripley's K analysis, or 'RDF' for calculation of the radial distribution function instead of K, and ran...
-                # Hint: type appears to be str
+                "type": "path",
+                "description": "Filepath to the cell mask (binary or "
+                "density; only with CSR)",
+                "required": False,
             },
             "controltype": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: CSR simulation within the density mask, or randomizing the real data
-                # Hint: type appears to be str
+                "type": "str",
+                "description": "'CSR' (CSR simulation within the density "
+                "mask) or 'RND' (randomize the real data)",
+                "options": ["CSR", "RND"],
+                "required": False,
             },
             "randomization_radius": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: for controltype \"RND\", the radius [nm] by which to randomize. optional.
-                # Hint: type appears to be float
+                "type": "float",
+                "description": "For controltype 'RND', the radius (nm) to "
+                "randomize by",
+                "unit": "nm",
+                "required": False,
             },
             "shuffle_self": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: for metric \"FRC\", whether to shuffle only other types or also the self type
-                # Hint: type appears to be bool
+                "type": "bool",
+                "description": "For metric 'FRC', whether to shuffle the "
+                "self type too",
+                "default": False,
+                "required": False,
             },
             "relocate_self": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: for metric \"FRC\", whether to relocate centerpoints to fraction_exclude
-                # Hint: type appears to be bool
+                "type": "bool",
+                "description": "For metric 'FRC', whether to relocate "
+                "centerpoints to 'type_self' after shuffling",
+                "default": False,
+                "required": False,
+            },
+            "fraction_exclude_self": {
+                "type": "bool",
+                "description": "For metric 'FRC', types to exclude from "
+                "the FRC fraction",
+                "default": False,
+                "required": False,
+            },
+            "normalize_to_bulkfraction": {
+                "type": "bool",
+                "description": "For metric 'FRC', whether to normalize to "
+                "the bulk fraction",
+                "required": False,
             },
             "significance_threshold": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: threshold above which heatmap entries are colored
-                # Hint: type appears to be float
+                "type": "float",
+                "description": "Threshold above which heatmap entries "
+                "are colored",
+                "required": False,
             },
             "normalization": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: type appears to be str
+                "type": "str",
+                "description": "The normalization to apply",
+                "required": False,
+            },
+            "aggfun": {
+                "type": "str",
+                "description": "Aggregation function for the controls",
+                "required": False,
             },
             "edge_correction": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: if True, only locs further from mask edges than max radius are used for evaluation
-                # Hint: type appears to be bool
+                "type": "bool",
+                "description": "If True, only locs further from the mask "
+                "edges than the max radius are used",
+                "required": False,
             },
             "showControlEnvelope": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: type appears to be bool
+                "type": "bool",
+                "description": "Whether to show the control envelope in "
+                "plots",
+                "required": False,
             },
         }
 
@@ -4362,52 +4367,24 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             if those two are not given, saving is not performed
         """
         parameters_spec = {
-            "statistical_method": {
-                "type": "str",
-                "description": "Statistical method for averaging",
-                "options": ["mean", "median", "trimmed_mean"],
-                "default": "mean",
-                "required": False,
-            },
             "fp_workflows": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the paths to the folders of separate workflows where the separate ripleys analyses have been done
-                # Hint: type appears to be list
+                "type": "list",
+                "description": "Paths to the folders of the separate "
+                "workflows where the individual Ripley's analyses were done",
+                "element_type": "str",
+                "required": True,
             },
             "report_names": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the report names of those worklfows
-                # Hint: type appears to be list
-            },
-            "ripleys_threshold": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the threshold of ripleys integrals above which the interaction is deemed significant.
-                # Hint: type appears to be float
-            },
-            "metric": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the type of analysis: 'RK' for the standard Ripley's K analysis, or 'RDF' for calculation of the radial distribution function instead of K, and ran...
-                # Hint: type appears to be str
-            },
-            "controltype": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: CSR simulation within the density mask, or randomizing the real data
-                # Hint: type appears to be str
-            },
-            "randomization_radius": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: for controltype \"RND\", the radius [nm] by which to randomize. # output_folders : list of str #     folders to write the significant pairs into. Thi...
-                # Hint: type appears to be float
+                "type": "list",
+                "description": "The report names of those workflows",
+                "element_type": "str",
+                "required": True,
             },
             "swkfl_ripleysk_key": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the results key of the ripleysk2 module. e.g. '05_ripleysk2'
-                # Hint: type appears to be str
-            },
-            "swkfl_manual_key": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the results key of the manual module to save the integrals to if those two are not given, saving is not performed
-                # Hint: type appears to be str
+                "type": "str",
+                "description": "The results key of the ripleysk2 module, "
+                "e.g. '05_ripleysk2'",
+                "required": True,
             },
         }
 
@@ -4481,68 +4458,64 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 if str: filepath to a yaml file with list of tuples
         """
         parameters_spec = {
-            "interaction_radius": {
-                "type": "float",
-                "description": "Maximum interaction distance in nm",
-                "unit": "nm",
-                "min": 1.0,
-                "max": 500.0,
-                "default": 50.0,
+            "channel_map": {
+                "type": "dict",
+                "description": "Maps between channels (protein names, tags "
+                "before combining) and index in the combine_id column of "
+                "combined locs",
                 "required": True,
             },
-            "confidence_level": {
-                "type": "float",
-                "description": "Statistical confidence level",
-                "min": 0.5,
-                "max": 0.99,
-                "default": 0.95,
-                "required": False,
-            },
-            "channel_map": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: maps between channels (protein names, tags before combining) and index in the combine_id column of combined locs labeling_efficiency : dict, channe...
-                # Hint: type appears to be dict
-            },
             "labeling_efficiency": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: type appears to be dict
+                "type": "dict",
+                "description": "Labeling efficiency per channel tag "
+                "(range 0-100)",
+                "required": True,
             },
             "labeling_uncertainty": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: type appears to be dict
+                "type": "dict",
+                "description": "Labeling uncertainty [nm] per channel tag "
+                "(good value e.g. 5)",
+                "required": True,
             },
             "n_simulate": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: number of target molecules to be simulated; good value is e.g. 50000 density : dict, channel tag to float density to simulate [nm^2 or nm^3]; area ...
-                # Hint: type appears to be int
+                "type": "int",
+                "description": "Number of target molecules to simulate "
+                "(good value e.g. 50000)",
+                "required": True,
             },
             "density": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: type appears to be dict
+                "type": "dict",
+                "description": "Density to simulate per channel tag "
+                "[nm^2 or nm^3]; area density if 2D, volume density if 3D",
+                "required": True,
             },
             "nn_nth": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: number of nearest neighbors to analyse
-                # Hint: type appears to be int
+                "type": "int",
+                "description": "Number of nearest neighbors to analyse",
+                "required": True,
             },
             "structure_distance": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the protein distance between each other in nm
-                # Hint: type appears to be float
+                "type": "float",
+                "description": "The protein distance between each other in nm",
+                "unit": "nm",
+                "required": True,
             },
             "res_factor": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the spinna res_factor
-                # Hint: type appears to be float
+                "type": "float",
+                "description": "The spinna res_factor",
+                "required": True,
             },
             "sim_repeats": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: number of simulation repeats, for noise reduction interaction_pairs: list of list of two strings, or str pairs that are able to interact
-                # Hint: type appears to be int
+                "type": "int",
+                "description": "Number of simulation repeats, for noise "
+                "reduction",
+                "required": True,
             },
             "interaction_pairs": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: type appears to be list
+                "type": "list",
+                "description": "Pairs that are able to interact (list of "
+                "two-string lists, or a filepath to a yaml of tuples)",
+                "required": True,
             },
         }
 
@@ -4678,65 +4651,49 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             in the decorator wrapper
         """
         parameters_spec = {
-            "threshold": {
-                "type": "float",
-                "description": "Density threshold for mask creation",
-                "min": 0.0,
-                "max": 1000.0,
-                "required": True,
-            },
-            "smoothing_radius": {
-                "type": "float",
-                "description": "Radius for density smoothing",
-                "min": 1.0,
-                "max": 200.0,
-                "default": 20.0,
-                "required": False,
-            },
             "fp_channel_map": {
+                "type": "path",
+                "description": "Filepath to the map from 'combine_channels' "
+                "module (dict from channel name to ID int in "
+                "locs['combine_id'])",
                 "required": True,
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: filepath to the map from 'combine_channels' module, which is a dict from channel name to ID int in the locs['combine_id']
-                # Hint: type appears to be str
-                # Hint: required = True
             },
             "fp_combined_locs": {
+                "type": "path",
+                "description": "Filepath to the locs combined in the "
+                "'combine_channels' module",
                 "required": True,
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: filepath to the locs combined in 'combine_channels' module
-                # Hint: type appears to be str
-                # Hint: required = True
             },
             "margin": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: Size of the added empty margin to the FOV, in nm
-                # Hint: type appears to be float
-                # Hint: required = True
+                "type": "float",
+                "description": "Size of the empty margin added to the FOV, "
+                "in nm",
+                "unit": "nm",
+                "required": True,
             },
             "binsize": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: Size o fthe 2D histogram bins of the first step, in nm
-                # Hint: type appears to be float
-                # Hint: required = True
+                "type": "float",
+                "description": "Size of the first-step 2D histogram bins, "
+                "in nm",
+                "unit": "nm",
+                "required": True,
             },
             "sigma_mask_blur": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: parameter of the gaussian blur in binsize units
-                # Hint: type appears to be int
-                # Hint: required = True
+                "type": "int",
+                "description": "Gaussian-blur parameter, in binsize units",
+                "required": True,
             },
             "mask_resolution": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: Controls the digital resolution of the mask, in nm
-                # Hint: type appears to be float
-                # Hint: required = True
+                "type": "float",
+                "description": "Digital resolution of the mask, in nm",
+                "unit": "nm",
+                "required": True,
             },
             "combine_col": {
+                "type": "str",
+                "description": "Name of the combine column (e.g. "
+                "'combine_id' or 'protein')",
                 "required": True,
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the name of the combine column, e.g. 'combine_id' or 'protein'. Same as used in 'combine_channels' module
-                # Hint: type appears to be str
-                # Hint: required = True
             },
         }
 
@@ -4821,17 +4778,6 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             in the decorator wrapper
         """
         parameters_spec = {
-            "algorithm": {
-                "type": "str",
-                "description": "Mask creation algorithm",
-                "options": ["threshold", "otsu", "adaptive"],
-                "required": True,
-            },
-            "parameters_dict": {
-                "type": "dict",
-                "description": "Algorithm-specific parameters",
-                "required": False,
-            },
             "binsize": {
                 "type": "float",
                 "description": "The bin size in nanometers.",
@@ -5133,78 +5079,45 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             in the decorator wrapper
         """
         parameters_spec = {
-            "radius": {
-                "type": "float",
-                "description": "DBSCAN radius for interaction clustering",
-                "min": 1.0,
-                "max": 500.0,
-                "default": 30.0,
-                "required": True,
-            },
-            "min_samples": {
-                "type": "int",
-                "description": "Minimum samples for interaction clusters",
-                "min": 1,
-                "max": 50,
-                "default": 3,
-                "required": True,
-            },
-            "interaction_threshold": {
-                "type": "float",
-                "description": "Distance threshold for interactions",
-                "min": 1.0,
-                "max": 200.0,
-                "default": 50.0,
-                "required": False,
-            },
             "fp_channel_map": {
+                "type": "path",
+                "description": "Filepath to the map from 'combine_channels' "
+                "module (dict from channel name to ID int in "
+                "locs['combine_id'])",
                 "required": True,
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: filepath to the map from 'combine_channels' module, which is a dict from channel name to ID int in the locs['combine_id']
-                # Hint: type appears to be str
-                # Hint: required = True
             },
             "epsilon_nm": {
+                "type": "float",
+                "description": "DBSCAN epsilon in nm",
+                "unit": "nm",
                 "required": True,
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: dbscan epsilon in nm
-                # Hint: type appears to be float
-                # Hint: required = True
             },
             "minpts": {
+                "type": "int",
+                "description": "Minimum number of points",
                 "required": True,
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: minimum number of points
-                # Hint: type appears to be int
-                # Hint: required = True
             },
             "sigma_linker": {
+                "type": "float",
+                "description": "Linker size in nm",
+                "unit": "nm",
                 "required": True,
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: ... in nm
-                # Hint: type appears to be float
-                # Hint: required = True
             },
             "fp_merge_mask": {
+                "type": "path",
+                "description": "Filepath to the merge mask (generated in "
+                "module 'create_mask')",
                 "required": True,
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: filepath to the merge mask (generated in module
-                # Hint: type appears to be str
-                # Hint: required = True
             },
             "thresh_type": {
+                "type": "str",
+                "description": "Threshold type",
                 "required": True,
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: ...
-                # Hint: type appears to be str
-                # Hint: required = True
             },
             "cell_name": {
+                "type": "str",
+                "description": "The name of the cell currently analyzed",
                 "required": True,
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the name of the cell currently analyzed
-                # Hint: type appears to be str
-                # Hint: required = True
             },
         }
 
@@ -5390,61 +5303,54 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             in the decorator wrapper
         """
         parameters_spec = {
-            "motif_size": {
-                "type": "int",
-                "description": "Size of motifs to search for",
-                "min": 2,
-                "max": 20,
-                "default": 5,
+            "fp_workflows": {
+                "type": "list",
+                "description": "Paths to the folders of the separate "
+                "workflows to merge",
+                "element_type": "str",
                 "required": True,
             },
-            "similarity_threshold": {
-                "type": "float",
-                "description": "Threshold for motif similarity",
-                "min": 0.0,
-                "max": 1.0,
-                "default": 0.8,
-                "required": False,
-            },
-            "fp_workflows": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the paths to the folders of separate workflows where the separate ripleys analyses have been done
-                # Hint: type appears to be list
-                # Hint: required = True
-            },
             "report_names": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the report names of those worklfows
-                # Hint: type appears to be list
-                # Hint: required = True
+                "type": "list",
+                "description": "The report names of those workflows",
+                "element_type": "str",
+                "required": True,
             },
             "swkfl_dbscan_molint_key": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the results key of the dbscan module. e.g. '09_dbscan_molint'
-                # Hint: type appears to be str
-                # Hint: required = True
+                "type": "str",
+                "description": "The results key of the DBSCAN module, "
+                "e.g. '09_dbscan_molint'",
+                "required": True,
             },
             "swkfl_CSR_sim_in_mask_key": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the results key of the CSR dbscan module. e.g. '10_CSR_sim_in_mask' population_threshold : float, 0 - 1 only select barcodes with a relative popula...
-                # Hint: type appears to be str
-                # Hint: required = True
+                "type": "str",
+                "description": "The results key of the CSR DBSCAN module, "
+                "e.g. '10_CSR_sim_in_mask'",
+                "required": True,
             },
             "population_threshold": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: type appears to be float
-                # Hint: required = True
+                "type": "float",
+                "description": "Only select barcodes with a relative "
+                "population above this (0 - 1)",
+                "min": 0.0,
+                "max": 1.0,
+                "required": True,
             },
             "ttest_pvalue_max": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: type appears to be float
-                # Hint: required = True
+                "type": "float",
+                "description": "The p-value below which the exp-vs-CSR "
+                "difference in cluster count for a barcode is significant",
+                "min": 0.0,
+                "max": 1.0,
+                "required": True,
             },
-            "channel_colors": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: colors to describe the receptors with
-                # Hint: type appears to be list
-                # Hint: required = True
+            "cellfraction_threshold": {
+                "type": "float",
+                "description": "The fraction of cells (0 - 1) that must "
+                "carry the barcode at least once",
+                "min": 0.0,
+                "max": 1.0,
+                "required": True,
             },
         }
 
@@ -5511,66 +5417,45 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             in the decorator wrapper
         """
         parameters_spec = {
-            "graph_type": {
-                "type": "str",
-                "description": "Type of interaction graph",
-                "options": ["adjacency", "distance", "correlation"],
+            "fp_workflows": {
+                "type": "list",
+                "description": "Paths to the folders of the separate "
+                "workflows where the separate ripleys analyses were done",
+                "element_type": "str",
                 "required": True,
             },
-            "edge_threshold": {
-                "type": "float",
-                "description": "Threshold for graph edges",
-                "min": 0.0,
-                "max": 1000.0,
-                "required": False,
-            },
-            "fp_workflows": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the paths to the folders of separate workflows where the separate ripleys analyses have been done
-                # Hint: type appears to be list
-                # Hint: required = True
-            },
             "report_names": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the report names of those worklfows
-                # Hint: type appears to be list
-                # Hint: required = True
+                "type": "list",
+                "description": "The report names of those workflows",
+                "element_type": "str",
+                "required": True,
             },
             "swkfl_protint_key": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the results key of the protein_interactions module. e.g. '09_protein_interactions'
-                # Hint: type appears to be str
-                # Hint: required = True
-            },
-            "fp_density": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: fp to the denfsities of the channels.
-                # Hint: type appears to be str
-                # Hint: required = True
+                "type": "str",
+                "description": "The results key of the protein_interactions "
+                "module, e.g. '09_protein_interactions'",
+                "required": True,
             },
             "fp_ripleys_meanvals": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the filepath to the interaction matrix
-                # Hint: type appears to be str
-                # Hint: required = True
-            },
-            "edge_factor": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: factor to display useful sizes
-                # Hint: type appears to be float
-                # Hint: required = True
+                "type": "path",
+                "description": "The filepath to the interaction matrix",
+                "required": True,
             },
             "node_factor": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: factor to display useful sizes
-                # Hint: type appears to be float
-                # Hint: required = True
+                "type": "float",
+                "description": "Factor to display useful node sizes",
+                "required": True,
+            },
+            "edge_factor": {
+                "type": "float",
+                "description": "Factor to display useful edge sizes",
+                "required": True,
             },
             "channel_colors": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: colors to describe the receptors with
-                # Hint: type appears to be list
-                # Hint: required = True
+                "type": "list",
+                "description": "Colors to describe the receptors with",
+                "element_type": "str",
+                "required": True,
             },
         }
 
@@ -5720,33 +5605,6 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             in the decorator wrapper
         """
         parameters_spec = {
-            "nlocs_threshold": {
-                "type": "int",
-                "description": (
-                    "Minimum number of localizations for gold detection"
-                ),
-                "min": 10,
-                "max": 10000,
-                "default": 100,
-                "required": True,
-            },
-            "rms_threshold": {
-                "type": "float",
-                "description": "Maximum RMS deviation threshold",
-                "min": 0.1,
-                "max": 10.0,
-                "default": 2.0,
-                "required": True,
-            },
-            "frame_window": {
-                "type": "int",
-                "description": "Frame window for kinetics analysis",
-                "unit": "frames",
-                "min": 10,
-                "max": 1000,
-                "default": 100,
-                "required": False,
-            },
             "remove_gold": {
                 "type": "bool",
                 "description": "If present and set to True, the gold \
@@ -5756,11 +5614,22 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             },
             "diameter": {
                 "type": "float",
-                "description": "The pick similar diameter for \
-                    identifying gold std_range, mean_rmsd : float \
-                    the pick similar parameters identifying gold",
+                "description": "The pick-similar diameter for identifying "
+                "gold",
                 "min": 0.0,
-                "default": 2.0,
+                "default": 2.5,
+                "required": False,
+            },
+            "std_range": {
+                "type": "float",
+                "description": "The pick-similar std_range parameter "
+                "identifying gold",
+                "required": False,
+            },
+            "mean_rmsd": {
+                "type": "float",
+                "description": "The pick-similar mean_rmsd parameter "
+                "identifying gold",
                 "required": False,
             },
         }
@@ -5833,65 +5702,50 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             in the decorator wrapper
         """
         parameters_spec = {
-            "reference_structure": {
-                "type": "int",
-                "description": "Index of reference structure",
-                "min": 0,
-                "required": True,
-            },
-            "similarity_metric": {
-                "type": "str",
-                "description": "Metric for similarity calculation",
-                "options": ["euclidean", "cosine", "correlation"],
-                "required": True,
-            },
-            "tolerance": {
+            "diameter": {
                 "type": "float",
-                "description": "Tolerance for similarity matching",
-                "min": 0.0,
-                "max": 1.0,
-                "default": 0.1,
+                "description": "The pick-similar diameter for identifying "
+                "gold",
+                "default": 2.0,
                 "required": False,
             },
-            "diameter": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the pick similar diameter for identifying gold
-                # Hint: type appears to be float
-                # Hint: required = True
-            },
             "min_n_locs_per_frame": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: type appears to be float
-                # Hint: required = False (optional)
+                "type": "float",
+                "description": "Min percentage (0-1) of frames with events "
+                "in the pick region to pick",
+                "default": 0.01,
+                "required": False,
             },
             "max_n_locs_per_frame": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: type appears to be float
-                # Hint: required = False (optional)
+                "type": "float",
+                "description": "Max percentage (0-1) of frames with events "
+                "in the pick region to pick",
+                "default": 0.01,
+                "required": False,
             },
             "min_rmsd": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the minimum root mean square distance from pick center to pick
-                # Hint: type appears to be float
-                # Hint: required = False (optional)
+                "type": "float",
+                "description": "Minimum RMS distance from the pick center "
+                "to pick",
+                "required": False,
             },
             "max_rmsd": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the maximum root mean square distance from pick center to pick
-                # Hint: type appears to be float
-                # Hint: required = False (optional)
+                "type": "float",
+                "description": "Maximum RMS distance from the pick center "
+                "to pick",
+                "required": False,
             },
             "n_plot_structures": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the number of structures to plot
-                # Hint: type appears to be int
-                # Hint: required = False (optional)
+                "type": "int",
+                "description": "Number of structures to plot",
+                "required": False,
             },
             "display_pixelsize": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the pixelsize for display in nm, default: 1
-                # Hint: type appears to be float
-                # Hint: required = False (optional)
+                "type": "float",
+                "description": "Pixel size for display in nm",
+                "unit": "nm",
+                "default": 1,
+                "required": False,
             },
         }
 
@@ -5952,55 +5806,42 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             in the decorator wrapper
         """
         parameters_spec = {
-            "cluster_method": {
-                "type": "str",
-                "description": "Method for structure clustering",
-                "options": ["kmeans", "hierarchical", "spectral"],
+            "diameter": {
+                "type": "float",
+                "description": "The pick-similar diameter for identifying "
+                "gold",
                 "required": True,
             },
-            "n_structures": {
-                "type": "int",
-                "description": "Number of structure types to identify",
-                "min": 1,
-                "max": 20,
-                "default": 5,
+            "min_n_locs_per_frame": {
+                "type": "float",
+                "description": "Percentage of frames with events in the pick "
+                "region below which there is noise",
+                "default": 0.01,
                 "required": False,
             },
-            "diameter": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the pick similar diameter for identifying gold
-                # Hint: type appears to be float
-                # Hint: required = True
-            },
-            "min_n_locs_per_frame": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the percentage of frames with events in the pick region below which there is noise. default: 0.01
-                # Hint: type appears to be float
-                # Hint: required = False (optional)
-            },
             "n_plot_structures": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the number of structures to plot
-                # Hint: type appears to be int
-                # Hint: required = False (optional)
+                "type": "int",
+                "description": "Number of structures to plot",
+                "required": False,
             },
             "display_pixelsize": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the pixelsize for display in nm, default: 1
-                # Hint: type appears to be float
-                # Hint: required = False (optional)
+                "type": "float",
+                "description": "Pixel size for display in nm",
+                "unit": "nm",
+                "default": 1,
+                "required": False,
             },
             "xi": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the xi parameter for clustering. default 0.05
-                # Hint: type appears to be float
-                # Hint: required = False (optional)
+                "type": "float",
+                "description": "The OPTICS xi clustering parameter",
+                "default": 0.05,
+                "required": False,
             },
             "min_cluster_size": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the minimun cluster size (fract). default .05
-                # Hint: type appears to be float
-                # Hint: required = False (optional)
+                "type": "float",
+                "description": "Minimum cluster size as a fraction",
+                "default": 0.05,
+                "required": False,
             },
         }
 
@@ -6195,6 +6036,25 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "min": 0.0,
                 "max": 1.0,
                 "default": 0.66,
+                "required": False,
+            },
+            "contour_threshold": {
+                "type": "float",
+                "description": (
+                    "Contour-detection threshold for finding candidate "
+                    "origami footprints"
+                ),
+                "default": 2000,
+                "required": False,
+            },
+            "n_plot_columns": {
+                "type": "int",
+                "description": (
+                    "Number of columns in the representative-structures "
+                    "plot grid"
+                ),
+                "min": 1,
+                "default": 8,
                 "required": False,
             },
         }
@@ -6680,42 +6540,17 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             in the decorator wrapper
         """
         parameters_spec = {
-            "max_distance": {
-                "type": "float",
-                "description": "Maximum linking distance in nm",
-                "unit": "nm",
-                "min": 1.0,
-                "max": 1000.0,
-                "default": 100.0,
-                "required": True,
-            },
-            "max_frame_gap": {
-                "type": "int",
-                "description": "Maximum frame gap for linking",
-                "unit": "frames",
-                "min": 1,
-                "max": 100,
-                "default": 5,
-                "required": True,
-            },
-            "linking_algorithm": {
-                "type": "str",
-                "description": "Algorithm for localization linking",
-                "options": ["nearest_neighbor", "hungarian", "lap"],
-                "default": "hungarian",
-                "required": False,
-            },
             "d_max": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: maximum distance to link [px]
-                # Hint: type appears to be int
-                # Hint: required = True
+                "type": "int",
+                "description": "Maximum distance to link, in pixels",
+                "unit": "px",
+                "required": True,
             },
             "tolerance": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: maximum transient dark time [frames]
-                # Hint: type appears to be int
-                # Hint: required = True
+                "type": "int",
+                "description": "Maximum transient dark time, in frames",
+                "unit": "frames",
+                "required": True,
             },
         }
 
@@ -6781,63 +6616,59 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             in the decorator wrapper
         """
         parameters_spec = {
-            "sub_module": {
+            "module_name": {
                 "type": "str",
-                "description": "Name of the sub-module to execute",
+                "description": "The module to call",
                 "required": True,
             },
-            "sub_module_params": {
-                "type": "dict",
-                "description": "Parameters for the sub-module",
-                "required": False,
-            },
-            "module_name": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the module to call
-                # Hint: type appears to be str
-                # Hint: required = True
-            },
             "param_target1": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: parameter name of the first target to set for the module
-                # Hint: type appears to be str
-                # Hint: required = True
+                "type": "str",
+                "description": "Parameter name of the first target to set "
+                "for the module",
+                "required": True,
             },
             "param_target2": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: parameter name of the second target to set for the module
-                # Hint: type appears to be str
-                # Hint: required = True
+                "type": "str",
+                "description": "Parameter name of the second target to set "
+                "for the module",
+                "required": True,
             },
             "module_kwargs": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the other arguments to the module
-                # Hint: type appears to be dict
-                # Hint: required = True
+                "type": "dict",
+                "description": "The other arguments to the module",
+                "required": False,
+            },
+            "xlabel": {
+                "type": "str",
+                "description": "Label for the x-axis of the heatmap",
+                "required": True,
+            },
+            "ylabel": {
+                "type": "str",
+                "description": "Label for the y-axis of the heatmap",
+                "required": True,
             },
             "result_scalar": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the key to display in a heatmap as main result
-                # Hint: type appears to be str
-                # Hint: required = False (optional)
+                "type": "str",
+                "description": "The key to display in a heatmap as main "
+                "result",
+                "required": False,
             },
             "scalar_threshold": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the saturation value in the heatmap
-                # Hint: type appears to be float
-                # Hint: required = False (optional)
+                "type": "float",
+                "description": "The saturation value in the heatmap",
+                "required": False,
             },
             "scalar_minval": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the minimum value for color in the heatmap
-                # Hint: type appears to be float
-                # Hint: required = False (optional)
+                "type": "float",
+                "description": "The minimum value for color in the heatmap",
+                "required": False,
             },
             "result_fpfig": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the key to the filepath of one or more figures generated to display for documentation
-                # Hint: type appears to be str or list
-                # Hint: required = False (optional)
+                "type": ["str", "list"],
+                "description": "The key to the filepath of one or more "
+                "figures generated to display for documentation",
+                "required": False,
             },
         }
 
@@ -7136,12 +6967,6 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                     },
                 },
             },
-            "n_simulate": {
-                "type": "int",
-                "description": "Number of structures to simulate",
-                "default": 500000,
-                "required": True,
-            },
             "density": {
                 "type": "dict",
                 "description": "Dictionary mapping from target/reference (tag) "
@@ -7179,6 +7004,12 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "description": "Maximum distance in histogram (nm). Auto-calculated if None or 0.",
                 "unit": "nm",
                 "default": 0,
+                "required": False,
+            },
+            "bootstrap": {
+                "type": "bool",
+                "description": "If True, also return the per-target "
+                "labeling-efficiency std from bootstrap resampling",
                 "required": False,
             },
         }
@@ -7689,51 +7520,43 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 path to radial profile plot
         """
         parameters_spec = {
-            "xlabel": {
-                "type": "str",
-                "description": "Label for the x-axis of the test plot",
-                "required": True,
-            },
-            "ylabel": {
-                "type": "str",
-                "description": "Label for the y-axis of the test plot",
-                "required": True,
-            },
             "delta_r": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: grid spacing for autocorrelation (default: 5 nm)
-                # Hint: type appears to be float
-                # Hint: required = False (optional)
+                "type": "float",
+                "description": "Grid spacing for autocorrelation (nm)",
+                "unit": "nm",
+                "default": 5.0,
+                "required": False,
             },
             "r_max": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: maximum radius for autocorrelation (default: 100 nm)
-                # Hint: type appears to be float
-                # Hint: required = False (optional)
+                "type": "float",
+                "description": "Maximum radius for autocorrelation (nm)",
+                "unit": "nm",
+                "default": 100.0,
+                "required": False,
             },
             "batch_size": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: number of data points per batch for chunking (auto-calculated if None)
-                # Hint: type appears to be int or None
-                # Hint: required = False (optional)
+                "type": "int",
+                "description": "Data points per batch for chunking "
+                "(auto if None)",
+                "required": False,
             },
             "n_processes": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: number of parallel processes (auto-detected if None, capped at 4)
-                # Hint: type appears to be int or None
-                # Hint: required = False (optional)
+                "type": "int",
+                "description": "Number of parallel processes (auto if None, "
+                "capped at 4)",
+                "required": False,
             },
             "use_chunking": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: enable memory-efficient chunking for large datasets (default: True)
-                # Hint: type appears to be bool
-                # Hint: required = False (optional)
+                "type": "bool",
+                "description": "Memory-efficient chunking for large datasets",
+                "default": True,
+                "required": False,
             },
             "use_sparse": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: use sparse matrices for very large grids (default: False)
-                # Hint: type appears to be bool
-                # Hint: required = False (optional)
+                "type": "bool",
+                "description": "Use sparse matrices for very large grids",
+                "default": False,
+                "required": False,
             },
         }
 
@@ -7858,63 +7681,57 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 path to FRC curve plot
         """
         parameters_spec = {
-            "xlabel": {
-                "type": "str",
-                "description": "Label for the x-axis of the test plot",
-                "required": True,
-            },
-            "ylabel": {
-                "type": "str",
-                "description": "Label for the y-axis of the test plot",
-                "required": True,
-            },
             "pixelsize_render": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: pixel size for rendered images in nm (default: 5 nm)
-                # Hint: type appears to be float
-                # Hint: required = False (optional)
+                "type": "float",
+                "description": "Pixel size for rendered images in nm",
+                "unit": "nm",
+                "default": 5.0,
+                "required": False,
             },
             "smoothing_sigma": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: Gaussian smoothing sigma in pixels (default: None)
-                # Hint: type appears to be float or None
-                # Hint: required = False (optional)
+                "type": "float",
+                "description": "Gaussian smoothing sigma in pixels "
+                "(None = no smoothing)",
+                "required": False,
             },
             "threshold": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: FRC threshold for resolution cutoff (default: 1/7 ≈ 0.143)
-                # Hint: type appears to be float
-                # Hint: required = False (optional)
+                "type": "float",
+                "description": "FRC threshold for the resolution cutoff "
+                "(default 1/7 ≈ 0.143)",
+                "default": 1.0 / 7.0,
+                "required": False,
             },
             "region_size": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: size of each spatial region in micrometers (default: 10.0 µm)
-                # Hint: type appears to be float
-                # Hint: required = False (optional)
+                "type": "float",
+                "description": "Size of each spatial region in micrometers",
+                "unit": "µm",
+                "default": 10.0,
+                "required": False,
             },
             "min_locs_per_region": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: minimum localizations per region to process (default: 500)
-                # Hint: type appears to be int
-                # Hint: required = False (optional)
+                "type": "int",
+                "description": "Minimum localizations per region to process",
+                "default": 500,
+                "required": False,
             },
             "max_frc_range_nm": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: maximum FRC range in nm (default: None = full range)
-                # Hint: type appears to be float or None
-                # Hint: required = False (optional)
+                "type": "float",
+                "description": "Maximum FRC range in nm (None = full range)",
+                "unit": "nm",
+                "required": False,
             },
             "n_processes": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: number of parallel processes (default: 4)
-                # Hint: type appears to be int
-                # Hint: required = False (optional)
+                "type": "int",
+                "description": "Number of parallel processes",
+                "default": 4,
+                "required": False,
             },
             "smoothing_window": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: moving average window size for FRC smoothing in 1/nm (default: 0.005)
-                # Hint: type appears to be float
-                # Hint: required = False (optional)
+                "type": "float",
+                "description": "Moving-average window size for FRC smoothing "
+                "in 1/nm",
+                "default": 0.005,
+                "required": False,
             },
         }
 
