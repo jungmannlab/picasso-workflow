@@ -116,7 +116,13 @@ SIGNATURE_CONTRACT = {
         "pick_shape",
         "pick_size",
     ),
-    "postprocess.align": ("locs", "infos"),
+    "postprocess.align": (
+        "locs",
+        "infos",
+        "method",
+        "max_shift",
+        "return_shifts",
+    ),
     "postprocess.plot_drift": ("drift", "fig"),
     # picasso 1.0 public pick-similar APIs (replace the former private
     # ``_pick_similar`` / ``_n_block_locs_at`` reach-ins).

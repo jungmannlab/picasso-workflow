@@ -351,40 +351,42 @@ class TestPicassoOutpost(unittest.TestCase):
 
         assert ngold_locs == len(centers) * info[0]["Frames"]
 
-    @unittest.skip("")
-    def test_07_rsso_alignment(self):
-        """Test the new filtered_RCC alignment method"""
-        # Create test data with known shift
-        shift_x = 2.0
-        shift_y = 1.5
+    def test_07_rsso_points_alignment(self):
+        """RSSO channel alignment runs picasso points-align (nm-native).
 
-        # Channel A (reference)
-        locs_a = pd.DataFrame(
-            np.rec.array(
-                [(1, 1), (3, 4), (5, 7), (8, 2)],
-                dtype=[("x", "f4"), ("y", "f4")],
+        Synthesizes two channels of clustered localizations with a known
+        injected shift and checks that ``align_channels(force_method="RSSO")``
+        -- now backed by ``picasso.postprocess.align(method="points")`` --
+        recovers it (nm), keeps ``algo_used == "RSSO"``, and reports the four
+        aggregated uncertainty keys the Confluence reporter reads.
+        """
+        pytest.importorskip("picasso")
+
+        rng = np.random.default_rng(0)
+        centers = rng.uniform(0, 5000, size=(60, 2))
+
+        def make_locs(extra_shift):
+            pts = np.concatenate(
+                [rng.normal([cx, cy], 8.0, size=(40, 2)) for cx, cy in centers]
             )
-        )
-
-        # Channel B (shifted version of A with some noise)
-        locs_b = pd.DataFrame(
-            np.rec.array(
-                [
-                    (1 + shift_x + 0.1, 1 + shift_y + 0.1),
-                    (3 + shift_x - 0.1, 4 + shift_y + 0.1),
-                    (5 + shift_x + 0.05, 7 + shift_y - 0.05),
-                    (8 + shift_x - 0.05, 2 + shift_y + 0.05),
-                ],
-                dtype=[("x", "f4"), ("y", "f4")],
+            pts = pts + np.asarray(extra_shift)
+            frame = rng.integers(0, 1000, size=len(pts)).astype("i4")
+            return np.rec.array(
+                (
+                    frame,
+                    pts[:, 0].astype("f4"),
+                    pts[:, 1].astype("f4"),
+                ),
+                dtype=[("frame", "i4"), ("x", "f4"), ("y", "f4")],
             )
-        )
 
-        info_a = [{"Width": 20, "Height": 20}]
-        info_b = [{"Width": 20, "Height": 20}]
-
-        # Test the align_channels function with filtered_RCC
-        # original_locs_a = locs_a.copy()
-        # original_locs_b = locs_b.copy()
+        # Channel 1 is channel 0 displaced by (30 nm, -20 nm).
+        inj_x, inj_y = 30.0, -20.0
+        locs_a = make_locs((0.0, 0.0))
+        locs_b = make_locs((inj_x, inj_y))
+        info = [{"Width": 5100, "Height": 5100, "Pixelsize": 1.0}]
+        channel_locs = [locs_a, locs_b]
+        channel_info = [list(info), list(info)]
 
         (
             shift,
@@ -394,272 +396,77 @@ class TestPicassoOutpost(unittest.TestCase):
             fp_figs,
             shift_uncertainties,
         ) = channels.align_channels(
-            [locs_a, locs_b],
-            [info_a, info_b],
+            channel_locs,
+            channel_info,
             force_method="RSSO",
-            max_shift=5.0,
+            max_shift=200,
         )
 
-        # Check that method was correctly used
         assert method == "RSSO"
+        assert fp_figs == []
+        # shift == [[x per channel], [y per channel]]; channel 0 is reference.
+        assert abs(shift[0][0]) < 1e-6 and abs(shift[1][0]) < 1e-6
+        recovered = cum_shift[:, :, -1]  # shape (2, 2): rows x, y
+        assert abs(recovered[0, 1] - inj_x) < 3.0
+        assert abs(recovered[1, 1] - inj_y) < 3.0
+        # The four aggregated uncertainty keys the reporter reads (nm).
+        for key in (
+            "mean_x_uncertainty",
+            "mean_y_uncertainty",
+            "max_x_uncertainty",
+            "max_y_uncertainty",
+        ):
+            assert key in shift_uncertainties
+            assert shift_uncertainties[key] >= 0
 
-        # Check that shifts are approximately correct
-        # The function should return the shift needed to align channels
-        # shift is a tuple (shifts_y, shifts_x)
-        assert (
-            abs(shift[0][1] - shift_y) < 0.5
-        )  # y shift for channel B (relaxed for histogram fallback)
-        assert (
-            abs(shift[1][1] - shift_x) < 0.5
-        )  # x shift for channel B (relaxed for histogram fallback)
+    def test_07b_rsso_points_alignment_unalignable_fallback(self):
+        """Unalignable channels degrade to a zero shift, not a crash.
 
-        # Check that channel A (reference) has no shift
-        assert abs(shift[0][0]) < 0.1  # y shift for channel A
-        assert abs(shift[1][0]) < 0.1  # x shift for channel A
+        picasso's points-align raises ``ValueError`` when it cannot find a
+        displacement peak between enough channel pairs (here, two channels of
+        structureless uniform-random localizations). The retired RSSO returned
+        a zero-shift no-op rather than aborting the aggregation workflow;
+        ``_align_by_points`` preserves that graceful fallback.
+        """
+        pytest.importorskip("picasso")
 
-        logger.debug(f"Detected shifts: x={shift[1]}, y={shift[0]}")
-        logger.debug(f"Expected shifts: x={-shift_x}, y={-shift_y}")
+        rng = np.random.default_rng(1)
 
-    @unittest.skip("")
-    def test_08_rsso_direct_function(self):
-        """Test the align_by_rsso function directly"""
-        # Create test data with known shift
-        shift_x = 1.0
-        shift_y = 0.5
-
-        # Channel A (reference)
-        locs_a = pd.DataFrame(
-            np.rec.array(
-                [(2, 2), (4, 4), (6, 6)], dtype=[("x", "f4"), ("y", "f4")]
-            )
-        )
-
-        # Channel B (shifted version of A)
-        locs_b = pd.DataFrame(
-            np.rec.array(
-                [
-                    (2 + shift_x, 2 + shift_y),
-                    (4 + shift_x, 4 + shift_y),
-                    (6 + shift_x, 6 + shift_y),
-                ],
-                dtype=[("x", "f4"), ("y", "f4")],
-            )
-        )
-
-        # Test the direct function
-        # original_locs_a = locs_a.copy()
-        # original_locs_b = locs_b.copy()
-
-        shifts, fp_figs, shift_uncertainties = channels.align_by_rsso(
-            [locs_a, locs_b], max_shift=3.0
-        )
-
-        # Check that shifts are approximately correct
-        # The function should return the shift needed to align channels
-        assert (
-            abs(shifts[0][1] - shift_y) < 0.65
-        )  # y shift for channel B (relaxed tolerance for histogram fallback)
-        assert (
-            abs(shifts[1][1] - shift_x) < 0.65
-        )  # x shift for channel B (relaxed tolerance for histogram fallback)
-
-        # Check that channel A (reference) has no shift
-        assert abs(shifts[0][0]) < 0.1  # y shift for channel A
-        assert abs(shifts[1][0]) < 0.1  # x shift for channel A
-
-    @unittest.skip("")
-    def test_09_rsso_three_channels(self):
-        """Test rsso with 3 channels to verify redundant benefits."""
-        # Create test data with known shifts
-        shift_x_b = 2.0
-        shift_y_b = 1.0
-        shift_x_c = -1.5
-        shift_y_c = 2.5
-
-        # Channel A (reference)
-        locs_a = pd.DataFrame(
-            np.rec.array(
-                [(2, 2), (4, 4), (6, 6), (8, 8), (10, 10)],
-                dtype=[("x", "f4"), ("y", "f4")],
-            )
-        )
-
-        # Channel B (shifted version of A with small noise)
-        locs_b = pd.DataFrame(
-            np.rec.array(
-                [
-                    (2 + shift_x_b + 0.05, 2 + shift_y_b - 0.03),
-                    (4 + shift_x_b - 0.02, 4 + shift_y_b + 0.04),
-                    (6 + shift_x_b + 0.01, 6 + shift_y_b - 0.01),
-                    (8 + shift_x_b - 0.03, 8 + shift_y_b + 0.02),
-                    (10 + shift_x_b + 0.04, 10 + shift_y_b - 0.05),
-                ],
-                dtype=[("x", "f4"), ("y", "f4")],
-            )
-        )
-
-        # Channel C (another shifted version of A with small noise)
-        locs_c = pd.DataFrame(
-            np.rec.array(
-                [
-                    (2 + shift_x_c - 0.02, 2 + shift_y_c + 0.06),
-                    (4 + shift_x_c + 0.03, 4 + shift_y_c - 0.02),
-                    (6 + shift_x_c - 0.01, 6 + shift_y_c + 0.03),
-                    (8 + shift_x_c + 0.05, 8 + shift_y_c - 0.04),
-                    (10 + shift_x_c - 0.04, 10 + shift_y_c + 0.01),
-                ],
-                dtype=[("x", "f4"), ("y", "f4")],
-            )
-        )
-
-        # Test with the improved algorithm
-        shifts, fp_figs, shift_uncertainties = channels.align_by_rsso(
-            [locs_a, locs_b, locs_c], max_shift=5.0
-        )
-
-        # Check that shifts are approximately correct
-        # Channel A should have no shift (reference)
-        assert abs(shifts[0][0]) < 0.1  # y shift for channel A
-        assert abs(shifts[1][0]) < 0.1  # x shift for channel A
-
-        # Channel B shifts (relaxed tolerances for least squares with
-        # histogram fallback)
-        assert abs(shifts[0][1] - shift_y_b) < 1.1  # y shift for channel B
-        assert abs(shifts[1][1] - shift_x_b) < 1.1  # x shift for channel B
-
-        # Channel C shifts (very relaxed tolerances for redundant least squares)
-        # Note: With redundant measurements, the least squares solution may differ
-        # significantly from individual pairwise measurements due to error
-        # optimization
-        assert abs(shifts[0][2] - shift_y_c) < 4.0  # y shift for channel C
-        assert abs(shifts[1][2] - shift_x_c) < 4.0  # x shift for channel C
-
-        logger.debug(
-            f"3-channel shifts - expected: x=[0, {shift_x_b}, {shift_x_c}], "
-            f"y=[0, {shift_y_b}, {shift_y_c}]"
-        )
-        logger.debug(
-            f"3-channel shifts - detected: x={shifts[1]}, y={shifts[0]}"
-        )
-
-    @unittest.skip("")
-    def test_10_rsso_four_channels_redundancy(self):
-        """Test rsso with 4 channels to demonstrate redundancy."""
-        # Create test data with known shifts
-        shifts_x_true = [0.0, 1.2, -0.8, 2.3]
-        shifts_y_true = [0.0, 0.5, 1.8, -1.1]
-
-        # Base localizations
-        base_locs = [(3, 3), (6, 6), (9, 9), (12, 12), (15, 15)]
-
-        # Set random seed for reproducible results
-        np.random.seed(42)
-
-        channel_locs = []
-        for i in range(4):
-            # Add known shift plus small random noise to each localization
-            shifted_locs = [
+        def uniform_locs(n=500):
+            pts = rng.uniform(0, 5000, size=(n, 2))
+            frame = rng.integers(0, 1000, size=n).astype("i4")
+            return np.rec.array(
                 (
-                    x + shifts_x_true[i] + np.random.normal(0, 0.02),
-                    y + shifts_y_true[i] + np.random.normal(0, 0.02),
-                )
-                for x, y in base_locs
-            ]
-            locs = pd.DataFrame(
-                np.rec.array(shifted_locs, dtype=[("x", "f4"), ("y", "f4")])
-            )
-            channel_locs.append(locs)
-
-        # Test with the improved algorithm
-        shifts, fp_figs, shift_uncertainties = channels.align_by_rsso(
-            channel_locs, max_shift=5.0
-        )
-
-        # Check accuracy for all channels
-        # The redundant calculation should provide better accuracy
-        for i in range(4):
-            y_error = abs(shifts[0][i] - shifts_y_true[i])
-            x_error = abs(shifts[1][i] - shifts_x_true[i])
-            logger.debug(
-                f"Channel {i}: y_error={y_error:.3f}, x_error={x_error:.3f}"
-            )
-            # With redundant calculations and 4 channels, least squares optimization
-            # can result in larger deviations from individual pairwise measurements
-            # (very relaxed tolerances due to histogram fallback and overdetermined
-            # system)
-            assert y_error < 3.0  # y shift
-            assert (
-                x_error < 5.0
-            )  # x shift (extra relaxed for complex overdetermined case)
-
-        logger.debug(
-            f"4-channel shifts - expected: x={shifts_x_true}, "
-            f"y={shifts_y_true}"
-        )
-        logger.debug(
-            f"4-channel shifts - detected: x={shifts[1]}, y={shifts[0]}"
-        )
-
-    @unittest.skip("")
-    def test_11_rsso_plotting(self):
-        """Test the histogram plotting functionality."""
-        import tempfile
-        import os
-
-        # Create test data
-        shift_x = 1.5
-        shift_y = 0.8
-
-        locs_a = pd.DataFrame(
-            np.rec.array(
-                [(2, 2), (4, 4), (6, 6)], dtype=[("x", "f4"), ("y", "f4")]
-            )
-        )
-        locs_b = pd.DataFrame(
-            np.rec.array(
-                [
-                    (2 + shift_x, 2 + shift_y),
-                    (4 + shift_x, 4 + shift_y),
-                    (6 + shift_x, 6 + shift_y),
-                ],
-                dtype=[("x", "f4"), ("y", "f4")],
-            )
-        )
-
-        # Create temporary directory for plots
-        with tempfile.TemporaryDirectory() as temp_dir:
-            # Test with plotting enabled
-            shifts, fp_figs, shift_uncertainties = channels.align_by_rsso(
-                [locs_a, locs_b],
-                max_shift=3.0,
-                plot_histogram=True,
-                plot_dir=temp_dir,
+                    frame,
+                    pts[:, 0].astype("f4"),
+                    pts[:, 1].astype("f4"),
+                ),
+                dtype=[("frame", "i4"), ("x", "f4"), ("y", "f4")],
             )
 
-            # Check that plot file was created via file system
-            expected_filename = "shift_histogram_ch0_to_ch1.png"
-            plot_path = os.path.join(temp_dir, expected_filename)
-            assert os.path.exists(
-                plot_path
-            ), f"Plot file {plot_path} not created"
+        info = [{"Width": 5100, "Height": 5100, "Pixelsize": 1.0}]
+        channel_locs = [uniform_locs(), uniform_locs()]
+        channel_info = [list(info), list(info)]
 
-            # Check that figure paths were returned
-            assert (
-                len(fp_figs) == 1
-            ), f"Expected 1 figure path, got {len(fp_figs)}"
-            assert (
-                fp_figs[0] == plot_path
-            ), f"Expected {plot_path}, got {fp_figs[0]}"
+        (
+            shift,
+            cum_shift,
+            use_fiducials,
+            method,
+            fp_figs,
+            shift_uncertainties,
+        ) = channels.align_channels(
+            channel_locs,
+            channel_info,
+            force_method="RSSO",
+            max_shift=200,
+        )
 
-            # Check file size is reasonable (not empty)
-            file_size = os.path.getsize(plot_path)
-            assert (
-                file_size > 1000
-            ), f"Plot file seems too small: {file_size} bytes"
-
-            logger.debug(f"Plot saved successfully to {plot_path}")
-            logger.debug(f"Plot file size: {file_size} bytes")
-            logger.debug(f"Returned figure paths: {fp_figs}")
+        # No exception: a zero-shift no-op, matching the retired RSSO.
+        assert method == "RSSO"
+        assert fp_figs == []
+        assert shift_uncertainties == {}
+        assert np.all(cum_shift[:, :, -1] == 0.0)
 
     @unittest.skip("")
     def test_12_resolution_ppac(self):
@@ -851,105 +658,6 @@ class TestPicassoOutpost(unittest.TestCase):
         ]
         for key in expected_keys:
             assert key in results, f"Missing key: {key}"
-
-    def test_15_align_by_rsso_confidence(self):
-        """Test confidence analysis in align_by_rsso"""
-        # Create test data with known shifts
-        shift_x_b = 1.2
-        shift_y_b = 0.8
-        shift_x_c = -0.5
-        shift_y_c = 1.5
-
-        # Channel A (reference)
-        locs_a = pd.DataFrame(
-            np.rec.array(
-                [(2, 2), (4, 4), (6, 6), (8, 8)],
-                dtype=[("x", "f4"), ("y", "f4")],
-            )
-        )
-
-        # Channel B (shifted version of A with small noise)
-        locs_b = pd.DataFrame(
-            np.rec.array(
-                [
-                    (2 + shift_x_b + 0.02, 2 + shift_y_b - 0.01),
-                    (4 + shift_x_b - 0.01, 4 + shift_y_b + 0.02),
-                    (6 + shift_x_b + 0.01, 6 + shift_y_b - 0.01),
-                    (8 + shift_x_b - 0.02, 8 + shift_y_b + 0.01),
-                ],
-                dtype=[("x", "f4"), ("y", "f4")],
-            )
-        )
-
-        # Channel C (another shifted version of A)
-        locs_c = pd.DataFrame(
-            np.rec.array(
-                [
-                    (2 + shift_x_c - 0.01, 2 + shift_y_c + 0.02),
-                    (4 + shift_x_c + 0.02, 4 + shift_y_c - 0.01),
-                    (6 + shift_x_c - 0.01, 6 + shift_y_c + 0.01),
-                    (8 + shift_x_c + 0.01, 8 + shift_y_c - 0.02),
-                ],
-                dtype=[("x", "f4"), ("y", "f4")],
-            )
-        )
-
-        # Test with uncertainty analysis
-        shifts, fp_figs, shift_uncertainties = channels.align_by_rsso(
-            [locs_a, locs_b, locs_c], max_shift=3.0
-        )
-
-        # Check that uncertainty information is returned
-        assert isinstance(
-            shift_uncertainties, dict
-        ), "Should return uncertainty dict"
-
-        # Check that uncertainty arrays are present
-        assert "shift_x_uncertainties" in shift_uncertainties
-        assert "shift_y_uncertainties" in shift_uncertainties
-
-        # Check uncertainty array shapes
-        x_uncertainties = shift_uncertainties["shift_x_uncertainties"]
-        y_uncertainties = shift_uncertainties["shift_y_uncertainties"]
-        assert (
-            len(x_uncertainties) == 3
-        ), f"Expected 3 channels, got {len(x_uncertainties)}"
-        assert (
-            len(y_uncertainties) == 3
-        ), f"Expected 3 channels, got {len(y_uncertainties)}"
-
-        # Reference channel should have zero uncertainty
-        assert (
-            x_uncertainties[0] == 0.0
-        ), "Reference channel should have zero uncertainty"
-        assert (
-            y_uncertainties[0] == 0.0
-        ), "Reference channel should have zero uncertainty"
-
-        # Non-reference channels should have positive uncertainties
-        for i in range(1, 3):
-            assert (
-                x_uncertainties[i] >= 0
-            ), f"Channel {i} should have non-negative x uncertainty"
-            assert (
-                y_uncertainties[i] >= 0
-            ), f"Channel {i} should have non-negative y uncertainty"
-
-        # Check summary statistics
-        mean_x_unc = shift_uncertainties.get("mean_x_uncertainty")
-        mean_y_unc = shift_uncertainties.get("mean_y_uncertainty")
-        assert not np.isnan(mean_x_unc), "Mean X uncertainty should be valid"
-        assert not np.isnan(mean_y_unc), "Mean Y uncertainty should be valid"
-        assert mean_x_unc >= 0, "Mean X uncertainty should be non-negative"
-        assert mean_y_unc >= 0, "Mean Y uncertainty should be non-negative"
-
-        logger.debug(
-            "Channel alignment uncertainties - "
-            + f"X: {x_uncertainties}, Y: {y_uncertainties}"
-        )
-        logger.debug(
-            f"Mean uncertainties - X: {mean_x_unc:.3f}, Y: {mean_y_unc:.3f}"
-        )
 
 
 def test_04d_estimate_density_rejects_empty_distance_window():

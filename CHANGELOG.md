@@ -79,6 +79,22 @@ This file was started after v0.5.6; earlier history is in the git log.
   integral), and additionally reports `loc_rate_drop`
   (`picasso.postprocess.localization_rate_drop`) and `destroyed_fraction`
   (`picasso.postprocess.docking_site_damage`), per the picasso-1.0 migration.
+- **RSSO channel alignment now runs on `picasso.postprocess.align(method=
+  "points")` + `lib.minimize_shifts` (nm-native, jackknife uncertainties).**
+  The `align_channels` `"RSSO"` method retires the forked
+  `outpost/alignment/shift_kernel.py` cross-correlation (and its global
+  `_solve_optimal_shifts` solve) in favour of picasso 1.0's points-align, which
+  cross-correlates the localizations of each channel pair, fits each shift and
+  solves the per-channel shifts by weighted least squares. The per-pair shift
+  histograms and the per-channel confidence figure are no longer produced; the
+  reported shift uncertainties are now picasso's jackknife standard errors (nm).
+  `max_shift` is now unambiguously **nm** (the old forked value was treated as
+  ambiguous "px" and defaulted to 10); when unset it uses picasso's default of
+  500 nm. The now-dead per-frame RSSO workers
+  (`_compute_frame_to_dataset_shift` /
+  `_compute_frame_to_dataset_shift_memory_efficient`) were removed, and the
+  Confluence shift/uncertainty labels are corrected to nm.
+
 - **Adopt picasso 1.0 public APIs for the formerly-private reach-ins; pin
   `picassosr>=1.0.0rc1`.** picasso 1.0.0rc1 removed the four private symbols
   the workflow reached into, so `_picasso_api` now routes through the public
@@ -117,14 +133,6 @@ This file was started after v0.5.6; earlier history is in the git log.
   `outpost/registration/icp.py` (rotation sweep + Kabsch + Hungarian match +
   ICP refine) is now a thin adapter over picasso 1.0's public
   `registration.register_to_template`, preserving the origami dict contract.
-
-- Remaining outpost forks still to migrate to their picasso 1.0 public
-  replacements (each changes scientific output; tracked for follow-up PRs):
-  `spatial_stats/csr_knn` → `postprocess.knn_density`,
-  `binding_events` → `postprocess.signal_to_background`/`dye_performance`,
-  `alignment` → `postprocess.align(method="points")`, SPINNA label-uncertainty
-  → `spinna.fit_label_uncertainty`/`fit_le(bootstrap=True)`, and CellMask
-  morphology → `masking.*`.
 
 - **The Qt GUI is now a `[gui]` extra, not a base dependency.** `PyQt6` +
   `PyQt6-WebEngine` (≈530 MB of Qt6/WebEngine binaries) moved out of the base
