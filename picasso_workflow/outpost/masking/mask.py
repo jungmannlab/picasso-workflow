@@ -386,11 +386,35 @@ class CellMask:
             masks.append(instance)
         return masks
 
-    def erode(self, erode_nm):
-        """Shrink the mask by a Euclidean (true-distance) erosion in nm."""
-        self._binary_mask = picasso_masking.erode(
-            self.binary_mask, erode_nm, pixel_size=self._upsample
-        ).astype(np.bool_)
+    def erode(self, erode_nm, border_is_edge=False):
+        """Shrink the mask by a Euclidean (true-distance) erosion in nm.
+
+        Parameters
+        ----------
+        erode_nm : float
+            Erosion distance, in nm.
+        border_is_edge : bool, optional
+            Whether to treat the image (field-of-view) border as an edge of
+            the mask. picasso's ``masking.erode`` does not -- a mask touching
+            the FOV border is not shrunk there -- which is right for mask
+            smoothing but wrong for Ripley's edge correction, where
+            localizations within ``erode_nm`` of the FOV border must be
+            excluded too (their neighbourhood extends past the observed area).
+            When True, the mask is padded with a False border before eroding
+            (so the distance transform sees the FOV border as "outside") and
+            cropped back; it is a no-op for masks that do not touch the border.
+            Default False (picasso's border-agnostic behaviour).
+        """
+        if border_is_edge:
+            padded = np.pad(self.binary_mask, 1, constant_values=False)
+            eroded = picasso_masking.erode(
+                padded, erode_nm, pixel_size=self._upsample
+            )
+            self._binary_mask = eroded[1:-1, 1:-1].astype(np.bool_)
+        else:
+            self._binary_mask = picasso_masking.erode(
+                self.binary_mask, erode_nm, pixel_size=self._upsample
+            ).astype(np.bool_)
 
         self._recalc_density_mask_from_binary()
 

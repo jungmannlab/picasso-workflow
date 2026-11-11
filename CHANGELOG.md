@@ -223,6 +223,17 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Fixed
 
+- **Ripley's K edge correction again excludes the field-of-view border.**
+  After the CellMask morphology migration to `picasso.masking.erode` (which,
+  unlike the former scipy erosion, does not treat the image border as a mask
+  edge), `ripleysk2`'s `edge_correction` no longer trimmed the mask at the FOV
+  border, so localizations within `max_r` of the image edge were kept and
+  biased K/L for border-touching cells. `CellMask.erode` gains a
+  `border_is_edge` option (pads the mask with a False border before eroding,
+  a no-op for masks not touching the border) and the edge correction now
+  passes `border_is_edge=True`, restoring the pre-migration behaviour while
+  keeping the nm-accurate Euclidean erosion.
+
 - **picasso 1.0 migration code review (finder -> verify -> fix).** A review of
   the migration found that it had updated the picasso *call sites* but missed
   the workflow's own *coordinate arithmetic*: since picasso 1.0 returns
