@@ -1627,14 +1627,11 @@ class TestAnalyseModules(unittest.TestCase):
     @patch("picasso_workflow.outpost.spinna.wrappers._plot_label_unc_scan")
     @patch(
         "picasso_workflow.outpost.spinna.wrappers.spinna."
-        "compare_models_given_label_unc"
+        "fit_label_uncertainty"
     )
-    def test_screen_label_uncertainty_selects_best(
-        self, mock_compare, mock_plot
-    ):
-        """screen_label_uncertainty scans multi-candidate targets, keeps
-        the lowest-scoring value and leaves single-candidate targets
-        untouched."""
+    def test_screen_label_uncertainty_selects_best(self, mock_fit, mock_plot):
+        """screen_label_uncertainty delegates scanning to picasso's
+        fit_label_uncertainty and plots one curve per screened target."""
         Structure = spinna_wrappers.spinna.Structure
         mono_a = Structure("mono_A")
         mono_a.define_coordinates("A", [0.0], [0.0], [0.0])
@@ -1642,9 +1639,14 @@ class TestAnalyseModules(unittest.TestCase):
         mono_b.define_coordinates("B", [0.0], [0.0], [0.0])
         structures = [mono_a, mono_b]
 
-        # A screened over 3 values (best is 4.0 -> lowest score), B fixed
+        # A screened over 3 values (best is 4.0 -> lowest score), B fixed.
+        # picasso returns the best value for every target, but a scan
+        # entry only for the multi-candidate (screened) target A.
         label_unc = {"A": [2.0, 4.0, 6.0], "B": [5.0]}
-        mock_compare.side_effect = [(0.5,), (0.1,), (0.3,)]
+        mock_fit.return_value = (
+            {"A": 4.0, "B": 5.0},
+            {"A": {"candidates": [2, 4, 6], "scores": [0.5, 0.1, 0.3]}},
+        )
         mock_plot.return_value = "scan_A.png"
 
         exp_data = {
@@ -1670,13 +1672,66 @@ class TestAnalyseModules(unittest.TestCase):
         )
 
         self.assertEqual(best, {"A": 4.0, "B": 5.0})
-        self.assertEqual(mock_compare.call_count, 3)
+        mock_fit.assert_called_once()
+        kw = mock_fit.call_args.kwargs
+        self.assertEqual(kw["models"], [structures])
+        self.assertEqual(kw["label_unc"], label_unc)
         # empty savedir avoids picasso's single-candidate save crash
-        self.assertEqual(mock_compare.call_args.kwargs["savedir"], "")
-        self.assertEqual(scan["A"]["candidates"], [2.0, 4.0, 6.0])
+        self.assertEqual(kw["savedir"], "")
+        self.assertEqual(scan["A"]["candidates"], [2, 4, 6])
         self.assertEqual(scan["A"]["scores"], [0.5, 0.1, 0.3])
         self.assertNotIn("B", scan)
+        # one screening figure, for the single screened target A
+        self.assertEqual(mock_plot.call_count, 1)
         self.assertEqual(figs, ["scan_A.png"])
+
+    @patch("picasso_workflow.outpost.spinna.wrappers._plot_label_unc_scan")
+    @patch(
+        "picasso_workflow.outpost.spinna.wrappers.spinna."
+        "fit_label_uncertainty"
+    )
+    def test_screen_label_uncertainty_no_monomer_fallback(
+        self, mock_fit, mock_plot
+    ):
+        """A multi-candidate target with no standalone monomer structure is
+        collapsed to its first candidate before the call (picasso would crash
+        screening it), as the pre-1.0 fallback did."""
+        Structure = spinna_wrappers.spinna.Structure
+        mono_a = Structure("mono_A")
+        mono_a.define_coordinates("A", [0.0], [0.0], [0.0])
+        het = Structure("het_AB")
+        het.define_coordinates("A", [0.0], [0.0], [0.0])
+        het.define_coordinates("B", [10.0], [0.0], [0.0])
+        structures = [mono_a, het]  # B appears only inside the dimer
+
+        # both multi-candidate, but B has no monomer -> B must be collapsed.
+        label_unc = {"A": [2.0, 4.0], "B": [3.0, 5.0]}
+        mock_fit.return_value = ({"A": 4.0, "B": 3.0}, {})
+        mock_plot.return_value = "scan.png"
+
+        exp_data = {"A": np.random.rand(20, 2) * 100}
+        spinna_wrappers.screen_label_uncertainty(
+            structures=structures,
+            label_unc=label_unc,
+            le={"A": 0.5, "B": 0.5},
+            granularity=10,
+            exp_data=exp_data,
+            mask_dict=None,
+            width=1000.0,
+            height=1000.0,
+            depth=None,
+            random_rot_mode="2D",
+            sim_repeats=1,
+            asynch=False,
+            result_dir="/tmp",
+            save_filename="/tmp/spinna-run",
+        )
+
+        kw = mock_fit.call_args.kwargs
+        self.assertEqual(kw["label_unc"]["B"], [3.0])  # collapsed to first
+        self.assertEqual(kw["label_unc"]["A"], [2.0, 4.0])  # still screened
+        # the caller's label_unc dict is not mutated
+        self.assertEqual(label_unc["B"], [3.0, 5.0])
 
     @patch("picasso_workflow.outpost.spinna.wrappers.single_spinna_run")
     @patch("picasso_workflow.outpost.spinna.wrappers.single_spinna_fit_le_run")
@@ -1935,6 +1990,88 @@ class TestAnalyseModules(unittest.TestCase):
         )
         self.assertAlmostEqual(results["labeling_efficiency"]["CD80"], 0.52)
         self.assertAlmostEqual(results["labeling_efficiency"]["CD86"], 0.60)
+
+        shutil.rmtree(
+            os.path.join(
+                self.results_folder, "00_labeling_efficiency_analysis"
+            )
+        )
+
+    @patch("picasso_workflow.outpost.spinna.wrappers.plot_spinna_nnd")
+    @patch("picasso_workflow.analyse.spinna.fit_le")
+    def test_labeling_efficiency_analysis_bootstrap(
+        self, mock_fit_le, mock_plot
+    ):
+        """With bootstrap=True, fit_le is called with bootstrap=True and
+        its returned 7th element (le_std, in percent) is consumed into
+        results['labeling_efficiency_std'] on the 0-1 scale."""
+        best_mixer = MagicMock()
+        best_mixer.get_structure_names.return_value = ["mA", "mB", "het"]
+        # 7-tuple: the 6-tuple plus le_std (percent) per target.
+        mock_fit_le.return_value = (
+            {"CD80": 52.0, "CD86": 60.0},  # le_values (percent)
+            {"CD80": 5.0, "CD86": 5.0},  # fitted_label_unc
+            12.0,  # best_distance
+            0.08,  # best_score
+            np.array([50.0, 30.0, 20.0]),  # best_props
+            best_mixer,
+            {"CD80": 4.0, "CD86": 6.0},  # le_std (percent)
+        )
+        mock_plot.return_value = ["a.png", "b.png", "c.png", "d.png"]
+
+        locs_dtype = [
+            ("frame", "u4"),
+            ("photons", "f4"),
+            ("x", "f4"),
+            ("y", "f4"),
+            ("lpx", "f4"),
+            ("lpy", "f4"),
+        ]
+
+        def _mklocs():
+            return pd.DataFrame(
+                np.rec.array(
+                    [
+                        tuple([i] + list(np.random.rand(len(locs_dtype) - 1)))
+                        for i in range(len(self.ap.movie))
+                    ],
+                    dtype=locs_dtype,
+                )
+            )
+
+        self.ap.channel_locs = [_mklocs(), _mklocs()]
+        self.ap.channel_tags = ["CD80", "CD86"]
+
+        parameters = {
+            "target_name": "CD80",
+            "reference_name": "CD86",
+            "pair_distance": 10,
+            "labeling_uncertainty": {"CD80": 5, "CD86": 5},
+            "n_simulate": 50000,
+            "density": {"CD80": 9e-5, "CD86": 9e-5},
+            "granularity": 30,
+            "sim_repeats": 5,
+            "nn_nth": 2,
+            "bootstrap": True,
+        }
+        parameters, results = self.ap.labeling_efficiency_analysis(
+            0, parameters
+        )
+
+        mock_fit_le.assert_called_once()
+        self.assertTrue(mock_fit_le.call_args.kwargs["bootstrap"])
+
+        # le_std (percent) consumed onto the 0-1 scale.
+        self.assertAlmostEqual(
+            results["labeling_efficiency_std"]["CD80"], 0.04
+        )
+        self.assertAlmostEqual(
+            results["labeling_efficiency_std"]["CD86"], 0.06
+        )
+        self.assertAlmostEqual(results["labeling_efficiency_std_target"], 0.04)
+        self.assertAlmostEqual(
+            results["labeling_efficiency_std_reference"], 0.06
+        )
 
         shutil.rmtree(
             os.path.join(
