@@ -43,6 +43,97 @@ except ImportError:
 # summary before it is elided. The tooltip always lists all of them.
 _SUMMARY_MAX_CHANNELS = 4
 
+# Parameters whose behaviour/units changed in a release; flagged in the GUI so
+# users revisit their values. Keyed (module_name, param_name) -> note. The
+# marker auto-hides a few releases after ``changed_in`` (see
+# ``_param_flag_active``). ``param_name`` may be a nested sub-parameter (e.g.
+# ``align_channels``'s ``max_shift`` lives under ``align_pars``); the test
+# suite checks every key still resolves to a rendered descriptor param.
+PARAM_CHANGE_FLAGS = {
+    ("align_channels", "max_shift"): {
+        "changed_in": "0.7.0",
+        "message": (
+            "Now interpreted in nanometres (picasso 1.0). It was an ambiguous "
+            "~pixel value defaulting to 10, so an old '10' meant roughly 10 px "
+            "(~1.3 um); 10 now means 10 nm. When unset the default is 500 nm. "
+            "Revisit this value."
+        ),
+    },
+    ("fit_csr", "min_dist"): {
+        "changed_in": "0.7.0",
+        "message": (
+            "Now in nanometres (maps to knn_density r_min/r_max). Revisit if "
+            "you set a pixel-based value."
+        ),
+    },
+    ("fit_csr", "max_dist"): {
+        "changed_in": "0.7.0",
+        "message": (
+            "Now in nanometres (maps to knn_density r_min/r_max). Revisit if "
+            "you set a pixel-based value."
+        ),
+    },
+    ("create_mask2", "dilate_nm"): {
+        "changed_in": "0.7.0",
+        "message": (
+            "Mask erosion/dilation now uses a true Euclidean distance in nm "
+            "(was an iteration-based pixel approximation) and no longer erodes "
+            "inward from the image border. Eroded/dilated masks differ "
+            "slightly, and masks touching the field-of-view edge behave "
+            "differently. Revisit if you tuned this."
+        ),
+    },
+    ("refine_mask_by_density", "smoothe_nm"): {
+        "changed_in": "0.7.0",
+        "message": (
+            "Mask erosion/dilation now uses a true Euclidean distance in nm "
+            "(was an iteration-based pixel approximation) and no longer erodes "
+            "inward from the image border. Eroded/dilated masks differ "
+            "slightly, and masks touching the field-of-view edge behave "
+            "differently. Revisit if you tuned this."
+        ),
+    },
+}
+# Hide a flag this many minor releases after its ``changed_in`` version.
+PARAM_FLAG_HORIZON_MINORS = 3
+
+
+def _param_flag_active(changed_in, current=__GUIVERSION__):
+    """Return whether a parameter-change flag should still be shown.
+
+    The marker auto-expires once the running version reaches
+    ``PARAM_FLAG_HORIZON_MINORS`` minor releases past ``changed_in`` (patch
+    reset to 0; e.g. ``"0.7.0"`` expires at ``"0.10.0"``). The check is
+    fail-open: an unknown/unparseable running version keeps the flag showing.
+
+    Parameters
+    ----------
+    changed_in : str
+        The release in which the parameter's behaviour changed (e.g.
+        ``"0.7.0"``).
+    current : str
+        The running version (defaults to the GUI version). ``"unknown"``,
+        empty, or unparseable values yield ``True``.
+
+    Returns
+    -------
+    bool
+        ``True`` while the flag should be shown, ``False`` once expired.
+    """
+    if not current or str(current).lower() == "unknown":
+        return True
+    try:
+        from packaging.version import parse
+
+        cur = parse(str(current).lstrip("v"))
+        base = parse(str(changed_in).lstrip("v"))
+        major, minor = base.major, base.minor
+        expire = parse(f"{major}.{minor + PARAM_FLAG_HORIZON_MINORS}.0")
+        return cur < expire
+    except Exception:
+        # Fail-open: anything unparseable keeps the flag visible.
+        return True
+
 
 def _read_text_safe(path):
     """Read a text file for logging. Returns a sentinel on any failure
@@ -2858,25 +2949,25 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             The index of the module in the workflow
         parameters : dict
             Required keys:
-                nneighbors : str or numpy.ndarray or list
-                    If str: filepath to nearest neighbor data file
-                    If array: 2D array (N, k) of kth nearest neighbor
-                    distances
-                    If list: multiple datasets or file paths
                 dimensionality : int
                     Spatial dimensionality (2 or 3) for CSR model
             Optional keys:
                 kmin : int
-                    Minimum k-th nearest neighbor order to fit (default: 1)
+                    Lowest k-th nearest neighbor order to fit (default: 1)
+                kmax : int
+                    Highest neighbour order considered (default: 5)
                 min_dist : float
-                    Minimum observable distance in nm due to technical
-                    limits
+                    Shortest neighbour distance in nm used in the fit
+                    (maps to knn_density r_min)
                 max_dist : float
-                    Maximum distance for filtering analysis
-                bkg_fraction : float
-                    Background fraction for fitting
-                fit_bkg : bool
-                    Whether to fit background (default: False)
+                    Upper end in nm of the plotted distance histograms
+                    (maps to knn_density r_max)
+                n_simulations : int
+                    Number of CSR simulations used for p-values and
+                    goodness-of-fit (default: 99)
+                gof_wasserstein_warn : float
+                    Wasserstein goodness-of-fit warning threshold
+                    (default: 0.3)
         results : dict
             Automatic keys (provided by decorator):
                 start time : str
@@ -2913,57 +3004,68 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             metrics
         """
         parameters_spec = {
-            "nneighbors": {
-                "type": ["str", "numpy.ndarray", "list"],
-                "description": (
-                    "Nearest neighbor data (file path, array, or list)"
-                ),
-                "extensions": [".txt", ".npy"],
-                "required": True,
-            },
             "dimensionality": {
                 "type": "int",
                 "description": "Spatial dimensionality (2 or 3) for CSR model",
                 "options": [2, 3],
+                "min": 2,
+                "max": 3,
                 "default": 2,
                 "required": True,
             },
             "kmin": {
                 "type": "int",
-                "description": "Minimum k-th nearest neighbor order to fit",
+                "description": "Lowest k-th nearest neighbor order to fit",
                 "min": 1,
                 "max": 20,
                 "default": 1,
                 "required": False,
             },
+            "kmax": {
+                "type": "int",
+                "description": "Highest neighbour order considered.",
+                "min": 1,
+                "max": 20,
+                "default": 5,
+                "required": False,
+            },
             "min_dist": {
                 "type": "float",
                 "description": (
-                    "Minimum observable distance in nm due to technical"
-                    + " limits"
+                    "Shortest neighbour distance in nm used in the fit"
+                    + " (maps to knn_density r_min)"
                 ),
+                "unit": "nm",
                 "min": 0.0,
                 "max": 100.0,
                 "required": False,
             },
             "max_dist": {
                 "type": "float",
-                "description": "Maximum distance for filtering analysis",
+                "description": (
+                    "Upper end in nm of the plotted distance histograms"
+                    + " (maps to knn_density r_max)"
+                ),
+                "unit": "nm",
                 "min": 10.0,
                 "max": 10000.0,
                 "required": False,
             },
-            "bkg_fraction": {
-                "type": "float",
-                "description": "Background fraction for fitting",
-                "min": 0.0,
-                "max": 1.0,
+            "n_simulations": {
+                "type": "int",
+                "description": (
+                    "Number of CSR simulations used for p-values and"
+                    + " goodness-of-fit."
+                ),
+                "min": 1,
+                "default": 99,
                 "required": False,
             },
-            "fit_bkg": {
-                "type": "bool",
-                "description": "Whether to fit background",
-                "default": False,
+            "gof_wasserstein_warn": {
+                "type": "float",
+                "description": "Wasserstein goodness-of-fit warning threshold.",
+                "min": 0.0,
+                "default": 0.3,
                 "required": False,
             },
         }
@@ -7893,6 +7995,146 @@ class ModuleDescriptor(util.AbstractModuleCollection):
 
         return parameters_spec, results_spec
 
+    def resolution_decorr_spatial(self):
+        """Estimate resolution using spatial image decorrelation.
+
+        Divides the FOV into spatial regions and computes a
+        decorrelation-based resolution per region using picasso 1.0's
+        ``postprocess.decorrelation`` (true Descloux et al.). picasso
+        renders the localizations internally and auto-sweeps pixel sizes,
+        so no render/apodization/filter geometry is tuned here.
+
+        Parameters
+        ----------
+        i : int
+            the index of the module
+        parameters: dict
+            with optional keys:
+                region_size : float
+                    size of each spatial region in micrometers
+                    (default: 10.0 µm)
+                min_locs_per_region : int
+                    minimum localizations per region to process
+                    (default: 500)
+                n_radii : int
+                    number of decorrelation radii (default: 50, must be
+                    >= 10)
+                n_filters : int
+                    number of high-pass filters (default: 10, must be
+                    >= 2)
+
+        Results:
+            resolution_decorr_spatial : float
+                mean decorrelation resolution over valid regions in nm
+            resolution_std : float
+                standard deviation across regions
+            n_regions : int
+                number of valid regions processed
+            n_regions_total : int
+                total number of regions tiled
+            resolutions_per_region : ndarray
+                per-region resolution values in nm
+            fig_decorr : str
+                path to the per-region resolution histogram
+        """
+        parameters_spec = {
+            "xlabel": {
+                "type": "str",
+                "description": "Label for the x-axis of the test plot",
+                "required": True,
+            },
+            "ylabel": {
+                "type": "str",
+                "description": "Label for the y-axis of the test plot",
+                "required": True,
+            },
+            "region_size": {
+                "type": "float",
+                "description": ("Size of each spatial region in micrometers."),
+                "unit": "um",
+                "min": 0.0,
+                "default": 10.0,
+                "required": False,
+            },
+            "min_locs_per_region": {
+                "type": "int",
+                "description": (
+                    "Minimum localizations per region to process."
+                ),
+                "min": 1,
+                "default": 500,
+                "required": False,
+            },
+            "n_radii": {
+                "type": "int",
+                "description": (
+                    "Number of decorrelation radii (must be at least 10)."
+                ),
+                "min": 10,
+                "default": 50,
+                "required": False,
+            },
+            "n_filters": {
+                "type": "int",
+                "description": (
+                    "Number of high-pass filters (must be at least 2)."
+                ),
+                "min": 2,
+                "default": 10,
+                "required": False,
+            },
+        }
+
+        results_spec = {
+            "start time": {
+                "type": "str",
+                "description": "Module execution start timestamp",
+            },
+            "end time": {
+                "type": "str",
+                "description": "Module execution end timestamp",
+            },
+            "duration": {
+                "type": "float",
+                "description": "Module execution duration in seconds",
+                "min": 0.0,
+            },
+            "folder": {
+                "type": "str",
+                "description": "Output folder for module results",
+            },
+            "resolution_decorr_spatial": {
+                "type": "float",
+                "description": (
+                    "Mean decorrelation resolution over valid regions in nm"
+                ),
+            },
+            "resolution_std": {
+                "type": "float",
+                "description": "Standard deviation of resolution across regions",
+            },
+            "n_regions": {
+                "type": "int",
+                "description": "Number of valid regions processed",
+            },
+            "n_regions_total": {
+                "type": "int",
+                "description": "Total number of regions tiled",
+            },
+            "resolutions_per_region": {
+                "type": "list",
+                "description": "Per-region resolution values in nm",
+            },
+            "fig_decorr": {
+                "type": "str",
+                "description": (
+                    "Filepath to the per-region resolution histogram"
+                ),
+            },
+        }
+
+        return parameters_spec, results_spec
+
 
 # ``SlurmCommunicator`` moved to the Qt-free ``slurm_submit`` module so the
 # WP-9 cluster-submit worker can reuse the SSH/sbatch transport without
@@ -8256,6 +8498,7 @@ class ParameterWidgetInfo:
         has_default=False,
         default_value=None,
         display_name=None,
+        change_marker=None,
     ):
         """Initialize parameter widget info.
 
@@ -8299,6 +8542,11 @@ class ParameterWidgetInfo:
         # declares one (e.g. "radius [px]").
         self.display_name = display_name or param_name
         self.use_default = has_default
+        # Amber "changed" marker shown when this parameter's behaviour/units
+        # changed in a recent release (see PARAM_CHANGE_FLAGS). It is a
+        # separate widget from the main label so _apply_param_default_state's
+        # label restyling never clobbers it.
+        self.change_marker = change_marker
 
 
 class ParameterCmdDialog(QtWidgets.QDialog):
@@ -17988,7 +18236,7 @@ class Window(QtWidgets.QMainWindow):
         self._on_parameter_changed()
 
     def _create_parameter_row(
-        self, param_name, param_metadata, indent_level=0
+        self, param_name, param_metadata, indent_level=0, module_name=None
     ):
         """Create a parameter row with widgets, supporting nested dicts.
 
@@ -17997,6 +18245,10 @@ class Window(QtWidgets.QMainWindow):
         param_name: Name of the parameter
         param_metadata: Metadata dict with type, description, default, etc.
         indent_level: Indentation level for nested parameters (0 = top level)
+        module_name: Name of the owning module, used to look up a
+            changed-parameter marker in ``PARAM_CHANGE_FLAGS``. Passed through
+            to recursive nested-param calls so sub-params carry their parent
+            module's name (optional).
 
         Returns
         -------
@@ -18068,7 +18320,10 @@ class Window(QtWidgets.QMainWindow):
                 # Create nested parameter rows
                 for sub_param_name, sub_param_metadata in properties.items():
                     sub_widget_info = self._create_parameter_row(
-                        sub_param_name, sub_param_metadata, indent_level + 1
+                        sub_param_name,
+                        sub_param_metadata,
+                        indent_level + 1,
+                        module_name=module_name,
                     )
                     sub_parameters[sub_param_name] = sub_widget_info
                     sub_rows.append(sub_widget_info.row_widget)
@@ -18091,7 +18346,10 @@ class Window(QtWidgets.QMainWindow):
                 # Create nested parameter rows (initially hidden)
                 for sub_param_name, sub_param_metadata in properties.items():
                     sub_widget_info = self._create_parameter_row(
-                        sub_param_name, sub_param_metadata, indent_level + 1
+                        sub_param_name,
+                        sub_param_metadata,
+                        indent_level + 1,
+                        module_name=module_name,
                     )
                     sub_parameters[sub_param_name] = sub_widget_info
                     sub_rows.append(sub_widget_info.row_widget)
@@ -18154,6 +18412,22 @@ class Window(QtWidgets.QMainWindow):
 
             row_layout.addWidget(widget, stretch=2)
 
+            # A parameter whose behaviour/units changed in a recent release
+            # gets an amber "changed" marker (distinct from the main label,
+            # which _apply_param_default_state restyles). It auto-expires a few
+            # releases after ``changed_in`` via _param_flag_active.
+            change_marker = None
+            flag = PARAM_CHANGE_FLAGS.get((module_name, param_name))
+            if flag and _param_flag_active(flag["changed_in"]):
+                change_marker = QtWidgets.QLabel("⚠ changed")
+                change_marker.setStyleSheet(
+                    "color: #B8860B; font-weight: bold;"
+                )
+                change_marker.setToolTip(
+                    flag["message"] + f"  (changed in v{flag['changed_in']})"
+                )
+                row_layout.addWidget(change_marker, stretch=0)
+
             # Create cmd button
             cmd_button = QtWidgets.QPushButton("cmd")
             cmd_button.setFixedWidth(50)
@@ -18203,6 +18477,7 @@ class Window(QtWidgets.QMainWindow):
                 has_default=has_default,
                 default_value=param_metadata.get("default"),
                 display_name=display_name,
+                change_marker=change_marker,
             )
 
             # Capture the widget info itself, not just the name: nested
@@ -18236,7 +18511,7 @@ class Window(QtWidgets.QMainWindow):
                 )
             return widget_info
 
-    def _populate_parameter_widgets(self, module_params):
+    def _populate_parameter_widgets(self, module_params, module_name=None):
         """Create and populate parameter entry widgets from module parameters.
 
         Parameters
@@ -18244,6 +18519,9 @@ class Window(QtWidgets.QMainWindow):
         module_params: Dict of parameter definitions with keys as parameter names
                        and values as dicts containing 'type', 'description', 'default',
                        'required', etc.
+        module_name: Name of the module being rendered, threaded through to
+                     each row so changed-parameter markers can be looked up in
+                     ``PARAM_CHANGE_FLAGS`` (optional).
         """
         if not module_params:
             # Show "No parameters" message if module has no parameters
@@ -18256,7 +18534,10 @@ class Window(QtWidgets.QMainWindow):
         for param_name, param_metadata in module_params.items():
             # Create parameter row (handles nested dicts recursively)
             widget_info = self._create_parameter_row(
-                param_name, param_metadata, indent_level=0
+                param_name,
+                param_metadata,
+                indent_level=0,
+                module_name=module_name,
             )
             self.parameter_widgets[param_name] = widget_info
 
@@ -18595,7 +18876,7 @@ class Window(QtWidgets.QMainWindow):
             self.parameter_widgets.clear()
 
             # Populate new parameter widgets
-            self._populate_parameter_widgets(module_params)
+            self._populate_parameter_widgets(module_params, module_name=text)
 
             # branch: sub-workflows are edited inline as indented rows.
             if text == "branch":
