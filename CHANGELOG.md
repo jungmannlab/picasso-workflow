@@ -194,6 +194,18 @@ This file was started after v0.5.6; earlier history is in the git log.
     nm-unit numerics end to end).
 
 ### Added
+- **GUI flags parameters whose behaviour/units changed in the picasso-1.0
+  migration.** Affected parameter rows now carry an amber "⚠ changed" marker
+  with a hover tooltip explaining what changed and when, so users revisit stale
+  values (e.g. `align_channels.max_shift` now in nm, `fit_csr` `min_dist` /
+  `max_dist` now in nm, the mask erosion/dilation distances
+  `create_mask2.dilate_nm` / `refine_mask_by_density.smoothe_nm`). The marker
+  auto-expires a few releases after it was introduced (0.7.0). The `fit_csr`
+  GUI form was also corrected to match `analyse.fit_csr` (dropped the unused
+  `nneighbors` / `fit_bkg` / `bkg_fraction` entries, added `kmax`,
+  `n_simulations` and `gof_wasserstein_warn`, and marked `min_dist` / `max_dist`
+  as nm), and a `resolution_decorr_spatial` form was added (it previously
+  rendered no parameters).
 - **Non-mocked picasso integration tests** (`tests/test_picasso_integration.py`)
   — a "golden pipeline" tier that runs the unit-sensitive analysis modules
   through the **real** picasso on tiny synthetic ground-truth data, asserting
