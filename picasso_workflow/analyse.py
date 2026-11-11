@@ -6827,6 +6827,14 @@ class AutoPicasso(
         min_locs_per_region = parameters.get("min_locs_per_region", 500)
         n_radii = parameters.get("n_radii", 50)
         n_filters = parameters.get("n_filters", 10)
+        # Validate up front so a misconfigured value surfaces a clear error
+        # rather than being swallowed by the per-region ValueError catch
+        # (which would silently report NaN for every region). picasso
+        # requires n_radii >= 10 and n_filters >= 2.
+        if n_radii < 10:
+            raise ValueError("n_radii must be at least 10 for decorrelation.")
+        if n_filters < 2:
+            raise ValueError("n_filters must be at least 2 for decorrelation.")
 
         logger.debug("Using picasso postprocess.decorrelation (Descloux).")
 
@@ -6835,8 +6843,13 @@ class AutoPicasso(
         # nm (see picasso.postprocess.decorrelation). Tile the loc extent.
         x_nm = np.asarray(self.locs["x"], dtype=np.float64)
         y_nm = np.asarray(self.locs["y"], dtype=np.float64)
-        x_min, x_max = float(x_nm.min()), float(x_nm.max())
-        y_min, y_max = float(y_nm.min()), float(y_nm.max())
+        # Empty locs: skip the min/max reduction (which would raise) and let
+        # the zero-extent tiling fall through to the no-valid-regions path.
+        if x_nm.size == 0:
+            x_min = x_max = y_min = y_max = 0.0
+        else:
+            x_min, x_max = float(x_nm.min()), float(x_nm.max())
+            y_min, y_max = float(y_nm.min()), float(y_nm.max())
         x_range = x_max - x_min
         y_range = y_max - y_min
 

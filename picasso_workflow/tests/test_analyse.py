@@ -4237,6 +4237,32 @@ class TestAnalyse(unittest.TestCase):
             os.path.join(self.results_folder, "00_resolution_decorr_spatial")
         )
 
+    @patch("picasso_workflow.analyse.postprocess.decorrelation")
+    def test_12c_resolution_decorr_spatial_empty_locs(self, mock_decorr):
+        """Empty locs degrade to NaN (guarded min/max reduction) rather than
+        crashing, and decorrelation is never called."""
+        self.ap.locs = pd.DataFrame({"x": [], "y": []}, dtype=float)
+        self.ap.info = [{"Width": 200, "Height": 100, "Pixelsize": 100.0}]
+        _, results = self.ap.resolution_decorr_spatial(
+            0, {"region_size": 10.0, "min_locs_per_region": 100}
+        )
+        mock_decorr.assert_not_called()
+        assert np.isnan(results["resolution_decorr_spatial"])
+        assert np.isnan(results["resolution_std"])
+        shutil.rmtree(
+            os.path.join(self.results_folder, "00_resolution_decorr_spatial")
+        )
+
+    def test_12d_resolution_decorr_spatial_bad_config_raises(self):
+        """A misconfigured n_radii/n_filters surfaces a clear ValueError
+        instead of being swallowed by the per-region catch (silent NaN)."""
+        self.ap.locs = pd.DataFrame({"x": [1.0, 2.0], "y": [1.0, 2.0]})
+        self.ap.info = [{"Width": 200, "Height": 100, "Pixelsize": 100.0}]
+        with self.assertRaises(ValueError):
+            self.ap.resolution_decorr_spatial(0, {"n_radii": 5})
+        with self.assertRaises(ValueError):
+            self.ap.resolution_decorr_spatial(0, {"n_filters": 1})
+
 
 def test_footprint_viewport_centres_on_com():
     """The render viewport is centred on the localizations' centre of mass,
