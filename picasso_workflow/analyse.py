@@ -5090,6 +5090,8 @@ class AutoPicasso(
         for k, v in config.items():
             results[k] = v
 
+        return parameters, results
+
     #    @profile_resource_usage
     @module_decorator
     def resolution_analysis(self, i, parameters, results):
@@ -8225,10 +8227,10 @@ class AutoPicasso(
                 min_ymax = min(min_ymax, locs["y"].max())
             for i, locs in enumerate(self.channel_locs):
                 self.channel_locs[i] = locs[
-                    (locs["x"] > max_xmin) & (locs["x"] < min_xmax)
-                ]
-                self.channel_locs[i] = locs[
-                    (locs["y"] > max_ymin) & (locs["y"] < min_ymax)
+                    (locs["x"] > max_xmin)
+                    & (locs["x"] < min_xmax)
+                    & (locs["y"] > max_ymin)
+                    & (locs["y"] < min_ymax)
                 ]
 
         results["fp_scene_locs_after"] = os.path.join(
