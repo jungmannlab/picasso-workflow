@@ -9202,10 +9202,13 @@ class AutoPicasso(
         pixelsize = self.pixelsize
 
         if parameters.get("edge_correction"):
-            # make the mask smaller by the maximum radius, and apply
+            # make the mask smaller by the maximum radius, and apply.
+            # border_is_edge=True so the field-of-view border counts as a mask
+            # edge: locs within max_r of the image border are excluded too
+            # (picasso's erode otherwise leaves the FOV border untouched).
             max_r = np.max(radii)
             ec_mask = copy.copy(mask)
-            ec_mask.erode(max_r)
+            ec_mask.erode(max_r, border_is_edge=True)
             area = ec_mask.area * 1e6  # in nm^2
             locs_used = [
                 ec_mask.apply_to_locs(locs) for locs in self.channel_locs

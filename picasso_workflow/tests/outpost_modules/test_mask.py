@@ -127,6 +127,33 @@ def test_erode_treats_array_border_as_not_a_mask_edge():
     assert cell_mask.binary_mask.sum() == binary.sum()  # unchanged (49)
 
 
+def test_erode_border_is_edge_shrinks_at_the_fov_border():
+    """``border_is_edge=True`` treats the field-of-view border as a mask edge.
+
+    A mask touching the array border is shrunk there too (what Ripley's edge
+    correction needs, and what scipy did before the picasso-1.0 migration),
+    while it stays a no-op for masks that do not reach the border.
+    """
+    upsample = 10
+
+    # Fills the whole array -> with the flag, the 1-px border rim is removed
+    # (5x5 = 25 px), unlike the default which leaves it unchanged (49).
+    binary = np.ones((7, 7), dtype=bool)
+    cell_mask = _binary_cellmask(binary, upsample=upsample)
+    cell_mask.erode(10, border_is_edge=True)
+    assert cell_mask.binary_mask.sum() == 25
+    assert not cell_mask.binary_mask[0, :].any()  # top border row cleared
+
+    # Interior mask (not touching the border): identical with or without it.
+    interior = np.zeros((11, 11), dtype=bool)
+    interior[2:9, 2:9] = True
+    m_flag = _binary_cellmask(interior.copy(), upsample=upsample)
+    m_plain = _binary_cellmask(interior.copy(), upsample=upsample)
+    m_flag.erode(10, border_is_edge=True)
+    m_plain.erode(10)
+    assert np.array_equal(m_flag.binary_mask, m_plain.binary_mask)
+
+
 def test_dilate_matches_picasso_masking():
     """CellMask.dilate routes through picasso.masking.dilate (true-Euclidean,
     nm-accurate), so the result matches a direct picasso dilate."""
