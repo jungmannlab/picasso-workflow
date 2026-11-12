@@ -11,6 +11,24 @@ This file was started after v0.5.6; earlier history is in the git log.
 ## [Unreleased]
 
 ### Added
+- **Admin console can run the cluster test chain in-container.** The admin
+  GUI's new *Test runs* tab submits the full tiered chain (tiers 1-3 -> tier 4
+  + per-template workflows -> summary, with `afterok`/`afterany` dependency
+  chaining) **inside an Apptainer image** -- `pytest --pyargs picasso_workflow`
+  from the image, no cloned repo or conda env on the login node. Ports
+  `tools/cluster_tests/submit_all.sh` to Python (`admin/testrun.py`) driving the
+  existing `SlurmCommunicator`; stages per-tier sbatch scripts + the summarizer
+  into a cluster scratch run dir (new `ClusterApptainer.test_results_dir`).
+  Writable `NUMBA_CACHE_DIR`/`MPLCONFIGDIR` are passed into the read-only image
+  so picasso imports; `PW_TEST_DATA_DIR` is bound + exported for tier 4. The
+  summarizer moved to `picasso_workflow/cluster_tests/summarize.py` (importable
+  in-image; a shim keeps `tools/cluster_tests/summarize.py` working) and runs on
+  the node (not the container) since it needs `sacct`. Needs a test image
+  carrying pytest -- `picasso-workflow-test-<version>.sif` (the *Test runs* tab
+  defaults to it). `apptainer_exec_prefix` gained an `env=` parameter and
+  `SlurmCommunicator` a general `put_file` staging primitive.
+  (`picasso_workflow/admin/testrun.py`, `admin/core.py`, `admin/qt.py`,
+  `slurm_submit.py`, `cluster_tests/`, `config_template.yaml`)
 - **Cluster admin console (`picasso-workflow-admin-gui` / `-admin-cli`).** A
   separate PyQt6 window (also openable from the main GUI's *Tools → Admin
   console…*) that SSHes to the cluster login node to show the shared-mount

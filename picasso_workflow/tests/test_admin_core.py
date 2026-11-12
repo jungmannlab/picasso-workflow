@@ -44,6 +44,15 @@ def test_parse_image_name_malformed_version_unparsed():
     assert core.parse_image_name("picasso-workflow-.sif") == (None, False)
 
 
+def test_default_test_image_basename():
+    assert (
+        core.default_test_image_basename("0.9.0")
+        == "picasso-workflow-test-0.9.0.sif"
+    )
+    assert core.default_test_image_basename("unknown") is None
+    assert core.default_test_image_basename("0.9.1.dev3+g1a2b") is None
+
+
 # --------------------------------------------------------------------------- #
 # ls -l --time-style=long-iso
 # --------------------------------------------------------------------------- #

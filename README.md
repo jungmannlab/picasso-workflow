@@ -411,8 +411,17 @@ picasso-workflow-admin-cli --host clusterXXX jobs
 
 It reads the connection + image settings from `config.yaml` (`SlurmLoginNodes`,
 `ClusterApptainer`) and authenticates with the same SSH key discovery as the Run
-tab, so no extra configuration is needed. (Running the cluster test chain
-in-container directly from this console is a planned follow-up.)
+tab, so no extra configuration is needed.
+
+The console's **Test runs** tab submits the tiered cluster test chain (tiers 1-3
+→ tier 4 → per-template workflows → summary) **inside an Apptainer image** —
+`pytest --pyargs picasso_workflow` from the image, with no cloned repo or conda
+env on the login node. Point `ClusterApptainer.test_results_dir` at a cluster
+scratch directory for the per-run artefacts, set the *Test data dir*
+(`PW_TEST_DATA_DIR`) for tier 4 / template runs, and read `SUMMARY.txt` back
+with *Fetch SUMMARY* when the summary job finishes. This needs a **test image
+that carries pytest** — `picasso-workflow-test-<version>.sif` (built with the
+`[dev]` extra); the tab defaults to it.
 
 ## Usage
 
