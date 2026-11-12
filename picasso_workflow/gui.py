@@ -17567,12 +17567,13 @@ class Window(QtWidgets.QMainWindow):
         # would be invisible inside the container and the job would fail to even
         # open the script. Skip if an existing bind already covers it. (The
         # cluster-submit worker guards the same invariant.)
-        if not any(
-            results_folder_host == b.rstrip("/")
-            or results_folder_host.startswith(b.rstrip("/") + "/")
+        results_bind = results_folder_host.rstrip("/")
+        if results_bind and not any(
+            results_bind == b.rstrip("/")
+            or results_bind.startswith(b.rstrip("/") + "/")
             for b in bind_paths
         ):
-            bind_paths = bind_paths + [results_folder_host]
+            bind_paths = bind_paths + [results_bind]
 
         cpu_only = self.cluster_cpu_only_check.isChecked()
         commands = self.slurm_communicator.assemble_slurm_commands(

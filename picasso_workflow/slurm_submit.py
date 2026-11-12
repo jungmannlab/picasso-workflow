@@ -111,7 +111,14 @@ def apptainer_config(host_cluster, config=None):
     base = _merged_apptainer_config(host_cluster, config)
     image_dir = str(base.get("image_dir", "") or "")
     module = base.get("module") or DEFAULT_APPTAINER_MODULE
-    bind_paths = [str(b) for b in (base.get("bind_paths") or [])]
+    # Drop null/blank entries so a stray `-` or empty line under
+    # ClusterApptainer.bind_paths doesn't become `--bind None` / `--bind ''`
+    # (which apptainer rejects).
+    bind_paths = [
+        s
+        for b in (base.get("bind_paths") or [])
+        if b is not None and (s := str(b).strip())
+    ]
     return image_dir, module, bind_paths
 
 
@@ -164,7 +171,7 @@ def apptainer_exec_prefix(image_path, bind_paths=None, use_nv=False, env=None):
         parts.append("--nv")
     for name, value in (env or {}).items():
         parts.append(f"--env {shlex.quote(f'{name}={value}')}")
-    parts += [f"--bind {shlex.quote(b)}" for b in (bind_paths or [])]
+    parts += [f"--bind {shlex.quote(b)}" for b in (bind_paths or []) if b]
     parts.append(shlex.quote(image_path))
     return " ".join(parts)
 
@@ -359,10 +366,12 @@ class SlurmCommunicator:
         ``bind_paths`` are host roots bound into the container (it only sees
         what is bound in); ``use_nv`` adds ``--nv`` to expose the host NVIDIA
         driver for GPU fitting (the CUDA toolkit lives in the image). With
-        ``image_path`` left ``None`` the command stays the host-conda
-        ``srun python`` for any non-GUI caller.
+        ``image_path`` left ``None`` (or empty) the command stays the
+        host-conda ``srun python`` for any non-GUI caller.
         """
-        containerized = image_path is not None
+        # Treat empty-string like None: an empty image_path must NOT emit
+        # `apptainer exec '' ...` (the sentinel for "host conda" is falsy).
+        containerized = bool(image_path)
         # A host with no ClusterEnvironment entry (e.g. an unconfigured
         # cluster, or a minimal config with no bundled config.yaml) degrades
         # gracefully: every lookup below is a .get() with a default, so no
@@ -399,8 +408,11 @@ class SlurmCommunicator:
         # toolkit that provides libNVVM; `module load cuda/<ver>` also sets
         # CUDA_HOME so numba finds it. Harmless on CPU-only runs.
         if containerized:
-            if apptainer_module:
-                commands.append(f"module load {shlex.quote(apptainer_module)}")
+            # Always load an Apptainer module in container mode so `apptainer`
+            # resolves on a module-based HPC; fall back to the pinned default
+            # when the caller didn't pass one (the GUI always does).
+            module = apptainer_module or DEFAULT_APPTAINER_MODULE
+            commands.append(f"module load {shlex.quote(module)}")
         else:
             if modules is None:
                 modules = cluster_env.get("Modules", []) or []
@@ -534,9 +546,11 @@ class SlurmCommunicator:
 
         script_lines.append("")  # Empty line after SLURM directives
 
-        # Add working directory change if specified
+        # Add working directory change if specified. Quote it: the containerized
+        # run `cd`s here and then launches a RELATIVE start_workflow.py, so a
+        # results folder containing a space must not word-split the `cd`.
         if working_directory:
-            script_lines.append(f"cd {working_directory}")
+            script_lines.append(f"cd {shlex.quote(working_directory)}")
             script_lines.append("")
 
         # Add timestamp and job info
