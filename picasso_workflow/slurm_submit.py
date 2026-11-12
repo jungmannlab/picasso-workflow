@@ -26,6 +26,61 @@ from loguru import logger
 
 from picasso_workflow import CONFIG
 
+#: Apptainer env module pinned to the LOWEST version on the target node group
+#: (register C10: hpcl8 max 1.4.1; hpcl10/hpcl20 up to 1.5.2 -- pin to the
+#: lowest so the same submit template runs on every node group). Overridable
+#: via config ``ClusterApptainer.module`` (GUI path) or
+#: ``ClusterSubmitConfig.apptainer_module`` (cluster-submit worker). Single
+#: source of the pin; ``cluster_submit`` re-imports it.
+DEFAULT_APPTAINER_MODULE = "apptainer/1.4.1"
+
+
+def default_image_basename(version):
+    """Return the shared-mount ``.sif`` filename matching ``version``.
+
+    The GUI auto-selects the Apptainer image whose filename encodes its own
+    installed ``picasso_workflow`` version, so the cluster runs the SAME version
+    the scientist is driving the GUI with. The naming mirrors the CI release
+    build (``.github/workflows/build-apptainer.yml``):
+    ``picasso-workflow-<version>.sif``.
+
+    Returns ``None`` when no reliable name can be formed -- i.e. an ``"unknown"``
+    version (a non-git install, see ``picasso_workflow.__init__``) or a
+    setuptools-scm dev version (``...dev...``/``+g<sha>``), whose CI image is
+    instead named ``picasso-workflow-develop-<sha>.sif`` and cannot be
+    reconstructed from the version string. In those cases the caller falls back
+    to the Run tab's image dropdown rather than guessing a filename.
+    """
+    if not version or version == "unknown":
+        return None
+    # setuptools-scm dev versions ("0.9.1.dev3+g1a2b3c4") don't map to a
+    # release .sif; the matching CI artefact is the develop-<sha> image, which
+    # this string can't reconstruct. Leave the selection to the dropdown.
+    if "dev" in version or "+" in version:
+        return None
+    return f"picasso-workflow-{version}.sif"
+
+
+def apptainer_exec_prefix(image_path, bind_paths=None, use_nv=False):
+    """Build the ``apptainer exec [--nv] --bind ... <image>`` command prefix.
+
+    Shared by the GUI submit path (:meth:`assemble_slurm_commands`) and the
+    cluster-submit worker (:func:`picasso_workflow.cluster_submit.
+    build_sbatch_script`) so the container invocation is assembled once. The
+    caller appends the in-container command (``python ...``).
+
+    Paths are ``shlex``-quoted because this is a real shell command and lab
+    data folders routinely contain spaces (e.g. ``channel 0.hdf5``); an
+    unquoted space would word-split the argv. ``use_nv`` adds ``--nv`` to
+    expose the host NVIDIA driver (the CUDA toolkit lives in the image).
+    """
+    parts = ["apptainer exec"]
+    if use_nv:
+        parts.append("--nv")
+    parts += [f"--bind {shlex.quote(b)}" for b in (bind_paths or [])]
+    parts.append(shlex.quote(image_path))
+    return " ".join(parts)
+
 
 class SlurmCommunicator:
     """Communication interface for SLURM job scheduling and SSH command
@@ -189,6 +244,10 @@ class SlurmCommunicator:
         modules=None,
         faulthandler=True,
         cpu_only=False,
+        image_path=None,
+        bind_paths=None,
+        apptainer_module=None,
+        use_nv=False,
     ):
         """Assembles picasso-workflow specific commands for running a batch
         job on a SLURM cluster.
@@ -203,7 +262,20 @@ class SlurmCommunicator:
         ``CUDA_VISIBLE_DEVICES=""`` to hide every GPU, forcing picasso's CPU
         fit/CRLB kernels -- a debug switch to isolate a GPU-side crash from the
         CPU path.
+
+        When ``image_path`` is given the workflow runs INSIDE that Apptainer
+        image (``apptainer exec``) rather than the host conda env, so the
+        cluster runs the exact picasso-workflow version the image was built
+        with -- the GUI path always sets it. ``apptainer_module`` is the env
+        module to ``module load`` so ``apptainer`` resolves (mirrors
+        :func:`picasso_workflow.cluster_submit.build_sbatch_script`);
+        ``bind_paths`` are host roots bound into the container (it only sees
+        what is bound in); ``use_nv`` adds ``--nv`` to expose the host NVIDIA
+        driver for GPU fitting (the CUDA toolkit lives in the image). With
+        ``image_path`` left ``None`` the command stays the host-conda
+        ``srun python`` for any non-GUI caller.
         """
+        containerized = image_path is not None
         # A host with no ClusterEnvironment entry (e.g. an unconfigured
         # cluster, or a minimal config with no bundled config.yaml) degrades
         # gracefully: every lookup below is a .get() with a default, so no
@@ -232,16 +304,21 @@ class SlurmCommunicator:
         # if not use_pw_module:
         #     commands.append(f"conda activate {conda_env}")
 
-        # Load environment modules (from the Run tab's Modules field, or config
-        # ClusterEnvironment.<host>.Modules when not overridden). GPU fitting
-        # (e.g. spline-mle-gpu) needs a CUDA toolkit that provides libNVVM; on
-        # module-based HPC systems the cleanest way is to `module load
-        # cuda/<ver>`, which also sets CUDA_HOME so numba finds it. Harmless on
-        # CPU-only runs.
-        if modules is None:
-            modules = cluster_env.get("Modules", []) or []
-        for module_name in modules:
-            commands.append(f"module load {module_name}")
+        # Load environment modules. Containerized runs load ONLY the Apptainer
+        # module (CUDA et al. live inside the image, exposed via --nv), so the
+        # host cuda/conda modules are skipped. Host-conda runs load the Run
+        # tab's Modules field (or config ClusterEnvironment.<host>.Modules when
+        # not overridden): GPU fitting (e.g. spline-mle-gpu) needs a CUDA
+        # toolkit that provides libNVVM; `module load cuda/<ver>` also sets
+        # CUDA_HOME so numba finds it. Harmless on CPU-only runs.
+        if containerized:
+            if apptainer_module:
+                commands.append(f"module load {shlex.quote(apptainer_module)}")
+        else:
+            if modules is None:
+                modules = cluster_env.get("Modules", []) or []
+            for module_name in modules:
+                commands.append(f"module load {module_name}")
 
         # Ignore ~/.local/lib site-packages: a stray user-site install (e.g.
         # numba) otherwise shadows the conda env's package and can break CUDA
@@ -265,24 +342,28 @@ class SlurmCommunicator:
         if cpu_only:
             commands.append('export CUDA_VISIBLE_DEVICES=""')
 
-        # instead of using slurm modules, let's directly append paths.
-        bin_path = cluster_env.get("BinPath", None)
-        if bin_path:
-            commands.append(f"export PATH={bin_path}:$PATH")
-        lib_path = cluster_env.get("LibraryPath", None)
-        if lib_path:
-            commands.append(
-                f"export LD_LIBRARY_PATH={lib_path}:$LD_LIBRARY_PATH"
-            )
-        python_path = cluster_env.get("PythonPath", None)
-        if python_path:
-            commands.append(f"export PYTHONPATH={python_path}:$PYTHONPATH")
-        conda_env = cluster_env.get("CondaEnv", None)
-        if conda_env:
-            commands.append(f"export CONDA_DEFAULT_ENV={conda_env}")
-        conda_prefix = cluster_env.get("CondaPrefix", None)
-        if conda_prefix:
-            commands.append(f"export CONDA_PREFIX={conda_prefix}")
+        # Host-conda env wiring (PATH/LD_LIBRARY_PATH/PYTHONPATH + CONDA_*).
+        # Skipped for containerized runs: the interpreter and its sys.path come
+        # from the image, so these host-env tweaks would be meaningless (or
+        # point CONDA_* at a non-existent host env).
+        if not containerized:
+            bin_path = cluster_env.get("BinPath", None)
+            if bin_path:
+                commands.append(f"export PATH={bin_path}:$PATH")
+            lib_path = cluster_env.get("LibraryPath", None)
+            if lib_path:
+                commands.append(
+                    f"export LD_LIBRARY_PATH={lib_path}:$LD_LIBRARY_PATH"
+                )
+            python_path = cluster_env.get("PythonPath", None)
+            if python_path:
+                commands.append(f"export PYTHONPATH={python_path}:$PYTHONPATH")
+            conda_env = cluster_env.get("CondaEnv", None)
+            if conda_env:
+                commands.append(f"export CONDA_DEFAULT_ENV={conda_env}")
+            conda_prefix = cluster_env.get("CondaPrefix", None)
+            if conda_prefix:
+                commands.append(f"export CONDA_PREFIX={conda_prefix}")
 
         # Capture the workflow's exit status. srun propagates the step's
         # failure (e.g. 143 = 128 + SIGTERM when a rank is killed / an MPI
@@ -290,7 +371,15 @@ class SlurmCommunicator:
         # script with this, so a failed/cancelled run is reported as FAILED
         # rather than COMPLETED (a bare `srun ...` followed by an `echo` would
         # otherwise make the batch script exit 0 regardless).
-        commands.append(f"srun python {scriptname}")
+        #
+        # Containerized: run the script INSIDE the image. The exported env above
+        # (PYTHONNOUSERSITE/PYTHONFAULTHANDLER/CUDA_VISIBLE_DEVICES) is inherited
+        # into the container -- Apptainer passes the host env through by default.
+        if containerized:
+            prefix = apptainer_exec_prefix(image_path, bind_paths, use_nv)
+            commands.append(f"srun {prefix} python {scriptname}")
+        else:
+            commands.append(f"srun python {scriptname}")
         commands.append("PW_RC=$?")
 
         return commands

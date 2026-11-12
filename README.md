@@ -352,6 +352,49 @@ defaults (no `module load`, no path exports) when it is absent — but GPU fitti
 needs the `Modules` entry, so define it for any host you run GPU fits on. See
 the bundled `picasso_workflow/config.yaml` for a worked `hpcl8XXX` example.
 
+### Apptainer image (GUI ↔ cluster version match)
+
+The Run tab's **Start Workflow on Cluster** path runs the workflow **inside an
+Apptainer image** on a shared mount, so the cluster runs the *same*
+picasso-workflow version you are driving the GUI with — not whatever host conda
+env happens to be loaded. The generated `run_workflow_slurm.sh` therefore
+`module load`s Apptainer and `apptainer exec`s the image instead of calling the
+host `python`. Configure the shared folder in `config.yaml`:
+
+```yaml
+ClusterApptainer:
+  image_dir: "/sw/picasso-workflow"   # shared mount holding the .sif images
+  module: "apptainer/1.4.1"           # apptainer env module to `module load`
+  bind_paths:                         # host roots bound into the container
+    - "/scratch/paint"
+```
+
+The Run tab's **Apptainer image** dropdown defaults to
+`picasso-workflow-<this GUI's version>.sif` and the **List** button fills it with
+the `.sif` files actually present in `image_dir` (listed over the existing SSH
+connection). The field is editable, so an unlisted image or an absolute path can
+be typed by hand. The images are the CI build from `deploy/apptainer/paint.def`,
+named by version (`.github/workflows/build-apptainer.yml`).
+
+For heterogeneous node groups (e.g. different mounts or Apptainer versions per
+cluster), add a per-cluster sub-dict keyed as in `SlurmLoginNodes`; the keys you
+set there override the globals for that host, the rest fall back.
+
+Two things to know:
+
+- **Bind mounts.** The container only sees the host paths listed in
+  `bind_paths`, so include every root the job reads (the scratch/data root,
+  template dirs). A path that is not bound in is invisible to the run. The run's
+  **results folder is bound automatically** (it holds the generated script, is
+  the job's CWD, and receives outputs), so it need not be listed.
+- **Version auto-match caveat.** The default filename can only be formed from a
+  released/tagged GUI version. A development install (where `__version__` is
+  `"unknown"` or a setuptools-scm dev string) leaves the default blank — pick the
+  image from the dropdown in that case. GPU runs add `apptainer exec --nv`
+  automatically when GPUs are requested, exposing the host NVIDIA driver (the
+  CUDA toolkit lives in the image, so the `ClusterEnvironment.<host>.Modules`
+  CUDA entry is not loaded in container mode).
+
 ## Usage
 
 - see examples in the folder "examples".
