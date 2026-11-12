@@ -1467,7 +1467,7 @@ class AggregationWorkflowCoordinator(AbstractWorkflowCoordinator):
         plt.close("all")
 
 
-class InvestigationCoordinator(AbstractWorkflowCoordinator):
+class InvestigationWorkflowCoordinator(AbstractWorkflowCoordinator):
     """Coordinate the analysis of a measurement series.
 
     Covers multiple conditions / cell types, cells and target molecules.
@@ -2084,6 +2084,13 @@ class InvestigationCoordinator(AbstractWorkflowCoordinator):
             )
             if self.profiler is not None:
                 self.profiler.append_profile_page(kwargs["awr"].all_results)
+
+
+#: Backwards-compatible alias for the pre-rename class name. The coordinator
+#: was renamed to match the ``*WorkflowCoordinator`` convention of its siblings
+#: (``SingleWorkflowCoordinator`` / ``AggregationWorkflowCoordinator``) and the
+#: name the GUI emits; keep the old name importable for hand-written scripts.
+InvestigationCoordinator = InvestigationWorkflowCoordinator
 
 
 class PerformanceProfiler:
