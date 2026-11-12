@@ -11,6 +11,13 @@ This file was started after v0.5.6; earlier history is in the git log.
 ## [Unreleased]
 
 ### Changed
+- **GUI workflow-config usability.** The aggregation/investigation file buttons
+  (Add/Rename/Remove Dataset & Channel, …) now wrap onto several rows instead of
+  being squeezed into one unreadably narrow row; the Files table/tree sizes its
+  File Path column to content so a horizontal scrollbar reaches the full path on
+  a narrow window instead of truncating it; and the Current Module editor / module
+  list divider gets a sensible default split giving the module list more room.
+  (`gui.py`)
 - **SPINNA label-uncertainty screening and labeling-efficiency bootstrap
   delegate to picasso 1.0.0rc1 public APIs.** The home-grown per-target
   label-uncertainty scan in `outpost/spinna/wrappers.screen_label_uncertainty`
@@ -231,6 +238,23 @@ This file was started after v0.5.6; earlier history is in the git log.
   built a driver whose constructor args and run method no longer match the
   coordinator), so the GUI now refuses to emit a broken Investigation script
   with a clear message instead; fixing the generator is tracked separately.
+- **`filter_locs` `quantile`/`zscore` threshold conversion fixed.** In
+  `quantile` mode the maximum threshold was computed from the *minimum*
+  quantiles (the comprehension iterated `all_xmin` for both bounds), collapsing
+  the keep-band and discarding almost everything. Additionally, both the
+  `quantile` and `zscore` branches applied the *last* field's statistics to
+  every field when filtering on multiple fields. Both branches now convert each
+  field's thresholds from its own distribution. (`analyse.py`)
+- **GUI: "Clear list" (single-workflow file table) now asks for confirmation**
+  before removing all files, matching the aggregation tree's existing "Clear"
+  prompt. (`gui.py`)
+- **GUI: "Previous Module Result" now lists the correct module when composing a
+  not-yet-added module.** The command dialog showed the second-to-last module's
+  results because it did not account for the new module's prospective insertion
+  slot; it now mirrors `add_module`'s insert position. (`gui.py`)
+- **GUI: added a "Duplicate module" workflow-list context-menu action**, so the
+  same module can appear twice in a row without adding it elsewhere and moving
+  it. (`gui.py`)
 - **GUI module-parameter forms corrected to match what `analyse.py` actually
   reads.** The hand-coded `ModuleDescriptor` forms in `gui.py` had drifted from
   the real `AutoPicasso.<module>` parameter contract. This fixes two `KeyError`
