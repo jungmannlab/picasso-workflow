@@ -3039,6 +3039,116 @@ class ParameterTiler:
         return result_parameters, tags
 
 
+#: Reserved single-dataset module-parameter key naming a per-channel boolean
+#: tile-parameter column. A module carrying it runs only on channels where
+#: that column is truthy (see :func:`compile_channel_restrictions`).
+RUN_ON_CHANNELS_KEY = "#run_on_channels"
+
+#: Parameter keys that hold nested ``(module_name, params)`` sub-workflow lists
+#: (branch / conditional_branch). The compiler recurses into these so a
+#: ``#run_on_channels`` directive is honored wherever a module sits.
+_SUBWORKFLOW_KEYS = ("branch_modules", "join_modules", "if_true", "if_false")
+
+
+def compile_channel_restrictions(modules):
+    """Compile ``#run_on_channels`` directives into ``conditional_branch``.
+
+    A single-dataset module may carry the reserved
+    :data:`RUN_ON_CHANNELS_KEY` key, whose value is the name of a per-channel
+    boolean tile-parameter column. Such a module should run only on the
+    channels where that column is truthy. This rewrites it to a
+    ``conditional_branch`` whose condition reads the column per channel (a
+    ``("$$map", <column>, False)`` command, resolved during tiling so each
+    channel's single-dataset workflow gets a concrete bool) and whose
+    ``if_false`` branch is empty -- a clean no-op on the other channels.
+
+    The compiler recurses into nested sub-workflow lists
+    (``branch_modules`` / ``join_modules`` / ``if_true`` / ``if_false``), so a
+    directive on a module nested inside a ``branch`` / ``conditional_branch``
+    is honored too (e.g. after a module is moved into a branch in the GUI).
+
+    Modules without the key (and non-dict parameter blocks) are returned
+    unchanged. The input is never mutated; a stray empty directive is simply
+    stripped (treated as "no restriction"). The transform is idempotent: an
+    already-compiled ``conditional_branch`` carries no directive and passes
+    through (its sub-lists are still recursed, which is a no-op second time).
+
+    Parameters
+    ----------
+    modules : list of tuple
+        ``(module_name, module_parameters)`` tuples, e.g. a single-dataset
+        module list.
+
+    Returns
+    -------
+    list of tuple
+        The module list with restricted modules wrapped in
+        ``conditional_branch``.
+    """
+    return [_compile_restriction(name, params) for name, params in modules]
+
+
+def _compile_restriction(module_name, params):
+    """Compile one ``(name, params)`` entry (see
+    :func:`compile_channel_restrictions`)."""
+    if not isinstance(params, dict):
+        return (module_name, params)
+
+    nested = [k for k in _SUBWORKFLOW_KEYS if isinstance(params.get(k), list)]
+    # Nothing to do only when the directive key is absent (not merely empty --
+    # an empty directive must still be stripped) and there is no nested
+    # sub-workflow to recurse into.
+    if RUN_ON_CHANNELS_KEY not in params and not nested:
+        return (module_name, params)  # unchanged; reuse the dict
+
+    # Copy so the caller's params are never mutated; recurse into any nested
+    # sub-workflow lists and drop the directive key.
+    new_params = dict(params)
+    for key in nested:
+        new_params[key] = compile_channel_restrictions(new_params[key])
+    column = new_params.pop(RUN_ON_CHANNELS_KEY, None)
+
+    if not column:
+        # No (or empty) restriction -- the key (if any) has been stripped.
+        return (module_name, new_params)
+
+    condition = {
+        "left": ("$$map", column, False),
+        "operator": "==",
+        "right": True,
+    }
+    return (
+        "conditional_branch",
+        {
+            "condition": condition,
+            "if_true": [(module_name, new_params)],
+            "if_false": [],
+        },
+    )
+
+
+def channel_restriction_columns(modules):
+    """Tile-parameter column names referenced by ``#run_on_channels``.
+
+    Recurses into nested sub-workflow lists, mirroring
+    :func:`compile_channel_restrictions`. Used to warn about a directive that
+    names a column absent from ``single_dataset_tileparameters`` (which would
+    silently default to ``False`` and skip the module on every channel).
+    """
+    cols = set()
+    for _name, params in modules:
+        if not isinstance(params, dict):
+            continue
+        column = params.get(RUN_ON_CHANNELS_KEY)
+        if column:
+            cols.add(column)
+        for key in _SUBWORKFLOW_KEYS:
+            sub = params.get(key)
+            if isinstance(sub, list):
+                cols |= channel_restriction_columns(sub)
+    return cols
+
+
 class BranchStateManager:
     """Snapshot and restore the per-branch analysis state of an analyzer.
 

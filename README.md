@@ -210,6 +210,61 @@ is reloaded into the GUI, so a workflow round-trips exactly. Per-channel values
 are keyed by channel name: renaming a channel in the GUI carries its values
 across, while a channel whose name no longer matches falls back to the default.
 
+### Running a module only on some channels
+
+Sometimes a module should run on *some* channels and not others — e.g. cluster
+only the RESI channels that have single-molecule resolution, while the
+diffraction-limited channels skip clustering but still share the same
+aggregation (alignment) workflow.
+
+Declare a per-channel **boolean** column (one `True`/`False` per channel) and
+add the reserved `#run_on_channels` key to the module, naming that column:
+
+```python
+workflow_modules_multi = {
+	"single_dataset_tileparameters": {
+		"#tags":    ["RESI_1", "RESI_2", "DL_1"],
+		"filepath": [fp0, fp1, fp2],
+		"is_resi":  [True,   True,    False],   # per-channel boolean column
+	},
+	"single_dataset_modules": [
+		# ... load / localize / undrift ...
+		("smlm_clusterer", {"radius": 4, "#run_on_channels": "is_resi"}),
+	],
+	"aggregation_modules": [ ... ],   # runs on every channel as usual
+}
+```
+
+At run time the module is compiled into a `conditional_branch` whose condition
+reads `is_resi` per channel (`("$$map", "is_resi", False) == True`): channels
+where the column is truthy run the module (`if_true`), the rest take an empty
+`if_false` — a clean no-op. `#run_on_channels` is a definition-level directive
+only; it never reaches the module itself.
+
+**In the GUI**, select a single-dataset module in an aggregation/investigation
+workflow and tick **"Run only on channels where column:"**, then pick (or
+auto-create) the boolean column; set which channels are `True` under
+**Per-Channel Params…**.
+
+**Use it for transform modules and mind these limits:**
+
+- The column must hold real booleans (`True`/`False`, or `0`/`1`) — a column
+  that is absent or holds strings like `"true"` resolves to the `False`
+  default, silently skipping the module on every channel (the runner logs a
+  warning for an undeclared column).
+- Best suited to modules that transform the shared state (`self.locs`) —
+  clustering, filtering — so a later `save_single_dataset` simply saves
+  whatever state the channel ended in and the aggregation loads that. **Do not
+  restrict a module whose per-dataset *result* is referenced by name/index
+  elsewhere** (via `$get_prior_result` / `$get_previous_module_result`, or from
+  an aggregation module): wrapping moves its result under the
+  `conditional_branch` key, so such a reference would no longer find it.
+- A restricted module does not expose a resume checkpoint of its own, so a
+  resumed run may re-run from an earlier point on the channels it ran.
+- Any later single-dataset module and the aggregation modules must tolerate the
+  channels that skipped this one (e.g. do not assume every channel was
+  clustered).
+
 ## Installation
 
 ### Prerequisites

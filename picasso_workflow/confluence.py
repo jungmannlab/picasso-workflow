@@ -60,8 +60,10 @@ def _yaml_safe(value):
 
 
 # Parameter keys that must never be rendered or serialized: the workflow
-# runner injects a live ParameterCommandExecutor under this name.
-_PARAM_BLACKLIST = ("parameter_command_executor",)
+# runner injects a live ParameterCommandExecutor under this name, and
+# ``#run_on_channels`` is a GUI/definition-level directive compiled into a
+# conditional_branch before execution (it never reaches a real module).
+_PARAM_BLACKLIST = ("parameter_command_executor", "#run_on_channels")
 
 # File suffixes the generic picasso-set reporter embeds as images.
 _IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg", ".svg")
