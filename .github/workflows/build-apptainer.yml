@@ -130,28 +130,41 @@ jobs:
           echo "Built $OUT (picasso_workflow $VERSION, ${{ matrix.variant }})"
 
       # --- publish -------------------------------------------------------------
-      # A) ephemeral CI artifact (always; good for verifying a build / dispatch).
+      # Ephemeral CI artifact per variant (always; good for verifying a build /
+      # dispatch, and the hand-off to the `release` job below). The release
+      # asset upload is NOT done here: two parallel matrix jobs hitting
+      # softprops/action-gh-release on the same release would race on the
+      # release object -- the dedicated `release` job (needs: build) uploads
+      # both .sif files in one serialized step instead.
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.name.outputs.sif }}
           path: ${{ steps.name.outputs.sif }}
 
-      # B) durable GitHub release asset (login node pulls it with curl/wget).
-      - uses: softprops/action-gh-release@v2
-        if: github.event_name == 'release'
+  # Durable GitHub release assets (login node pulls them with curl/wget). Runs
+  # once, AFTER both matrix builds, and uploads both variants' .sif in a single
+  # action-gh-release call -- so there is no concurrent read-modify-write of the
+  # release object (the race two in-matrix uploads would hit).
+  release:
+    needs: build
+    if: github.event_name == 'release'
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
         with:
-          files: ${{ steps.name.outputs.sif }}
+          path: dist
+          merge-multiple: true    # flatten every variant's .sif into dist/
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.sif
 
-      # C) ghcr via ORAS — the C48-RECOMMENDED target (enables an automated
-      #    login-node refresh: `apptainer pull oras://ghcr.io/<owner>/picasso-workflow:<tag>`).
-      #    Needs `packages: write` in `permissions:` above; left off by default so
-      #    this PR makes no org-package/visibility decision. To enable, uncomment:
-      # - name: Push to ghcr
-      #   run: |
-      #     echo "${{ secrets.GITHUB_TOKEN }}" | \
-      #       apptainer registry login -u ${{ github.actor }} --password-stdin oras://ghcr.io
-      #     apptainer push "${{ steps.name.outputs.sif }}" \
-      #       oras://ghcr.io/${{ github.repository_owner }}/picasso-workflow:${{ steps.name.outputs.version }}
+  # ghcr via ORAS — the C48-RECOMMENDED target (enables an automated login-node
+  # refresh: `apptainer pull oras://ghcr.io/<owner>/picasso-workflow:<tag>`).
+  # Needs `packages: write`; left off by default so this makes no org-package/
+  # visibility decision. To enable, add a job that downloads the artifacts and
+  # `apptainer push`es each to oras://ghcr.io/<owner>/picasso-workflow:<tag>.
 
 # --- Private-repo adaptation (only if a jungmannlab repo becomes private) -------
 # Don't put a git token inside %post (it can leak into the image). Instead:
