@@ -12855,32 +12855,35 @@ class AutoPicasso(
             all_xmin = [float(all_xmin)]
             all_xmax = [float(all_xmax)]
         else:
-            if all_xmin is None:
-                all_xmin = [None] * len(all_field)
-            if all_xmax is None:
-                all_xmax = [None] * len(all_field)
+            # Work on copies (never mutate the caller's parameter lists in
+            # place - the single-dataset runner records them to
+            # WorkflowRunner.yaml) and pad to one entry per field, so a short
+            # or omitted min/max list means "no bound" for the trailing fields
+            # rather than an IndexError in the per-field conversion below.
+            all_xmin = list(all_xmin) if all_xmin is not None else []
+            all_xmax = list(all_xmax) if all_xmax is not None else []
+            all_xmin += [None] * (len(all_field) - len(all_xmin))
+            all_xmax += [None] * (len(all_field) - len(all_xmax))
         if parameters.get("mode") == "zscore":
-            # Turn from zscores into absolute values
-            for i, field in enumerate(all_field):
+            # Turn from zscores into absolute values, per field: each field's
+            # thresholds use that field's own mean/std. (fi is a separate name
+            # so it does not shadow the module index i used for filenames.)
+            for fi, field in enumerate(all_field):
+                if all_xmin[fi] is None and all_xmax[fi] is None:
+                    continue
                 mean = np.mean(self.locs[field])
                 std = np.std(self.locs[field])
-                all_xmin = [
-                    None if mi is None else mean + mi * std for mi in all_xmin
-                ]
-                all_xmax = [
-                    None if ma is None else mean + ma * std for ma in all_xmax
-                ]
+                if all_xmin[fi] is not None:
+                    all_xmin[fi] = mean + all_xmin[fi] * std
+                if all_xmax[fi] is not None:
+                    all_xmax[fi] = mean + all_xmax[fi] * std
         elif parameters.get("mode") == "quantile":
-            # Turn from quantiles into absolute values
-            for i, field in enumerate(all_field):
-                all_xmin = [
-                    None if mi is None else np.quantile(self.locs[field], mi)
-                    for mi in all_xmin
-                ]
-                all_xmax = [
-                    None if mi is None else np.quantile(self.locs[field], mi)
-                    for mi in all_xmin
-                ]
+            # Turn from quantiles into absolute values, per field.
+            for fi, field in enumerate(all_field):
+                if all_xmin[fi] is not None:
+                    all_xmin[fi] = np.quantile(self.locs[field], all_xmin[fi])
+                if all_xmax[fi] is not None:
+                    all_xmax[fi] = np.quantile(self.locs[field], all_xmax[fi])
 
         results["nlocs_before"] = len(self.locs)
         # plot heatmaps before filtering
