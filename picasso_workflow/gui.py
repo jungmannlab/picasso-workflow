@@ -19,6 +19,7 @@ from loguru import logger
 import subprocess
 import os
 import re
+import shlex
 import sys
 import getpass
 import yaml
@@ -7947,7 +7948,11 @@ class ModuleDescriptor(util.AbstractModuleCollection):
 # WP-9 cluster-submit worker can reuse the SSH/sbatch transport without
 # importing PyQt. Re-exported here so this module's call sites and the
 # existing GUI tests (``gui.SlurmCommunicator(...)``) keep working unchanged.
-from picasso_workflow.slurm_submit import SlurmCommunicator  # noqa: E402,F401
+from picasso_workflow.slurm_submit import (  # noqa: E402,F401
+    SlurmCommunicator,
+    default_image_basename,
+    DEFAULT_APPTAINER_MODULE,
+)
 
 
 class FilePathEditor(QtWidgets.QWidget):
@@ -10325,6 +10330,34 @@ class Window(QtWidgets.QMainWindow):
         )
         self.cluster_host_combo.currentTextChanged.connect(
             self._populate_cluster_modules
+        )
+
+        # Apptainer image on the shared mount. The GUI's cluster path always
+        # runs the workflow INSIDE this image, so the cluster runs the same
+        # picasso-workflow version the image was built with (rather than the
+        # host conda env). Editable; defaults to picasso-workflow-<GUI
+        # version>.sif. "List" fills the dropdown from the shared folder
+        # (config ClusterApptainer.image_dir) over SSH.
+        cluster_config_layout.addWidget(QtWidgets.QLabel("Apptainer image:"))
+        self.cluster_image_combo = QtWidgets.QComboBox()
+        self.cluster_image_combo.setEditable(True)
+        self.cluster_image_combo.setMinimumWidth(240)
+        cluster_config_layout.addWidget(self.cluster_image_combo)
+        self.cluster_image_refresh_button = QtWidgets.QPushButton("List")
+        self.cluster_image_refresh_button.setToolTip(
+            "List the .sif images in the shared folder on the selected "
+            "cluster (over SSH) and fill the dropdown. The default is "
+            "picasso-workflow-<this GUI's version>.sif."
+        )
+        self.cluster_image_refresh_button.clicked.connect(
+            self._refresh_cluster_images
+        )
+        cluster_config_layout.addWidget(self.cluster_image_refresh_button)
+        self._populate_cluster_images(
+            str(self.cluster_host_combo.currentText())
+        )
+        self.cluster_host_combo.currentTextChanged.connect(
+            self._populate_cluster_images
         )
 
         # Memory
@@ -16192,6 +16225,106 @@ class Window(QtWidgets.QMainWindow):
             self.cluster_modules_edit.setText(new_default)
         self._cluster_modules_default = new_default
 
+    def _apptainer_config(self, host_cluster):
+        """Resolved Apptainer settings for ``host_cluster``.
+
+        Reads the global ``ClusterApptainer`` block and merges an optional
+        per-host override (a sub-dict keyed like ``SlurmLoginNodes``) on top.
+        Returns ``(image_dir, module, bind_paths)``.
+        """
+        base = dict(CONFIG.get("ClusterApptainer", {}) or {})
+        override = base.get(str(host_cluster))
+        if isinstance(override, dict):
+            base.update(override)
+        image_dir = str(base.get("image_dir", "") or "")
+        module = base.get("module") or DEFAULT_APPTAINER_MODULE
+        bind_paths = [str(b) for b in (base.get("bind_paths") or [])]
+        return image_dir, module, bind_paths
+
+    def _populate_cluster_images(self, host_cluster):
+        """Set the Apptainer image field's default for the selected cluster.
+
+        Local only (no SSH): pre-selects ``picasso-workflow-<GUI version>.sif``
+        when a reliable name can be formed, else leaves the field unchanged if
+        the user already typed one, otherwise blank. Use the "List" button to
+        fill the dropdown from the shared folder over SSH. The field's tooltip
+        shows the configured ``image_dir``.
+        """
+        image_dir, _module, _binds = self._apptainer_config(host_cluster)
+        default = default_image_basename(__GUIVERSION__)
+        self.cluster_image_combo.setToolTip(
+            "Apptainer image to run the workflow inside. Shared folder: "
+            f"{image_dir or '(unset: configure ClusterApptainer.image_dir)'}. "
+            "Editable; click 'List' to see the .sif files actually present."
+        )
+        current = self.cluster_image_combo.currentText().strip()
+        # Only overwrite an untouched field, so a manual pick survives a
+        # cluster switch.
+        if current == "" or current == getattr(
+            self, "_cluster_image_default", ""
+        ):
+            self.cluster_image_combo.setCurrentText(default or "")
+        self._cluster_image_default = default or ""
+
+    def _refresh_cluster_images(self):
+        """List the shared folder's .sif images over SSH into the dropdown.
+
+        Best-effort: on any SSH/listing failure the user is told and the
+        editable field is left as-is (they can still type a name by hand).
+        """
+        host_cluster = str(self.cluster_host_combo.currentText())
+        image_dir, _module, _binds = self._apptainer_config(host_cluster)
+        if not image_dir:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "No image folder configured",
+                "ClusterApptainer.image_dir is not set in config.yaml, so "
+                "there is no shared folder to list. Configure it, or type the "
+                "image filename by hand.",
+            )
+            return
+        try:
+            self._ensure_slurm_communicator(host_cluster)
+            # -1 one-per-line, then basename; tolerate an empty/missing dir.
+            cmd = (
+                f"ls -1 {shlex.quote(image_dir)}/*.sif 2>/dev/null "
+                "| xargs -r -n1 basename"
+            )
+            result = self.slurm_communicator.execute_ssh_command(cmd)
+        except Exception as exc:  # noqa: BLE001 - surfaced to the user
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Could not list images",
+                f"Listing {image_dir} on {host_cluster} failed:\n{exc}",
+            )
+            return
+        images = [
+            line.strip()
+            for line in (result.get("stdout", "") or "").splitlines()
+            if line.strip()
+        ]
+        if not images:
+            QtWidgets.QMessageBox.information(
+                self,
+                "No images found",
+                f"No .sif files found in {image_dir} on {host_cluster}.",
+            )
+            return
+        current = self.cluster_image_combo.currentText().strip()
+        self.cluster_image_combo.blockSignals(True)
+        self.cluster_image_combo.clear()
+        self.cluster_image_combo.addItems(images)
+        # Keep the current pick if still offered, else the auto-resolved
+        # default when present on the mount, else the first listed image.
+        default = self._cluster_image_default
+        if current in images:
+            self.cluster_image_combo.setCurrentText(current)
+        elif default in images:
+            self.cluster_image_combo.setCurrentText(default)
+        else:
+            self.cluster_image_combo.setCurrentText(images[0])
+        self.cluster_image_combo.blockSignals(False)
+
     # ------------------------------------------------------------------ #
     # Live progress monitor
     # ------------------------------------------------------------------ #
@@ -17345,12 +17478,47 @@ class Window(QtWidgets.QMainWindow):
         # Modules to `module load` come from the Run tab's field
         # (space-separated); an empty field loads nothing.
         modules = self.cluster_modules_edit.text().split()
+
+        # Resolve the Apptainer image. The GUI cluster path always runs the
+        # workflow INSIDE an image (so the cluster matches the GUI's version),
+        # so an image must be resolvable: a bare filename is joined onto the
+        # configured shared folder; an absolute path is used as-is. Refuse
+        # (rather than silently falling back to the host conda env) when none
+        # can be formed -- e.g. an "unknown" GUI version left the default blank
+        # and the user picked nothing.
+        image_dir, apptainer_module, bind_paths = self._apptainer_config(
+            host_cluster
+        )
+        image_sel = self.cluster_image_combo.currentText().strip()
+        if image_sel.startswith("/"):
+            image_path = image_sel
+        elif image_sel and image_dir:
+            image_path = f"{image_dir.rstrip('/')}/{image_sel}"
+        else:
+            image_path = image_sel  # bare name with no image_dir, or ""
+        if not image_path:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "No Apptainer image selected",
+                "The cluster run needs an Apptainer image (the GUI path runs "
+                "the workflow inside one so the cluster matches the GUI's "
+                "version). Pick one from the 'Apptainer image' dropdown "
+                "(click 'List' to see what is on the shared folder) or type "
+                "its filename, and set ClusterApptainer.image_dir in "
+                "config.yaml.",
+            )
+            return None, None
+
         commands = self.slurm_communicator.assemble_slurm_commands(
             host_cluster,
             scriptname=scriptname,
             modules=modules,
             faulthandler=self.cluster_faulthandler_check.isChecked(),
             cpu_only=self.cluster_cpu_only_check.isChecked(),
+            image_path=image_path,
+            bind_paths=bind_paths,
+            apptainer_module=apptainer_module,
+            use_nv=n_gpus > 0,
         )
         # scriptname=scriptname, use_pw_module=True)
         # scriptname=scriptname, use_pw_module=False)
@@ -17382,6 +17550,12 @@ class Window(QtWidgets.QMainWindow):
             "results_folder_host": results_folder_host,
             "job_name": job_name,
             "slurm_options": slurm_options,
+            "apptainer": {
+                "image_path": image_path,
+                "module": apptainer_module,
+                "bind_paths": bind_paths,
+                "nv": n_gpus > 0,
+            },
             "scriptname": scriptname,
             "python_script_path": python_script_path,
             "slurm_script_path": (

@@ -63,8 +63,11 @@ COMPUTE_LOCATION = "cluster"
 #: Apptainer module pinned to the LOWEST version on the target node group
 #: (register C10: hpcl8 max 1.4.1; hpcl10/hpcl20 up to 1.5.2 -- WP-9 pins to the
 #: lowest so the same submit template runs on every node group). Overridable per
-#: deployment via ``ClusterSubmitConfig.apptainer_module``.
-DEFAULT_APPTAINER_MODULE = "apptainer/1.4.1"
+#: deployment via ``ClusterSubmitConfig.apptainer_module``. Single-sourced in
+#: ``slurm_submit`` so the GUI path and this worker stay pinned together.
+from picasso_workflow.slurm_submit import (  # noqa: E402
+    DEFAULT_APPTAINER_MODULE,
+)
 
 
 # ---------------------------------------------------------------------------

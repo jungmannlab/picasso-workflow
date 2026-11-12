@@ -54,6 +54,19 @@ ClusterEnvironment:
     # the node driver's CUDA ceiling (see `nvidia-smi`).
     Modules:
       - cuda/13.0
+# The GUI's "Start Workflow on Cluster" path always runs inside an Apptainer
+# image on a shared mount, so the cluster runs the SAME pinned picasso-workflow
+# version as the GUI (rather than whatever host conda env happens to be loaded).
+# The Run tab's image dropdown lists the .sif files found in `image_dir` and
+# defaults to picasso-workflow-<GUI version>.sif when it exists there.
+ClusterApptainer:
+  image_dir: "/sw/picasso-workflow"      # shared mount holding the .sif images
+  module: "apptainer/1.4.1"              # apptainer env module to `module load`
+  # Host paths bound into the container (`apptainer exec --bind`). The container
+  # only sees what is bound in, so list every root the job reads/writes: the
+  # scratch/data root, the results folder's root, template dirs, etc.
+  bind_paths:
+    - "/scratch/paint"
 Drivepaths:
   machine.local:
     - "/local/machine/path"

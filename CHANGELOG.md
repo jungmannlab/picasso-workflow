@@ -10,6 +10,20 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ## [Unreleased]
 
+### Added
+- **GUI cluster runs execute inside a shared-mount Apptainer image.** The Run
+  tab's *Start Workflow on Cluster* path now always wraps the workflow in
+  `apptainer exec` (the generated `run_workflow_slurm.sh` `module load`s
+  Apptainer and runs the image instead of the host `python`), so the cluster
+  runs the same picasso-workflow version the GUI is driven with. A new
+  `ClusterApptainer` config section (`image_dir`, `module`, `bind_paths`) points
+  at the shared folder, and a Run-tab *Apptainer image* dropdown defaults to
+  `picasso-workflow-<GUI version>.sif` with a *List* button that fills it from
+  the shared folder over SSH. GPU requests add `apptainer exec --nv`
+  automatically. Reuses the module-load/bind-quoting pattern already in the
+  cluster-submit worker and single-sources `DEFAULT_APPTAINER_MODULE`.
+  (`slurm_submit.py`, `gui.py`, `cluster_submit.py`, `config_template.yaml`)
+
 ### Changed
 - **GUI workflow-config usability.** The aggregation/investigation file buttons
   (Add/Rename/Remove Dataset & Channel, …) now wrap onto several rows instead of
