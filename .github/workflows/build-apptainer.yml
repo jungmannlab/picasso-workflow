@@ -1,4 +1,4 @@
-# Build the cluster Apptainer image (register C10 / WP-9) in CI.
+# Build the cluster Apptainer image(s) (register C10 / WP-9) in CI.
 #
 # Builds the `.sif` from `deploy/apptainer/paint.def` on a hosted runner (which
 # has the privilege Apptainer's fakeroot build needs) and publishes it. The
@@ -7,11 +7,18 @@
 # (e.g. /sw/picasso-workflow-<version>.sif) and jobs `apptainer exec` from there
 # (C48 distribution scheme).
 #
+# Two VARIANTS are built from the one recipe (matrix):
+#   • lean -> picasso-workflow[-develop-<sha>]-<version>.sif   (PW_EXTRAS="")
+#            the aggregation/analysis image; no pytest, stays small.
+#   • test -> picasso-workflow-test[-develop-<sha>]-<version>.sif  (PW_EXTRAS="[dev]")
+#            adds the [dev] extra (pytest) so the admin console's in-container
+#            test chain (`pytest --pyargs picasso_workflow`) can run inside it.
+#
 # Naming (C48): the published file carries the PRIMARY CONSUMER's version
 # (picasso_workflow.__version__) — that is the key the submitter matches on
 # (WP-9 cluster_submit resolves its installed __version__ -> image_path):
-#   • release build  -> picasso-workflow-<version>.sif
-#   • rolling develop -> picasso-workflow-develop-<short-sha>.sif
+#   • release build  -> picasso-workflow[-test-]<version>.sif
+#   • rolling develop -> picasso-workflow[-test-]develop-<short-sha>.sif
 # The login-node pull is what (re)points the `picasso-workflow-develop.sif`
 # symlink; CI only produces the sha-stamped file.
 
@@ -43,6 +50,20 @@ jobs:
     # .deb depends on libfuse3-3, which noble replaced with libfuse3-4 -> the
     # install fails with "libfuse3-3 … not installable". jammy still ships it.
     runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false          # a lean-build failure shouldn't hide a test one
+      matrix:
+        include:
+          # lean analysis/aggregation image (no pytest).
+          - variant: lean
+            extras: ""
+            infix: ""
+          # test image: adds the [dev] extra (pytest) for the in-container
+          # test chain. Named picasso-workflow-test-<version>.sif.
+          - variant: test
+            extras: "[dev]"
+            infix: "test-"
+    name: build-${{ matrix.variant }}
     steps:
       - uses: actions/checkout@v4
 
@@ -66,15 +87,21 @@ jobs:
           # ref, which is NOT a fetchable git ref — leave PW_REF empty so the def's
           # own pin (develop) is used and the clone resolves.
           PW_REF: ${{ github.event.inputs.pw_ref || (github.event_name == 'release' && github.ref_name) || '' }}
+          PW_EXTRAS: ${{ matrix.extras }}
         run: |
           export APPTAINER_TMPDIR="$RUNNER_TEMP/apptainer-tmp"
           mkdir -p "$APPTAINER_TMPDIR"
-          # bake the chosen ref into the def (paint.def hard-codes PW_REF); skip on
-          # PR builds, which validate the def exactly as written (PW_REF=develop).
+          # bake the chosen ref + extras into the def (paint.def hard-codes both,
+          # so a sed matches the existing PW_REF-injection pattern). PW_REF is
+          # skipped on PR builds (PW_REF=develop, validated as written); PW_EXTRAS
+          # is only injected for the non-lean variant.
           if [ -n "$PW_REF" ]; then
             sed -i "s|^    PW_REF=.*|    PW_REF=\"${PW_REF}\"|" deploy/apptainer/paint.def
           fi
-          echo "Building with PW_REF=$(grep -oP '^\s*PW_REF=\"\K[^\"]+' deploy/apptainer/paint.def)"
+          if [ -n "$PW_EXTRAS" ]; then
+            sed -i "s|^    PW_EXTRAS=.*|    PW_EXTRAS=\"${PW_EXTRAS}\"|" deploy/apptainer/paint.def
+          fi
+          echo "Building ${{ matrix.variant }} with PW_REF=$(grep -oP '^\s*PW_REF=\"\K[^\"]+' deploy/apptainer/paint.def) PW_EXTRAS=$(grep -oP '^\s*PW_EXTRAS=\"\K[^\"]*' deploy/apptainer/paint.def)"
           apptainer build build.sif deploy/apptainer/paint.def
 
       - name: Smoke-test the image (imports the stack headlessly)
@@ -84,45 +111,60 @@ jobs:
       # key). Read it from the installed package METADATA via importlib.metadata,
       # not from picasso_workflow._version — that file is setuptools-scm-generated
       # and gitignored, so it isn't reliably shipped in the wheel (hence the
-      # try/except in __init__). The dist-info version is always present.
+      # try/except in __init__). The dist-info version is always present. The
+      # `test-` variant gets the matrix infix so it sits alongside the lean image.
       - name: Resolve C48 image name
         id: name
         run: |
           VERSION=$(apptainer exec build.sif \
             python -c "from importlib.metadata import version; print(version('picasso_workflow'))")
+          INFIX="${{ matrix.infix }}"
           if [ "${{ github.event_name }}" = "release" ]; then
-            OUT="picasso-workflow-${VERSION}.sif"
+            OUT="picasso-workflow-${INFIX}${VERSION}.sif"
           else
-            OUT="picasso-workflow-develop-${GITHUB_SHA::7}.sif"
+            OUT="picasso-workflow-${INFIX}develop-${GITHUB_SHA::7}.sif"
           fi
           mv build.sif "$OUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "sif=$OUT"         >> "$GITHUB_OUTPUT"
-          echo "Built $OUT (picasso_workflow $VERSION)"
+          echo "Built $OUT (picasso_workflow $VERSION, ${{ matrix.variant }})"
 
       # --- publish -------------------------------------------------------------
-      # A) ephemeral CI artifact (always; good for verifying a build / dispatch).
+      # Ephemeral CI artifact per variant (always; good for verifying a build /
+      # dispatch, and the hand-off to the `release` job below). The release
+      # asset upload is NOT done here: two parallel matrix jobs hitting
+      # softprops/action-gh-release on the same release would race on the
+      # release object -- the dedicated `release` job (needs: build) uploads
+      # both .sif files in one serialized step instead.
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.name.outputs.sif }}
           path: ${{ steps.name.outputs.sif }}
 
-      # B) durable GitHub release asset (login node pulls it with curl/wget).
-      - uses: softprops/action-gh-release@v2
-        if: github.event_name == 'release'
+  # Durable GitHub release assets (login node pulls them with curl/wget). Runs
+  # once, AFTER both matrix builds, and uploads both variants' .sif in a single
+  # action-gh-release call -- so there is no concurrent read-modify-write of the
+  # release object (the race two in-matrix uploads would hit).
+  release:
+    needs: build
+    if: github.event_name == 'release'
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
         with:
-          files: ${{ steps.name.outputs.sif }}
+          path: dist
+          merge-multiple: true    # flatten every variant's .sif into dist/
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.sif
 
-      # C) ghcr via ORAS — the C48-RECOMMENDED target (enables an automated
-      #    login-node refresh: `apptainer pull oras://ghcr.io/<owner>/picasso-workflow:<tag>`).
-      #    Needs `packages: write` in `permissions:` above; left off by default so
-      #    this PR makes no org-package/visibility decision. To enable, uncomment:
-      # - name: Push to ghcr
-      #   run: |
-      #     echo "${{ secrets.GITHUB_TOKEN }}" | \
-      #       apptainer registry login -u ${{ github.actor }} --password-stdin oras://ghcr.io
-      #     apptainer push "${{ steps.name.outputs.sif }}" \
-      #       oras://ghcr.io/${{ github.repository_owner }}/picasso-workflow:${{ steps.name.outputs.version }}
+  # ghcr via ORAS — the C48-RECOMMENDED target (enables an automated login-node
+  # refresh: `apptainer pull oras://ghcr.io/<owner>/picasso-workflow:<tag>`).
+  # Needs `packages: write`; left off by default so this makes no org-package/
+  # visibility decision. To enable, add a job that downloads the artifacts and
+  # `apptainer push`es each to oras://ghcr.io/<owner>/picasso-workflow:<tag>.
 
 # --- Private-repo adaptation (only if a jungmannlab repo becomes private) -------
 # Don't put a git token inside %post (it can leak into the image). Instead:

@@ -51,6 +51,9 @@ From: python:3.11-slim-bookworm
     # PW_EXTRAS is empty for the cluster: the Qt GUI (PyQt6 + WebEngine, ~530 MB)
     # is a `[gui]` extra that the aggregation never imports, so the cluster image
     # stays lean. Set PW_EXTRAS="[gui]" if you ever want a full desktop image.
+    # build-apptainer.yml seds this line (like PW_REF) to PW_EXTRAS="[dev]" for
+    # the `test` matrix variant -> picasso-workflow-test-<version>.sif, which
+    # carries pytest so the admin console's in-container test chain can run.
     PW_REF="develop"
     PW_EXTRAS=""
     python -m pip install --no-cache-dir --pre \

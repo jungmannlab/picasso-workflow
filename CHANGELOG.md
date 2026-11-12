@@ -11,6 +11,15 @@ This file was started after v0.5.6; earlier history is in the git log.
 ## [Unreleased]
 
 ### Added
+- **CI builds a `-test-` Apptainer image carrying pytest.** `build-apptainer.yml`
+  now builds two variants from the one recipe via a matrix: the lean
+  analysis/aggregation image (`picasso-workflow-<version>.sif`, unchanged) and a
+  test image (`picasso-workflow-test-<version>.sif`, built with the `[dev]`
+  extra) that the admin console's in-container test chain runs
+  `pytest --pyargs picasso_workflow` inside. The `[dev]` extra is `sed`-injected
+  into `deploy/apptainer/paint.def` (mirroring the existing `PW_REF` injection),
+  so the recipe itself is unchanged. (`.github/workflows/build-apptainer.yml`,
+  `deploy/apptainer/paint.def`)
 - **Admin console can run the cluster test chain in-container.** The admin
   GUI's new *Test runs* tab submits the full tiered chain (tiers 1-3 -> tier 4
   + per-template workflows -> summary, with `afterok`/`afterany` dependency
