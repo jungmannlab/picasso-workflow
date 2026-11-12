@@ -15493,6 +15493,23 @@ class Window(QtWidgets.QMainWindow):
             else "Unknown"
         )
 
+        # Investigation workflows cannot currently be generated from the GUI:
+        # the emitted driver is out of sync with InvestigationWorkflowCoordinator
+        # (constructor signature and run entry points differ), so a generated
+        # script would fail at import/run. Refuse here with a clear message
+        # rather than writing a broken script.
+        if workflow_type_index == 2:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Investigation workflow not supported",
+                "Generating a runnable script for Investigation workflows "
+                "from the GUI is not currently supported: the generator is "
+                "out of sync with InvestigationWorkflowCoordinator's API.\n\n"
+                "Use a Single or Aggregation workflow, or drive "
+                "InvestigationWorkflowCoordinator from a hand-written script.",
+            )
+            return None
+
         # Single Workflow input-files mode (combo index): 0 = explicit
         # file list, 1 = auto-detect raw files in the results folder at
         # run time, 2 = no input files (run the workflow exactly once).
@@ -15907,6 +15924,11 @@ class Window(QtWidgets.QMainWindow):
                 )
             script_lines.append("    )")
         elif workflow_type_index == 2:  # Investigation Workflow
+            # NOTE: unreachable - create_python_script returns early for
+            # Investigation workflows (see the guard above). This emitted
+            # driver is stale vs InvestigationWorkflowCoordinator's current
+            # constructor/run API and is kept only as a starting point for a
+            # future fix; update it (and drop the guard) before relying on it.
             script_lines.extend(
                 [
                     "    # Create investigation workflow coordinator",
@@ -17115,6 +17137,12 @@ class Window(QtWidgets.QMainWindow):
         python_script_path = self.create_python_script(
             host_cluster, login_node, scriptname
         )
+        if python_script_path is None:
+            # Script generation was refused (validation error, or an
+            # Investigation workflow which the GUI cannot generate yet);
+            # create_python_script already told the user why. Abort rather
+            # than assembling / submitting a job for a missing script.
+            return None, None
 
         # Use the results folder's last directory as a meaningful job name
         # (falls back to "mypwjob" if it cannot be determined). Sanitize to
@@ -17243,6 +17271,10 @@ class Window(QtWidgets.QMainWindow):
         """"""
         logger.info("start_slurm: assembling SLURM scripts")
         host_cluster, script_path = self.assemble_slurm_scripts()
+        if script_path is None:
+            # Script assembly was refused (validation / Investigation); the
+            # user was already told. Do not submit a job for a missing script.
+            return
         logger.info(
             f"start_slurm: submitting job to {host_cluster} "
             f"using script {script_path}"
@@ -17276,6 +17308,10 @@ class Window(QtWidgets.QMainWindow):
 
     def estimate_start(self):
         host_cluster, script_path = self.assemble_slurm_scripts()
+        if script_path is None:
+            # Script assembly was refused (validation / Investigation); the
+            # user was already told. Nothing to estimate.
+            return
         result = self.slurm_communicator.submit_job(
             script_path, host_cluster, additional_options=["--test-only"]
         )
@@ -17332,6 +17368,12 @@ class Window(QtWidgets.QMainWindow):
                 f"Could not generate the workflow script:\n{e}"
             )
             logger.error(traceback.format_exc())
+            return
+
+        if script_path is None:
+            # A None return (not an exception) means generation was refused
+            # (validation / Investigation); the user was already told. Do not
+            # create a log or launch a subprocess on a missing script.
             return
 
         # clear any stale abort flag from a previous run in this folder

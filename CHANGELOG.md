@@ -230,6 +230,14 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Fixed
 
+- **Investigation workflow coordinator renamed to
+  `InvestigationWorkflowCoordinator`** (from `InvestigationCoordinator`) to
+  match the `SingleWorkflowCoordinator` / `AggregationWorkflowCoordinator`
+  convention and the name the GUI emits; the old name stays importable as an
+  alias. The GUI's Investigation script generation was additionally stale (it
+  built a driver whose constructor args and run method no longer match the
+  coordinator), so the GUI now refuses to emit a broken Investigation script
+  with a clear message instead; fixing the generator is tracked separately.
 - **`filter_locs` `quantile`/`zscore` threshold conversion fixed.** In
   `quantile` mode the maximum threshold was computed from the *minimum*
   quantiles (the comprehension iterated `all_xmin` for both bounds), collapsing
