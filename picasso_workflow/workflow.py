@@ -53,6 +53,7 @@ from picasso_workflow.util import (
     ParameterCommandExecutor,
     ParameterTiler,
     DictSimpleTyper,
+    channel_restriction_columns,
     compile_channel_restrictions,
     convert_filepath_for_machine,
 )
@@ -940,9 +941,27 @@ class AggregationWorkflowRunner:
         # conditional_branch and each channel's tiling takes if_true or the
         # empty (no-op) if_false. Idempotent: lists without the directive, and
         # already-compiled lists, pass through unchanged.
-        single_dataset_modules = compile_channel_restrictions(
-            self.aggregation_workflow.get("single_dataset_modules", [])
+        sugar_single_modules = self.aggregation_workflow.get(
+            "single_dataset_modules", []
         )
+        single_dataset_modules = compile_channel_restrictions(
+            sugar_single_modules
+        )
+        # Warn if a #run_on_channels directive names a per-channel column that
+        # is not declared: $$map would default it to False and the restricted
+        # module would silently be skipped on every channel.
+        declared_cols = (
+            self.aggregation_workflow.get("single_dataset_tileparameters")
+            or {}
+        )
+        for col in sorted(channel_restriction_columns(sugar_single_modules)):
+            if col not in declared_cols:
+                logger.warning(
+                    "#run_on_channels references tile-parameter column "
+                    f"'{col}', which is not in "
+                    "single_dataset_tileparameters; it defaults to False, so "
+                    "the restricted module is skipped on every channel."
+                )
 
         # pre-flight: validate both sub-workflows (warn-only, non-blocking).
         # single_dataset_modules run per dataset (single scope);
@@ -2277,11 +2296,14 @@ class WorkflowRunner:
                 # escaping with the progress state stuck at RUNNING (which
                 # leaves the live monitor showing the dataset as still running
                 # long after the rank has moved on).
-                # The branch module owns resolution of its sub-workflow payload
-                # (branch_modules/join_modules reference branch-local and $$map
-                # results that do not exist yet at this point), so pass its
-                # config through raw; branch() resolves each piece itself.
-                if module_name != "branch":
+                # The branch and conditional_branch modules own resolution of
+                # their sub-workflow payloads (branch_modules / join_modules /
+                # if_true / if_false reference branch-local and $$map results
+                # that do not exist yet at this point, and whose correct
+                # resolution index is the sub-module's, not this wrapper's), so
+                # pass their config through raw; each resolves its own pieces
+                # (branch(), conditional_branch() via the injected executor).
+                if module_name not in ("branch", "conditional_branch"):
                     module_parameters = self.parameter_command_executor.run(
                         module_parameters, curr_rootidx=i
                     )

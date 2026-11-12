@@ -347,6 +347,35 @@ class TestUtil(unittest.TestCase):
         assert util.ConditionEvaluator(None).evaluate(condA) is True
         assert util.ConditionEvaluator(None).evaluate(condB) is False
 
+    def test_05_compile_channel_restrictions_nested(self):
+        """A ``#run_on_channels`` directive on a module nested inside a branch
+        is honored (compiled in place), and the transform is idempotent."""
+        key = util.RUN_ON_CHANNELS_KEY
+        modules = [
+            (
+                "branch",
+                {
+                    "branch_modules": [("cluster", {"r": 5, key: "is_resi"})],
+                    "join_modules": [("summarize_branches", {})],
+                },
+            ),
+        ]
+        out = util.compile_channel_restrictions(modules)
+        bmods = out[0][1]["branch_modules"]
+        assert bmods[0][0] == "conditional_branch"
+        assert bmods[0][1]["if_true"] == [("cluster", {"r": 5})]
+        assert bmods[0][1]["if_false"] == []
+        # join section untouched
+        assert out[0][1]["join_modules"] == [("summarize_branches", {})]
+        # input not mutated; idempotent
+        assert modules[0][1]["branch_modules"][0][1] == {
+            "r": 5,
+            key: "is_resi",
+        }
+        assert util.compile_channel_restrictions(out) == out
+        # referenced columns are collected across nesting
+        assert util.channel_restriction_columns(modules) == {"is_resi"}
+
     def test_05_ParameterTiler_tags_only(self):
         """With only a '#tags' entry (no mapped files), the tiler must
         produce exactly one workflow set - this is what the single

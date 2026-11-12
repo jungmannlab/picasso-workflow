@@ -14203,6 +14203,7 @@ class Window(QtWidgets.QMainWindow):
             self._clear_branch_context()
             # Back to "Add" mode and append-at-end availability.
             self._refresh_module_palette()
+            self._sync_run_on_channels_control()
             return
 
         # Save current parameters before loading new selection
@@ -14229,6 +14230,7 @@ class Window(QtWidgets.QMainWindow):
             self.editing_workflow_subnode = None
             self._clear_branch_context()
             self._refresh_module_palette()
+            self._sync_run_on_channels_control()
             return
 
         top_index = node["top"] if node is not None else current_row
@@ -14278,6 +14280,10 @@ class Window(QtWidgets.QMainWindow):
 
         # Reflect what is addable after the newly selected insertion point.
         self._refresh_module_palette()
+        # Refresh the per-channel control for the new selection (the
+        # _populate_stored_parameters path above also does this, but not when
+        # the module is absent from the palette; idempotent if called twice).
+        self._sync_run_on_channels_control()
 
     def _branch_submodule_at(self, modules, node):
         """Return ``(name, params, subnode)`` for a selected branch sub-row.

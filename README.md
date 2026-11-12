@@ -244,9 +244,26 @@ only; it never reaches the module itself.
 **In the GUI**, select a single-dataset module in an aggregation/investigation
 workflow and tick **"Run only on channels where column:"**, then pick (or
 auto-create) the boolean column; set which channels are `True` under
-**Per-Channel Params…**. Note that any later single-dataset module and the
-aggregation modules must tolerate the channels that skip this one (e.g. do not
-reference a skipped clustering's per-channel result for those channels).
+**Per-Channel Params…**.
+
+**Use it for transform modules and mind these limits:**
+
+- The column must hold real booleans (`True`/`False`, or `0`/`1`) — a column
+  that is absent or holds strings like `"true"` resolves to the `False`
+  default, silently skipping the module on every channel (the runner logs a
+  warning for an undeclared column).
+- Best suited to modules that transform the shared state (`self.locs`) —
+  clustering, filtering — so a later `save_single_dataset` simply saves
+  whatever state the channel ended in and the aggregation loads that. **Do not
+  restrict a module whose per-dataset *result* is referenced by name/index
+  elsewhere** (via `$get_prior_result` / `$get_previous_module_result`, or from
+  an aggregation module): wrapping moves its result under the
+  `conditional_branch` key, so such a reference would no longer find it.
+- A restricted module does not expose a resume checkpoint of its own, so a
+  resumed run may re-run from an earlier point on the channels it ran.
+- Any later single-dataset module and the aggregation modules must tolerate the
+  channels that skipped this one (e.g. do not assume every channel was
+  clustered).
 
 ## Installation
 

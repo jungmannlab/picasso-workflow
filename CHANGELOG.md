@@ -232,6 +232,12 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Fixed
 
+- **`conditional_branch` now owns resolution of its sub-workflow payload**, like
+  `branch` already did: the workflow runner no longer pre-resolves `$`-commands
+  in a `conditional_branch`'s `if_true` / `if_false` sub-modules at the wrapper's
+  index (which resolved sibling/previous-result references at the wrong point and
+  polluted the saved parameters with `*_originalnocmd` keys). The module resolves
+  its own pieces via the injected executor.
 - **GUI module-parameter forms corrected to match what `analyse.py` actually
   reads.** The hand-coded `ModuleDescriptor` forms in `gui.py` had drifted from
   the real `AutoPicasso.<module>` parameter contract. This fixes two `KeyError`

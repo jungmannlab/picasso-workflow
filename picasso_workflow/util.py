@@ -3044,6 +3044,11 @@ class ParameterTiler:
 #: that column is truthy (see :func:`compile_channel_restrictions`).
 RUN_ON_CHANNELS_KEY = "#run_on_channels"
 
+#: Parameter keys that hold nested ``(module_name, params)`` sub-workflow lists
+#: (branch / conditional_branch). The compiler recurses into these so a
+#: ``#run_on_channels`` directive is honored wherever a module sits.
+_SUBWORKFLOW_KEYS = ("branch_modules", "join_modules", "if_true", "if_false")
+
 
 def compile_channel_restrictions(modules):
     """Compile ``#run_on_channels`` directives into ``conditional_branch``.
@@ -3057,9 +3062,16 @@ def compile_channel_restrictions(modules):
     channel's single-dataset workflow gets a concrete bool) and whose
     ``if_false`` branch is empty -- a clean no-op on the other channels.
 
+    The compiler recurses into nested sub-workflow lists
+    (``branch_modules`` / ``join_modules`` / ``if_true`` / ``if_false``), so a
+    directive on a module nested inside a ``branch`` / ``conditional_branch``
+    is honored too (e.g. after a module is moved into a branch in the GUI).
+
     Modules without the key (and non-dict parameter blocks) are returned
     unchanged. The input is never mutated; a stray empty directive is simply
-    stripped (treated as "no restriction").
+    stripped (treated as "no restriction"). The transform is idempotent: an
+    already-compiled ``conditional_branch`` carries no directive and passes
+    through (its sub-lists are still recursed, which is a no-op second time).
 
     Parameters
     ----------
@@ -3073,40 +3085,67 @@ def compile_channel_restrictions(modules):
         The module list with restricted modules wrapped in
         ``conditional_branch``.
     """
-    compiled = []
-    for module_name, params in modules:
-        column = (
-            params.get(RUN_ON_CHANNELS_KEY)
-            if isinstance(params, dict)
-            else None
-        )
-        if not column:
-            # No (or empty) restriction -- strip a stray empty key if present.
-            if isinstance(params, dict) and RUN_ON_CHANNELS_KEY in params:
-                params = {
-                    k: v for k, v in params.items() if k != RUN_ON_CHANNELS_KEY
-                }
-            compiled.append((module_name, params))
+    return [_compile_restriction(name, params) for name, params in modules]
+
+
+def _compile_restriction(module_name, params):
+    """Compile one ``(name, params)`` entry (see
+    :func:`compile_channel_restrictions`)."""
+    if not isinstance(params, dict):
+        return (module_name, params)
+
+    column = params.get(RUN_ON_CHANNELS_KEY)
+    nested = [k for k in _SUBWORKFLOW_KEYS if isinstance(params.get(k), list)]
+    if not column and not nested:
+        return (module_name, params)  # unchanged; reuse the dict
+
+    # Copy so the caller's params are never mutated; recurse into any nested
+    # sub-workflow lists.
+    new_params = dict(params)
+    for key in nested:
+        new_params[key] = compile_channel_restrictions(new_params[key])
+
+    if not column:
+        # No (or empty) restriction -- strip a stray empty key if present.
+        new_params.pop(RUN_ON_CHANNELS_KEY, None)
+        return (module_name, new_params)
+
+    new_params.pop(RUN_ON_CHANNELS_KEY, None)
+    condition = {
+        "left": ("$$map", column, False),
+        "operator": "==",
+        "right": True,
+    }
+    return (
+        "conditional_branch",
+        {
+            "condition": condition,
+            "if_true": [(module_name, new_params)],
+            "if_false": [],
+        },
+    )
+
+
+def channel_restriction_columns(modules):
+    """Tile-parameter column names referenced by ``#run_on_channels``.
+
+    Recurses into nested sub-workflow lists, mirroring
+    :func:`compile_channel_restrictions`. Used to warn about a directive that
+    names a column absent from ``single_dataset_tileparameters`` (which would
+    silently default to ``False`` and skip the module on every channel).
+    """
+    cols = set()
+    for _name, params in modules:
+        if not isinstance(params, dict):
             continue
-        inner_params = {
-            k: v for k, v in params.items() if k != RUN_ON_CHANNELS_KEY
-        }
-        condition = {
-            "left": ("$$map", column, False),
-            "operator": "==",
-            "right": True,
-        }
-        compiled.append(
-            (
-                "conditional_branch",
-                {
-                    "condition": condition,
-                    "if_true": [(module_name, inner_params)],
-                    "if_false": [],
-                },
-            )
-        )
-    return compiled
+        column = params.get(RUN_ON_CHANNELS_KEY)
+        if column:
+            cols.add(column)
+        for key in _SUBWORKFLOW_KEYS:
+            sub = params.get(key)
+            if isinstance(sub, list):
+                cols |= channel_restriction_columns(sub)
+    return cols
 
 
 class BranchStateManager:
