@@ -13,7 +13,6 @@ from picasso_workflow.admin.core import (
     JobInfo,
     build_admin,
     cluster_hosts,
-    default_test_image_basename,
     this_gui_version,
 )
 
@@ -24,6 +23,5 @@ __all__ = [
     "JobInfo",
     "build_admin",
     "cluster_hosts",
-    "default_test_image_basename",
     "this_gui_version",
 ]

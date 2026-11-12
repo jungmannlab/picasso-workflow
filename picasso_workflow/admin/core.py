@@ -25,44 +25,26 @@ from picasso_workflow import CONFIG
 from picasso_workflow.slurm_submit import (
     SlurmCommunicator,
     apptainer_config,
-    default_image_basename,
+    resolve_pw_version,
 )
+
+#: Field separator for ``squeue``/``sacct`` ``-o`` output. A tab never appears
+#: in a SLURM job name / reason, so splitting on it (rather than ``|``) is
+#: robust to a pipe in a user's job name.
+_SEP = "\t"
 
 
 # ---------------------------------------------------------------------------
 # Version / image naming
 # ---------------------------------------------------------------------------
-def default_test_image_basename(version):
-    """Return the ``-test-`` ``.sif`` filename matching ``version``.
-
-    The test image (built with the ``[dev]`` extra so it carries pytest) is
-    named ``picasso-workflow-test-<version>.sif`` alongside the lean
-    ``picasso-workflow-<version>.sif``. Returns ``None`` for the same
-    unknown/dev versions :func:`slurm_submit.default_image_basename` rejects.
-    """
-    base = default_image_basename(version)
-    if base is None:
-        return None
-    return base.replace("picasso-workflow-", "picasso-workflow-test-", 1)
-
-
 def this_gui_version():
     """The installed ``picasso_workflow`` version, or ``"unknown"``.
 
-    Prefers the dist metadata (present even in a non-git wheel install) and
-    falls back to the importable ``__version__``.
+    Delegates to :func:`slurm_submit.resolve_pw_version` so the admin console
+    and the Run tab's image auto-match report the SAME version (the Images
+    tab's "this GUI" highlighting depends on the two agreeing).
     """
-    try:
-        import importlib.metadata
-
-        return importlib.metadata.version("picasso_workflow")
-    except Exception:
-        try:
-            from picasso_workflow import __version__
-
-            return __version__
-        except Exception:
-            return "unknown"
+    return resolve_pw_version()
 
 
 def parse_image_name(name):
@@ -81,9 +63,11 @@ def parse_image_name(name):
         version = stem[len("picasso-workflow-") :]
     else:
         return None, is_test
-    # A plain release version is digits/dots; develop-<sha> and the like are
-    # left unparsed (shown verbatim by the caller, not matched to a version).
-    if version and all(c.isdigit() or c == "." for c in version):
+    # A plain release version is dot-separated digit groups ("0.9.0");
+    # develop-<sha>, malformed dotted names ("0..0"), etc. are left unparsed
+    # (shown verbatim by the caller, not matched to a version).
+    groups = version.split(".")
+    if version and all(g.isdigit() for g in groups):
         return version, is_test
     return None, is_test
 
@@ -130,18 +114,21 @@ class DiskUsage:
 def parse_image_listing(stdout):
     """Parse ``ls -l --time-style=long-iso <dir>`` into ``[ImageInfo]``.
 
-    Only regular files (lines starting ``-``) ending in ``.sif`` are kept.
-    Fields: perms links owner group size YYYY-MM-DD HH:MM name...
+    Regular files (lines starting ``-``) and symlinks (``l``, e.g. a
+    ``...-latest.sif`` alias) ending in ``.sif`` are kept. Fields: perms links
+    owner group size YYYY-MM-DD HH:MM name[ -> target].
     """
     images = []
     for line in stdout.splitlines():
         line = line.rstrip("\n")
-        if not line or not line.startswith("-"):
-            continue  # skip 'total N', directories, symlinks, blanks
+        if not line or line[0] not in "-l":
+            continue  # skip 'total N', directories, blanks
         parts = line.split()
         if len(parts) < 8:
             continue
         name = " ".join(parts[7:])
+        # Symlinks render as "name -> target"; keep the link's own name.
+        name = name.split(" -> ", 1)[0]
         if not name.endswith(".sif"):
             continue
         version, is_test = parse_image_name(name)
@@ -172,16 +159,21 @@ def _human_size(num_bytes):
 
 
 def parse_squeue(stdout):
-    """Parse ``squeue -h -o '%i|%j|%T|%M|%P|%R'`` into ``[JobInfo]``."""
+    """Parse tab-separated ``squeue -h -o`` output into ``[JobInfo]``.
+
+    Columns: JobID, Name, State, Time, Partition, Reason (see
+    :meth:`ClusterAdmin.queue`). Split on tab (``_SEP``) so a pipe in a job
+    name cannot shift fields.
+    """
     jobs = []
     for line in stdout.splitlines():
-        line = line.strip()
-        if not line:
+        line = line.rstrip("\n")
+        if not line.strip():
             continue
-        f = line.split("|")
+        f = line.split(_SEP)
         if len(f) < 4:
             continue
-        extra = " ".join(x for x in (f[4:5] + f[5:6]) if x)
+        extra = " ".join(x for x in f[4:] if x)  # partition + reason
         jobs.append(
             JobInfo(
                 job_id=f[0],
@@ -195,17 +187,19 @@ def parse_squeue(stdout):
 
 
 def parse_sacct(stdout):
-    """Parse ``sacct -X -n -P -o JobID,JobName,State,Elapsed,End``.
+    """Parse tab-separated ``sacct`` output into ``[JobInfo]``.
 
-    ``-P`` emits pipe-separated fields, ``-n`` drops the header, ``-X`` keeps
-    only the main job (not the ``.batch``/``.extern`` steps).
+    Columns: JobID, JobName, State, Elapsed, End (see
+    :meth:`ClusterAdmin.recent_jobs`). ``-n`` drops the header, ``-X`` keeps
+    only the main job (not the ``.batch``/``.extern`` steps); the tab delimiter
+    is robust to a pipe in a job name.
     """
     jobs = []
     for line in stdout.splitlines():
-        line = line.strip()
-        if not line:
+        line = line.rstrip("\n")
+        if not line.strip():
             continue
-        f = line.split("|")
+        f = line.split(_SEP)
         if len(f) < 4:
             continue
         jobs.append(
@@ -334,18 +328,23 @@ class ClusterAdmin:
 
     def queue(self):
         """The user's current SLURM queue (squeue)."""
+        # Tab-separated fields (robust to a '|' in a job name); the format is
+        # single-quoted so the remote shell keeps the literal tabs intact.
+        fmt = _SEP.join(["%i", "%j", "%T", "%M", "%P", "%R"])
         out = self._run(
             "squeue -h -u "
             + shlex.quote(self.username)
-            + " -o '%i|%j|%T|%M|%P|%R'"
+            + " -o "
+            + shlex.quote(fmt)
         )
         return parse_squeue(out)
 
     def recent_jobs(self, days=3):
         """The user's recent finished/running jobs (sacct)."""
         out = self._run(
-            "sacct -X -n -P "
-            + "-u "
+            "sacct -X -n -P --delimiter="
+            + shlex.quote(_SEP)
+            + " -u "
             + shlex.quote(self.username)
             + f" -S now-{int(days)}days "
             + "-o JobID,JobName,State,Elapsed,End"
@@ -353,9 +352,13 @@ class ClusterAdmin:
         return parse_sacct(out)
 
     def disk_usage(self):
-        """``df -h`` for the image directory (or ``None`` if unset)."""
+        """``df -hP`` for the image directory (or ``None`` if unset).
+
+        ``-P`` forces POSIX single-line output so a long network device name
+        does not wrap onto its own line and defeat :func:`parse_df`.
+        """
         image_dir, _module, _binds = apptainer_config(self.host)
         if not image_dir:
             return None
-        out = self._run(f"df -h {shlex.quote(image_dir)}")
+        out = self._run(f"df -hP {shlex.quote(image_dir)}")
         return parse_df(out)

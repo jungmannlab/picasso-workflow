@@ -120,6 +120,15 @@ class AdminWindow(QMainWindow):
         if path:
             self.identity.setText(path)
 
+    @staticmethod
+    def _make_table(headers) -> QTableWidget:
+        """A read-only table with the given headers and a stretched last col."""
+        table = QTableWidget(0, len(headers))
+        table.setHorizontalHeaderLabels(headers)
+        table.horizontalHeader().setStretchLastSection(True)
+        table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        return table
+
     # -- images tab -------------------------------------------------------
     def _build_images_tab(self) -> QWidget:
         w = QWidget()
@@ -129,13 +138,8 @@ class AdminWindow(QMainWindow):
         lay.addWidget(refresh)
         self.image_dir_label = QLabel("")
         lay.addWidget(self.image_dir_label)
-        self.image_table = QTableWidget(0, 6)
-        self.image_table.setHorizontalHeaderLabels(
+        self.image_table = self._make_table(
             ["Image", "Version", "Test", "Size", "Modified", "Match"]
-        )
-        self.image_table.horizontalHeader().setStretchLastSection(True)
-        self.image_table.setEditTriggers(
-            QTableWidget.EditTrigger.NoEditTriggers
         )
         lay.addWidget(self.image_table, 1)
         return w
@@ -150,23 +154,13 @@ class AdminWindow(QMainWindow):
         self.disk_label = QLabel("")
         lay.addWidget(self.disk_label)
         lay.addWidget(QLabel("Queue (squeue)"))
-        self.queue_table = QTableWidget(0, 5)
-        self.queue_table.setHorizontalHeaderLabels(
+        self.queue_table = self._make_table(
             ["Job", "Name", "State", "Time", "Partition/Reason"]
-        )
-        self.queue_table.horizontalHeader().setStretchLastSection(True)
-        self.queue_table.setEditTriggers(
-            QTableWidget.EditTrigger.NoEditTriggers
         )
         lay.addWidget(self.queue_table, 1)
         lay.addWidget(QLabel("Recent jobs (sacct, last 3 days)"))
-        self.recent_table = QTableWidget(0, 5)
-        self.recent_table.setHorizontalHeaderLabels(
+        self.recent_table = self._make_table(
             ["Job", "Name", "State", "Elapsed", "End"]
-        )
-        self.recent_table.horizontalHeader().setStretchLastSection(True)
-        self.recent_table.setEditTriggers(
-            QTableWidget.EditTrigger.NoEditTriggers
         )
         lay.addWidget(self.recent_table, 1)
         return w

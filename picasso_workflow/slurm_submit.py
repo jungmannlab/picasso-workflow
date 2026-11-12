@@ -35,6 +35,28 @@ from picasso_workflow import CONFIG
 DEFAULT_APPTAINER_MODULE = "apptainer/1.4.1"
 
 
+def resolve_pw_version():
+    """The installed ``picasso_workflow`` version, or ``"unknown"``.
+
+    Prefers the dist metadata (present even in a non-git wheel install, where
+    ``_version.py`` / ``__version__`` may be absent) and falls back to the
+    importable ``__version__``. Single source so the Run tab's image auto-match
+    and the admin console report the SAME version (the match highlighting
+    depends on it).
+    """
+    try:
+        import importlib.metadata
+
+        return importlib.metadata.version("picasso_workflow")
+    except Exception:
+        try:
+            from picasso_workflow import __version__
+
+            return __version__
+        except Exception:
+            return "unknown"
+
+
 def default_image_basename(version):
     """Return the shared-mount ``.sif`` filename matching ``version``.
 

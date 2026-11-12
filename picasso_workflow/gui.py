@@ -25,7 +25,6 @@ import sys
 import getpass
 import yaml
 import importlib.util
-import importlib.metadata
 
 # import pkgutil
 # import importlib
@@ -7954,6 +7953,7 @@ from picasso_workflow.slurm_submit import (  # noqa: E402,F401
     SlurmCommunicator,
     apptainer_config,
     default_image_basename,
+    resolve_pw_version,
 )
 
 
@@ -10359,11 +10359,9 @@ class Window(QtWidgets.QMainWindow):
         # since the installed version cannot change at runtime. Prefer the
         # installed dist metadata (present even in a non-git wheel install,
         # where _version.py / __GUIVERSION__ is "unknown") over __GUIVERSION__.
-        try:
-            _pw_version = importlib.metadata.version("picasso_workflow")
-        except Exception:
-            _pw_version = __GUIVERSION__
-        self._image_version_default = default_image_basename(_pw_version) or ""
+        self._image_version_default = (
+            default_image_basename(resolve_pw_version()) or ""
+        )
         # Tracks the last programmatically applied image, so a manual pick is
         # preserved across cluster switches while an untouched field follows
         # the version default (mirrors self._cluster_modules_default).
@@ -16270,6 +16268,14 @@ class Window(QtWidgets.QMainWindow):
             )
             return
         win = getattr(self, "_admin_window", None)
+        # A cached window whose underlying C++ object was deleted (e.g. a future
+        # DeleteOnClose) is not None but raises on access -- recreate in that
+        # case rather than crashing.
+        if win is not None:
+            try:
+                win.isVisible()
+            except RuntimeError:
+                win = None
         if win is None:
             win = AdminWindow(self)
             self._admin_window = win
