@@ -17009,6 +17009,12 @@ class Window(QtWidgets.QMainWindow):
         python_script_path = self.create_python_script(
             host_cluster, login_node, scriptname
         )
+        if python_script_path is None:
+            # Script generation was refused (validation error, or an
+            # Investigation workflow which the GUI cannot generate yet);
+            # create_python_script already told the user why. Abort rather
+            # than assembling / submitting a job for a missing script.
+            return None, None
 
         # Use the results folder's last directory as a meaningful job name
         # (falls back to "mypwjob" if it cannot be determined). Sanitize to
@@ -17137,6 +17143,10 @@ class Window(QtWidgets.QMainWindow):
         """"""
         logger.info("start_slurm: assembling SLURM scripts")
         host_cluster, script_path = self.assemble_slurm_scripts()
+        if script_path is None:
+            # Script assembly was refused (validation / Investigation); the
+            # user was already told. Do not submit a job for a missing script.
+            return
         logger.info(
             f"start_slurm: submitting job to {host_cluster} "
             f"using script {script_path}"
@@ -17170,6 +17180,10 @@ class Window(QtWidgets.QMainWindow):
 
     def estimate_start(self):
         host_cluster, script_path = self.assemble_slurm_scripts()
+        if script_path is None:
+            # Script assembly was refused (validation / Investigation); the
+            # user was already told. Nothing to estimate.
+            return
         result = self.slurm_communicator.submit_job(
             script_path, host_cluster, additional_options=["--test-only"]
         )
@@ -17226,6 +17240,12 @@ class Window(QtWidgets.QMainWindow):
                 f"Could not generate the workflow script:\n{e}"
             )
             logger.error(traceback.format_exc())
+            return
+
+        if script_path is None:
+            # A None return (not an exception) means generation was refused
+            # (validation / Investigation); the user was already told. Do not
+            # create a log or launch a subprocess on a missing script.
             return
 
         # clear any stale abort flag from a previous run in this folder
