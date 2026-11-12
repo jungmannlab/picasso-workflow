@@ -68,6 +68,10 @@ ClusterApptainer:
   # in automatically, so it need not be listed here.
   bind_paths:
     - "/scratch/paint"
+  # Cluster scratch dir where the admin console's test runs stage their
+  # artefacts (per-run subdir with JUnit XMLs, logs, SUMMARY.txt). Needs no
+  # login-node repo -- the test chain runs pytest inside the image.
+  test_results_dir: "/scratch/paint/test-results"
   # Optional per-cluster override: a sub-dict keyed as in SlurmLoginNodes
   # overrides the keys above for that host (heterogeneous node groups with
   # different mounts / Apptainer versions). Only the keys you set are replaced;

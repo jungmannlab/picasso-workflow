@@ -104,22 +104,44 @@ def apptainer_config(host_cluster, config=None):
     return image_dir, module, bind_paths
 
 
-def apptainer_exec_prefix(image_path, bind_paths=None, use_nv=False):
-    """Build the ``apptainer exec [--nv] --bind ... <image>`` command prefix.
+def apptainer_test_results_dir(host_cluster, config=None):
+    """The cluster scratch dir for admin test-run artefacts (or ``""``).
 
-    Shared by the GUI submit path (:meth:`assemble_slurm_commands`) and the
+    ``ClusterApptainer.test_results_dir`` with the same per-host override merge
+    as :func:`apptainer_config`. A per-run subdirectory is created under it so
+    runs never intermingle; no login-node repo is needed.
+    """
+    if config is None:
+        config = CONFIG
+    base = dict(config.get("ClusterApptainer", {}) or {})
+    override = base.get(str(host_cluster))
+    if isinstance(override, dict):
+        base.update(override)
+    return str(base.get("test_results_dir", "") or "")
+
+
+def apptainer_exec_prefix(image_path, bind_paths=None, use_nv=False, env=None):
+    """Build the ``apptainer exec [--nv] [--env ...] --bind ... <image>`` prefix.
+
+    Shared by the GUI submit path (:meth:`assemble_slurm_commands`), the
     cluster-submit worker (:func:`picasso_workflow.cluster_submit.
-    build_sbatch_script`) so the container invocation is assembled once. The
-    caller appends the in-container command (``python ...``).
+    build_sbatch_script`), and the admin test-run orchestration so the
+    container invocation is assembled once. The caller appends the in-container
+    command (``python ...``).
 
     Paths are ``shlex``-quoted because this is a real shell command and lab
     data folders routinely contain spaces (e.g. ``channel 0.hdf5``); an
     unquoted space would word-split the argv. ``use_nv`` adds ``--nv`` to
     expose the host NVIDIA driver (the CUDA toolkit lives in the image).
+    ``env`` is an optional mapping of ``NAME -> value`` passed through as
+    ``--env NAME=value`` (e.g. writable ``NUMBA_CACHE_DIR``/``MPLCONFIGDIR`` so
+    picasso can import inside the read-only image, or ``PW_TEST_DATA_DIR``).
     """
     parts = ["apptainer exec"]
     if use_nv:
         parts.append("--nv")
+    for name, value in (env or {}).items():
+        parts.append(f"--env {shlex.quote(f'{name}={value}')}")
     parts += [f"--bind {shlex.quote(b)}" for b in (bind_paths or [])]
     parts.append(shlex.quote(image_path))
     return " ".join(parts)
@@ -623,6 +645,61 @@ class SlurmCommunicator:
             # Clean up temporary file
             try:
                 os.unlink(tmp_file_path)
+            except OSError:
+                pass
+
+    def put_file(self, content, remote_path, make_executable=False):
+        """Write ``content`` to an exact ``remote_path`` over scp.
+
+        A general staging primitive (unlike :meth:`write_slurm_script`, which
+        targets a fixed filename in a folder): the admin test-run orchestration
+        stages several named files -- per-tier sbatch scripts, ``summarize.py``,
+        ``jobs.tsv`` -- into a cluster run directory. Returns the usual
+        result dict (``success``/``stdout``/``stderr``/``return_code``).
+        """
+        with tempfile.NamedTemporaryFile(
+            mode="w", delete=False, newline="\n"
+        ) as tmp:
+            tmp.write(content)
+            tmp_path = tmp.name
+        try:
+            scp_cmd = [
+                "scp",
+                "-P",
+                str(self.port),
+                "-o",
+                "ConnectTimeout={}".format(self.timeout),
+                "-o",
+                "StrictHostKeyChecking=no",
+            ]
+            if self.ssh_key_path:
+                scp_cmd.extend(["-i", self.ssh_key_path])
+            scp_cmd.extend(
+                [tmp_path, f"{self.username}@{self.hostname}:{remote_path}"]
+            )
+            result = subprocess.run(
+                scp_cmd, capture_output=True, text=True, timeout=self.timeout
+            )
+            if result.returncode != 0:
+                return {
+                    "stdout": result.stdout,
+                    "stderr": result.stderr,
+                    "return_code": result.returncode,
+                    "success": False,
+                }
+            if make_executable:
+                return self.execute_ssh_command(
+                    f"chmod +x {shlex.quote(remote_path)}"
+                )
+            return {
+                "stdout": f"wrote {remote_path}",
+                "stderr": "",
+                "return_code": 0,
+                "success": True,
+            }
+        finally:
+            try:
+                os.unlink(tmp_path)
             except OSError:
                 pass
 

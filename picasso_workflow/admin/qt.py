@@ -14,13 +14,16 @@ extra (PyQt6).
 
 from __future__ import annotations
 
+import datetime
 import getpass
+import posixpath
 import sys
 import traceback
 
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtWidgets import (
     QApplication,
+    QCheckBox,
     QComboBox,
     QFileDialog,
     QFormLayout,
@@ -39,6 +42,13 @@ from PyQt6.QtWidgets import (
 )
 
 from picasso_workflow.admin import core
+
+
+def _row_widget(layout) -> QWidget:
+    """Wrap a layout in a QWidget (so it can go in a QFormLayout row)."""
+    w = QWidget()
+    w.setLayout(layout)
+    return w
 
 
 class _Worker(QThread):
@@ -77,8 +87,10 @@ class AdminWindow(QMainWindow):
             )
         )
         root.addWidget(self._build_connection_panel())
+        self._test_run_dir = None
         self.tabs = QTabWidget()
         self.tabs.addTab(self._build_images_tab(), "Images")
+        self.tabs.addTab(self._build_testruns_tab(), "Test runs")
         self.tabs.addTab(self._build_jobs_tab(), "Jobs & usage")
         root.addWidget(self.tabs, 1)
 
@@ -143,6 +155,121 @@ class AdminWindow(QMainWindow):
         )
         lay.addWidget(self.image_table, 1)
         return w
+
+    # -- test runs tab ----------------------------------------------------
+    def _build_testruns_tab(self) -> QWidget:
+        w = QWidget()
+        lay = QVBoxLayout(w)
+        form = QFormLayout()
+        # Default to the -test- image matching this GUI's version (the image
+        # that carries pytest); editable / resolved against image_dir on submit.
+        self.test_image = QComboBox()
+        self.test_image.setEditable(True)
+        default = core.default_test_image_basename(core.this_gui_version())
+        self.test_image.setCurrentText(default or "")
+        form.addRow("Test image", self.test_image)
+        self.test_data_dir = QLineEdit()
+        self.test_data_dir.setPlaceholderText(
+            "PW_TEST_DATA_DIR on the cluster (blank = tiers 1-3 only)"
+        )
+        form.addRow("Test data dir", self.test_data_dir)
+        self.test_tier4 = QCheckBox("Tier 4 (real data)")
+        self.test_templates = QCheckBox("Template workflow runs")
+        self.test_tier4.setChecked(True)
+        self.test_templates.setChecked(True)
+        toggles = QHBoxLayout()
+        toggles.addWidget(self.test_tier4)
+        toggles.addWidget(self.test_templates)
+        toggles.addStretch(1)
+        form.addRow("Also run", _row_widget(toggles))
+        lay.addLayout(form)
+        bar = QHBoxLayout()
+        submit = QPushButton("Submit test chain")
+        submit.clicked.connect(self._submit_test_chain)
+        fetch = QPushButton("Fetch SUMMARY")
+        fetch.clicked.connect(self._fetch_summary)
+        bar.addWidget(submit)
+        bar.addWidget(fetch)
+        bar.addStretch(1)
+        lay.addLayout(bar)
+        self.test_summary = QPlainTextEdit(readOnly=True)
+        lay.addWidget(self.test_summary, 1)
+        return w
+
+    def _resolve_test_image(self, image_dir):
+        """Join the image field onto image_dir (abs path used as-is)."""
+        sel = self.test_image.currentText().strip()
+        if posixpath.isabs(sel):
+            return sel
+        if sel and image_dir:
+            return posixpath.join(image_dir, sel)
+        return sel
+
+    def _submit_test_chain(self) -> None:
+        version = core.this_gui_version()
+        # One timestamp, computed on the GUI thread (not in the worker).
+        ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        data_dir = self.test_data_dir.text().strip() or None
+        run_tier4 = self.test_tier4.isChecked()
+        run_templates = self.test_templates.isChecked()
+
+        def action(admin):
+            from picasso_workflow.slurm_submit import apptainer_config
+
+            image_dir, _m, _b = apptainer_config(admin.host)
+            image_path = self._resolve_test_image(image_dir)
+            if not image_path:
+                raise RuntimeError(
+                    "No test image selected (and no image_dir configured)."
+                )
+            return admin.submit_test_chain(
+                image_path=image_path,
+                version=version,
+                timestamp=ts,
+                test_data_dir=data_dir,
+                run_tier4=run_tier4,
+                run_templates=run_templates,
+            )
+
+        def done(result):
+            self._test_run_dir = result["run_dir"]
+            lines = [
+                f"run dir: {result['run_dir']}",
+                f"tiers 1-3 job: {result['tiers_job']}",
+                f"tier 4 job: {result['tier4_job'] or '(skipped)'}",
+                f"template jobs: {len(result['template_jobs'])}",
+                f"summary job: {result['summary_job']}",
+                "",
+                "Submitted. Use 'Fetch SUMMARY' once the summary job finishes,"
+                " or watch progress in the Jobs & usage tab.",
+            ]
+            self.test_summary.setPlainText("\n".join(lines))
+            self.activity.appendPlainText(
+                f"✓ submitted test chain -> {result['run_dir']}"
+            )
+
+        self._run(action, done, busy="submitting test chain")
+
+    def _fetch_summary(self) -> None:
+        if not self._test_run_dir:
+            QMessageBox.information(
+                self, "Fetch SUMMARY", "Submit a test chain first."
+            )
+            return
+        run_dir = self._test_run_dir
+
+        def done(text):
+            self.test_summary.setPlainText(
+                text
+                or "(SUMMARY.txt not present yet — the summary job has "
+                "not finished)"
+            )
+
+        self._run(
+            lambda a: a.fetch_summary(run_dir),
+            done,
+            busy="fetching SUMMARY",
+        )
 
     # -- jobs & usage tab -------------------------------------------------
     def _build_jobs_tab(self) -> QWidget:

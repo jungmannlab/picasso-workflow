@@ -25,6 +25,8 @@ from picasso_workflow import CONFIG
 from picasso_workflow.slurm_submit import (
     SlurmCommunicator,
     apptainer_config,
+    apptainer_test_results_dir,
+    default_image_basename,
     resolve_pw_version,
 )
 
@@ -45,6 +47,21 @@ def this_gui_version():
     tab's "this GUI" highlighting depends on the two agreeing).
     """
     return resolve_pw_version()
+
+
+def default_test_image_basename(version):
+    """Return the ``-test-`` ``.sif`` filename matching ``version``.
+
+    The test image (built with the ``[dev]`` extra so it carries pytest) is
+    named ``picasso-workflow-test-<version>.sif`` alongside the lean
+    ``picasso-workflow-<version>.sif``; the Test-runs tab defaults to it.
+    Returns ``None`` for the unknown/dev versions
+    :func:`slurm_submit.default_image_basename` rejects.
+    """
+    base = default_image_basename(version)
+    if base is None:
+        return None
+    return base.replace("picasso-workflow-", "picasso-workflow-test-", 1)
 
 
 def parse_image_name(name):
@@ -362,3 +379,56 @@ class ClusterAdmin:
             return None
         out = self._run(f"df -hP {shlex.quote(image_dir)}")
         return parse_df(out)
+
+    # -- test runs --------------------------------------------------------
+    @staticmethod
+    def _summarize_source():
+        """The staged (stdlib-only) summarizer's text."""
+        import importlib.resources
+
+        return (
+            importlib.resources.files("picasso_workflow.cluster_tests")
+            .joinpath("summarize.py")
+            .read_text()
+        )
+
+    def submit_test_chain(
+        self,
+        image_path,
+        version,
+        timestamp,
+        test_data_dir=None,
+        run_tier4=True,
+        run_templates=True,
+    ):
+        """Stage + submit the container test chain; return a summary dict.
+
+        ``image_path`` is the (test) ``.sif`` to run pytest inside; ``version``
+        labels the run dir; ``timestamp`` tags it (passed in so the caller
+        controls the clock). See :class:`testrun.TestChainSubmitter`.
+        """
+        from picasso_workflow.admin.testrun import TestChainSubmitter
+
+        image_dir, module, bind_paths = apptainer_config(self.host)
+        submitter = TestChainSubmitter(
+            self,
+            image_path=image_path,
+            test_results_dir=apptainer_test_results_dir(self.host),
+            module=module,
+            bind_paths=bind_paths,
+            summarize_source=self._summarize_source(),
+        )
+        return submitter.submit(
+            version=version,
+            timestamp=timestamp,
+            test_data_dir=test_data_dir,
+            run_tier4=run_tier4,
+            run_templates=run_templates,
+        )
+
+    def fetch_summary(self, run_dir):
+        """Return ``<run_dir>/SUMMARY.txt`` if present, else ``""``."""
+        result = self.comm.execute_ssh_command(
+            f"cat {shlex.quote(run_dir)}/SUMMARY.txt 2>/dev/null"
+        )
+        return result.get("stdout", "") or ""

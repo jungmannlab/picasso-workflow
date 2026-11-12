@@ -90,6 +90,19 @@ def test_apptainer_exec_prefix_no_binds():
     assert apptainer_exec_prefix("/sw/x.sif") == "apptainer exec /sw/x.sif"
 
 
+def test_apptainer_exec_prefix_env():
+    out = apptainer_exec_prefix(
+        "/sw/x.sif",
+        ["/scratch/run"],
+        env={"NUMBA_CACHE_DIR": "/scratch/run/.numba"},
+    )
+    # --env comes before --bind and the image
+    assert out == (
+        "apptainer exec --env NUMBA_CACHE_DIR=/scratch/run/.numba "
+        "--bind /scratch/run /sw/x.sif"
+    )
+
+
 # --------------------------------------------------------------------------- #
 # assemble_slurm_commands -- containerized
 # --------------------------------------------------------------------------- #
