@@ -223,6 +223,14 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Fixed
 
+- **Investigation workflow coordinator renamed to
+  `InvestigationWorkflowCoordinator`** (from `InvestigationCoordinator`) to
+  match the `SingleWorkflowCoordinator` / `AggregationWorkflowCoordinator`
+  convention and the name the GUI emits; the old name stays importable as an
+  alias. The GUI's Investigation script generation was additionally stale (it
+  built a driver whose constructor args and run method no longer match the
+  coordinator), so the GUI now refuses to emit a broken Investigation script
+  with a clear message instead; fixing the generator is tracked separately.
 - **GUI module-parameter forms corrected to match what `analyse.py` actually
   reads.** The hand-coded `ModuleDescriptor` forms in `gui.py` had drifted from
   the real `AutoPicasso.<module>` parameter contract. This fixes two `KeyError`

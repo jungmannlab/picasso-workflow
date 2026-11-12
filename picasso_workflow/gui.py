@@ -15365,6 +15365,23 @@ class Window(QtWidgets.QMainWindow):
             else "Unknown"
         )
 
+        # Investigation workflows cannot currently be generated from the GUI:
+        # the emitted driver is out of sync with InvestigationWorkflowCoordinator
+        # (constructor signature and run entry points differ), so a generated
+        # script would fail at import/run. Refuse here with a clear message
+        # rather than writing a broken script.
+        if workflow_type_index == 2:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Investigation workflow not supported",
+                "Generating a runnable script for Investigation workflows "
+                "from the GUI is not currently supported: the generator is "
+                "out of sync with InvestigationWorkflowCoordinator's API.\n\n"
+                "Use a Single or Aggregation workflow, or drive "
+                "InvestigationWorkflowCoordinator from a hand-written script.",
+            )
+            return None
+
         # Single Workflow input-files mode (combo index): 0 = explicit
         # file list, 1 = auto-detect raw files in the results folder at
         # run time, 2 = no input files (run the workflow exactly once).
@@ -15779,6 +15796,11 @@ class Window(QtWidgets.QMainWindow):
                 )
             script_lines.append("    )")
         elif workflow_type_index == 2:  # Investigation Workflow
+            # NOTE: unreachable - create_python_script returns early for
+            # Investigation workflows (see the guard above). This emitted
+            # driver is stale vs InvestigationWorkflowCoordinator's current
+            # constructor/run API and is kept only as a starting point for a
+            # future fix; update it (and drop the guard) before relying on it.
             script_lines.extend(
                 [
                     "    # Create investigation workflow coordinator",
