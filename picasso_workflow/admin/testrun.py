@@ -104,17 +104,40 @@ def pytest_command(
     )
 
 
+def _node_setup(module):
+    """Node-side setup lines before ``apptainer exec`` (forwarded into it).
+
+    Apptainer passes the host environment into the container by default, so
+    exporting these on the node forwards them to the in-image pytest:
+
+    - ``PYTHONNOUSERSITE`` -- apptainer bind-mounts the host ``$HOME``, so a
+      stray ``~/.local`` could shadow the image's packages; disable user-site
+      (the original tier sbatch did the same).
+    - ``OMP_NUM_THREADS`` -- let picasso's parallel localisation fit / BLAS use
+      the whole allocation; without it they fall back to one core and risk the
+      tier wall-clock limit.
+    - ``~/.picasso_secrets`` -- the Confluence TEST credentials the integration
+      tiers need (sourced if present, a no-op otherwise), so those tests run
+      rather than skip.
+    """
+    return [
+        "source /etc/profile.d/modules.sh",
+        f"module load {shlex.quote(module)}",
+        "export PYTHONNOUSERSITE=1",
+        'export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-2}"',
+        "[ -f ~/.picasso_secrets ] && source ~/.picasso_secrets",
+    ]
+
+
 def tiers1_3_commands(image_path, run_dir, module, bind_paths):
     """Commands for the tiers-1-3 job: unit+template gate, then integration.
 
     The unit/template tier gates the integration tier (the integration pytest
     only runs if the first exits 0), exactly like the old ``afterok`` inside
-    one allocation. ``PW_RC`` carries the job's exit status (``create_slurm_script``
-    appends ``exit ${PW_RC:-0}``).
+    one allocation. ``PW_RC`` carries the job's exit status
+    (``create_slurm_script`` appends ``exit ${PW_RC:-0}``).
     """
-    return [
-        "source /etc/profile.d/modules.sh",
-        f"module load {shlex.quote(module)}",
+    return _node_setup(module) + [
         pytest_command(
             image_path, run_dir, "not integration", "tier1_2", bind_paths
         ),
@@ -135,9 +158,7 @@ def tiers1_3_commands(image_path, run_dir, module, bind_paths):
 
 def tier4_commands(image_path, run_dir, module, bind_paths, test_data_dir):
     """Commands for the tier-4 job: real-data integration tests."""
-    return [
-        "source /etc/profile.d/modules.sh",
-        f"module load {shlex.quote(module)}",
+    return _node_setup(module) + [
         pytest_command(
             image_path,
             run_dir,
@@ -155,7 +176,8 @@ def summary_commands(run_dir):
 
     Runs with the node's ``python3`` (NOT inside the container) because it
     shells out to ``sacct``, which the image has no client for. The summarizer
-    is stdlib-only, so a bare ``python3 <file> <run_dir>`` suffices.
+    is stdlib-only, so a bare ``python3 <file> <run_dir>`` suffices -- the
+    summary node is assumed to have a system ``python3`` on PATH.
     """
     summarize = posixpath.join(run_dir, "summarize.py")
     return [
@@ -216,13 +238,23 @@ class TestChainSubmitter:
             working_directory=run_dir,
         )
         remote = f"{run_dir}/{label}.sbatch"
-        res = self.comm.put_file(script, remote, make_executable=True)
+        self._stage(script, remote, make_executable=True)
+        return self._submit(remote, dependency)
+
+    def _stage(self, content, remote, make_executable=False):
+        """Write ``content`` to ``remote`` over scp; raise on failure.
+
+        Staging must not fail silently: a dropped ``summarize.py`` / ``jobs.tsv``
+        would only surface as a cryptic failure in the summary job far later.
+        """
+        res = self.comm.put_file(
+            content, remote, make_executable=make_executable
+        )
         if not res.get("success"):
             raise RuntimeError(
                 f"staging {remote} failed: "
                 f"{(res.get('stderr', '') or '').strip()}"
             )
-        return self._submit(remote, dependency)
 
     def _submit(self, remote_script, dependency=None):
         cmd = "sbatch --parsable"
@@ -258,6 +290,17 @@ class TestChainSubmitter:
                 "ClusterApptainer.test_results_dir is not set in config.yaml."
             )
         run_dir = run_dir_path(self.test_results_dir, version, timestamp)
+        # Discover templates BEFORE submitting anything: if test_data_dir is
+        # missing/inaccessible the `find` fails here, so we abort with nothing
+        # queued rather than orphaning the tier jobs (no summary would collect
+        # them). The discovered run_workflow_slurm.sh scripts are submitted
+        # as-is, so they must already be Apptainer-based (regenerate them via
+        # the Run tab) -- a conda template script would need a login-node env.
+        templates = (
+            self.discover_templates(test_data_dir)
+            if (run_templates and test_data_dir)
+            else []
+        )
         # run dir + the writable cache dirs the in-image pytest needs.
         self.admin._run(
             "mkdir -p "
@@ -268,7 +311,7 @@ class TestChainSubmitter:
             + shlex.quote(f"{run_dir}/.mpl")
         )
         # stage the stdlib-only summarizer for the (on-node) summary job.
-        self.comm.put_file(self.summarize_source, f"{run_dir}/summarize.py")
+        self._stage(self.summarize_source, f"{run_dir}/summarize.py")
 
         tiers_job = self._sbatch(
             "tiers1_3",
@@ -304,23 +347,18 @@ class TestChainSubmitter:
             dep_ids.append(tier4_job)
 
         template_jobs = []
-        if run_templates and test_data_dir:
-            for script in self.discover_templates(test_data_dir):
-                jid = self._submit(script, dependency=f"afterok:{tiers_job}")
-                template_jobs.append((jid, script))
-                rows.append(
-                    (
-                        "template",
-                        jid,
-                        posixpath.basename(posixpath.dirname(script)),
-                        script,
-                    )
-                )
-                dep_ids.append(jid)
+        for script in templates:
+            folder = posixpath.dirname(script)
+            jid = self._submit(script, dependency=f"afterok:{tiers_job}")
+            template_jobs.append((jid, script))
+            # 4th column is the template FOLDER (summarize.py scans
+            # <folder>/logs/ for the per-job logs); the label is its basename.
+            rows.append(("template", jid, posixpath.basename(folder), folder))
+            dep_ids.append(jid)
 
         # manifest + run info, then the summary job (afterany everything).
-        self.comm.put_file(render_jobs_tsv(rows), f"{run_dir}/jobs.tsv")
-        self.comm.put_file(
+        self._stage(render_jobs_tsv(rows), f"{run_dir}/jobs.tsv")
+        self._stage(
             render_run_info(
                 {
                     "run_id": posixpath.basename(run_dir),

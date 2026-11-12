@@ -18,7 +18,6 @@ from picasso_workflow import workflow_references as wfref
 from loguru import logger
 import subprocess
 import os
-import posixpath
 import re
 import shlex
 import sys
@@ -7953,6 +7952,7 @@ from picasso_workflow.slurm_submit import (  # noqa: E402,F401
     SlurmCommunicator,
     apptainer_config,
     default_image_basename,
+    resolve_cluster_image_path,
     resolve_pw_version,
 )
 
@@ -17543,15 +17543,11 @@ class Window(QtWidgets.QMainWindow):
         image_dir, apptainer_module, bind_paths = self._apptainer_config(
             host_cluster
         )
-        # Cluster paths are POSIX even when the GUI host is Windows, so join
-        # with posixpath rather than os.path (which would use backslashes).
-        image_sel = self.cluster_image_combo.currentText().strip()
-        if posixpath.isabs(image_sel):
-            image_path = image_sel
-        elif image_sel and image_dir:
-            image_path = posixpath.join(image_dir, image_sel)
-        else:
-            image_path = image_sel  # bare name with no image_dir, or ""
+        # Resolve the typed/selected image the same way the admin Test-runs tab
+        # does (shared helper): absolute path as-is, else joined onto image_dir.
+        image_path = resolve_cluster_image_path(
+            self.cluster_image_combo.currentText(), image_dir
+        )
         if not image_path:
             QtWidgets.QMessageBox.warning(
                 self,

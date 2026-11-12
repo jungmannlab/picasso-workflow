@@ -25,7 +25,23 @@ from picasso_workflow.slurm_submit import (
     SlurmCommunicator,
     apptainer_exec_prefix,
     default_image_basename,
+    resolve_cluster_image_path,
 )
+
+
+# --------------------------------------------------------------------------- #
+# resolve_cluster_image_path
+# --------------------------------------------------------------------------- #
+def test_resolve_cluster_image_path():
+    # bare name -> joined onto image_dir
+    assert resolve_cluster_image_path("x.sif", "/sw/pw") == "/sw/pw/x.sif"
+    # absolute path -> used as-is (image_dir ignored)
+    assert (
+        resolve_cluster_image_path("/other/x.sif", "/sw/pw") == "/other/x.sif"
+    )
+    # empty selection, or no image_dir to join onto -> unchanged
+    assert resolve_cluster_image_path("", "/sw/pw") == ""
+    assert resolve_cluster_image_path("x.sif", "") == "x.sif"
 
 
 # --------------------------------------------------------------------------- #

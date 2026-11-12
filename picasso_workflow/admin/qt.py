@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import datetime
 import getpass
-import posixpath
 import sys
 import traceback
 
@@ -175,6 +174,12 @@ class AdminWindow(QMainWindow):
         form.addRow("Test data dir", self.test_data_dir)
         self.test_tier4 = QCheckBox("Tier 4 (real data)")
         self.test_templates = QCheckBox("Template workflow runs")
+        self.test_templates.setToolTip(
+            "Submit each run_workflow_slurm.sh found under the test data dir. "
+            "These are submitted as-is, so they must already be Apptainer-"
+            "based (regenerate them from the Run tab) -- a conda-based script "
+            "would need a login-node environment."
+        )
         self.test_tier4.setChecked(True)
         self.test_templates.setChecked(True)
         toggles = QHBoxLayout()
@@ -196,28 +201,24 @@ class AdminWindow(QMainWindow):
         lay.addWidget(self.test_summary, 1)
         return w
 
-    def _resolve_test_image(self, image_dir):
-        """Join the image field onto image_dir (abs path used as-is)."""
-        sel = self.test_image.currentText().strip()
-        if posixpath.isabs(sel):
-            return sel
-        if sel and image_dir:
-            return posixpath.join(image_dir, sel)
-        return sel
-
     def _submit_test_chain(self) -> None:
         version = core.this_gui_version()
-        # One timestamp, computed on the GUI thread (not in the worker).
+        # Snapshot ALL widget inputs on the GUI thread (widgets aren't
+        # thread-safe); the worker closure below touches only these locals.
         ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        image_sel = self.test_image.currentText().strip()
         data_dir = self.test_data_dir.text().strip() or None
         run_tier4 = self.test_tier4.isChecked()
         run_templates = self.test_templates.isChecked()
 
         def action(admin):
-            from picasso_workflow.slurm_submit import apptainer_config
+            from picasso_workflow.slurm_submit import (
+                apptainer_config,
+                resolve_cluster_image_path,
+            )
 
             image_dir, _m, _b = apptainer_config(admin.host)
-            image_path = self._resolve_test_image(image_dir)
+            image_path = resolve_cluster_image_path(image_sel, image_dir)
             if not image_path:
                 raise RuntimeError(
                     "No test image selected (and no image_dir configured)."

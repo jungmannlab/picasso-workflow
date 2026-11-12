@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import os
+import posixpath
 import re
 import shlex
 import subprocess
@@ -83,14 +84,12 @@ def default_image_basename(version):
     return f"picasso-workflow-{version}.sif"
 
 
-def apptainer_config(host_cluster, config=None):
-    """Resolved Apptainer settings for ``host_cluster``.
+def _merged_apptainer_config(host_cluster, config=None):
+    """The ``ClusterApptainer`` block with an optional per-host override merged.
 
-    Reads the global ``ClusterApptainer`` block and merges an optional per-host
-    override (a sub-dict keyed as in ``SlurmLoginNodes``) on top. Returns
-    ``(image_dir, module, bind_paths)``. Shared by the GUI Run tab and the admin
-    console so both resolve the shared mount the same way. ``config`` defaults to
-    the package ``CONFIG``.
+    The override is a sub-dict keyed as in ``SlurmLoginNodes``; only the keys it
+    sets replace the globals. Shared by :func:`apptainer_config` and
+    :func:`apptainer_test_results_dir` so the merge lives in one place.
     """
     if config is None:
         config = CONFIG
@@ -98,6 +97,18 @@ def apptainer_config(host_cluster, config=None):
     override = base.get(str(host_cluster))
     if isinstance(override, dict):
         base.update(override)
+    return base
+
+
+def apptainer_config(host_cluster, config=None):
+    """Resolved Apptainer settings for ``host_cluster``.
+
+    Returns ``(image_dir, module, bind_paths)`` from the per-host-merged
+    ``ClusterApptainer`` block. Shared by the GUI Run tab and the admin console
+    so both resolve the shared mount the same way. ``config`` defaults to the
+    package ``CONFIG``.
+    """
+    base = _merged_apptainer_config(host_cluster, config)
     image_dir = str(base.get("image_dir", "") or "")
     module = base.get("module") or DEFAULT_APPTAINER_MODULE
     bind_paths = [str(b) for b in (base.get("bind_paths") or [])]
@@ -107,17 +118,28 @@ def apptainer_config(host_cluster, config=None):
 def apptainer_test_results_dir(host_cluster, config=None):
     """The cluster scratch dir for admin test-run artefacts (or ``""``).
 
-    ``ClusterApptainer.test_results_dir`` with the same per-host override merge
-    as :func:`apptainer_config`. A per-run subdirectory is created under it so
+    ``ClusterApptainer.test_results_dir`` (per-host-merged like
+    :func:`apptainer_config`). A per-run subdirectory is created under it so
     runs never intermingle; no login-node repo is needed.
     """
-    if config is None:
-        config = CONFIG
-    base = dict(config.get("ClusterApptainer", {}) or {})
-    override = base.get(str(host_cluster))
-    if isinstance(override, dict):
-        base.update(override)
+    base = _merged_apptainer_config(host_cluster, config)
     return str(base.get("test_results_dir", "") or "")
+
+
+def resolve_cluster_image_path(selection, image_dir):
+    """Resolve a user-typed image selection to a cluster path.
+
+    An absolute POSIX path is used as-is; a bare filename is joined onto
+    ``image_dir``; an empty selection (or no ``image_dir`` to join onto) is
+    returned unchanged. Shared by the Run tab and the admin Test-runs tab so a
+    typed basename resolves the same way in both.
+    """
+    selection = (selection or "").strip()
+    if posixpath.isabs(selection):
+        return selection
+    if selection and image_dir:
+        return posixpath.join(image_dir, selection)
+    return selection
 
 
 def apptainer_exec_prefix(image_path, bind_paths=None, use_nv=False, env=None):
@@ -582,32 +604,8 @@ class SlurmCommunicator:
             tmp_file_path = tmp_file.name
 
         try:
-            # Copy file to remote host using scp
-            scp_cmd = [
-                "scp",
-                "-P",
-                str(self.port),
-                "-o",
-                "ConnectTimeout={}".format(self.timeout),
-                "-o",
-                "StrictHostKeyChecking=no",
-            ]
-
-            if self.ssh_key_path:
-                scp_cmd.extend(["-i", self.ssh_key_path])
-
-            scp_cmd.extend(
-                [
-                    tmp_file_path,
-                    f"{self.username}@{self.hostname}:{folder}",
-                ]
-            )
-
-            logger.debug(f"Copying SLURM script: {' '.join(scp_cmd)}")
-
-            result = subprocess.run(
-                scp_cmd, capture_output=True, text=True, timeout=self.timeout
-            )
+            # Copy file to remote host using scp (shared flags via _scp).
+            result = self._scp(tmp_file_path, folder)
 
             if result.returncode == 0:
                 # Make script executable
@@ -663,23 +661,7 @@ class SlurmCommunicator:
             tmp.write(content)
             tmp_path = tmp.name
         try:
-            scp_cmd = [
-                "scp",
-                "-P",
-                str(self.port),
-                "-o",
-                "ConnectTimeout={}".format(self.timeout),
-                "-o",
-                "StrictHostKeyChecking=no",
-            ]
-            if self.ssh_key_path:
-                scp_cmd.extend(["-i", self.ssh_key_path])
-            scp_cmd.extend(
-                [tmp_path, f"{self.username}@{self.hostname}:{remote_path}"]
-            )
-            result = subprocess.run(
-                scp_cmd, capture_output=True, text=True, timeout=self.timeout
-            )
+            result = self._scp(tmp_path, remote_path)
             if result.returncode != 0:
                 return {
                     "stdout": result.stdout,
@@ -702,6 +684,31 @@ class SlurmCommunicator:
                 os.unlink(tmp_path)
             except OSError:
                 pass
+
+    def _scp(self, local_path, remote_dest):
+        """Run ``scp local_path user@host:remote_dest``; return the result.
+
+        The scp flags (port, timeout, StrictHostKeyChecking, optional ``-i``
+        key) live here so :meth:`put_file` and :meth:`write_slurm_script` stay
+        in lockstep. Returns the ``subprocess.CompletedProcess``.
+        """
+        scp_cmd = [
+            "scp",
+            "-P",
+            str(self.port),
+            "-o",
+            "ConnectTimeout={}".format(self.timeout),
+            "-o",
+            "StrictHostKeyChecking=no",
+        ]
+        if self.ssh_key_path:
+            scp_cmd.extend(["-i", self.ssh_key_path])
+        scp_cmd.extend(
+            [local_path, f"{self.username}@{self.hostname}:{remote_dest}"]
+        )
+        return subprocess.run(
+            scp_cmd, capture_output=True, text=True, timeout=self.timeout
+        )
 
     def submit_job(self, script_path, dest_machine, additional_options=None):
         """Submit a SLURM job using sbatch.

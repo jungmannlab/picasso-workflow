@@ -69,12 +69,27 @@ def test_tiers1_3_commands_gate():
         "/sw/x-test.sif", "/scratch/run", "apptainer/1.4.1", ["/scratch/paint"]
     )
     assert "module load apptainer/1.4.1" in cmds
+    # node setup forwarded into the container (perf + user-site + secrets)
+    assert "export PYTHONNOUSERSITE=1" in cmds
+    assert 'export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-2}"' in cmds
+    assert any("picasso_secrets" in c for c in cmds)
     # unit/template tier, then a gated integration tier
     assert any("-m 'not integration'" in c for c in cmds)
     assert 'if [ "$PW_RC" -eq 0 ]; then' in cmds
     assert any("-m 'integration and not real_data'" in c for c in cmds)
     assert "fi" in cmds
     assert cmds.count("PW_RC=$?") >= 1
+
+
+def test_tier4_commands_node_setup():
+    cmds = testrun.tier4_commands(
+        "/sw/x-test.sif",
+        "/scratch/run",
+        "apptainer/1.4.1",
+        ["/scratch/paint"],
+        "/fs/testdata",
+    )
+    assert 'export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-2}"' in cmds
 
 
 def test_summary_commands_runs_on_node():
@@ -98,21 +113,24 @@ def test_render_jobs_tsv_and_run_info():
 # --------------------------------------------------------------------------- #
 class _FakeComm:
     def __init__(self):
-        self.put = []
+        self.put = []  # remote paths
+        self.staged = {}  # remote -> content
 
     def create_slurm_script(self, name, commands, **kw):
         return f"#script:{name}\n" + "\n".join(commands)
 
     def put_file(self, content, remote, make_executable=False):
         self.put.append(remote)
+        self.staged[remote] = content
         return {"success": True, "stdout": "", "stderr": "", "return_code": 0}
 
 
 class _FakeAdmin:
-    def __init__(self, templates):
+    def __init__(self, templates, find_fails=False):
         self.host = "clusterXXX"
         self.comm = _FakeComm()
         self.templates = templates
+        self.find_fails = find_fails
         self.commands = []
         self._next = 100
 
@@ -121,6 +139,8 @@ class _FakeAdmin:
         if command.startswith("mkdir"):
             return ""
         if command.startswith("find "):
+            if self.find_fails:
+                raise RuntimeError("find: no such directory")
             return "\n".join(self.templates) + "\n"
         if command.startswith("sbatch"):
             self._next += 1
@@ -162,7 +182,11 @@ def test_submit_full_chain_dependencies():
     assert sbatches[-1].count("afterany:101:102:") == 1  # summary on all
     # staged artefacts: summarizer + manifest + run info
     assert "/scratch/tr/20261112_101500_0.9.0/summarize.py" in admin.comm.put
-    assert "/scratch/tr/20261112_101500_0.9.0/jobs.tsv" in admin.comm.put
+    jobs_tsv = admin.comm.staged["/scratch/tr/20261112_101500_0.9.0/jobs.tsv"]
+    # the template row's dir column is the FOLDER (summarize scans <dir>/logs),
+    # not the run_workflow_slurm.sh script path.
+    assert "\t/fs/testdata/t1\n" in jobs_tsv
+    assert "run_workflow_slurm.sh" not in jobs_tsv
 
 
 def test_submit_tiers_only_when_no_data_dir():
@@ -176,3 +200,16 @@ def test_submit_tiers_only_when_no_data_dir():
     sbatches = [c for c in admin.commands if c.startswith("sbatch")]
     assert len(sbatches) == 2
     assert "afterany:101" in sbatches[-1]
+
+
+def test_submit_aborts_before_queueing_when_discovery_fails():
+    # a missing/inaccessible test data dir makes `find` fail -- submit must
+    # abort with NOTHING queued (no orphaned tier jobs without a summary).
+    import pytest
+
+    admin = _FakeAdmin(templates=[], find_fails=True)
+    with pytest.raises(RuntimeError):
+        _submitter(admin).submit(
+            version="0.9.0", timestamp="T", test_data_dir="/bad"
+        )
+    assert not any(c.startswith("sbatch") for c in admin.commands)
