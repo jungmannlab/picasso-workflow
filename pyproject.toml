@@ -51,6 +51,10 @@ keywords = ["picasso"]
 
 [project.scripts]
 picasso-workflow-gui = "picasso_workflow._launcher:main"
+# Cluster admin console: inspect shared-mount Apptainer images, the SLURM
+# queue, and disk usage over SSH (GUI needs the [gui] extra; CLI is headless).
+picasso-workflow-admin-gui = "picasso_workflow.admin.qt:main"
+picasso-workflow-admin-cli = "picasso_workflow.admin.cli:main"
 # WP-7 flat-archive backfill: ingest _locs.hdf5 datasets, import curated
 # taxon + good/bad labels, and learn per-taxon expected-metric ranges.
 picasso-workflow-backfill-locs = "picasso_workflow.backfill.ingest:main"

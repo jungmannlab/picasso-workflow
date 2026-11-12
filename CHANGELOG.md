@@ -11,6 +11,17 @@ This file was started after v0.5.6; earlier history is in the git log.
 ## [Unreleased]
 
 ### Added
+- **Cluster admin console (`picasso-workflow-admin-gui` / `-admin-cli`).** A
+  separate PyQt6 window (also openable from the main GUI's *Tools → Admin
+  console…*) that SSHes to the cluster login node to show the shared-mount
+  Apptainer image inventory (filename · version · test/lean · size · mtime,
+  highlighting the image matching this GUI's version), the SLURM queue
+  (`squeue`) + recent jobs (`sacct`), and image-folder disk usage (`df`). Built
+  on the existing `SlurmCommunicator` (subprocess ssh) + `CONFIG`, mirroring the
+  monet / picasso-registry admin pattern (GUI-free `admin/core.py` with pure
+  output parsers, `admin/qt.py`, `admin/cli.py`). First slice of the admin GUI;
+  in-container test-run submission + a test image follow.
+  (`picasso_workflow/admin/`, `slurm_submit.py`, `gui.py`, `pyproject.toml`)
 - **GUI cluster runs execute inside a shared-mount Apptainer image.** The Run
   tab's *Start Workflow on Cluster* path now always wraps the workflow in
   `apptainer exec` (the generated `run_workflow_slurm.sh` `module load`s

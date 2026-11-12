@@ -61,6 +61,27 @@ def default_image_basename(version):
     return f"picasso-workflow-{version}.sif"
 
 
+def apptainer_config(host_cluster, config=None):
+    """Resolved Apptainer settings for ``host_cluster``.
+
+    Reads the global ``ClusterApptainer`` block and merges an optional per-host
+    override (a sub-dict keyed as in ``SlurmLoginNodes``) on top. Returns
+    ``(image_dir, module, bind_paths)``. Shared by the GUI Run tab and the admin
+    console so both resolve the shared mount the same way. ``config`` defaults to
+    the package ``CONFIG``.
+    """
+    if config is None:
+        config = CONFIG
+    base = dict(config.get("ClusterApptainer", {}) or {})
+    override = base.get(str(host_cluster))
+    if isinstance(override, dict):
+        base.update(override)
+    image_dir = str(base.get("image_dir", "") or "")
+    module = base.get("module") or DEFAULT_APPTAINER_MODULE
+    bind_paths = [str(b) for b in (base.get("bind_paths") or [])]
+    return image_dir, module, bind_paths
+
+
 def apptainer_exec_prefix(image_path, bind_paths=None, use_nv=False):
     """Build the ``apptainer exec [--nv] --bind ... <image>`` command prefix.
 
