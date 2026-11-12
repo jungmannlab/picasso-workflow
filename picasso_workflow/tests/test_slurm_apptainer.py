@@ -22,11 +22,59 @@ from pathlib import Path
 import yaml
 
 from picasso_workflow.slurm_submit import (
+    DEFAULT_APPTAINER_MODULE,
     SlurmCommunicator,
+    apptainer_config,
     apptainer_exec_prefix,
     default_image_basename,
     resolve_cluster_image_path,
 )
+
+
+# --------------------------------------------------------------------------- #
+# hardening (PR #96 follow-up): empty/None handling, module fallback, cd quote
+# --------------------------------------------------------------------------- #
+def test_apptainer_config_drops_blank_bind_entries():
+    cfg = {
+        "ClusterApptainer": {
+            "image_dir": "/sw",
+            "bind_paths": ["/a", None, "", "  ", "/b "],
+        }
+    }
+    _dir, _mod, binds = apptainer_config("h", config=cfg)
+    # null/blank entries dropped, survivors stripped
+    assert binds == ["/a", "/b"]
+
+
+def test_apptainer_exec_prefix_skips_empty_binds():
+    out = apptainer_exec_prefix("/sw/x.sif", ["/a", "", "/b"])
+    assert out == "apptainer exec --bind /a --bind /b /sw/x.sif"
+
+
+def test_empty_image_path_is_host_conda_not_containerized():
+    # "" is the host-conda sentinel just like None -- must NOT emit `apptainer
+    # exec '' ...`.
+    cmds = SlurmCommunicator("h", "u").assemble_slurm_commands(
+        "hpcl8XXX", image_path=""
+    )
+    assert "srun python start_workflow.py" in cmds
+    assert not any("apptainer" in c for c in cmds)
+
+
+def test_containerized_module_falls_back_to_default():
+    # image_path given but no apptainer_module -> still load the pinned default
+    # (else `apptainer` isn't on PATH on a module-based HPC).
+    cmds = SlurmCommunicator("h", "u").assemble_slurm_commands(
+        "hpcl8XXX", image_path="/sw/x.sif"
+    )
+    assert f"module load {DEFAULT_APPTAINER_MODULE}" in cmds
+
+
+def test_create_slurm_script_quotes_working_dir():
+    s = SlurmCommunicator("h", "u").create_slurm_script(
+        "job", ["echo hi"], working_directory="/res/my run"
+    )
+    assert "cd '/res/my run'" in s
 
 
 # --------------------------------------------------------------------------- #

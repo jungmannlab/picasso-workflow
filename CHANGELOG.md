@@ -10,6 +10,19 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ## [Unreleased]
 
+### Fixed
+- **Apptainer submit-path hardening (follow-up to the GUI/cluster Apptainer
+  work).** `assemble_slurm_commands` now treats an empty `image_path` like
+  `None` (host-conda `srun python`) instead of emitting `apptainer exec '' …`,
+  and always `module load`s an Apptainer module in container mode (falling back
+  to `DEFAULT_APPTAINER_MODULE` when the caller passes none, so `apptainer`
+  resolves on a module-based HPC). `apptainer_config` drops null/blank
+  `bind_paths` entries and `apptainer_exec_prefix` skips empty binds (no more
+  `--bind ''` / `--bind None`). The results-folder auto-bind normalises a
+  trailing slash and skips an empty path, and `create_slurm_script` quotes the
+  `cd <working_directory>` so a results folder containing a space can't break
+  the relative `start_workflow.py` launch. (`slurm_submit.py`, `gui.py`)
+
 ### Added
 - **CI builds a `-test-` Apptainer image carrying pytest.** `build-apptainer.yml`
   now builds two variants from the one recipe via a matrix: the lean
