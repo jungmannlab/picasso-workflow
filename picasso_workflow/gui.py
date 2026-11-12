@@ -10855,6 +10855,42 @@ class Window(QtWidgets.QMainWindow):
         _join_layout.addStretch()
         self.join_module_container.setVisible(False)
         current_layout.addWidget(self.join_module_container)
+
+        # "Run only on channels where <column>" control: restrict this
+        # single-dataset module to channels where a per-channel boolean
+        # tile-parameter column is set. Shown only for a selected top-level
+        # single-dataset module in an aggregation/investigation workflow (the
+        # only place channels exist). Stored on the module as the reserved
+        # "#run_on_channels" key and compiled into a conditional_branch at run
+        # time (see util.compile_channel_restrictions).
+        self.run_on_channels_container = QtWidgets.QWidget()
+        _roc_layout = QtWidgets.QHBoxLayout(self.run_on_channels_container)
+        _roc_layout.setContentsMargins(0, 0, 0, 0)
+        self.run_on_channels_checkbox = QtWidgets.QCheckBox(
+            "Run only on channels where column:"
+        )
+        self.run_on_channels_checkbox.setToolTip(
+            "Restrict this single-dataset module to channels where the chosen "
+            "per-channel boolean column is set (e.g. cluster only RESI "
+            "channels); other channels skip it, while the aggregation "
+            "workflow still runs on all of them. Tick which channels in "
+            "'Per-Channel Params…'. Downstream modules must tolerate the "
+            "channels that skip this one."
+        )
+        self.run_on_channels_checkbox.toggled.connect(
+            self._on_run_on_channels_toggled
+        )
+        self.run_on_channels_combo = QtWidgets.QComboBox()
+        self.run_on_channels_combo.setToolTip(
+            "Per-channel boolean column deciding where this module runs."
+        )
+        self.run_on_channels_combo.currentIndexChanged.connect(
+            self._on_run_on_channels_column_changed
+        )
+        _roc_layout.addWidget(self.run_on_channels_checkbox)
+        _roc_layout.addWidget(self.run_on_channels_combo, 1)
+        self.run_on_channels_container.setVisible(False)
+        current_layout.addWidget(self.run_on_channels_container)
         # label describing the module selected. Rendered as word-wrapped
         # rich text inside its own scroll area so long descriptions stay
         # readable and the divider below can resize the region.
@@ -14598,6 +14634,115 @@ class Window(QtWidgets.QMainWindow):
             )
             checkbox.blockSignals(False)
 
+    # -- per-channel "run only on channels" control --------------------
+    def _editing_single_module_params(self):
+        """Params dict of the top-level single-dataset module being edited.
+
+        Returns ``None`` unless a top-level (non branch-sub) module is
+        selected in the Single Dataset Workflow tab.
+        """
+        if self.editing_workflow_tab != 0 or self.editing_workflow_subnode:
+            return None
+        idx = self.editing_workflow_index
+        modules = self.single_workflow_modules
+        if not (0 <= idx < len(modules)):
+            return None
+        params = modules[idx][1]
+        return params if isinstance(params, dict) else None
+
+    def _channel_scope_columns(self):
+        """Names of channel-scope tile-parameter columns (sorted)."""
+        return sorted(
+            name
+            for name, entry in self._tile_params().items()
+            if entry.get("scope") == "channel"
+        )
+
+    def _unique_tile_param_name(self, base):
+        """A tile-param column name based on ``base`` not already taken."""
+        existing = self._tile_params()
+        if base not in existing:
+            return base
+        i = 2
+        while f"{base}_{i}" in existing:
+            i += 1
+        return f"{base}_{i}"
+
+    def _sync_run_on_channels_control(self):
+        """Show/populate the per-channel "run only on channels" control.
+
+        Visible only for a selected top-level single-dataset module in an
+        aggregation/investigation workflow (where channels exist); reflects the
+        module's stored ``#run_on_channels`` column.
+        """
+        container = getattr(self, "run_on_channels_container", None)
+        if container is None:
+            return
+        params = self._editing_single_module_params()
+        is_agg = self.workflow_type.currentIndex() in (1, 2)
+        if params is None or not is_agg:
+            container.setVisible(False)
+            return
+
+        current = params.get(util.RUN_ON_CHANNELS_KEY)
+        columns = self._channel_scope_columns()
+        # Keep an orphaned reference (its column was later removed) visible.
+        if current and current not in columns:
+            columns = columns + [current]
+
+        self.run_on_channels_combo.blockSignals(True)
+        self.run_on_channels_combo.clear()
+        self.run_on_channels_combo.addItems(columns)
+        if current:
+            self.run_on_channels_combo.setCurrentText(current)
+        self.run_on_channels_combo.blockSignals(False)
+
+        self.run_on_channels_checkbox.blockSignals(True)
+        self.run_on_channels_checkbox.setChecked(bool(current))
+        self.run_on_channels_checkbox.blockSignals(False)
+        self.run_on_channels_combo.setEnabled(bool(current))
+        container.setVisible(True)
+
+    def _on_run_on_channels_toggled(self, checked):
+        """Enable/disable the per-channel restriction for the edited module."""
+        params = self._editing_single_module_params()
+        if params is None:
+            return
+        if checked:
+            col = self.run_on_channels_combo.currentText().strip()
+            if not col:
+                # Auto-create a per-channel boolean column named after the
+                # module (ticked per channel in 'Per-Channel Params…').
+                module_name = self.single_workflow_modules[
+                    self.editing_workflow_index
+                ][0]
+                col = self._unique_tile_param_name(f"run_{module_name}")
+                self.register_tile_param(col, scope="channel", default=False)
+            params[util.RUN_ON_CHANNELS_KEY] = col
+            self._log_workflow_config_event(
+                "modules.run_on_channels_set",
+                index=self.editing_workflow_index,
+                column=col,
+            )
+        else:
+            params.pop(util.RUN_ON_CHANNELS_KEY, None)
+            self._log_workflow_config_event(
+                "modules.run_on_channels_cleared",
+                index=self.editing_workflow_index,
+            )
+        self._sync_run_on_channels_control()
+
+    def _on_run_on_channels_column_changed(self, _idx):
+        """Point the edited module's restriction at the chosen column."""
+        if not self.run_on_channels_checkbox.isChecked():
+            return
+        params = self._editing_single_module_params()
+        if params is None:
+            return
+        col = self.run_on_channels_combo.currentText().strip()
+        if col:
+            params[util.RUN_ON_CHANNELS_KEY] = col
+
     def _on_per_branch_toggled(self, param_name, checked):
         """Convert a parameter to/from a per-branch ("$branch", [...]) value."""
         if self.editing_branch_context is None:
@@ -14698,6 +14843,8 @@ class Window(QtWidgets.QMainWindow):
 
         # Show/refresh the per-branch checkboxes for the current context.
         self._sync_per_branch_controls()
+        # Show/refresh the per-channel "run only on channels" control.
+        self._sync_run_on_channels_control()
 
     def _on_workflow_tab_changed(self, tab_index):
         """Handle workflow tab change - display selected module if any."""
@@ -14766,6 +14913,9 @@ class Window(QtWidgets.QMainWindow):
                     finally:
                         # Always unblock signals, even if exception occurs
                         self.module_combobox.blockSignals(False)
+
+        # The active tab / selected module changed; refresh extra controls.
+        self._sync_run_on_channels_control()
 
     def _on_workflow_type_changed(self, type_index):
         """Handle workflow type change - enable/disable workflow tabs accordingly.
@@ -14839,6 +14989,9 @@ class Window(QtWidgets.QMainWindow):
             self.workflow_tabs.setTabEnabled(2, True)  # Investigation: enabled
 
         self._refresh_stepwise_targets()
+        # The channel-restriction control is only meaningful for
+        # aggregation/investigation workflows; refresh its visibility.
+        self._sync_run_on_channels_control()
 
     def _on_stepwise_toggled(self, checked):
         """Enable/disable stepwise mode.
@@ -18546,6 +18699,13 @@ class Window(QtWidgets.QMainWindow):
                     param_values[nested_key] = old_params[nested_key]
                 else:
                     param_values.pop(nested_key, None)
+        # Reserved "#"-prefixed directives (e.g. #run_on_channels) are managed
+        # by their own controls, not the parameter form; carry them through so
+        # the widget-only capture above does not drop them.
+        if isinstance(old_params, dict):
+            for rkey, rval in old_params.items():
+                if isinstance(rkey, str) and rkey.startswith("#"):
+                    param_values[rkey] = rval
         if old_params != param_values:
             modules[idx] = (module_name, param_values)
             self._log_workflow_config_event(

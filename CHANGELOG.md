@@ -194,6 +194,15 @@ This file was started after v0.5.6; earlier history is in the git log.
     nm-unit numerics end to end).
 
 ### Added
+- **Run a single-dataset module only on some channels.** A single-dataset
+  module may carry a reserved `#run_on_channels` key naming a per-channel
+  boolean tile-parameter column; at run time it is compiled into a
+  `conditional_branch` that runs the module only on channels where that column
+  is truthy (others take an empty, no-op `if_false`), while the aggregation
+  workflow still runs on every channel — e.g. cluster only RESI channels. In
+  the GUI, a "Run only on channels where column:" control on the Current Module
+  editor sets it (reusing the per-channel tile-parameter machinery). New pure
+  helper `util.compile_channel_restrictions`.
 - **GUI flags parameters whose behaviour/units changed in the picasso-1.0
   migration.** Affected parameter rows now carry an amber "⚠ changed" marker
   with a hover tooltip explaining what changed and when, so users revisit stale

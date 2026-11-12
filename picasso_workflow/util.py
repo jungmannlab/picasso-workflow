@@ -3039,6 +3039,76 @@ class ParameterTiler:
         return result_parameters, tags
 
 
+#: Reserved single-dataset module-parameter key naming a per-channel boolean
+#: tile-parameter column. A module carrying it runs only on channels where
+#: that column is truthy (see :func:`compile_channel_restrictions`).
+RUN_ON_CHANNELS_KEY = "#run_on_channels"
+
+
+def compile_channel_restrictions(modules):
+    """Compile ``#run_on_channels`` directives into ``conditional_branch``.
+
+    A single-dataset module may carry the reserved
+    :data:`RUN_ON_CHANNELS_KEY` key, whose value is the name of a per-channel
+    boolean tile-parameter column. Such a module should run only on the
+    channels where that column is truthy. This rewrites it to a
+    ``conditional_branch`` whose condition reads the column per channel (a
+    ``("$$map", <column>, False)`` command, resolved during tiling so each
+    channel's single-dataset workflow gets a concrete bool) and whose
+    ``if_false`` branch is empty -- a clean no-op on the other channels.
+
+    Modules without the key (and non-dict parameter blocks) are returned
+    unchanged. The input is never mutated; a stray empty directive is simply
+    stripped (treated as "no restriction").
+
+    Parameters
+    ----------
+    modules : list of tuple
+        ``(module_name, module_parameters)`` tuples, e.g. a single-dataset
+        module list.
+
+    Returns
+    -------
+    list of tuple
+        The module list with restricted modules wrapped in
+        ``conditional_branch``.
+    """
+    compiled = []
+    for module_name, params in modules:
+        column = (
+            params.get(RUN_ON_CHANNELS_KEY)
+            if isinstance(params, dict)
+            else None
+        )
+        if not column:
+            # No (or empty) restriction -- strip a stray empty key if present.
+            if isinstance(params, dict) and RUN_ON_CHANNELS_KEY in params:
+                params = {
+                    k: v for k, v in params.items() if k != RUN_ON_CHANNELS_KEY
+                }
+            compiled.append((module_name, params))
+            continue
+        inner_params = {
+            k: v for k, v in params.items() if k != RUN_ON_CHANNELS_KEY
+        }
+        condition = {
+            "left": ("$$map", column, False),
+            "operator": "==",
+            "right": True,
+        }
+        compiled.append(
+            (
+                "conditional_branch",
+                {
+                    "condition": condition,
+                    "if_true": [(module_name, inner_params)],
+                    "if_false": [],
+                },
+            )
+        )
+    return compiled
+
+
 class BranchStateManager:
     """Snapshot and restore the per-branch analysis state of an analyzer.
 

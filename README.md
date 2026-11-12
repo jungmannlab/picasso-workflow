@@ -210,6 +210,44 @@ is reloaded into the GUI, so a workflow round-trips exactly. Per-channel values
 are keyed by channel name: renaming a channel in the GUI carries its values
 across, while a channel whose name no longer matches falls back to the default.
 
+### Running a module only on some channels
+
+Sometimes a module should run on *some* channels and not others — e.g. cluster
+only the RESI channels that have single-molecule resolution, while the
+diffraction-limited channels skip clustering but still share the same
+aggregation (alignment) workflow.
+
+Declare a per-channel **boolean** column (one `True`/`False` per channel) and
+add the reserved `#run_on_channels` key to the module, naming that column:
+
+```python
+workflow_modules_multi = {
+	"single_dataset_tileparameters": {
+		"#tags":    ["RESI_1", "RESI_2", "DL_1"],
+		"filepath": [fp0, fp1, fp2],
+		"is_resi":  [True,   True,    False],   # per-channel boolean column
+	},
+	"single_dataset_modules": [
+		# ... load / localize / undrift ...
+		("smlm_clusterer", {"radius": 4, "#run_on_channels": "is_resi"}),
+	],
+	"aggregation_modules": [ ... ],   # runs on every channel as usual
+}
+```
+
+At run time the module is compiled into a `conditional_branch` whose condition
+reads `is_resi` per channel (`("$$map", "is_resi", False) == True`): channels
+where the column is truthy run the module (`if_true`), the rest take an empty
+`if_false` — a clean no-op. `#run_on_channels` is a definition-level directive
+only; it never reaches the module itself.
+
+**In the GUI**, select a single-dataset module in an aggregation/investigation
+workflow and tick **"Run only on channels where column:"**, then pick (or
+auto-create) the boolean column; set which channels are `True` under
+**Per-Channel Params…**. Note that any later single-dataset module and the
+aggregation modules must tolerate the channels that skip this one (e.g. do not
+reference a skipped clustering's per-channel result for those channels).
+
 ## Installation
 
 ### Prerequisites

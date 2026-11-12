@@ -53,6 +53,7 @@ from picasso_workflow.util import (
     ParameterCommandExecutor,
     ParameterTiler,
     DictSimpleTyper,
+    compile_channel_restrictions,
     convert_filepath_for_machine,
 )
 from picasso_workflow.registry_client import registry_logger_from_config
@@ -933,11 +934,21 @@ class AggregationWorkflowRunner:
             succeeded. Rank 0 (and single-task runs) return None after the
             aggregation step; failures are raised as :class:`WorkflowError`.
         """
+        # Compile per-channel "run only on channels where <column>"
+        # directives (``#run_on_channels``) into conditional_branch wrappers
+        # before validating/tiling, so the engine runs a normal
+        # conditional_branch and each channel's tiling takes if_true or the
+        # empty (no-op) if_false. Idempotent: lists without the directive, and
+        # already-compiled lists, pass through unchanged.
+        single_dataset_modules = compile_channel_restrictions(
+            self.aggregation_workflow.get("single_dataset_modules", [])
+        )
+
         # pre-flight: validate both sub-workflows (warn-only, non-blocking).
         # single_dataset_modules run per dataset (single scope);
         # aggregation_modules run on the pooled results (aggregation scope).
         _log_workflow_validation(
-            self.aggregation_workflow.get("single_dataset_modules", []),
+            single_dataset_modules,
             Scope.SINGLE,
             "aggregation: single-dataset modules",
         )
@@ -952,9 +963,7 @@ class AggregationWorkflowRunner:
         if self.rank == 0:
             self.save(self.result_folder)
         # First, run the individual analysis
-        sgl_ds_workflow_parameters = self.aggregation_workflow[
-            "single_dataset_modules"
-        ]
+        sgl_ds_workflow_parameters = single_dataset_modules
         individual_parametersets, tags = self.parameter_tiler.run(
             sgl_ds_workflow_parameters
         )

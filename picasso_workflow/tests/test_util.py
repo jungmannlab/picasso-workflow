@@ -292,6 +292,61 @@ class TestUtil(unittest.TestCase):
         assert cluster0["radius"] == 4
         assert cluster1["radius"] == 4
 
+    def test_05_compile_channel_restrictions(self):
+        """A module carrying ``#run_on_channels`` is wrapped in a
+        conditional_branch keyed on that per-channel column; modules without
+        it (and empty directives) pass through, and the input is not mutated.
+        """
+        key = util.RUN_ON_CHANNELS_KEY
+        modules = [
+            ("load", {"filename": "a.tiff"}),
+            ("cluster", {"radius": 5, key: "is_resi"}),
+            ("render", {"oversampling": 5, key: ""}),  # empty -> stripped
+        ]
+        out = util.compile_channel_restrictions(modules)
+
+        # unchanged module passes through
+        assert out[0] == ("load", {"filename": "a.tiff"})
+        # restricted module -> conditional_branch
+        assert out[1][0] == "conditional_branch"
+        cb = out[1][1]
+        assert cb["condition"] == {
+            "left": ("$$map", "is_resi", False),
+            "operator": "==",
+            "right": True,
+        }
+        assert cb["if_true"] == [("cluster", {"radius": 5})]
+        assert cb["if_false"] == []
+        # empty directive -> stripped, left unrestricted
+        assert out[2] == ("render", {"oversampling": 5})
+        # input not mutated
+        assert modules[1][1] == {"radius": 5, key: "is_resi"}
+
+    def test_05_compile_channel_restrictions_tiled(self):
+        """Compiled restriction + tiling resolves the condition per channel:
+        the ``$$map`` column becomes a concrete bool per tile, so channel A
+        runs if_true and channel B takes the empty (no-op) if_false.
+        """
+        key = util.RUN_ON_CHANNELS_KEY
+        modules = [("cluster", {"radius": 5, key: "run_cluster"})]
+        compiled = util.compile_channel_restrictions(modules)
+
+        tile_entries = {
+            "#tags": ["chA", "chB"],
+            "run_cluster": [True, False],
+        }
+        tiler = util.ParameterTiler(self, tile_entries)
+        res_out, tags = tiler.run(compiled)
+        assert tags == ["chA", "chB"]
+        # per-tile conditional_branch condition left-hand value
+        condA = res_out[0][0][1]["condition"]
+        condB = res_out[1][0][1]["condition"]
+        assert condA["left"] is True
+        assert condB["left"] is False
+        # evaluated: channel A runs the module, channel B is a no-op
+        assert util.ConditionEvaluator(None).evaluate(condA) is True
+        assert util.ConditionEvaluator(None).evaluate(condB) is False
+
     def test_05_ParameterTiler_tags_only(self):
         """With only a '#tags' entry (no mapped files), the tiler must
         produce exactly one workflow set - this is what the single
