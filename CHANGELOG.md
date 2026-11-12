@@ -20,8 +20,9 @@ This file was started after v0.5.6; earlier history is in the git log.
   at the shared folder, and a Run-tab *Apptainer image* dropdown defaults to
   `picasso-workflow-<GUI version>.sif` with a *List* button that fills it from
   the shared folder over SSH. GPU requests add `apptainer exec --nv`
-  automatically. Reuses the module-load/bind-quoting pattern already in the
-  cluster-submit worker and single-sources `DEFAULT_APPTAINER_MODULE`.
+  automatically, and the run's results folder is always bound in. Shares the
+  `apptainer_exec_prefix` command builder and `DEFAULT_APPTAINER_MODULE` pin
+  with the cluster-submit worker so the two paths cannot drift.
   (`slurm_submit.py`, `gui.py`, `cluster_submit.py`, `config_template.yaml`)
 
 ### Changed

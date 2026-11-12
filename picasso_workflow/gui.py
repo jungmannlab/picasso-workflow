@@ -18,12 +18,14 @@ from picasso_workflow import workflow_references as wfref
 from loguru import logger
 import subprocess
 import os
+import posixpath
 import re
 import shlex
 import sys
 import getpass
 import yaml
 import importlib.util
+import importlib.metadata
 
 # import pkgutil
 # import importlib
@@ -10353,6 +10355,19 @@ class Window(QtWidgets.QMainWindow):
             self._refresh_cluster_images
         )
         cluster_config_layout.addWidget(self.cluster_image_refresh_button)
+        # Version-derived default image name (host-independent); computed once
+        # since the installed version cannot change at runtime. Prefer the
+        # installed dist metadata (present even in a non-git wheel install,
+        # where _version.py / __GUIVERSION__ is "unknown") over __GUIVERSION__.
+        try:
+            _pw_version = importlib.metadata.version("picasso_workflow")
+        except Exception:
+            _pw_version = __GUIVERSION__
+        self._image_version_default = default_image_basename(_pw_version) or ""
+        # Tracks the last programmatically applied image, so a manual pick is
+        # preserved across cluster switches while an untouched field follows
+        # the version default (mirrors self._cluster_modules_default).
+        self._cluster_image_default = ""
         self._populate_cluster_images(
             str(self.cluster_host_combo.currentText())
         )
@@ -16244,27 +16259,24 @@ class Window(QtWidgets.QMainWindow):
     def _populate_cluster_images(self, host_cluster):
         """Set the Apptainer image field's default for the selected cluster.
 
-        Local only (no SSH): pre-selects ``picasso-workflow-<GUI version>.sif``
-        when a reliable name can be formed, else leaves the field unchanged if
-        the user already typed one, otherwise blank. Use the "List" button to
-        fill the dropdown from the shared folder over SSH. The field's tooltip
-        shows the configured ``image_dir``.
+        Local only (no SSH): pre-selects ``picasso-workflow-<version>.sif``
+        when a reliable name can be formed, else blank -- but only when the
+        field is untouched (empty, or still the last programmatically applied
+        value), so a manual pick survives a cluster switch. Use the "List"
+        button to fill the dropdown from the shared folder over SSH. The
+        field's tooltip shows the configured ``image_dir``.
         """
         image_dir, _module, _binds = self._apptainer_config(host_cluster)
-        default = default_image_basename(__GUIVERSION__)
+        default = self._image_version_default
         self.cluster_image_combo.setToolTip(
             "Apptainer image to run the workflow inside. Shared folder: "
             f"{image_dir or '(unset: configure ClusterApptainer.image_dir)'}. "
             "Editable; click 'List' to see the .sif files actually present."
         )
         current = self.cluster_image_combo.currentText().strip()
-        # Only overwrite an untouched field, so a manual pick survives a
-        # cluster switch.
-        if current == "" or current == getattr(
-            self, "_cluster_image_default", ""
-        ):
-            self.cluster_image_combo.setCurrentText(default or "")
-        self._cluster_image_default = default or ""
+        if current == "" or current == self._cluster_image_default:
+            self.cluster_image_combo.setCurrentText(default)
+        self._cluster_image_default = default
 
     def _refresh_cluster_images(self):
         """List the shared folder's .sif images over SSH into the dropdown.
@@ -16285,12 +16297,14 @@ class Window(QtWidgets.QMainWindow):
             return
         try:
             self._ensure_slurm_communicator(host_cluster)
-            # -1 one-per-line, then basename; tolerate an empty/missing dir.
-            cmd = (
-                f"ls -1 {shlex.quote(image_dir)}/*.sif 2>/dev/null "
-                "| xargs -r -n1 basename"
+            # List the folder (basenames, one per line) and filter to .sif
+            # client-side. Listing the directory itself -- rather than globbing
+            # `*.sif` with stderr suppressed -- means a real failure (missing
+            # dir, no read permission) surfaces as a non-zero exit with a
+            # message, instead of looking like an empty folder.
+            result = self.slurm_communicator.execute_ssh_command(
+                f"ls -1 {shlex.quote(image_dir)}"
             )
-            result = self.slurm_communicator.execute_ssh_command(cmd)
         except Exception as exc:  # noqa: BLE001 - surfaced to the user
             QtWidgets.QMessageBox.warning(
                 self,
@@ -16298,11 +16312,20 @@ class Window(QtWidgets.QMainWindow):
                 f"Listing {image_dir} on {host_cluster} failed:\n{exc}",
             )
             return
-        images = [
-            line.strip()
-            for line in (result.get("stdout", "") or "").splitlines()
-            if line.strip()
-        ]
+        if not result.get("success"):
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Could not list images",
+                f"Listing {image_dir} on {host_cluster} failed (exit "
+                f"{result.get('return_code')}):\n"
+                f"{(result.get('stderr', '') or '').strip()}",
+            )
+            return
+        images = sorted(
+            name.strip()
+            for name in (result.get("stdout", "") or "").splitlines()
+            if name.strip().endswith(".sif")
+        )
         if not images:
             QtWidgets.QMessageBox.information(
                 self,
@@ -16314,16 +16337,20 @@ class Window(QtWidgets.QMainWindow):
         self.cluster_image_combo.blockSignals(True)
         self.cluster_image_combo.clear()
         self.cluster_image_combo.addItems(images)
-        # Keep the current pick if still offered, else the auto-resolved
-        # default when present on the mount, else the first listed image.
-        default = self._cluster_image_default
+        # Keep the current pick if still offered, else the version default when
+        # present on the mount, else the first listed image.
         if current in images:
-            self.cluster_image_combo.setCurrentText(current)
-        elif default in images:
-            self.cluster_image_combo.setCurrentText(default)
+            chosen = current
+        elif self._image_version_default in images:
+            chosen = self._image_version_default
         else:
-            self.cluster_image_combo.setCurrentText(images[0])
+            chosen = images[0]
+        self.cluster_image_combo.setCurrentText(chosen)
         self.cluster_image_combo.blockSignals(False)
+        # Record the programmatically applied value so a later cluster switch
+        # treats it as a default (re-applying that cluster's version default),
+        # not as a hand-typed manual pick.
+        self._cluster_image_default = chosen
 
     # ------------------------------------------------------------------ #
     # Live progress monitor
@@ -17489,11 +17516,13 @@ class Window(QtWidgets.QMainWindow):
         image_dir, apptainer_module, bind_paths = self._apptainer_config(
             host_cluster
         )
+        # Cluster paths are POSIX even when the GUI host is Windows, so join
+        # with posixpath rather than os.path (which would use backslashes).
         image_sel = self.cluster_image_combo.currentText().strip()
-        if image_sel.startswith("/"):
+        if posixpath.isabs(image_sel):
             image_path = image_sel
         elif image_sel and image_dir:
-            image_path = f"{image_dir.rstrip('/')}/{image_sel}"
+            image_path = posixpath.join(image_dir, image_sel)
         else:
             image_path = image_sel  # bare name with no image_dir, or ""
         if not image_path:
@@ -17509,16 +17538,32 @@ class Window(QtWidgets.QMainWindow):
             )
             return None, None
 
+        # Always bind the results folder: the generated start_workflow.py lives
+        # there, it is the job's CWD, and outputs are written there. Without it
+        # a results folder on a mount not listed in ClusterApptainer.bind_paths
+        # would be invisible inside the container and the job would fail to even
+        # open the script. Skip if an existing bind already covers it. (The
+        # cluster-submit worker guards the same invariant.)
+        if not any(
+            results_folder_host == b.rstrip("/")
+            or results_folder_host.startswith(b.rstrip("/") + "/")
+            for b in bind_paths
+        ):
+            bind_paths = bind_paths + [results_folder_host]
+
+        cpu_only = self.cluster_cpu_only_check.isChecked()
         commands = self.slurm_communicator.assemble_slurm_commands(
             host_cluster,
             scriptname=scriptname,
             modules=modules,
             faulthandler=self.cluster_faulthandler_check.isChecked(),
-            cpu_only=self.cluster_cpu_only_check.isChecked(),
+            cpu_only=cpu_only,
             image_path=image_path,
             bind_paths=bind_paths,
             apptainer_module=apptainer_module,
-            use_nv=n_gpus > 0,
+            # --nv exposes the host GPU driver; pointless (and contradictory)
+            # when CPU-only hides every GPU via CUDA_VISIBLE_DEVICES="".
+            use_nv=n_gpus > 0 and not cpu_only,
         )
         # scriptname=scriptname, use_pw_module=True)
         # scriptname=scriptname, use_pw_module=False)
@@ -17554,7 +17599,7 @@ class Window(QtWidgets.QMainWindow):
                 "image_path": image_path,
                 "module": apptainer_module,
                 "bind_paths": bind_paths,
-                "nv": n_gpus > 0,
+                "nv": n_gpus > 0 and not cpu_only,
             },
             "scriptname": scriptname,
             "python_script_path": python_script_path,

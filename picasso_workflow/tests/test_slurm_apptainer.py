@@ -23,6 +23,7 @@ import yaml
 
 from picasso_workflow.slurm_submit import (
     SlurmCommunicator,
+    apptainer_exec_prefix,
     default_image_basename,
 )
 
@@ -63,6 +64,30 @@ def test_default_image_basename_dev_version_returns_none():
     # version string cannot reconstruct -> leave the pick to the dropdown.
     assert default_image_basename("0.9.1.dev3+g1a2b3c4") is None
     assert default_image_basename("0.9.1.dev3") is None
+
+
+# --------------------------------------------------------------------------- #
+# apptainer_exec_prefix -- shared by GUI path and cluster-submit worker
+# --------------------------------------------------------------------------- #
+def test_apptainer_exec_prefix_basic():
+    assert (
+        apptainer_exec_prefix("/sw/x.sif", ["/scratch/paint"])
+        == "apptainer exec --bind /scratch/paint /sw/x.sif"
+    )
+
+
+def test_apptainer_exec_prefix_nv_and_quoting():
+    out = apptainer_exec_prefix(
+        "/sw/x.sif", ["/scratch/my data", "/fs/t"], use_nv=True
+    )
+    assert out == (
+        "apptainer exec --nv --bind '/scratch/my data' "
+        "--bind /fs/t /sw/x.sif"
+    )
+
+
+def test_apptainer_exec_prefix_no_binds():
+    assert apptainer_exec_prefix("/sw/x.sif") == "apptainer exec /sw/x.sif"
 
 
 # --------------------------------------------------------------------------- #

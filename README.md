@@ -376,12 +376,17 @@ connection). The field is editable, so an unlisted image or an absolute path can
 be typed by hand. The images are the CI build from `deploy/apptainer/paint.def`,
 named by version (`.github/workflows/build-apptainer.yml`).
 
+For heterogeneous node groups (e.g. different mounts or Apptainer versions per
+cluster), add a per-cluster sub-dict keyed as in `SlurmLoginNodes`; the keys you
+set there override the globals for that host, the rest fall back.
+
 Two things to know:
 
 - **Bind mounts.** The container only sees the host paths listed in
-  `bind_paths`, so include every root the job reads/writes (the scratch/data
-  root, the results folder's root, template dirs). A path that is not bound in
-  is invisible to the run.
+  `bind_paths`, so include every root the job reads (the scratch/data root,
+  template dirs). A path that is not bound in is invisible to the run. The run's
+  **results folder is bound automatically** (it holds the generated script, is
+  the job's CWD, and receives outputs), so it need not be listed.
 - **Version auto-match caveat.** The default filename can only be formed from a
   released/tagged GUI version. A development install (where `__version__` is
   `"unknown"` or a setuptools-scm dev string) leaves the default blank — pick the

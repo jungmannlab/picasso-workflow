@@ -61,6 +61,27 @@ def default_image_basename(version):
     return f"picasso-workflow-{version}.sif"
 
 
+def apptainer_exec_prefix(image_path, bind_paths=None, use_nv=False):
+    """Build the ``apptainer exec [--nv] --bind ... <image>`` command prefix.
+
+    Shared by the GUI submit path (:meth:`assemble_slurm_commands`) and the
+    cluster-submit worker (:func:`picasso_workflow.cluster_submit.
+    build_sbatch_script`) so the container invocation is assembled once. The
+    caller appends the in-container command (``python ...``).
+
+    Paths are ``shlex``-quoted because this is a real shell command and lab
+    data folders routinely contain spaces (e.g. ``channel 0.hdf5``); an
+    unquoted space would word-split the argv. ``use_nv`` adds ``--nv`` to
+    expose the host NVIDIA driver (the CUDA toolkit lives in the image).
+    """
+    parts = ["apptainer exec"]
+    if use_nv:
+        parts.append("--nv")
+    parts += [f"--bind {shlex.quote(b)}" for b in (bind_paths or [])]
+    parts.append(shlex.quote(image_path))
+    return " ".join(parts)
+
+
 class SlurmCommunicator:
     """Communication interface for SLURM job scheduling and SSH command
     execution.
@@ -351,24 +372,12 @@ class SlurmCommunicator:
         # rather than COMPLETED (a bare `srun ...` followed by an `echo` would
         # otherwise make the batch script exit 0 regardless).
         #
-        # Containerized: run the script INSIDE the image. Paths are shlex-quoted
-        # because this is a real shell command and lab data folders routinely
-        # contain spaces (same rationale as build_sbatch_script). The exported
-        # env above (PYTHONNOUSERSITE/PYTHONFAULTHANDLER/CUDA_VISIBLE_DEVICES) is
-        # inherited into the container -- Apptainer passes the host env through
-        # by default.
+        # Containerized: run the script INSIDE the image. The exported env above
+        # (PYTHONNOUSERSITE/PYTHONFAULTHANDLER/CUDA_VISIBLE_DEVICES) is inherited
+        # into the container -- Apptainer passes the host env through by default.
         if containerized:
-            bind_arg = " ".join(
-                f"--bind {shlex.quote(b)}" for b in (bind_paths or [])
-            )
-            parts = ["srun apptainer exec"]
-            if use_nv:
-                parts.append("--nv")
-            if bind_arg:
-                parts.append(bind_arg)
-            parts.append(shlex.quote(image_path))
-            parts.append(f"python {scriptname}")
-            commands.append(" ".join(parts))
+            prefix = apptainer_exec_prefix(image_path, bind_paths, use_nv)
+            commands.append(f"srun {prefix} python {scriptname}")
         else:
             commands.append(f"srun python {scriptname}")
         commands.append("PW_RC=$?")

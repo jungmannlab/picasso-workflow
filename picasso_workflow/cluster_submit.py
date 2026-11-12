@@ -67,6 +67,7 @@ COMPUTE_LOCATION = "cluster"
 #: ``slurm_submit`` so the GUI path and this worker stay pinned together.
 from picasso_workflow.slurm_submit import (  # noqa: E402
     DEFAULT_APPTAINER_MODULE,
+    apptainer_exec_prefix,
 )
 
 
@@ -183,14 +184,14 @@ def build_sbatch_script(
     # Two DIFFERENT quoting rules apply:
     #  * the `apptainer exec` line is a real SHELL command, so every path there
     #    is shlex-quoted (lab data folders routinely contain spaces, e.g.
-    #    "channel 0.hdf5" -- an unquoted space would word-split the argv);
+    #    "channel 0.hdf5" -- an unquoted space would word-split the argv). This
+    #    quoting lives in the shared apptainer_exec_prefix helper;
     #  * `#SBATCH` directives are parsed by SLURM ITSELF, NOT a shell -- SLURM
     #    does not strip shell quotes, so shlex-quoting them would make the
     #    quote chars part of the value (a filename literally containing `'`).
     #    So directive values are emitted RAW. The scratch/results paths that
     #    feed them are deployment-controlled and space-free; the spaced DATA
     #    paths only ever appear in the shell `apptainer exec` command below.
-    bind_arg = " ".join(f"--bind {shlex.quote(b)}" for b in binds)
     out_pattern = f"{results_dir_remote}/{job_name}_%j.out"
     err_pattern = f"{results_dir_remote}/{job_name}_%j.err"
     lines = [
@@ -209,10 +210,8 @@ def build_sbatch_script(
     if constraint:
         lines.append(f"#SBATCH --constraint={constraint}")
     run_cmd = (
-        "apptainer exec "
-        + bind_arg
-        + f" {shlex.quote(image_path)} "
-        + "python -m picasso_workflow.cluster_submit run "
+        apptainer_exec_prefix(image_path, binds)
+        + " python -m picasso_workflow.cluster_submit run "
         + f"--spec {shlex.quote(workflow_yaml_remote)} "
         + f"--results-dir {shlex.quote(results_dir_remote)}"
     )
