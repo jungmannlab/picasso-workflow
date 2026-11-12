@@ -3094,23 +3094,24 @@ def _compile_restriction(module_name, params):
     if not isinstance(params, dict):
         return (module_name, params)
 
-    column = params.get(RUN_ON_CHANNELS_KEY)
     nested = [k for k in _SUBWORKFLOW_KEYS if isinstance(params.get(k), list)]
-    if not column and not nested:
+    # Nothing to do only when the directive key is absent (not merely empty --
+    # an empty directive must still be stripped) and there is no nested
+    # sub-workflow to recurse into.
+    if RUN_ON_CHANNELS_KEY not in params and not nested:
         return (module_name, params)  # unchanged; reuse the dict
 
     # Copy so the caller's params are never mutated; recurse into any nested
-    # sub-workflow lists.
+    # sub-workflow lists and drop the directive key.
     new_params = dict(params)
     for key in nested:
         new_params[key] = compile_channel_restrictions(new_params[key])
+    column = new_params.pop(RUN_ON_CHANNELS_KEY, None)
 
     if not column:
-        # No (or empty) restriction -- strip a stray empty key if present.
-        new_params.pop(RUN_ON_CHANNELS_KEY, None)
+        # No (or empty) restriction -- the key (if any) has been stripped.
         return (module_name, new_params)
 
-    new_params.pop(RUN_ON_CHANNELS_KEY, None)
     condition = {
         "left": ("$$map", column, False),
         "operator": "==",
