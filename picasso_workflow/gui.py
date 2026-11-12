@@ -25,7 +25,6 @@ import sys
 import getpass
 import yaml
 import importlib.util
-import importlib.metadata
 
 # import pkgutil
 # import importlib
@@ -7952,8 +7951,9 @@ class ModuleDescriptor(util.AbstractModuleCollection):
 # existing GUI tests (``gui.SlurmCommunicator(...)``) keep working unchanged.
 from picasso_workflow.slurm_submit import (  # noqa: E402,F401
     SlurmCommunicator,
+    apptainer_config,
     default_image_basename,
-    DEFAULT_APPTAINER_MODULE,
+    resolve_pw_version,
 )
 
 
@@ -10359,11 +10359,9 @@ class Window(QtWidgets.QMainWindow):
         # since the installed version cannot change at runtime. Prefer the
         # installed dist metadata (present even in a non-git wheel install,
         # where _version.py / __GUIVERSION__ is "unknown") over __GUIVERSION__.
-        try:
-            _pw_version = importlib.metadata.version("picasso_workflow")
-        except Exception:
-            _pw_version = __GUIVERSION__
-        self._image_version_default = default_image_basename(_pw_version) or ""
+        self._image_version_default = (
+            default_image_basename(resolve_pw_version()) or ""
+        )
         # Tracks the last programmatically applied image, so a manual pick is
         # preserved across cluster switches while an untouched field follows
         # the version default (mirrors self._cluster_modules_default).
@@ -10641,6 +10639,11 @@ class Window(QtWidgets.QMainWindow):
         # startup or shows anything when offline / up to date.
         self._update_thread = None
         self._start_update_check()
+
+        # Tools menu: the cluster admin console (shared-mount Apptainer images,
+        # SLURM queue, disk usage) in its own window.
+        tools_menu = self.menuBar().addMenu("Tools")
+        tools_menu.addAction("Admin console…", self._open_admin_console)
 
         # Help menu: re-openable onboarding + a shortcut to the settings file.
         help_menu = self.menuBar().addMenu("Help")
@@ -16243,18 +16246,42 @@ class Window(QtWidgets.QMainWindow):
     def _apptainer_config(self, host_cluster):
         """Resolved Apptainer settings for ``host_cluster``.
 
-        Reads the global ``ClusterApptainer`` block and merges an optional
-        per-host override (a sub-dict keyed like ``SlurmLoginNodes``) on top.
-        Returns ``(image_dir, module, bind_paths)``.
+        Thin wrapper over :func:`slurm_submit.apptainer_config` (shared with the
+        admin console); returns ``(image_dir, module, bind_paths)``.
         """
-        base = dict(CONFIG.get("ClusterApptainer", {}) or {})
-        override = base.get(str(host_cluster))
-        if isinstance(override, dict):
-            base.update(override)
-        image_dir = str(base.get("image_dir", "") or "")
-        module = base.get("module") or DEFAULT_APPTAINER_MODULE
-        bind_paths = [str(b) for b in (base.get("bind_paths") or [])]
-        return image_dir, module, bind_paths
+        return apptainer_config(host_cluster)
+
+    def _open_admin_console(self):
+        """Open the cluster admin console (Apptainer images, queue, usage).
+
+        A separate top-level window (reused across opens), lazy-importing the
+        admin GUI so a PyQt/import problem surfaces a message rather than
+        blocking startup.
+        """
+        try:
+            from picasso_workflow.admin.qt import AdminWindow
+        except Exception as exc:  # noqa: BLE001 - surfaced to the user
+            QtWidgets.QMessageBox.critical(
+                self,
+                "Admin console",
+                f"Could not open the admin console: {exc}",
+            )
+            return
+        win = getattr(self, "_admin_window", None)
+        # A cached window whose underlying C++ object was deleted (e.g. a future
+        # DeleteOnClose) is not None but raises on access -- recreate in that
+        # case rather than crashing.
+        if win is not None:
+            try:
+                win.isVisible()
+            except RuntimeError:
+                win = None
+        if win is None:
+            win = AdminWindow(self)
+            self._admin_window = win
+        win.show()
+        win.raise_()
+        win.activateWindow()
 
     def _populate_cluster_images(self, host_cluster):
         """Set the Apptainer image field's default for the selected cluster.

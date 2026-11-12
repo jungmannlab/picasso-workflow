@@ -35,6 +35,28 @@ from picasso_workflow import CONFIG
 DEFAULT_APPTAINER_MODULE = "apptainer/1.4.1"
 
 
+def resolve_pw_version():
+    """The installed ``picasso_workflow`` version, or ``"unknown"``.
+
+    Prefers the dist metadata (present even in a non-git wheel install, where
+    ``_version.py`` / ``__version__`` may be absent) and falls back to the
+    importable ``__version__``. Single source so the Run tab's image auto-match
+    and the admin console report the SAME version (the match highlighting
+    depends on it).
+    """
+    try:
+        import importlib.metadata
+
+        return importlib.metadata.version("picasso_workflow")
+    except Exception:
+        try:
+            from picasso_workflow import __version__
+
+            return __version__
+        except Exception:
+            return "unknown"
+
+
 def default_image_basename(version):
     """Return the shared-mount ``.sif`` filename matching ``version``.
 
@@ -59,6 +81,27 @@ def default_image_basename(version):
     if "dev" in version or "+" in version:
         return None
     return f"picasso-workflow-{version}.sif"
+
+
+def apptainer_config(host_cluster, config=None):
+    """Resolved Apptainer settings for ``host_cluster``.
+
+    Reads the global ``ClusterApptainer`` block and merges an optional per-host
+    override (a sub-dict keyed as in ``SlurmLoginNodes``) on top. Returns
+    ``(image_dir, module, bind_paths)``. Shared by the GUI Run tab and the admin
+    console so both resolve the shared mount the same way. ``config`` defaults to
+    the package ``CONFIG``.
+    """
+    if config is None:
+        config = CONFIG
+    base = dict(config.get("ClusterApptainer", {}) or {})
+    override = base.get(str(host_cluster))
+    if isinstance(override, dict):
+        base.update(override)
+    image_dir = str(base.get("image_dir", "") or "")
+    module = base.get("module") or DEFAULT_APPTAINER_MODULE
+    bind_paths = [str(b) for b in (base.get("bind_paths") or [])]
+    return image_dir, module, bind_paths
 
 
 def apptainer_exec_prefix(image_path, bind_paths=None, use_nv=False):
