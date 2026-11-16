@@ -10259,43 +10259,46 @@ class Window(QtWidgets.QMainWindow):
         run_on_cluster_layout = QtWidgets.QVBoxLayout(run_on_cluster_tab)
         self.run_tabs.addTab(run_on_cluster_tab, "Run on SLURM Cluster")
 
-        # Cluster configuration widgets
-        cluster_config_layout = QtWidgets.QHBoxLayout()
+        # Cluster configuration grid -- a grid (not a single HBox row) so the
+        # many controls keep usable width. Field columns (1/3/5) stretch; the
+        # label columns (0/2/4) stay compact.
+        cluster_config_layout = QtWidgets.QGridLayout()
         cluster_config_widget = QtWidgets.QWidget()
         cluster_config_widget.setLayout(cluster_config_layout)
         run_on_cluster_layout.addWidget(cluster_config_widget)
+        for _col in (1, 3, 5):
+            cluster_config_layout.setColumnStretch(_col, 1)
 
-        # Cluster Host dropdown
-        cluster_config_layout.addWidget(QtWidgets.QLabel("Cluster Host:"))
+        # Cluster Host dropdown (row 0, full width)
+        cluster_config_layout.addWidget(
+            QtWidgets.QLabel("Cluster Host:"), 0, 0
+        )
         self.cluster_host_combo = QtWidgets.QComboBox()
         for host in CONFIG["SlurmLoginNodes"].keys():
             self.cluster_host_combo.addItem(host)
         self.cluster_host_combo.setEditable(True)
-        # self.cluster_host_combo.addItems(["localhost", "cluster.example.com"])
-        cluster_config_layout.addWidget(self.cluster_host_combo)
+        cluster_config_layout.addWidget(self.cluster_host_combo, 0, 1, 1, 5)
 
-        # Number of nodes
-        cluster_config_layout.addWidget(QtWidgets.QLabel("#nodes:"))
+        # Resources (row 1): nodes / cores / GPUs
+        cluster_config_layout.addWidget(QtWidgets.QLabel("#nodes:"), 1, 0)
         self.cluster_nodes_spin = QtWidgets.QSpinBox()
         self.cluster_nodes_spin.setMinimum(1)
         self.cluster_nodes_spin.setMaximum(1000)
         self.cluster_nodes_spin.setValue(
             CONFIG["SlurmDefault"].get("nodes", 1)
         )
-        cluster_config_layout.addWidget(self.cluster_nodes_spin)
+        cluster_config_layout.addWidget(self.cluster_nodes_spin, 1, 1)
 
-        # Number of cores per node
-        cluster_config_layout.addWidget(QtWidgets.QLabel("#cores/node:"))
+        cluster_config_layout.addWidget(QtWidgets.QLabel("#cores/node:"), 1, 2)
         self.cluster_cores_spin = QtWidgets.QSpinBox()
         self.cluster_cores_spin.setMinimum(1)
         self.cluster_cores_spin.setMaximum(256)
         self.cluster_cores_spin.setValue(
             CONFIG["SlurmDefault"].get("cores", 1)
         )
-        cluster_config_layout.addWidget(self.cluster_cores_spin)
+        cluster_config_layout.addWidget(self.cluster_cores_spin, 1, 3)
 
-        # Number of GPUs per node (0 = no GPU requested)
-        cluster_config_layout.addWidget(QtWidgets.QLabel("#GPUs/node:"))
+        cluster_config_layout.addWidget(QtWidgets.QLabel("#GPUs/node:"), 1, 4)
         self.cluster_gpus_spin = QtWidgets.QSpinBox()
         self.cluster_gpus_spin.setMinimum(0)
         self.cluster_gpus_spin.setMaximum(64)
@@ -10304,14 +10307,15 @@ class Window(QtWidgets.QMainWindow):
             "Number of GPUs to request per node via SLURM "
             "(adds '#SBATCH --gres=gpu:N'). 0 = no GPU."
         )
-        cluster_config_layout.addWidget(self.cluster_gpus_spin)
+        cluster_config_layout.addWidget(self.cluster_gpus_spin, 1, 5)
 
         # SLURM partition (queue). GPU nodes usually live in a dedicated
         # partition, so a --gres=gpu request must target it or the job never
         # schedules. Populated per selected cluster from config
         # (SlurmPartitions) and editable, so an unlisted partition can be
         # typed by hand. Blank -> omit --partition and use SLURM's default.
-        cluster_config_layout.addWidget(QtWidgets.QLabel("Partition:"))
+        # Scheduling (row 2): partition / memory / timeout
+        cluster_config_layout.addWidget(QtWidgets.QLabel("Partition:"), 2, 0)
         self.cluster_partition_combo = QtWidgets.QComboBox()
         self.cluster_partition_combo.setEditable(True)
         self.cluster_partition_combo.setToolTip(
@@ -10319,7 +10323,7 @@ class Window(QtWidgets.QMainWindow):
             "GPU nodes usually require a dedicated partition; leave blank to "
             "use the cluster default partition."
         )
-        cluster_config_layout.addWidget(self.cluster_partition_combo)
+        cluster_config_layout.addWidget(self.cluster_partition_combo, 2, 1)
         self._populate_cluster_partitions(
             str(self.cluster_host_combo.currentText())
         )
@@ -10334,7 +10338,7 @@ class Window(QtWidgets.QMainWindow):
         # and editable. GPU fitting needs a CUDA toolkit providing libNVVM, so
         # a cuda module is loaded here (also sets CUDA_HOME for numba). Blank
         # -> load nothing.
-        cluster_config_layout.addWidget(QtWidgets.QLabel("Modules:"))
+        cluster_config_layout.addWidget(QtWidgets.QLabel("Modules:"), 3, 0)
         self.cluster_modules_edit = QtWidgets.QLineEdit()
         self.cluster_modules_edit.setPlaceholderText("e.g., cuda/13.0")
         self.cluster_modules_edit.setToolTip(
@@ -10346,7 +10350,7 @@ class Window(QtWidgets.QMainWindow):
         # preserved across cluster changes while an untouched field follows the
         # new cluster's config.
         self._cluster_modules_default = ""
-        cluster_config_layout.addWidget(self.cluster_modules_edit)
+        cluster_config_layout.addWidget(self.cluster_modules_edit, 3, 1, 1, 5)
         self._populate_cluster_modules(
             str(self.cluster_host_combo.currentText())
         )
@@ -10360,11 +10364,13 @@ class Window(QtWidgets.QMainWindow):
         # host conda env). Editable; defaults to picasso-workflow-<GUI
         # version>.sif. "List" fills the dropdown from the shared folder
         # (config ClusterApptainer.image_dir) over SSH.
-        cluster_config_layout.addWidget(QtWidgets.QLabel("Apptainer image:"))
+        cluster_config_layout.addWidget(
+            QtWidgets.QLabel("Apptainer image:"), 4, 0
+        )
         self.cluster_image_combo = QtWidgets.QComboBox()
         self.cluster_image_combo.setEditable(True)
         self.cluster_image_combo.setMinimumWidth(240)
-        cluster_config_layout.addWidget(self.cluster_image_combo)
+        cluster_config_layout.addWidget(self.cluster_image_combo, 4, 1, 1, 4)
         self.cluster_image_refresh_button = QtWidgets.QPushButton("List")
         self.cluster_image_refresh_button.setToolTip(
             "List the .sif images in the shared folder on the selected "
@@ -10374,7 +10380,9 @@ class Window(QtWidgets.QMainWindow):
         self.cluster_image_refresh_button.clicked.connect(
             self._refresh_cluster_images
         )
-        cluster_config_layout.addWidget(self.cluster_image_refresh_button)
+        cluster_config_layout.addWidget(
+            self.cluster_image_refresh_button, 4, 5
+        )
         # Version-derived default image name (host-independent); computed once
         # since the installed version cannot change at runtime. Prefer the
         # installed dist metadata (present even in a non-git wheel install,
@@ -10393,25 +10401,23 @@ class Window(QtWidgets.QMainWindow):
             self._populate_cluster_images
         )
 
-        # Memory
-        cluster_config_layout.addWidget(QtWidgets.QLabel("Memory:"))
+        # Memory (row 2, col 2-3)
+        cluster_config_layout.addWidget(QtWidgets.QLabel("Memory:"), 2, 2)
         self.cluster_memory_edit = QtWidgets.QLineEdit()
         self.cluster_memory_edit.setPlaceholderText("e.g., 4GB")
         self.cluster_memory_edit.setText(
             CONFIG["SlurmDefault"].get("memory", "4GB")
         )
-        self.cluster_memory_edit.setMaximumWidth(100)
-        cluster_config_layout.addWidget(self.cluster_memory_edit)
+        cluster_config_layout.addWidget(self.cluster_memory_edit, 2, 3)
 
-        # Timeout
-        cluster_config_layout.addWidget(QtWidgets.QLabel("Timeout:"))
+        # Timeout (row 2, col 4-5)
+        cluster_config_layout.addWidget(QtWidgets.QLabel("Timeout:"), 2, 4)
         self.cluster_timeout_edit = QtWidgets.QLineEdit()
         self.cluster_timeout_edit.setPlaceholderText("e.g., 24:00:00")
         self.cluster_timeout_edit.setText(
             CONFIG["SlurmDefault"].get("timeout", "24:00:00")
         )
-        self.cluster_timeout_edit.setMaximumWidth(100)
-        cluster_config_layout.addWidget(self.cluster_timeout_edit)
+        cluster_config_layout.addWidget(self.cluster_timeout_edit, 2, 5)
 
         # Faulthandler: dump the Python->C traceback on a native crash (a
         # LAPACK/CUDA fault in a fit/CRLB call leaves no Python exception).
@@ -10425,7 +10431,9 @@ class Window(QtWidgets.QMainWindow):
             "the error log instead of dying silently. Inherited by "
             "multiprocessing workers. Negligible overhead; recommended on."
         )
-        cluster_config_layout.addWidget(self.cluster_faulthandler_check)
+        cluster_config_layout.addWidget(
+            self.cluster_faulthandler_check, 5, 0, 1, 2
+        )
 
         # Debug: hide every GPU (CUDA_VISIBLE_DEVICES="") so the fit/CRLB run
         # on the CPU kernels. Off by default; use it to bisect a GPU-side crash
@@ -10439,7 +10447,9 @@ class Window(QtWidgets.QMainWindow):
             "GPU-side crash (a spline CRLB kernel fault dies as a hard "
             "SIGSEGV, not a catchable error). Leave off for normal / GPU runs."
         )
-        cluster_config_layout.addWidget(self.cluster_cpu_only_check)
+        cluster_config_layout.addWidget(
+            self.cluster_cpu_only_check, 5, 2, 1, 2
+        )
 
         # self.cluster_use_module = QtWidgets.QCheckBox("Use p-w module")
         # self.cluster_use_module.setMaximumWidth(200)

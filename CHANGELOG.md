@@ -11,6 +11,13 @@ This file was started after v0.5.6; earlier history is in the git log.
 ## [Unreleased]
 
 ### Changed
+- **Run tab cluster config laid out as a grid.** The ~11 cluster controls
+  (host, #nodes/#cores/#GPUs, partition/memory/timeout, modules, Apptainer
+  image + List, faulthandler / CPU-only) were all in one `QHBoxLayout`, so each
+  was squeezed too narrow to use. They now sit in a `QGridLayout` with
+  stretching field columns, grouped by row (resources / scheduling / modules /
+  image / debug), and the Memory/Timeout fields no longer carry a 100 px cap.
+  (`gui.py`)
 - **Admin console hidden from the main GUI by default.** The *Tools → Admin
   console…* menu item now appears only when `AdminConsole.enabled: true` is set
   in `config.yaml` (default `false`) — it is cluster-admin tooling, not for
