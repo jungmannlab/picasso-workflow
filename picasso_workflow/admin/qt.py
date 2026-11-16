@@ -216,12 +216,20 @@ class AdminWindow(QMainWindow):
             "Self-contained -- needs no test data."
         )
         self.test_tier4 = QCheckBox("Tier 4 (real data)")
+        self.test_tier4.setToolTip(
+            "The test SUITE's real-data tier: pytest -m 'integration and "
+            "real_data' over the datasets in the test data dir (the real_data-"
+            "marked tests in test_real_data_integration.py / "
+            "test_z_integration.py -- assertion-based correctness checks)."
+        )
         self.test_templates = QCheckBox("Template workflow runs")
         self.test_templates.setToolTip(
-            "Submit each run_workflow_slurm.sh found under the test data dir. "
-            "These are submitted as-is, so they must already be Apptainer-"
-            "based (regenerate them from the Run tab) -- a conda-based script "
-            "would need a login-node environment."
+            "End-to-end WORKFLOW runs (not pytest): submit each "
+            "run_workflow_slurm.sh found under the test data dir -- each runs "
+            "the full pipeline on its template's data; the verdict is 'ran "
+            "through with no error'. Submitted as-is, so they must already be "
+            "Apptainer-based (regenerate them from the Run tab) -- a conda-"
+            "based script would need a login-node environment."
         )
         self.test_tiers13.setChecked(True)
         self.test_tier4.setChecked(True)
