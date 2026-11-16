@@ -61,7 +61,17 @@ This file was started after v0.5.6; earlier history is in the git log.
   (mapped to `picasso_picked_locs`), the pick-similar thresholds (diameter,
   nlocs-per-frame, rmsd) are derived from the grouped picked localizations and
   put in the step's notes, so the user can switch the module to `find_similar`
-  and reproduce the picks. Reconstruction runs off the UI thread and reports a
+  and reproduce the picks. Raw movies resolve even when the recorded `File` is a
+  Windows path (so re-localization correctly uses `load_dataset_movie` with the
+  raw file). Steps with no automatic mapping (display *Render*, unit
+  conversions, a channel-alignment render) are kept as a `dummy_module`
+  placeholder (removable, or reclassifiable via the dropdown) rather than
+  dropped. A *Move selected step → aggregation* button makes the selected
+  single-stage step the cross-channel boundary — it and every later step move to
+  the aggregation stage with the save/load/documentation bridge modules
+  rebuilt (useful when channel alignment was not recorded as a distinct step).
+  The wizard opens non-modally so the main GUI stays editable while it (and the
+  notes) remain visible. Reconstruction runs off the UI thread and reports a
   progress bar with a per-channel status line and a rough ETA (the slow part is
   loading each channel's localization file for the pick retro-calculation), and
   can be aborted mid-scan via a Stop button or the wizard's Cancel. New modules

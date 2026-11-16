@@ -16289,10 +16289,11 @@ class Window(QtWidgets.QMainWindow):
     def _open_manual_to_workflow_wizard(self):
         """Open the wizard that reconstructs a workflow from a manual analysis.
 
-        A modal wizard that scans a manually-performed analysis folder, maps its
-        saved steps back to workflow modules, and (on Apply) populates the Files
-        tree and module lists here. Lazy-imported so a PyQt/import problem
-        surfaces a message rather than blocking startup.
+        Scans a manually-performed analysis folder, maps its saved steps back to
+        workflow modules, and (on Apply) populates the Files tree and module
+        lists here. Opened *non-modally* so the main GUI stays editable while the
+        wizard (and its review notes) remains visible. Lazy-imported so a
+        PyQt/import problem surfaces a message rather than blocking startup.
         """
         try:
             from picasso_workflow.wizard_manual_to_workflow import (
@@ -16305,8 +16306,13 @@ class Window(QtWidgets.QMainWindow):
                 f"Could not open the wizard: {exc}",
             )
             return
+        # Keep a reference so the non-modal window is not garbage-collected.
         wizard = ManualToWorkflowWizard(self)
-        wizard.exec()
+        wizard.setModal(False)
+        self._manual_wizard = wizard
+        wizard.show()
+        wizard.raise_()
+        wizard.activateWindow()
 
     def _populate_cluster_images(self, host_cluster):
         """Set the Apptainer image field's default for the selected cluster.

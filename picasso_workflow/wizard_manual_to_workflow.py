@@ -40,6 +40,17 @@ _CONF_LABEL = {
     mtw.CONF_UNMAPPED: "unmapped",
 }
 
+# Wizard-added plumbing modules (not user processing steps) -- excluded when
+# re-splitting single/aggregation stages.
+_BRIDGE_MODULES = frozenset(
+    {
+        "save_single_dataset",
+        "analysis_documentation",
+        "load_datasets_to_aggregate",
+        "save_datasets_aggregated",
+    }
+)
+
 # Aggregation workflow type index in the main GUI's workflow_type combo.
 _AGGREGATION_TYPE_INDEX = 1
 # "Workflow Config" tab index.
@@ -91,6 +102,61 @@ def _format_params(params, channel, tree_data):
         f"{k}={_format_value(v, channel, tree_data)}"
         for k, v in params.items()
     )
+
+
+def resplit_to_aggregation(
+    single, single_meta, agg, agg_meta, single_row_index
+):
+    """Re-split single/aggregation at a chosen single-stage step.
+
+    The step at ``single_row_index`` (indexing ``single``, bridges included) and
+    every later single-stage *processing* step move to the front of the
+    aggregation stage; the single stage is closed with ``save_single_dataset``
+    and the aggregation stage reopened with ``analysis_documentation`` +
+    ``load_datasets_to_aggregate``. Returns new
+    ``(single, single_meta, agg, agg_meta)``. Qt-free so it is unit-testable.
+    """
+
+    def strip(mods, metas):
+        return [
+            (m, me)
+            for m, me in zip(mods, metas)
+            if m[0] not in _BRIDGE_MODULES
+        ]
+
+    single_pairs = strip(single, single_meta)
+    agg_pairs = strip(agg, agg_meta)
+    # Real-step index of the selected row (bridges excluded).
+    split = max(
+        0,
+        sum(
+            1
+            for i in range(single_row_index + 1)
+            if single[i][0] not in _BRIDGE_MODULES
+        )
+        - 1,
+    )
+    keep = single_pairs[:split]
+    moved = single_pairs[split:]
+
+    new_single = [m for m, _ in keep] + [mtw._save_single_bridge()]
+    new_single_meta = [me for _, me in keep] + [mtw._bridge_meta()]
+    save_index = len(new_single) - 1
+    new_agg_real = moved + agg_pairs
+    new_agg = (
+        [
+            ("analysis_documentation", {}),
+            mtw._load_aggregate_bridge(save_index),
+        ]
+        + [m for m, _ in new_agg_real]
+        + [("save_datasets_aggregated", {})]
+    )
+    new_agg_meta = (
+        [mtw._bridge_meta(), mtw._bridge_meta()]
+        + [me for _, me in new_agg_real]
+        + [mtw._bridge_meta()]
+    )
+    return new_single, new_single_meta, new_agg, new_agg_meta
 
 
 def apply_result_to_window(window, result):
@@ -319,6 +385,16 @@ class _ReviewPage(QtWidgets.QWizardPage):
         )
         channel_row.addWidget(self.channel_combo)
         channel_row.addStretch(1)
+        self.to_agg_button = QtWidgets.QPushButton(
+            "Move selected step → aggregation (and all after)"
+        )
+        self.to_agg_button.setToolTip(
+            "Make the selected single-stage step the cross-channel boundary: "
+            "it and every later step move to the aggregation stage, with the "
+            "save/load/documentation bridge modules inserted."
+        )
+        self.to_agg_button.clicked.connect(self._move_selected_to_aggregation)
+        channel_row.addWidget(self.to_agg_button)
         channel_row.addWidget(
             QtWidgets.QLabel("(right-click a row to remove a step)")
         )
@@ -601,6 +677,46 @@ class _ReviewPage(QtWidgets.QWizardPage):
             del meta[idx]
             self._rebuild_table()
             self._revalidate()
+
+    def _move_selected_to_aggregation(self):
+        """Split single/aggregation at the selected single-stage step.
+
+        The selected step (e.g. a channel-alignment step reclassified from a
+        placeholder) and every later single-stage step move to the aggregation
+        stage; the single stage is closed with ``save_single_dataset`` and the
+        aggregation stage opened with ``analysis_documentation`` +
+        ``load_datasets_to_aggregate``. Existing bridge modules are rebuilt.
+        """
+        row = self.table.currentRow()
+        rows = self._rows()
+        if row < 0 or row >= len(rows):
+            QtWidgets.QMessageBox.information(
+                self, "Move to aggregation", "Select a single-stage row first."
+            )
+            return
+        _stage, list_name, idx = rows[row]
+        if list_name != "single" or self._single[idx][0] in _BRIDGE_MODULES:
+            QtWidgets.QMessageBox.information(
+                self,
+                "Move to aggregation",
+                "Pick a single-stage processing step (not a bridge module).",
+            )
+            return
+
+        (
+            self._single,
+            self._single_meta,
+            self._agg,
+            self._agg_meta,
+        ) = resplit_to_aggregation(
+            self._single,
+            self._single_meta,
+            self._agg,
+            self._agg_meta,
+            idx,
+        )
+        self._rebuild_table()
+        self._revalidate()
 
     # -- validation / apply ---------------------------------------------
     def _revalidate(self):

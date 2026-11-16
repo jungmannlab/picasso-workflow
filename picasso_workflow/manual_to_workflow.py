@@ -155,7 +155,6 @@ class ChannelChain:
     # to attribute each step to the manual file that first saved it
     file_lengths: list = field(default_factory=list)
     steps: list[MappedStep] = field(default_factory=list)
-    skipped: list[str] = field(default_factory=list)  # non-pipeline sources
 
 
 @dataclass
@@ -379,17 +378,27 @@ def _split_dataset_channel(base_stem):
     return "dataset", base_stem.strip()
 
 
+def _recorded_basename(path):
+    """Basename of a recorded path, tolerating Windows separators.
+
+    The info ``File`` may be a Windows path (e.g.
+    ``U:\\users\\...\\<acq>_MMStack_Pos0.ome.tif``); ``os.path.basename`` on
+    Linux would not split on backslashes, so normalize them first.
+    """
+    return os.path.basename(str(path).replace("\\", "/"))
+
+
 def _channel_basename(chain):
     """Raw-movie basename from a channel's info header, or ``None``.
 
-    The first info dict records the source movie under ``File`` -- usually a
-    staged temp path (e.g. ``/tmp/pwf_movie_stage_.../<acq>_MMStack_Pos0.ome
-    .tif``), so only its basename is meaningful for locating the real file.
+    The first info dict records the source movie under ``File`` -- a staged temp
+    path or a Windows acquisition path -- so only its basename is meaningful for
+    locating the real file.
     """
     if chain.info_steps:
         file_field = chain.info_steps[0].get("File")
         if file_field:
-            return os.path.basename(str(file_field))
+            return _recorded_basename(file_field)
     return None
 
 
@@ -447,7 +456,7 @@ def _first_raw_basename(manual_dir):
         if os.path.exists(info_path):
             info = _load_info(info_path)
             if info and info[0].get("File"):
-                return os.path.basename(str(info[0]["File"]))
+                return _recorded_basename(info[0]["File"])
     return None
 
 
@@ -872,12 +881,22 @@ def map_step(step, pixelsize=130.0):
     for needle, module_name, extractor in STEP_MAP:
         if needle in low:
             if module_name == SKIP_MODULE:
+                # No automatic mapping (display Render, unit conversion, a
+                # measurement, or a channel-alignment render with no distinct
+                # info step). Keep it as a placeholder rather than dropping it,
+                # so the user can remove it or pick the right module (e.g.
+                # align_channels for a channel-alignment step).
                 return MappedStep(
                     source=source,
-                    module_name=SKIP_MODULE,
+                    module_name="dummy_module",
                     params={},
-                    confidence=CONF_SKIP,
-                    messages=["no workflow equivalent; skipped"],
+                    confidence=CONF_UNMAPPED,
+                    messages=[
+                        "no automatic mapping -- remove this row, or pick a "
+                        "module (e.g. align_channels if this is a "
+                        "channel-alignment step)"
+                    ],
+                    info_dict=step,
                 )
             params = extractor(step, pixelsize)
             no_params_expected = extractor is _extract_none
@@ -959,10 +978,6 @@ def map_chain(chain, pixelsize=130.0, start_from="raw"):
             mapped = map_step(step, pixelsize)
             mapped.source_file = _file_for_index(chain.file_lengths, j)
             steps.append(mapped)
-    # Drop non-pipeline steps (measurements / metadata) from the module list,
-    # but record their sources so they can be surfaced for transparency.
-    chain.skipped = [s.source for s in steps if s.module_name == SKIP_MODULE]
-    steps = [s for s in steps if s.module_name != SKIP_MODULE]
     steps = _collapse_localize(steps)
     for s in steps:
         if s.module_name == "picasso_picked_locs" and chain.picks_path:
@@ -1564,13 +1579,6 @@ def reconstruct_workflow(
         errors.append(
             "raw data folder not found; workflows will load the manual "
             "localization files instead of re-localizing from the movies"
-        )
-
-    skipped = list(dict.fromkeys(chains[0].skipped)) if chains else []
-    if skipped:
-        errors.append(
-            "info: skipped non-pipeline steps (measurements / metadata, no "
-            "workflow equivalent): " + "; ".join(skipped)
         )
 
     versions = _source_versions(chains[0].info_steps) if chains else []
