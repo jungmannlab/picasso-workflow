@@ -846,6 +846,12 @@ NOTES_BY_MODULE = {
         "pick-similar, switch the module to find_similar and set its "
         "parameters"
     ),
+    "combine_channels": (
+        "set 'channels' (the tags to combine) and 'tag' (the new name) for "
+        "each RESI target, e.g. the GFP rounds -> 'GFP'; add more "
+        "combine_channels modules for further targets (non-RESI channels are "
+        "left untouched)"
+    ),
 }
 
 

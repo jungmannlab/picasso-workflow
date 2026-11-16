@@ -1012,6 +1012,46 @@ class TestAnalyseModules(unittest.TestCase):
 
         shutil.rmtree(os.path.join(self.results_folder, "00_combine_channels"))
 
+    def test_combine_channels_subset(self):
+        # Combine only a subset of channels into a new named channel (e.g. the
+        # GFP RESI rounds), keeping the other channels untouched.
+        locs_dtype = [
+            ("frame", "u4"),
+            ("photons", "f4"),
+            ("x", "f4"),
+            ("y", "f4"),
+            ("lpx", "f4"),
+            ("lpy", "f4"),
+        ]
+
+        def mklocs():
+            arr = np.rec.array(
+                [
+                    tuple([i] + list(np.random.rand(len(locs_dtype) - 1)))
+                    for i in range(len(self.ap.movie))
+                ],
+                dtype=locs_dtype,
+            )
+            return pd.DataFrame(arr)
+
+        n = len(self.ap.movie)
+        self.ap.channel_locs = [mklocs(), mklocs(), mklocs()]
+        self.ap.channel_info = [["i0"], ["i1"], ["i2"]]
+        self.ap.channel_tags = ["GFP-A", "GFP-B", "ALFA"]
+
+        self.ap.combine_channels(
+            0, {"channels": ["GFP-A", "GFP-B"], "tag": "GFP"}
+        )
+
+        # The two GFP channels are combined into "GFP"; ALFA is kept; the
+        # combined channel is appended last and carries combine_id.
+        self.assertEqual(self.ap.channel_tags, ["ALFA", "GFP"])
+        self.assertEqual(len(self.ap.channel_locs), 2)
+        self.assertEqual(len(self.ap.channel_locs[-1]), 2 * n)
+        self.assertIn("combine_id", self.ap.channel_locs[-1].columns)
+
+        shutil.rmtree(os.path.join(self.results_folder, "00_combine_channels"))
+
     @patch(
         "picasso_workflow.outpost.formats.zeiss.convert_zeiss_file",
         MagicMock,

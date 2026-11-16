@@ -11,6 +11,14 @@ This file was started after v0.5.6; earlier history is in the git log.
 ## [Unreleased]
 
 ### Added
+- **`combine_channels` can combine a subset of channels.** A new optional
+  `channels` parameter (a list of channel tags) combines only that subset into
+  the new `tag` channel and keeps the other channels untouched, so a RESI
+  dataset with several targets can combine, e.g., the GFP rounds into `GFP` and
+  the ALFA rounds into `ALFA` (one `combine_channels` module each) while leaving
+  non-RESI channels alone. Omitting `channels` combines all channels (the
+  previous behaviour). Exposed in the GUI module editor.
+
 - **Manual → Workflow wizard (GUI).** A new *Tools → Manual → Workflow…* wizard
   reconstructs a runnable aggregation workflow from a manually-performed picasso
   analysis. It scans the selected dataset root (raw acquisition folders + a
@@ -81,6 +89,12 @@ This file was started after v0.5.6; earlier history is in the git log.
   `gui.py`.
 
 ### Fixed
+- **`find_gold` default parameters shown in the GUI.** The `std_range` /
+  `mean_rmsd` fields had no default (so they showed `0`, which the module treats
+  as "unset" and silently falls back to `picasso.pick_gold`'s defaults). They
+  now show the real defaults — `std_range` 1.4 and `mean_rmsd` 50.0 nm — so the
+  values used are visible and correct.
+
 - **Apptainer submit-path hardening (follow-up to the GUI/cluster Apptainer
   work).** `assemble_slurm_commands` now treats an empty `image_path` like
   `None` (host-conda `srun python`) instead of emitting `apptainer exec '' …`,

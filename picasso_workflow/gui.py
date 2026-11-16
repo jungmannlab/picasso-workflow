@@ -3496,6 +3496,16 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             in the decorator wrapper
         """
         parameters_spec = {
+            "channels": {
+                "type": "list",
+                "element_type": "str",
+                "description": "Tags of the channels to combine (a subset). "
+                "Only these are combined into 'tag'; the other channels are "
+                "kept. Leave empty to combine all channels. Use several "
+                "combine_channels modules for several RESI targets (e.g. the "
+                "GFP rounds into 'GFP', the ALFA rounds into 'ALFA').",
+                "required": False,
+            },
             "channel_weights": {
                 "type": "list",
                 "description": "Relative weights for each channel",
@@ -5624,13 +5634,17 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             "std_range": {
                 "type": "float",
                 "description": "The pick-similar std_range parameter "
-                "identifying gold",
+                "identifying gold (picasso.pick_gold default 1.4)",
+                "min": 0.0,
+                "default": 1.4,
                 "required": False,
             },
             "mean_rmsd": {
                 "type": "float",
-                "description": "The pick-similar mean_rmsd parameter "
-                "identifying gold",
+                "description": "The pick-similar mean_rmsd (nm) identifying "
+                "gold (picasso.pick_gold default 50.0)",
+                "min": 0.0,
+                "default": 50.0,
                 "required": False,
             },
         }
