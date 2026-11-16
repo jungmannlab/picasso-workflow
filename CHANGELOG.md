@@ -10,6 +10,24 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ## [Unreleased]
 
+### Added
+- **Manual → Workflow wizard (GUI).** A new *Tools → Manual → Workflow…* wizard
+  reconstructs a runnable aggregation workflow from a manually-performed picasso
+  analysis. It scans the selected dataset root (raw acquisition folders + a
+  manual-analysis subfolder), reads each channel's cumulative info-yaml chain to
+  recover the ordered processing steps, maps them to workflow modules
+  (data-driven, backed by the `ModuleSpec` registry, with a flagged `manual`
+  placeholder for anything it can't confidently map), and splits the sequence
+  into single-dataset modules up to the first cross-channel step and aggregation
+  modules from there on. Parameters that vary across channels are lifted to
+  `("$$map", …)` tile columns; `find_similar` (pick-similar) thresholds that
+  picasso does not persist are retro-calculated from the saved picks and
+  localizations. The result is checked with `validate_workflow` and a per-step
+  review table (with confidence flags), then applied into the Files tree and
+  module lists so it can be run directly via the Run tab. New modules
+  `manual_to_workflow.py` (Qt-free engine) and `wizard_manual_to_workflow.py`
+  (PyQt6 wizard); a one-line `Tools` menu hook in `gui.py`.
+
 ### Fixed
 - **Apptainer submit-path hardening (follow-up to the GUI/cluster Apptainer
   work).** `assemble_slurm_commands` now treats an empty `image_path` like

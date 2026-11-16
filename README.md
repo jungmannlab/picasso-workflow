@@ -265,6 +265,41 @@ auto-create) the boolean column; set which channels are `True` under
   channels that skipped this one (e.g. do not assume every channel was
   clustered).
 
+## Manual → Workflow wizard
+
+If an analysis was performed by hand in the picasso GUI, the *Tools → Manual →
+Workflow…* wizard reconstructs the equivalent automated workflow so it can be
+re-run and documented. Point it at the **dataset root** — the folder holding the
+raw acquisition subfolders (`01_…`, `02_…`) and the manual-analysis subfolder
+(e.g. `analysis_manual`, name varies and is editable in the wizard).
+
+How it works:
+
+- **Reads the cumulative info yamls.** Every manual picasso step appends a dict
+  to the `.yaml` info sidecar and a suffix to the filename, so the deepest file
+  of each channel's chain records the whole ordered history. The info list is
+  the authoritative source; filename suffixes corroborate it.
+- **Maps steps to modules** with a data-driven table backed by the `ModuleSpec`
+  registry. Anything it can't confidently map becomes a flagged `manual`
+  placeholder — nothing is silently dropped.
+- **Splits single vs. aggregation** at the first cross-channel step
+  (`align_channels` / `combine_channels` / `register_channels`): everything
+  before runs per channel as single-dataset modules; that step and everything
+  after run in the aggregation stage.
+- **Recovers per-channel parameters.** Parameters that differ across channels
+  are lifted to `("$$map", …)` tile columns (see *Per-channel parameters*
+  above). `find_similar` (pick-similar) thresholds that picasso does not save
+  are retro-calculated from the saved picks and localizations.
+- **Checks and reviews.** The reconstruction is validated with
+  `validate_workflow`, and a review table shows each step's module, a confidence
+  flag (OK / retro-calc / defaults / unmapped) and any consistency findings.
+  *Apply* writes the Files tree and module lists into the GUI; review them in the
+  Workflow Config tab and launch from the Run tab as usual.
+
+The reconstruction engine (`picasso_workflow/manual_to_workflow.py`) is Qt-free
+and importable on its own; the wizard (`wizard_manual_to_workflow.py`) is the
+PyQt6 front-end.
+
 ## Installation
 
 ### Prerequisites

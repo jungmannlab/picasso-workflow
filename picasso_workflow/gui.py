@@ -10644,6 +10644,9 @@ class Window(QtWidgets.QMainWindow):
         # SLURM queue, disk usage) in its own window.
         tools_menu = self.menuBar().addMenu("Tools")
         tools_menu.addAction("Admin console…", self._open_admin_console)
+        tools_menu.addAction(
+            "Manual → Workflow…", self._open_manual_to_workflow_wizard
+        )
 
         # Help menu: re-openable onboarding + a shortcut to the settings file.
         help_menu = self.menuBar().addMenu("Help")
@@ -16282,6 +16285,28 @@ class Window(QtWidgets.QMainWindow):
         win.show()
         win.raise_()
         win.activateWindow()
+
+    def _open_manual_to_workflow_wizard(self):
+        """Open the wizard that reconstructs a workflow from a manual analysis.
+
+        A modal wizard that scans a manually-performed analysis folder, maps its
+        saved steps back to workflow modules, and (on Apply) populates the Files
+        tree and module lists here. Lazy-imported so a PyQt/import problem
+        surfaces a message rather than blocking startup.
+        """
+        try:
+            from picasso_workflow.wizard_manual_to_workflow import (
+                ManualToWorkflowWizard,
+            )
+        except Exception as exc:  # noqa: BLE001 - surfaced to the user
+            QtWidgets.QMessageBox.critical(
+                self,
+                "Manual → Workflow",
+                f"Could not open the wizard: {exc}",
+            )
+            return
+        wizard = ManualToWorkflowWizard(self)
+        wizard.exec()
 
     def _populate_cluster_images(self, host_cluster):
         """Set the Apptainer image field's default for the selected cluster.
