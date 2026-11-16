@@ -43,6 +43,15 @@ CONF_OK = "ok"  # mapped with recovered parameters
 CONF_RETRO = "retro"  # parameters retro-calculated from saved data
 CONF_LOW = "low"  # mapped but parameters fell back to defaults
 CONF_UNMAPPED = "unmapped"  # no confident mapping -> placeholder
+CONF_SKIP = "skip"  # non-pipeline step (measurement/metadata) -> no module
+
+# Sentinel target for steps that have no workflow equivalent and are dropped
+# from the module list (reported for transparency, never emitted as a module).
+SKIP_MODULE = "__skip__"
+
+# Modules whose parameters cannot be recovered from the info: flag them for
+# review even though the mapping itself is confident.
+PARAMS_NOT_RECOVERABLE = frozenset({"filter_locs"})
 
 # Cross-channel modules: the first one seen marks the single -> aggregation
 # boundary. All of these are aggregation-scope in the registry.
@@ -141,6 +150,7 @@ class ChannelChain:
     # number of info steps baked into base_hdf5 (the downstream-mode start)
     base_info_len: int = 0
     steps: list[MappedStep] = field(default_factory=list)
+    skipped: list[str] = field(default_factory=list)  # non-pipeline sources
 
 
 @dataclass
@@ -638,10 +648,17 @@ def _extract_none(step, pixelsize):
 # ("hdbscan" before "dbscan"; "undrift from picked"/"by fiducials" before the
 # generic "undrift"; the cross-channel markers before the generic "align").
 STEP_MAP = [
+    # --- non-pipeline steps with no workflow equivalent -> skipped ---
+    # "Convert units" is a px<->nm metadata annotation; "Render : NeNA" is a
+    # localization-precision measurement. Neither transforms the data.
+    ("convert units", SKIP_MODULE, _extract_none),
+    ("nena", SKIP_MODULE, _extract_none),
     # --- picasso-workflow-native cross-channel markers (stay native) ---
     ("register_channels", "register_channels", _extract_none),
     ("channel registration", "register_channels", _extract_none),
     ("combine_channels", "combine_channels", _extract_none),
+    # picasso's "Combine" merges the per-channel files (RESI) -> combine_channels
+    ("combine", "combine_channels", _extract_none),
     ("align_channels", "align_channels", _extract_none),
     # --- picasso-workflow-native picks helpers (no picasso equivalent) ---
     ("find_gold", "find_gold", _extract_none),
@@ -712,12 +729,26 @@ def map_step(step, pixelsize=130.0):
     low = source.lower()
     for needle, module_name, extractor in STEP_MAP:
         if needle in low:
+            if module_name == SKIP_MODULE:
+                return MappedStep(
+                    source=source,
+                    module_name=SKIP_MODULE,
+                    params={},
+                    confidence=CONF_SKIP,
+                    messages=["no workflow equivalent; skipped"],
+                )
             params = extractor(step, pixelsize)
             no_params_expected = extractor is _extract_none
             conf = CONF_OK if (params or no_params_expected) else CONF_LOW
             messages = []
             if not params and not no_params_expected:
                 messages.append("parameters fell back to module defaults")
+            if module_name in PARAMS_NOT_RECOVERABLE:
+                conf = CONF_LOW
+                messages.append(
+                    "parameters not recovered from the manual step; set them "
+                    "in the module"
+                )
             return MappedStep(
                 source=source,
                 module_name=module_name,
@@ -775,6 +806,10 @@ def map_chain(chain, pixelsize=130.0, start_from="raw"):
                 steps.append(_loader_step(chain, step))
                 continue
             steps.append(map_step(step, pixelsize))
+    # Drop non-pipeline steps (measurements / metadata) from the module list,
+    # but record their sources so they can be surfaced for transparency.
+    chain.skipped = [s.source for s in steps if s.module_name == SKIP_MODULE]
+    steps = [s for s in steps if s.module_name != SKIP_MODULE]
     steps = _collapse_localize(steps)
     for s in steps:
         if s.module_name == "picasso_picked_locs" and chain.picks_path:
@@ -1259,6 +1294,13 @@ def reconstruct_workflow(
         errors.append(
             "raw data folder not found; workflows will load the manual "
             "localization files instead of re-localizing from the movies"
+        )
+
+    skipped = list(dict.fromkeys(chains[0].skipped)) if chains else []
+    if skipped:
+        errors.append(
+            "info: skipped non-pipeline steps (measurements / metadata, no "
+            "workflow equivalent): " + "; ".join(skipped)
         )
 
     _report(progress, "Done.", 1.0)
