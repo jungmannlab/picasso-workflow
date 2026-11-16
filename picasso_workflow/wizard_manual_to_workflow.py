@@ -16,7 +16,6 @@ can be unit-tested against a stub window with no display.
 
 from __future__ import annotations
 
-import os
 import time
 
 from PyQt6 import QtCore, QtGui, QtWidgets
@@ -90,17 +89,17 @@ class _ReconstructWorker(QtCore.QObject):
     # (message, fraction): fraction is a float in [0, 1] or None (indeterminate)
     progress = pyqtSignal(str, object)
 
-    def __init__(self, root, manual_subdir, pixelsize):
+    def __init__(self, manual_dir, raw_root, pixelsize):
         super().__init__()
-        self._root = root
-        self._manual_subdir = manual_subdir
+        self._manual_dir = manual_dir
+        self._raw_root = raw_root
         self._pixelsize = pixelsize
 
     def run(self):
         try:
             result = mtw.reconstruct_workflow(
-                self._root,
-                manual_subdir=self._manual_subdir,
+                self._manual_dir,
+                raw_root=self._raw_root,
                 pixelsize=self._pixelsize,
                 progress=self.progress.emit,
             )
@@ -117,23 +116,32 @@ class _SelectFolderPage(QtWidgets.QWizardPage):
         super().__init__(parent)
         self.setTitle("Select manual analysis")
         self.setSubTitle(
-            "Choose the dataset root folder containing the raw acquisition "
-            "subfolders and the manual-analysis subfolder."
+            "Choose the folder holding the manual analysis (the one with the "
+            "saved .hdf5 step files, e.g. 'analysis_manual')."
         )
         layout = QtWidgets.QFormLayout(self)
 
-        self.root_edit = QtWidgets.QLineEdit()
-        browse = QtWidgets.QPushButton("Browse…")
-        browse.clicked.connect(self._browse)
-        row = QtWidgets.QHBoxLayout()
-        row.addWidget(self.root_edit)
-        row.addWidget(browse)
-        root_widget = QtWidgets.QWidget()
-        root_widget.setLayout(row)
-        layout.addRow("Dataset root:", root_widget)
+        self.manual_edit = QtWidgets.QLineEdit()
+        manual_browse = QtWidgets.QPushButton("Browse…")
+        manual_browse.clicked.connect(self._browse_manual)
+        layout.addRow(
+            "Manual-analysis folder:",
+            self._with_button(self.manual_edit, manual_browse),
+        )
 
-        self.manual_edit = QtWidgets.QLineEdit("analysis_manual")
-        layout.addRow("Manual subfolder:", self.manual_edit)
+        self.raw_edit = QtWidgets.QLineEdit()
+        self.raw_edit.setPlaceholderText("auto-detected — leave blank to auto")
+        self.raw_edit.setToolTip(
+            "Dataset folder holding the raw acquisition subfolders (01_…, "
+            "02_…), used to re-localize from the raw movies. Leave blank to "
+            "auto-detect by searching upward from the manual folder."
+        )
+        raw_browse = QtWidgets.QPushButton("Browse…")
+        raw_browse.clicked.connect(self._browse_raw)
+        layout.addRow(
+            "Raw data folder:",
+            self._with_button(self.raw_edit, raw_browse),
+        )
 
         self.pixelsize_spin = QtWidgets.QDoubleSpinBox()
         self.pixelsize_spin.setRange(1.0, 10000.0)
@@ -141,37 +149,41 @@ class _SelectFolderPage(QtWidgets.QWizardPage):
         self.pixelsize_spin.setSuffix(" nm")
         layout.addRow("Camera pixel size:", self.pixelsize_spin)
 
-        # Expose fields as wizard fields for the review page to read.
-        self.registerField("root*", self.root_edit)
-        self.registerField("manual_subdir", self.manual_edit)
+        # The manual folder is mandatory; the raw folder is optional (auto).
+        self.registerField("manual_dir*", self.manual_edit)
 
-    def _browse(self):
+    @staticmethod
+    def _with_button(line_edit, button):
+        row = QtWidgets.QHBoxLayout()
+        row.addWidget(line_edit)
+        row.addWidget(button)
+        holder = QtWidgets.QWidget()
+        holder.setLayout(row)
+        return holder
+
+    def _browse_manual(self):
         folder = QtWidgets.QFileDialog.getExistingDirectory(
-            self, "Select dataset root folder", self.root_edit.text()
+            self, "Select manual-analysis folder", self.manual_edit.text()
+        )
+        if not folder:
+            return
+        self.manual_edit.setText(folder)
+        # Best-effort: auto-fill the raw-data folder (cheap: reads one header
+        # and walks up a few levels — no recursive tree walk).
+        if not self.raw_edit.text().strip():
+            try:
+                detected = mtw.detect_raw_root(folder)
+            except Exception:  # noqa: BLE001 - best-effort only
+                detected = None
+            if detected:
+                self.raw_edit.setText(detected)
+
+    def _browse_raw(self):
+        folder = QtWidgets.QFileDialog.getExistingDirectory(
+            self, "Select raw-data folder", self.raw_edit.text()
         )
         if folder:
-            self.root_edit.setText(folder)
-            self._autodetect_manual(folder)
-
-    def _autodetect_manual(self, folder):
-        """Pre-fill the manual subfolder if a likely one is present."""
-        candidates = []
-        try:
-            for name in os.listdir(folder):
-                sub = os.path.join(folder, name)
-                if os.path.isdir(sub) and any(
-                    f.lower().endswith(".hdf5") for f in os.listdir(sub)
-                ):
-                    candidates.append(name)
-        except OSError:
-            return
-        if candidates and self.manual_edit.text() not in candidates:
-            # Prefer a name mentioning "manual"; else the first candidate.
-            pick = next(
-                (c for c in candidates if "manual" in c.lower()),
-                candidates[0],
-            )
-            self.manual_edit.setText(pick)
+            self.raw_edit.setText(folder)
 
 
 class _ReviewPage(QtWidgets.QWizardPage):
@@ -230,12 +242,12 @@ class _ReviewPage(QtWidgets.QWizardPage):
 
         wizard = self.wizard()
         select = wizard.page(wizard._select_page_id)
-        root = select.root_edit.text()
-        manual_subdir = select.manual_edit.text() or "analysis_manual"
+        manual_dir = select.manual_edit.text()
+        raw_root = select.raw_edit.text().strip() or None
         pixelsize = select.pixelsize_spin.value()
 
         self._thread = QThread(self)
-        self._worker = _ReconstructWorker(root, manual_subdir, pixelsize)
+        self._worker = _ReconstructWorker(manual_dir, raw_root, pixelsize)
         self._worker.moveToThread(self._thread)
         self._thread.started.connect(self._worker.run)
         self._worker.progress.connect(self._on_progress)
@@ -313,6 +325,10 @@ class _ReviewPage(QtWidgets.QWizardPage):
             f"{len(result.single_modules)} single + "
             f"{len(result.agg_modules)} aggregation modules."
         )
+        if result.raw_root:
+            summary += f" Raw data: {result.raw_root}."
+        else:
+            summary += " Raw data folder not found (loading manual locs)."
         if n_unmapped:
             summary += (
                 f" {n_unmapped} unmapped step(s) must be resolved before "

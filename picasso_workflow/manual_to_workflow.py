@@ -160,6 +160,8 @@ class ReconstructionResult:
         Channel tags in order.
     errors : list[str]
         Consistency / validation findings (empty when clean).
+    raw_root : str or None
+        The dataset root where raw movies were located (``None`` if not found).
     """
 
     tree_data: dict
@@ -168,6 +170,7 @@ class ReconstructionResult:
     review: list
     channels: list
     errors: list = field(default_factory=list)
+    raw_root: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -281,50 +284,112 @@ def _split_dataset_channel(base_stem):
     return "dataset", base_stem.strip()
 
 
-def _build_raw_index(root):
-    """Index raw files under ``root`` by basename for channel resolution.
+def _channel_basename(chain):
+    """Raw-movie basename from a channel's info header, or ``None``.
 
-    One ``os.walk`` over the (potentially large) raw-data tree, shared across
-    all channels, instead of one walk per channel.
-
-    Returns
-    -------
-    dict[str, str]
-        ``{basename: absolute_path}`` (first occurrence wins).
+    The first info dict records the source movie under ``File`` -- usually a
+    staged temp path (e.g. ``/tmp/pwf_movie_stage_.../<acq>_MMStack_Pos0.ome
+    .tif``), so only its basename is meaningful for locating the real file.
     """
-    index: dict[str, str] = {}
-    for dirpath, _dirs, files in os.walk(root):
-        for name in files:
-            index.setdefault(name, os.path.join(dirpath, name))
-    return index
+    if chain.info_steps:
+        file_field = chain.info_steps[0].get("File")
+        if file_field:
+            return os.path.basename(str(file_field))
+    return None
 
 
-def _resolve_raw_filepath(info_steps, raw_index):
-    """Resolve a channel's raw ``.ome.tif`` from its info + the raw index.
+def _acq_folder_from_basename(basename):
+    """MicroManager acquisition-folder name for a raw basename, or ``None``.
 
-    The first info dict records the source movie under ``File``; its basename
-    (e.g. ``08_ALFA_L1_100pM_1_MMStack_Pos0.ome.tif``) identifies the raw file
-    in ``raw_index``. Returns the resolved path or ``None``.
+    MicroManager saves ``<acq>/<acq>_MMStack_PosN...ome.tif``, so the folder is
+    the basename up to ``_MMStack``.
     """
-    if not info_steps:
-        return None
-    file_field = info_steps[0].get("File")
-    if not file_field:
-        return None
-    return raw_index.get(os.path.basename(str(file_field)))
+    marker = basename.lower().find("_mmstack")
+    return basename[:marker] if marker > 0 else None
 
 
-def scan_folder(root, manual_subdir="analysis_manual", progress=None):
-    """Discover per-channel manual-analysis chains under ``root``.
+def _raw_in_root(root, basename):
+    """Resolve ``basename`` under ``root`` cheaply -- no deep tree walk.
+
+    Tries the MicroManager layout ``root/<acq>/<basename>`` first (an O(1)
+    stat), then ``root/<basename>`` and one level of immediate subdirectories.
+    Returns the path or ``None``.
+    """
+    if not root or not basename:
+        return None
+    acq = _acq_folder_from_basename(basename)
+    if acq:
+        candidate = os.path.join(root, acq, basename)
+        if os.path.isfile(candidate):
+            return candidate
+    candidate = os.path.join(root, basename)
+    if os.path.isfile(candidate):
+        return candidate
+    try:
+        for name in os.listdir(root):
+            candidate = os.path.join(root, name, basename)
+            if os.path.isfile(candidate):
+                return candidate
+    except OSError:
+        pass
+    return None
+
+
+def _first_raw_basename(manual_dir):
+    """First resolvable raw basename among a manual folder's channels."""
+    try:
+        hdf5s = [
+            f for f in os.listdir(manual_dir) if f.lower().endswith(".hdf5")
+        ]
+    except OSError:
+        return None
+    groups = _group_by_base_stem(hdf5s)
+    for base_stem in sorted(groups):
+        deepest = max(groups[base_stem], key=len)
+        info_path = os.path.join(
+            manual_dir, deepest[: -len(".hdf5")] + ".yaml"
+        )
+        if os.path.exists(info_path):
+            info = _load_info(info_path)
+            if info and info[0].get("File"):
+                return os.path.basename(str(info[0]["File"]))
+    return None
+
+
+def detect_raw_root(manual_dir, max_up=5):
+    """Find the dataset root holding the raw movies for a manual folder.
+
+    The raw acquisition folders can sit several levels above the manual-analysis
+    folder (e.g. ``<root>/wfN/analysis_manual``), so walk up from ``manual_dir``
+    and return the first ancestor under which a raw movie resolves (by the
+    MicroManager naming convention). Returns ``None`` if none is found within
+    ``max_up`` levels -- no recursive tree walk is performed.
+    """
+    basename = _first_raw_basename(manual_dir)
+    if not basename:
+        return None
+    current = os.path.abspath(manual_dir)
+    for _ in range(max_up + 1):
+        if _raw_in_root(current, basename):
+            return current
+        parent = os.path.dirname(current)
+        if parent == current:
+            break
+        current = parent
+    return None
+
+
+def scan_folder(manual_dir, progress=None):
+    """Discover per-channel manual-analysis chains in ``manual_dir``.
+
+    Reads only the manual-analysis folder (the ``.hdf5`` chain + ``.yaml``
+    sidecars + pick files); raw-movie resolution, which needs the dataset root,
+    is a separate step in :func:`reconstruct_workflow`.
 
     Parameters
     ----------
-    root : str
-        Dataset root folder (holds the raw acquisition subfolders and the
-        manual-analysis subfolder).
-    manual_subdir : str
-        Name of the subfolder holding the manual ``.hdf5`` chain. The name
-        varies between datasets, so the wizard lets the user override it.
+    manual_dir : str
+        Folder holding the manual ``.hdf5`` step chain (e.g. ``analysis_manual``).
     progress : callable, optional
         ``progress(message, fraction)`` callback for UI feedback (see
         :func:`_report`).
@@ -334,17 +399,13 @@ def scan_folder(root, manual_subdir="analysis_manual", progress=None):
     list[ChannelChain]
         One entry per discovered channel, sorted by base stem.
     """
-    manual_dir = os.path.join(root, manual_subdir)
     if not os.path.isdir(manual_dir):
         raise FileNotFoundError(
-            f"manual-analysis subfolder not found: {manual_dir}"
+            f"manual-analysis folder not found: {manual_dir}"
         )
 
     hdf5s = [f for f in os.listdir(manual_dir) if f.lower().endswith(".hdf5")]
     groups = _group_by_base_stem(hdf5s)
-    # Walk the raw-data tree once and share the basename index across channels.
-    _report(progress, "Indexing raw data files…", None)
-    raw_index = _build_raw_index(root)
 
     chains = []
     ordered = sorted(groups)
@@ -372,7 +433,7 @@ def scan_folder(root, manual_subdir="analysis_manual", progress=None):
                 dataset=dataset,
                 base_hdf5=base_path,
                 deepest_hdf5=deepest_path,
-                raw_filepath=_resolve_raw_filepath(info_steps, raw_index),
+                raw_filepath=None,
                 picks_path=picks_path,
                 info_steps=info_steps,
             )
@@ -718,8 +779,14 @@ def _collapse_localize(steps):
 
 
 def _loader_step(chain, header):
-    """Pick the loader module for a channel from its header + raw path."""
-    if chain.raw_filepath or "File" in header:
+    """Pick the loader module for a channel from the resolved raw path.
+
+    A resolved raw movie drives ``load_dataset_movie`` (re-localize from the
+    raw data). Otherwise fall back to ``load_dataset_localizations`` on the
+    manual localization file -- the header's ``File`` is a staged temp path, so
+    its mere presence does not mean the raw movie is available.
+    """
+    if chain.raw_filepath:
         return MappedStep(
             source="movie header",
             module_name="load_dataset_movie",
@@ -1028,16 +1095,21 @@ def validate(single_modules, agg_modules, chains):
 # 8. Top-level entry point.
 # ---------------------------------------------------------------------------
 def reconstruct_workflow(
-    root, manual_subdir="analysis_manual", pixelsize=130.0, progress=None
+    manual_dir, raw_root=None, pixelsize=130.0, progress=None
 ):
     """Reconstruct an aggregation workflow from a manual-analysis folder.
 
     Parameters
     ----------
-    root : str
-        Dataset root folder.
-    manual_subdir : str
-        Manual-analysis subfolder name (varies per dataset).
+    manual_dir : str
+        Folder holding the manual ``.hdf5`` step chain (e.g. the
+        ``analysis_manual`` folder) -- the user browses straight to it.
+    raw_root : str, optional
+        Dataset root holding the raw acquisition subfolders, used to point the
+        reconstructed ``load_dataset_movie`` steps at the raw movies. If
+        omitted, it is auto-detected by walking up from ``manual_dir`` (the raw
+        folders may sit several levels above). When no raw movie can be located,
+        the loader falls back to the manual localization file.
     pixelsize : float
         Camera pixel size in nm, used for the ``find_similar`` retro-calc.
     progress : callable, optional
@@ -1049,9 +1121,19 @@ def reconstruct_workflow(
     ReconstructionResult
     """
     _report(progress, "Scanning analysis folder…", None)
-    chains = scan_folder(root, manual_subdir, progress=progress)
+    chains = scan_folder(manual_dir, progress=progress)
     if not chains:
-        raise ValueError(f"no manual-analysis channels found under {root}")
+        raise ValueError(f"no manual-analysis channels found in {manual_dir}")
+
+    # Locate the raw movies by the MicroManager naming convention (direct stat,
+    # no recursive tree walk); auto-detect the dataset root if not given.
+    _report(progress, "Locating raw data…", None)
+    effective_raw_root = raw_root or detect_raw_root(manual_dir)
+    if effective_raw_root:
+        for chain in chains:
+            chain.raw_filepath = _raw_in_root(
+                effective_raw_root, _channel_basename(chain)
+            )
 
     # Reserve the first 90% of the bar for the per-channel pass (the slow part:
     # each channel with picks loads its full localization file for the
@@ -1110,6 +1192,12 @@ def reconstruct_workflow(
     review = _build_review(chains)
     errors = validate(single_modules, agg_modules, chains) + diverge_warnings
 
+    if not effective_raw_root:
+        errors.append(
+            "raw data folder not found; workflows will load the manual "
+            "localization files instead of re-localizing from the movies"
+        )
+
     _report(progress, "Done.", 1.0)
     return ReconstructionResult(
         tree_data=tree_data,
@@ -1118,6 +1206,7 @@ def reconstruct_workflow(
         review=review,
         channels=[c.tag for c in chains],
         errors=errors,
+        raw_root=effective_raw_root,
     )
 
 

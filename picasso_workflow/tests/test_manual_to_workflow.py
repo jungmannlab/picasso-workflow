@@ -106,23 +106,70 @@ def test_split_dataset_channel():
     assert m._split_dataset_channel("AcTub-R5") == ("dataset", "AcTub-R5")
 
 
-def test_scan_folder_discovers_channels_and_raw(tmp_path):
+def _manual(root, sub="analysis_manual"):
+    return os.path.join(root, sub)
+
+
+def test_scan_folder_discovers_channels(tmp_path):
     root = _make_dataset(tmp_path, CHANNELS)
-    chains = m.scan_folder(root)
+    chains = m.scan_folder(_manual(root))
     assert [c.tag for c in chains] == ["ALFA-L1", "ALFA-R2"]
     assert all(c.dataset == "Cell 1" for c in chains)
-    assert chains[0].raw_filepath.endswith(
-        "08_ALFA_L1_100pM_1_MMStack_Pos0.ome.tif"
-    )
-    assert os.path.exists(chains[0].raw_filepath)
+    # scan_folder itself does not resolve raw movies (that needs the root).
+    assert all(c.raw_filepath is None for c in chains)
     # The deepest file (longest chain) is the info source.
     assert chains[0].deepest_hdf5.endswith("_density.hdf5")
 
 
 def test_scan_folder_missing_manual_raises(tmp_path):
-    (tmp_path / "root").mkdir()
     with pytest.raises(FileNotFoundError):
-        m.scan_folder(str(tmp_path / "root"))
+        m.scan_folder(str(tmp_path / "does_not_exist"))
+
+
+def test_raw_resolution_by_convention_no_tree_walk(tmp_path, monkeypatch):
+    # Raw movies must resolve by the MicroManager naming convention without a
+    # recursive os.walk of the (potentially huge) raw-data tree.
+    monkeypatch.setattr(m.os, "walk", lambda *a, **k: _fail_walk())
+    root = _make_dataset(tmp_path, CHANNELS)
+    res = m.reconstruct_workflow(_manual(root))
+    fp = res.tree_data["file_paths"]["Cell 1"]["ALFA-L1"]
+    assert fp.endswith("08_ALFA_L1_100pM_1_MMStack_Pos0.ome.tif")
+    assert os.path.exists(fp)
+    assert res.raw_root == str(root)
+
+
+def _fail_walk():
+    raise AssertionError("os.walk must not be used for raw resolution")
+
+
+def test_detect_raw_root_walks_up_past_nested_manual(tmp_path):
+    # analysis_manual nested below the dataset root (e.g. <root>/wf5/...).
+    root = _make_dataset(tmp_path, CHANNELS, manual="wf5/analysis_manual")
+    manual_dir = _manual(root, "wf5/analysis_manual")
+    detected = m.detect_raw_root(manual_dir)
+    assert detected == str(root)
+    res = m.reconstruct_workflow(manual_dir)
+    fp = res.tree_data["file_paths"]["Cell 1"]["ALFA-L1"]
+    assert fp.endswith("08_ALFA_L1_100pM_1_MMStack_Pos0.ome.tif")
+    assert res.errors == []
+
+
+def test_reconstruct_without_raw_flags_and_falls_back(tmp_path):
+    # Manual folder with no reachable raw tree: loader falls back to the
+    # manual localization file and a warning is recorded.
+    man = tmp_path / "loose_manual"
+    man.mkdir()
+    base = "Cell 1_ALFA-L1"
+    (man / f"{base}.hdf5").write_text("")
+    with open(man / f"{base}.yaml", "w") as f:
+        yaml.safe_dump_all(
+            _chain_docs("08_ALFA_L1_100pM_1_MMStack_Pos0.ome.tif", 11), f
+        )
+    res = m.reconstruct_workflow(str(man))
+    assert res.raw_root is None
+    assert any("raw data folder not found" in e for e in res.errors)
+    fp = res.tree_data["file_paths"]["Cell 1"]["ALFA-L1"]
+    assert fp.endswith(f"{base}.hdf5")
 
 
 # ---------------------------------------------------------------------------
@@ -439,7 +486,7 @@ def test_agg_param_divergence_warns():
 # ---------------------------------------------------------------------------
 def test_reconstruct_workflow_golden(tmp_path):
     root = _make_dataset(tmp_path, CHANNELS)
-    res = m.reconstruct_workflow(root)
+    res = m.reconstruct_workflow(_manual(root))
 
     assert res.channels == ["ALFA-L1", "ALFA-R2"]
 
@@ -511,7 +558,7 @@ def test_apply_result_to_window(tmp_path):
     from picasso_workflow import wizard_manual_to_workflow as wiz
 
     root = _make_dataset(tmp_path, CHANNELS)
-    result = m.reconstruct_workflow(root)
+    result = m.reconstruct_workflow(_manual(root))
     win = _StubWindow()
     wiz.apply_result_to_window(win, result)
 
@@ -528,7 +575,7 @@ def test_reconstruct_reports_progress(tmp_path):
     root = _make_dataset(tmp_path, CHANNELS)
     calls = []
     m.reconstruct_workflow(
-        root, progress=lambda msg, frac: calls.append((msg, frac))
+        _manual(root), progress=lambda msg, frac: calls.append((msg, frac))
     )
     assert calls, "progress callback was never invoked"
     # Final call reports completion at 100%.
@@ -569,7 +616,7 @@ def test_reconstruct_flags_unmapped_step(tmp_path):
     with open(man / f"{base}_cents_mystery.yaml", "w") as f:
         yaml.safe_dump_all(docs, f)
 
-    res = m.reconstruct_workflow(str(root))
+    res = m.reconstruct_workflow(str(man))
     # The unmapped step surfaces as a placeholder and a validation error.
     confidences = [r["confidence"] for r in res.review]
     assert m.CONF_UNMAPPED in confidences

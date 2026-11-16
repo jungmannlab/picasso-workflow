@@ -31,10 +31,15 @@ This file was started after v0.5.6; earlier history is in the git log.
   picasso does not persist are retro-calculated from the saved picks and
   localizations. The result is checked with `validate_workflow` and a per-step
   review table (with confidence flags), then applied into the Files tree and
-  module lists so it can be run directly via the Run tab. Reconstruction runs
-  off the UI thread and reports a progress bar with a per-channel status line
-  and a rough ETA (the slow part is loading each channel's localization file
-  for the pick retro-calculation). New modules `manual_to_workflow.py` (Qt-free
+  module lists so it can be run directly via the Run tab. The user browses
+  straight to the manual-analysis folder (e.g. `analysis_manual`); the dataset
+  root holding the raw movies — which can sit several levels above it — is
+  auto-detected by walking upward and resolving the movies via the MicroManager
+  naming convention (a direct lookup, no recursive tree walk), and is shown
+  editable. Reconstruction runs off the UI thread and reports a progress bar
+  with a per-channel status line and a rough ETA (the slow part is loading each
+  channel's localization file for the pick retro-calculation). New modules
+  `manual_to_workflow.py` (Qt-free
   engine, with an optional `progress(message, fraction)` callback) and
   `wizard_manual_to_workflow.py` (PyQt6 wizard); a one-line `Tools` menu hook in
   `gui.py`.
