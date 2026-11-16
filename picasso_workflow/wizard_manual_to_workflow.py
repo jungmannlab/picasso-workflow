@@ -17,6 +17,7 @@ can be unit-tested against a stub window with no display.
 from __future__ import annotations
 
 import os
+import time
 
 from PyQt6 import QtCore, QtGui, QtWidgets
 from PyQt6.QtCore import QThread, pyqtSignal
@@ -86,6 +87,8 @@ class _ReconstructWorker(QtCore.QObject):
 
     finished = pyqtSignal(object)
     failed = pyqtSignal(str)
+    # (message, fraction): fraction is a float in [0, 1] or None (indeterminate)
+    progress = pyqtSignal(str, object)
 
     def __init__(self, root, manual_subdir, pixelsize):
         super().__init__()
@@ -99,6 +102,7 @@ class _ReconstructWorker(QtCore.QObject):
                 self._root,
                 manual_subdir=self._manual_subdir,
                 pixelsize=self._pixelsize,
+                progress=self.progress.emit,
             )
         except Exception as exc:  # noqa: BLE001 - surfaced to the user
             self.failed.emit(str(exc))
@@ -183,10 +187,16 @@ class _ReviewPage(QtWidgets.QWizardPage):
         self.result = None
         self._thread = None
         self._worker = None
+        self._start_time = None
 
         layout = QtWidgets.QVBoxLayout(self)
         self.status = QtWidgets.QLabel("")
+        self.status.setWordWrap(True)
         layout.addWidget(self.status)
+
+        self.progress_bar = QtWidgets.QProgressBar()
+        self.progress_bar.setTextVisible(True)
+        layout.addWidget(self.progress_bar)
 
         self.table = QtWidgets.QTableWidget(0, 4)
         self.table.setHorizontalHeaderLabels(
@@ -213,6 +223,9 @@ class _ReviewPage(QtWidgets.QWizardPage):
         self.table.setRowCount(0)
         self.errors_box.setPlainText("")
         self.status.setText("Scanning and reconstructing…")
+        # Start indeterminate (busy) until the first determinate update.
+        self.progress_bar.setRange(0, 0)
+        self._start_time = time.monotonic()
         self.completeChanged.emit()
 
         wizard = self.wizard()
@@ -225,11 +238,35 @@ class _ReviewPage(QtWidgets.QWizardPage):
         self._worker = _ReconstructWorker(root, manual_subdir, pixelsize)
         self._worker.moveToThread(self._thread)
         self._thread.started.connect(self._worker.run)
+        self._worker.progress.connect(self._on_progress)
         self._worker.finished.connect(self._on_finished)
         self._worker.failed.connect(self._on_failed)
         self._worker.finished.connect(self._thread.quit)
         self._worker.failed.connect(self._thread.quit)
         self._thread.start()
+
+    def _on_progress(self, message, fraction):
+        """Update the status label + progress bar from the worker thread."""
+        if fraction is None:
+            self.progress_bar.setRange(0, 0)  # busy / indeterminate
+            self.status.setText(message)
+            return
+        self.progress_bar.setRange(0, 1000)
+        self.progress_bar.setValue(int(max(0.0, min(1.0, fraction)) * 1000))
+        eta = self._estimate_eta(fraction)
+        self.status.setText(message + eta)
+
+    def _estimate_eta(self, fraction):
+        """Return a '  (~Ns remaining)' suffix, or '' when not estimable."""
+        if self._start_time is None or not 0.0 < fraction < 1.0:
+            return ""
+        elapsed = time.monotonic() - self._start_time
+        remaining = elapsed * (1.0 - fraction) / fraction
+        if remaining < 1.0:
+            return ""
+        if remaining < 90.0:
+            return f"  (~{int(round(remaining))}s remaining)"
+        return f"  (~{int(round(remaining / 60.0))} min remaining)"
 
     def _stop_worker(self):
         """Quit and dispose any running reconstruction thread/worker.
@@ -257,10 +294,15 @@ class _ReviewPage(QtWidgets.QWizardPage):
         self._worker = None
 
     def _on_failed(self, message):
+        # Stop the busy animation (determinate, empty) on failure.
+        self.progress_bar.setRange(0, 1)
+        self.progress_bar.setValue(0)
         self.status.setText(f"Reconstruction failed: {message}")
         self.completeChanged.emit()
 
     def _on_finished(self, result):
+        self.progress_bar.setRange(0, 1000)
+        self.progress_bar.setValue(1000)
         self.result = result
         self._populate_table(result)
         n_unmapped = sum(

@@ -524,6 +524,25 @@ def test_apply_result_to_window(tmp_path):
     assert len(win.refreshed) == 2
 
 
+def test_reconstruct_reports_progress(tmp_path):
+    root = _make_dataset(tmp_path, CHANNELS)
+    calls = []
+    m.reconstruct_workflow(
+        root, progress=lambda msg, frac: calls.append((msg, frac))
+    )
+    assert calls, "progress callback was never invoked"
+    # Final call reports completion at 100%.
+    assert calls[-1][1] == 1.0
+    # Indeterminate (scan) phases report None; per-channel phases report a
+    # fraction in [0, 1).
+    assert any(frac is None for _, frac in calls)
+    assert any(
+        isinstance(frac, float) and 0.0 <= frac < 1.0 for _, frac in calls
+    )
+    # Messages name the channels being reconstructed.
+    assert any("ALFA-L1" in msg for msg, _ in calls)
+
+
 def test_reconstruct_flags_unmapped_step(tmp_path):
     channels = [
         (

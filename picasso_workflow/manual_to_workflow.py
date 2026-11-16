@@ -206,6 +206,17 @@ def _load_locs(hdf5_path):
     return _picasso_api.io.load_locs(hdf5_path)
 
 
+def _report(progress, message, fraction):
+    """Invoke an optional progress callback ``progress(message, fraction)``.
+
+    ``fraction`` is a float in ``[0, 1]`` for determinate progress or ``None``
+    for an indeterminate (busy) phase. A ``None`` ``progress`` is a no-op, so
+    the engine stays usable headless/in tests.
+    """
+    if progress is not None:
+        progress(message, fraction)
+
+
 # ---------------------------------------------------------------------------
 # 1. Folder scan.
 # ---------------------------------------------------------------------------
@@ -303,7 +314,7 @@ def _resolve_raw_filepath(info_steps, raw_index):
     return raw_index.get(os.path.basename(str(file_field)))
 
 
-def scan_folder(root, manual_subdir="analysis_manual"):
+def scan_folder(root, manual_subdir="analysis_manual", progress=None):
     """Discover per-channel manual-analysis chains under ``root``.
 
     Parameters
@@ -314,6 +325,9 @@ def scan_folder(root, manual_subdir="analysis_manual"):
     manual_subdir : str
         Name of the subfolder holding the manual ``.hdf5`` chain. The name
         varies between datasets, so the wizard lets the user override it.
+    progress : callable, optional
+        ``progress(message, fraction)`` callback for UI feedback (see
+        :func:`_report`).
 
     Returns
     -------
@@ -329,10 +343,17 @@ def scan_folder(root, manual_subdir="analysis_manual"):
     hdf5s = [f for f in os.listdir(manual_dir) if f.lower().endswith(".hdf5")]
     groups = _group_by_base_stem(hdf5s)
     # Walk the raw-data tree once and share the basename index across channels.
+    _report(progress, "Indexing raw data files…", None)
     raw_index = _build_raw_index(root)
 
     chains = []
-    for base_stem in sorted(groups):
+    ordered = sorted(groups)
+    for idx, base_stem in enumerate(ordered):
+        _report(
+            progress,
+            f"Reading step history {idx + 1}/{len(ordered)}…",
+            None,
+        )
         files = groups[base_stem]
         # deepest = longest filename (longest suffix chain).
         deepest = max(files, key=len)
@@ -1007,7 +1028,7 @@ def validate(single_modules, agg_modules, chains):
 # 8. Top-level entry point.
 # ---------------------------------------------------------------------------
 def reconstruct_workflow(
-    root, manual_subdir="analysis_manual", pixelsize=130.0
+    root, manual_subdir="analysis_manual", pixelsize=130.0, progress=None
 ):
     """Reconstruct an aggregation workflow from a manual-analysis folder.
 
@@ -1019,18 +1040,41 @@ def reconstruct_workflow(
         Manual-analysis subfolder name (varies per dataset).
     pixelsize : float
         Camera pixel size in nm, used for the ``find_similar`` retro-calc.
+    progress : callable, optional
+        ``progress(message, fraction)`` callback for UI feedback;
+        ``fraction`` is in ``[0, 1]`` or ``None`` for an indeterminate phase.
 
     Returns
     -------
     ReconstructionResult
     """
-    chains = scan_folder(root, manual_subdir)
+    _report(progress, "Scanning analysis folder…", None)
+    chains = scan_folder(root, manual_subdir, progress=progress)
     if not chains:
         raise ValueError(f"no manual-analysis channels found under {root}")
 
-    for chain in chains:
+    # Reserve the first 90% of the bar for the per-channel pass (the slow part:
+    # each channel with picks loads its full localization file for the
+    # pick retro-calc); the last 10% is the quick fold/validate.
+    total = len(chains)
+    for i, chain in enumerate(chains):
+        frac = 0.9 * i / total
+        _report(
+            progress,
+            f"Reconstructing channel {i + 1}/{total}: {chain.tag}…",
+            frac,
+        )
         map_chain(chain, pixelsize=pixelsize)
+        if chain.picks_path:
+            _report(
+                progress,
+                f"Channel {i + 1}/{total} ({chain.tag}): loading "
+                "localizations for pick retro-calculation…",
+                frac,
+            )
         apply_find_similar_retrocalc(chain, pixelsize=pixelsize)
+
+    _report(progress, "Folding and validating the workflow…", 0.95)
 
     # Split each channel, then fold the single stage with $$map.
     per_channel_single = []
@@ -1066,6 +1110,7 @@ def reconstruct_workflow(
     review = _build_review(chains)
     errors = validate(single_modules, agg_modules, chains) + diverge_warnings
 
+    _report(progress, "Done.", 1.0)
     return ReconstructionResult(
         tree_data=tree_data,
         single_modules=single_modules,

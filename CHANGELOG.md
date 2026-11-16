@@ -31,9 +31,13 @@ This file was started after v0.5.6; earlier history is in the git log.
   picasso does not persist are retro-calculated from the saved picks and
   localizations. The result is checked with `validate_workflow` and a per-step
   review table (with confidence flags), then applied into the Files tree and
-  module lists so it can be run directly via the Run tab. New modules
-  `manual_to_workflow.py` (Qt-free engine) and `wizard_manual_to_workflow.py`
-  (PyQt6 wizard); a one-line `Tools` menu hook in `gui.py`.
+  module lists so it can be run directly via the Run tab. Reconstruction runs
+  off the UI thread and reports a progress bar with a per-channel status line
+  and a rough ETA (the slow part is loading each channel's localization file
+  for the pick retro-calculation). New modules `manual_to_workflow.py` (Qt-free
+  engine, with an optional `progress(message, fraction)` callback) and
+  `wizard_manual_to_workflow.py` (PyQt6 wizard); a one-line `Tools` menu hook in
+  `gui.py`.
 
 ### Fixed
 - **Apptainer submit-path hardening (follow-up to the GUI/cluster Apptainer
