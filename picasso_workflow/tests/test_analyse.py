@@ -1059,6 +1059,39 @@ class TestAnalyseModules(unittest.TestCase):
 
         shutil.rmtree(os.path.join(self.results_folder, "00_combine_channels"))
 
+    def test_combine_channels_subset_no_match(self):
+        # A subset that matches no existing tag is a no-op, but must still
+        # populate results["combine_map"] so the Confluence reporter (which
+        # reads it unconditionally) does not KeyError.
+        locs_dtype = [
+            ("frame", "u4"),
+            ("photons", "f4"),
+            ("x", "f4"),
+            ("y", "f4"),
+            ("lpx", "f4"),
+            ("lpy", "f4"),
+        ]
+        arr = np.rec.array(
+            [
+                tuple([i] + list(np.random.rand(len(locs_dtype) - 1)))
+                for i in range(len(self.ap.movie))
+            ],
+            dtype=locs_dtype,
+        )
+        self.ap.channel_locs = [pd.DataFrame(arr)]
+        self.ap.channel_info = [["i0"]]
+        self.ap.channel_tags = ["ALFA"]
+
+        _, results = self.ap.combine_channels(
+            0, {"channels": ["does-not-exist"], "tag": "GFP"}
+        )
+
+        # Channels untouched, and combine_map present (empty) for the reporter.
+        self.assertEqual(self.ap.channel_tags, ["ALFA"])
+        self.assertEqual(results["combine_map"], {})
+
+        shutil.rmtree(os.path.join(self.results_folder, "00_combine_channels"))
+
     @patch(
         "picasso_workflow.outpost.formats.zeiss.convert_zeiss_file",
         MagicMock,

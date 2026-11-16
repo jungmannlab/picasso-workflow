@@ -8440,6 +8440,9 @@ class AutoPicasso(
             logger.warning(
                 "combine_channels: no channels matched; nothing combined"
             )
+            # Populate combine_map so the reporter (which reads it
+            # unconditionally) does not KeyError on this no-op path.
+            results["combine_map"] = {}
             return parameters, results
 
         combine_map = {
