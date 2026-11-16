@@ -36,9 +36,13 @@ This file was started after v0.5.6; earlier history is in the git log.
   root holding the raw movies — which can sit several levels above it — is
   auto-detected by walking upward and resolving the movies via the MicroManager
   naming convention (a direct lookup, no recursive tree walk), and is shown
-  editable. Reconstruction runs off the UI thread and reports a progress bar
-  with a per-channel status line and a rough ETA (the slow part is loading each
-  channel's localization file for the pick retro-calculation). New modules
+  editable. Two start modes: re-localize from the raw movies (full pipeline),
+  or start downstream from each channel's localized file (load it directly and
+  run only the steps applied after it, skipping the baked-in localize/undrift
+  and the raw lookup). Reconstruction runs off the UI thread and reports a
+  progress bar with a per-channel status line and a rough ETA (the slow part is
+  loading each channel's localization file for the pick retro-calculation), and
+  can be aborted mid-scan via a Stop button or the wizard's Cancel. New modules
   `manual_to_workflow.py` (Qt-free
   engine, with an optional `progress(message, fraction)` callback) and
   `wizard_manual_to_workflow.py` (PyQt6 wizard); a one-line `Tools` menu hook in

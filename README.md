@@ -309,6 +309,17 @@ How it works:
   *Apply* writes the Files tree and module lists into the GUI; review them in the
   Workflow Config tab and launch from the Run tab as usual.
 
+**Start mode.** Choose *Re-localize from the raw movies* for the full pipeline
+(load the movie → identify/localize/undrift → … — needs the raw data), or
+*Start downstream from the localized files* to load each channel's manual
+localization file directly and run only the steps applied after it (the
+baked-in localize/undrift steps are skipped, and no raw data is needed).
+
+**Progress & abort.** Reconstruction runs off the UI thread with a progress bar,
+a per-channel status line and a rough ETA; the slow part is loading each
+channel's localization file for the pick retro-calculation. A **Stop** button
+(and the wizard's Cancel) aborts the scan between channels.
+
 The reconstruction engine (`picasso_workflow/manual_to_workflow.py`) is Qt-free
 and importable on its own; the wizard (`wizard_manual_to_workflow.py`) is the
 PyQt6 front-end.

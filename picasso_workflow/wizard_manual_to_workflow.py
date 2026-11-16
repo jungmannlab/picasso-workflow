@@ -2,12 +2,13 @@
 """GUI wizard: translate a manual analysis into a picasso-workflow.
 
 A thin PyQt6 front-end over :mod:`picasso_workflow.manual_to_workflow`. The user
-selects the dataset root (holding the raw acquisition folders and a
-manual-analysis subfolder); the engine reconstructs the equivalent aggregation
-workflow; the wizard shows a per-step review table with confidence flags and
-consistency findings; on *Apply* it writes the reconstructed Files tree and
-module lists into the main GUI so the user can review and launch via the normal
-Run tab.
+browses straight to the manual-analysis folder and chooses whether to
+re-localize from the raw movies or start downstream from the localized files;
+the engine reconstructs the equivalent aggregation workflow (off the UI thread,
+with progress and a Stop button); the wizard shows a per-step review table with
+confidence flags and consistency findings; on *Apply* it writes the
+reconstructed Files tree and module lists into the main GUI so the user can
+review and launch via the normal Run tab.
 
 The GUI-population step is factored into :func:`apply_result_to_window`, a
 Qt-free helper that only touches documented ``Window`` attributes/methods, so it
@@ -16,6 +17,7 @@ can be unit-tested against a stub window with no display.
 
 from __future__ import annotations
 
+import threading
 import time
 
 from PyQt6 import QtCore, QtGui, QtWidgets
@@ -86,14 +88,21 @@ class _ReconstructWorker(QtCore.QObject):
 
     finished = pyqtSignal(object)
     failed = pyqtSignal(str)
+    cancelled = pyqtSignal()
     # (message, fraction): fraction is a float in [0, 1] or None (indeterminate)
     progress = pyqtSignal(str, object)
 
-    def __init__(self, manual_dir, raw_root, pixelsize):
+    def __init__(self, manual_dir, raw_root, pixelsize, start_from):
         super().__init__()
         self._manual_dir = manual_dir
         self._raw_root = raw_root
         self._pixelsize = pixelsize
+        self._start_from = start_from
+        self._cancel = threading.Event()
+
+    def cancel(self):
+        """Request cooperative cancellation (thread-safe)."""
+        self._cancel.set()
 
     def run(self):
         try:
@@ -101,8 +110,13 @@ class _ReconstructWorker(QtCore.QObject):
                 self._manual_dir,
                 raw_root=self._raw_root,
                 pixelsize=self._pixelsize,
+                start_from=self._start_from,
                 progress=self.progress.emit,
+                should_cancel=self._cancel.is_set,
             )
+        except mtw.ReconstructionCancelled:
+            self.cancelled.emit()
+            return
         except Exception as exc:  # noqa: BLE001 - surfaced to the user
             self.failed.emit(str(exc))
             return
@@ -110,7 +124,7 @@ class _ReconstructWorker(QtCore.QObject):
 
 
 class _SelectFolderPage(QtWidgets.QWizardPage):
-    """Page 1: pick the dataset root, manual subfolder, and pixel size."""
+    """Page 1: manual folder, start mode, raw-data folder, and pixel size."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -129,6 +143,22 @@ class _SelectFolderPage(QtWidgets.QWizardPage):
             self._with_button(self.manual_edit, manual_browse),
         )
 
+        # Start mode: re-localize from raw, or start downstream from the
+        # already-localized manual files.
+        self.mode_raw = QtWidgets.QRadioButton(
+            "Re-localize from the raw movies (full pipeline)"
+        )
+        self.mode_raw.setChecked(True)
+        self.mode_loc = QtWidgets.QRadioButton(
+            "Start downstream from the localized files (skip re-localization)"
+        )
+        mode_box = QtWidgets.QVBoxLayout()
+        mode_box.addWidget(self.mode_raw)
+        mode_box.addWidget(self.mode_loc)
+        mode_holder = QtWidgets.QWidget()
+        mode_holder.setLayout(mode_box)
+        layout.addRow("Start from:", mode_holder)
+
         self.raw_edit = QtWidgets.QLineEdit()
         self.raw_edit.setPlaceholderText("auto-detected — leave blank to auto")
         self.raw_edit.setToolTip(
@@ -136,12 +166,14 @@ class _SelectFolderPage(QtWidgets.QWizardPage):
             "02_…), used to re-localize from the raw movies. Leave blank to "
             "auto-detect by searching upward from the manual folder."
         )
-        raw_browse = QtWidgets.QPushButton("Browse…")
-        raw_browse.clicked.connect(self._browse_raw)
+        self.raw_browse = QtWidgets.QPushButton("Browse…")
+        self.raw_browse.clicked.connect(self._browse_raw)
         layout.addRow(
             "Raw data folder:",
-            self._with_button(self.raw_edit, raw_browse),
+            self._with_button(self.raw_edit, self.raw_browse),
         )
+        # The raw folder only matters when re-localizing from raw.
+        self.mode_loc.toggled.connect(self._on_mode_changed)
 
         self.pixelsize_spin = QtWidgets.QDoubleSpinBox()
         self.pixelsize_spin.setRange(1.0, 10000.0)
@@ -151,6 +183,10 @@ class _SelectFolderPage(QtWidgets.QWizardPage):
 
         # The manual folder is mandatory; the raw folder is optional (auto).
         self.registerField("manual_dir*", self.manual_edit)
+
+    def _on_mode_changed(self, downstream):
+        self.raw_edit.setEnabled(not downstream)
+        self.raw_browse.setEnabled(not downstream)
 
     @staticmethod
     def _with_button(line_edit, button):
@@ -206,9 +242,15 @@ class _ReviewPage(QtWidgets.QWizardPage):
         self.status.setWordWrap(True)
         layout.addWidget(self.status)
 
+        progress_row = QtWidgets.QHBoxLayout()
         self.progress_bar = QtWidgets.QProgressBar()
         self.progress_bar.setTextVisible(True)
-        layout.addWidget(self.progress_bar)
+        progress_row.addWidget(self.progress_bar)
+        self.stop_button = QtWidgets.QPushButton("Stop")
+        self.stop_button.setToolTip("Abort the running scan")
+        self.stop_button.clicked.connect(self._request_cancel)
+        progress_row.addWidget(self.stop_button)
+        layout.addLayout(progress_row)
 
         self.table = QtWidgets.QTableWidget(0, 4)
         self.table.setHorizontalHeaderLabels(
@@ -237,6 +279,7 @@ class _ReviewPage(QtWidgets.QWizardPage):
         self.status.setText("Scanning and reconstructing…")
         # Start indeterminate (busy) until the first determinate update.
         self.progress_bar.setRange(0, 0)
+        self.stop_button.setEnabled(True)
         self._start_time = time.monotonic()
         self.completeChanged.emit()
 
@@ -245,17 +288,39 @@ class _ReviewPage(QtWidgets.QWizardPage):
         manual_dir = select.manual_edit.text()
         raw_root = select.raw_edit.text().strip() or None
         pixelsize = select.pixelsize_spin.value()
+        start_from = "localizations" if select.mode_loc.isChecked() else "raw"
 
         self._thread = QThread(self)
-        self._worker = _ReconstructWorker(manual_dir, raw_root, pixelsize)
+        self._worker = _ReconstructWorker(
+            manual_dir, raw_root, pixelsize, start_from
+        )
         self._worker.moveToThread(self._thread)
         self._thread.started.connect(self._worker.run)
         self._worker.progress.connect(self._on_progress)
         self._worker.finished.connect(self._on_finished)
         self._worker.failed.connect(self._on_failed)
+        self._worker.cancelled.connect(self._on_cancelled)
         self._worker.finished.connect(self._thread.quit)
         self._worker.failed.connect(self._thread.quit)
+        self._worker.cancelled.connect(self._thread.quit)
         self._thread.start()
+
+    def _request_cancel(self):
+        """Ask the running worker to stop (cooperative, between channels)."""
+        worker = getattr(self, "_worker", None)
+        if worker is not None:
+            worker.cancel()
+            self.stop_button.setEnabled(False)
+            self.status.setText("Stopping…")
+
+    def _on_cancelled(self):
+        self.progress_bar.setRange(0, 1)
+        self.progress_bar.setValue(0)
+        self.stop_button.setEnabled(False)
+        self.status.setText(
+            "Scan stopped. Go Back to change settings, or close the wizard."
+        )
+        self.completeChanged.emit()
 
     def _on_progress(self, message, fraction):
         """Update the status label + progress bar from the worker thread."""
@@ -281,18 +346,20 @@ class _ReviewPage(QtWidgets.QWizardPage):
         return f"  (~{int(round(remaining / 60.0))} min remaining)"
 
     def _stop_worker(self):
-        """Quit and dispose any running reconstruction thread/worker.
+        """Cancel, quit and dispose any running reconstruction thread/worker.
 
-        Disconnect the old worker's signals first: ``run()`` is not
-        interruptible, so it may still emit ``finished`` while ``wait()`` blocks
-        the UI thread; without disconnecting, that stale result would be
-        delivered to ``_on_finished`` after the new run has started.
+        Request cancellation first so ``wait()`` returns promptly (``run()`` is
+        not interruptible but polls between channels), and disconnect the old
+        worker's signals so a late ``finished`` cannot be delivered to
+        ``_on_finished`` after a new run has started.
         """
         worker = getattr(self, "_worker", None)
         if worker is not None:
             try:
+                worker.cancel()
                 worker.finished.disconnect()
                 worker.failed.disconnect()
+                worker.cancelled.disconnect()
             except (TypeError, RuntimeError):
                 pass  # nothing connected / already deleted
         thread = getattr(self, "_thread", None)
@@ -309,12 +376,14 @@ class _ReviewPage(QtWidgets.QWizardPage):
         # Stop the busy animation (determinate, empty) on failure.
         self.progress_bar.setRange(0, 1)
         self.progress_bar.setValue(0)
+        self.stop_button.setEnabled(False)
         self.status.setText(f"Reconstruction failed: {message}")
         self.completeChanged.emit()
 
     def _on_finished(self, result):
         self.progress_bar.setRange(0, 1000)
         self.progress_bar.setValue(1000)
+        self.stop_button.setEnabled(False)
         self.result = result
         self._populate_table(result)
         n_unmapped = sum(
@@ -400,3 +469,9 @@ class ManualToWorkflowWizard(QtWidgets.QWizard):
                 )
                 return
         super().accept()
+
+    def reject(self):
+        # Cancelling the wizard must abort (and join) any running scan so no
+        # worker thread lingers after the window closes.
+        self.page(self._review_page_id)._stop_worker()
+        super().reject()
