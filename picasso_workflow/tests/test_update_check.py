@@ -13,6 +13,7 @@ from picasso_workflow.update_check import (
     UpdateInfo,
     _is_newer,
     check_for_update,
+    fetch_latest_release,
 )
 
 # -- version comparison -------------------------------------------------------
@@ -107,3 +108,52 @@ def test_check_never_raises_on_network_error(monkeypatch):
 
     monkeypatch.setattr(update_check.urllib.request, "urlopen", _boom)
     assert check_for_update("0.5.6") is None
+
+
+# -- fetch_latest_release (3-way, for the on-demand dialog) -------------------
+
+
+def test_fetch_latest_release_update(monkeypatch):
+    monkeypatch.setattr(
+        update_check.urllib.request,
+        "urlopen",
+        _fake_urlopen(
+            {"tag_name": "v0.9.0", "html_url": "https://example/r/0.9.0"}
+        ),
+    )
+    r = fetch_latest_release("0.5.6")
+    assert r.status == "update"
+    assert r.current == "0.5.6" and r.latest == "0.9.0"
+    assert r.url == "https://example/r/0.9.0" and r.error is None
+
+
+def test_fetch_latest_release_current(monkeypatch):
+    monkeypatch.setattr(
+        update_check.urllib.request,
+        "urlopen",
+        _fake_urlopen(
+            {"tag_name": "v0.5.6", "html_url": "https://example/r/0.5.6"}
+        ),
+    )
+    r = fetch_latest_release("0.5.6")
+    assert r.status == "current" and r.latest == "0.5.6"
+
+
+def test_fetch_latest_release_error_on_missing_fields(monkeypatch):
+    monkeypatch.setattr(
+        update_check.urllib.request,
+        "urlopen",
+        _fake_urlopen({"name": "no tag"}),
+    )
+    r = fetch_latest_release("0.5.6")
+    assert r.status == "error" and r.latest is None
+
+
+def test_fetch_latest_release_error_on_network(monkeypatch):
+    def _boom(req, timeout=None):
+        raise OSError("network down")
+
+    monkeypatch.setattr(update_check.urllib.request, "urlopen", _boom)
+    r = fetch_latest_release("0.5.6")
+    assert r.status == "error"
+    assert "network down" in (r.error or "")
