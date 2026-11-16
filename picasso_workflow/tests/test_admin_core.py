@@ -89,6 +89,18 @@ def test_parse_image_listing_empty():
     assert core.parse_image_listing("total 0\n") == []
 
 
+def test_configured_test_data_dir():
+    assert (
+        core.configured_test_data_dir({"TestData": {"directory": "/fs/td"}})
+        == "/fs/td"
+    )
+    # unset / null / missing -> "" (blank => tiers 1-3 only)
+    assert (
+        core.configured_test_data_dir({"TestData": {"directory": None}}) == ""
+    )
+    assert core.configured_test_data_dir({}) == ""
+
+
 def test_image_tag():
     # release / test both show the version; a develop image shows its label
     assert core.image_tag("picasso-workflow-0.9.0.sif") == "0.9.0"

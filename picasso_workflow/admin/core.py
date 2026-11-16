@@ -89,6 +89,22 @@ def parse_image_name(name):
     return None, is_test
 
 
+def configured_test_data_dir(config=None):
+    """The configured test-data dir (``TestData.directory``), or ``""``.
+
+    The same source ``tools/cluster_tests/submit_all.sh`` and the
+    ``network_test_data`` pytest fixture use to resolve ``PW_TEST_DATA_DIR``
+    when the env var is unset -- so a GUI-launched test run exercises the same
+    datasets (tier 4 + the per-template workflow runs). ``config`` defaults to
+    the package ``CONFIG``. Note it must be valid on the cluster compute node
+    (where ``submit_all.sh`` runs it is, being read from the login node's
+    config).
+    """
+    if config is None:
+        config = CONFIG
+    return str((config.get("TestData") or {}).get("directory") or "")
+
+
 def image_tag(name):
     """The human-readable label after the prefix (for the Images table).
 

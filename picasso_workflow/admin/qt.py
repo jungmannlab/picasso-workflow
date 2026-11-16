@@ -187,15 +187,22 @@ class AdminWindow(QMainWindow):
         form.addRow("Test image", _row_widget(img_row))
         self.test_data_dir = QLineEdit()
         self.test_data_dir.setMinimumWidth(420)
+        # Pre-fill from config TestData.directory -- the same source
+        # submit_all.sh resolves PW_TEST_DATA_DIR from, so a GUI run exercises
+        # the same datasets. Editable; blank = tiers 1-3 only.
+        self.test_data_dir.setText(core.configured_test_data_dir())
         self.test_data_dir.setPlaceholderText(
             "e.g. /fs/pool/…/picasso-workflow_testdata  (blank = skip "
             "tier 4 + templates)"
         )
         self.test_data_dir.setToolTip(
-            "Cluster path to a directory of real DNA-PAINT test datasets "
-            "(exported as PW_TEST_DATA_DIR / bound into the container). Only "
-            "tier 4 (real data) and the template workflow runs need it; leave "
-            "it blank to run just tiers 1-3."
+            "Cluster path to a directory of real DNA-PAINT test datasets, "
+            "exported as PW_TEST_DATA_DIR + bound into the container (tier 4 "
+            "runs real_data tests over it; template runs are the "
+            "run_workflow_slurm.sh scripts found under it). Pre-filled from "
+            "config.yaml TestData.directory -- the same key submit_all.sh "
+            "uses. Must be valid on the cluster compute node. Blank = tiers "
+            "1-3 only."
         )
         form.addRow("Test data dir", self.test_data_dir)
         # Which jobs to run. Tiers 1-3 are self-contained (no data); tier 4 +
