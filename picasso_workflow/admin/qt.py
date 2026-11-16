@@ -122,9 +122,17 @@ class AdminWindow(QMainWindow):
         form.addRow("Cluster", self.host)
         form.addRow("User", self.user)
         form.addRow("Identity file", key_w)
+        # Connection-level actions shared by both tabs: Refresh images lists the
+        # mount once and fills BOTH the Images table and the Test-runs dropdown.
         test = QPushButton("Test connection")
         test.clicked.connect(self._on_test)
-        form.addRow(test, self.conn_status)
+        refresh = QPushButton("Refresh images")
+        refresh.clicked.connect(self._refresh_images)
+        actions = QHBoxLayout()
+        actions.addWidget(test)
+        actions.addWidget(refresh)
+        actions.addWidget(self.conn_status, 1)
+        form.addRow("", _row_widget(actions))
         return box
 
     def _pick_identity(self) -> None:
@@ -145,10 +153,9 @@ class AdminWindow(QMainWindow):
     def _build_images_tab(self) -> QWidget:
         w = QWidget()
         lay = QVBoxLayout(w)
-        refresh = QPushButton("Refresh images")
-        refresh.clicked.connect(self._refresh_images)
-        lay.addWidget(refresh)
-        self.image_dir_label = QLabel("")
+        self.image_dir_label = QLabel(
+            "Click 'Refresh images' (top) to list the shared mount."
+        )
         lay.addWidget(self.image_dir_label)
         self.image_table = self._make_table(
             ["Image", "Version", "Test", "Size", "Modified", "Match"]
@@ -161,9 +168,10 @@ class AdminWindow(QMainWindow):
         w = QWidget()
         lay = QVBoxLayout(w)
         form = QFormLayout()
-        # Editable image combo + a List button that fills it from the shared
-        # mount (test images first). Defaults to the -test- image matching this
-        # GUI's version when that forms a clean name (blank on a dev build).
+        # Editable image combo, filled by the top 'Refresh images' button with
+        # the mount's TEST images (the chain runs pytest inside the image, which
+        # a lean image lacks). Defaults to the -test- image matching this GUI's
+        # version when that forms a clean name (blank on a dev build).
         self.test_image = QComboBox()
         self.test_image.setEditable(True)
         self.test_image.setMinimumWidth(420)
@@ -171,20 +179,11 @@ class AdminWindow(QMainWindow):
         self.test_image.setCurrentText(default or "")
         self.test_image.setToolTip(
             "The .sif to run pytest inside (needs the [dev]/pytest extra, i.e. "
-            "a picasso-workflow-test-<version>.sif). Click 'List' to pick from "
-            "the shared mount; a bare name is resolved against "
-            "ClusterApptainer.image_dir."
+            "a picasso-workflow-test-<version>.sif). 'Refresh images' (top) "
+            "fills this with the mount's test images; a bare name is resolved "
+            "against ClusterApptainer.image_dir."
         )
-        list_images = QPushButton("List")
-        list_images.setToolTip(
-            "List the test .sif images (those carrying pytest) on the shared "
-            "folder over SSH. Use the Images tab to see lean images too."
-        )
-        list_images.clicked.connect(self._list_test_images)
-        img_row = QHBoxLayout()
-        img_row.addWidget(self.test_image, 1)
-        img_row.addWidget(list_images)
-        form.addRow("Test image", _row_widget(img_row))
+        form.addRow("Test image", self.test_image)
         self.test_data_dir = QLineEdit()
         self.test_data_dir.setMinimumWidth(420)
         # Pre-fill from config TestData.directory -- the same source
@@ -243,42 +242,6 @@ class AdminWindow(QMainWindow):
         self.test_summary = QPlainTextEdit(readOnly=True)
         lay.addWidget(self.test_summary, 1)
         return w
-
-    def _list_test_images(self) -> None:
-        """Populate the test-image combo from the shared mount (test first)."""
-
-        def done(images):
-            # Only TEST images: the chain runs pytest inside the image, which a
-            # lean image lacks, so a lean pick would just fail. The combo stays
-            # editable, so an oddly-named test image can still be typed.
-            names = [im.name for im in images if im.is_test]
-            if not names:
-                self.activity.appendPlainText(
-                    f"✓ {len(images)} image(s), 0 test image(s)"
-                )
-                QMessageBox.information(
-                    self,
-                    "No test images",
-                    "No test images (picasso-workflow-test-<version>.sif) on "
-                    "the shared mount. The test chain runs pytest inside the "
-                    "image, which the lean image doesn't carry -- build or "
-                    "download a -test- image (or type its name).",
-                )
-                return
-            current = self.test_image.currentText().strip()
-            self.test_image.blockSignals(True)
-            self.test_image.clear()
-            self.test_image.addItems(names)
-            if current in names:
-                self.test_image.setCurrentText(current)
-            else:
-                self.test_image.setCurrentText(names[0])
-            self.test_image.blockSignals(False)
-            self.activity.appendPlainText(
-                f"✓ {len(names)} test image(s) of {len(images)}"
-            )
-
-        self._run(lambda a: a.list_images(), done, busy="listing images")
 
     def _submit_test_chain(self) -> None:
         version = core.this_gui_version()
@@ -432,6 +395,12 @@ class AdminWindow(QMainWindow):
         )
 
     def _refresh_images(self) -> None:
+        """List the mount once; fill the Images table AND the test dropdown.
+
+        Shared by both tabs (one SSH listing): the Images table shows every
+        image; the Test-runs dropdown gets only the TEST images (the chain runs
+        pytest inside the image, which a lean image lacks).
+        """
         gui_version = core.this_gui_version()
 
         def done(result):
@@ -459,13 +428,36 @@ class AdminWindow(QMainWindow):
                 for c, text in enumerate(cells):
                     self.image_table.setItem(r, c, QTableWidgetItem(text))
             self.image_table.resizeColumnsToContents()
-            self.activity.appendPlainText(f"✓ {len(images)} image(s)")
+            self._fill_test_images(images)
+            n_test = sum(1 for im in images if im.is_test)
+            self.activity.appendPlainText(
+                f"✓ {len(images)} image(s), {n_test} test image(s)"
+            )
 
         self._run(
             lambda a: (a.image_dir(), a.list_images()),
             done,
             busy="listing images",
         )
+
+    def _fill_test_images(self, images):
+        """Put the TEST images into the Test-runs dropdown (editable).
+
+        An empty list leaves the combo's current text (the version default or a
+        typed name) untouched, so a mount with no test image doesn't wipe it.
+        """
+        names = [im.name for im in images if im.is_test]
+        current = self.test_image.currentText().strip()
+        self.test_image.blockSignals(True)
+        self.test_image.clear()
+        if names:
+            self.test_image.addItems(names)
+            self.test_image.setCurrentText(
+                current if current in names else names[0]
+            )
+        else:
+            self.test_image.setCurrentText(current)  # preserve, no items
+        self.test_image.blockSignals(False)
 
     def _refresh_jobs(self) -> None:
         def done(result):
