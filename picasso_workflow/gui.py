@@ -9982,6 +9982,26 @@ class _UpdateCheckWorker(QtCore.QObject):
         self.finished.emit(result)
 
 
+class _ReleaseCheckWorker(QtCore.QObject):
+    """On-demand GitHub release check (Help -> Check for updates).
+
+    Like :class:`_UpdateCheckWorker` but emits the richer ``CheckResult`` so
+    the menu dialog can report up-to-date vs. couldn't-check, not just "newer".
+    """
+
+    finished = QtCore.pyqtSignal(object)  # emits update_check.CheckResult
+
+    def __init__(self, current_version: str) -> None:
+        super().__init__()
+        self._current_version = current_version
+
+    def run(self) -> None:
+        from picasso_workflow.update_check import fetch_latest_release
+
+        # fetch_latest_release never raises (it reports status="error").
+        self.finished.emit(fetch_latest_release(self._current_version))
+
+
 class Window(QtWidgets.QMainWindow):
     """Main window for the picasso-workflow GUI application."""
 
@@ -10655,6 +10675,7 @@ class Window(QtWidgets.QMainWindow):
         help_menu.addAction(
             "Reload settings file", self._reload_config_into_ui
         )
+        help_menu.addAction("Check for updates…", self._check_for_updates)
         # On first launch, show the onboarding guide once the window is up.
         QtCore.QTimer.singleShot(0, self._maybe_show_getting_started)
 
@@ -12621,6 +12642,94 @@ class Window(QtWidgets.QMainWindow):
             self.update_banner.setVisible(True)
         except Exception as e:  # pragma: no cover - defensive
             logger.debug(f"Could not show the update banner: {e}")
+
+    def _check_for_updates(self):
+        """Help menu: on-demand GitHub release check -> result dialog.
+
+        Reuses the startup check's thread slot + lifecycle
+        (``_forget_update_thread`` / ``_stop_update_thread`` / ``closeEvent``);
+        the re-entry guard means it no-ops while the startup check (or a prior
+        manual one) is still running. Routes to a dialog instead of the banner.
+        """
+        if getattr(self, "_update_thread", None) is not None:
+            return
+        try:
+            worker = _ReleaseCheckWorker(__GUIVERSION__)
+            thread = QtCore.QThread(self)
+            worker.moveToThread(thread)
+            thread._pw_worker = worker
+            thread.started.connect(worker.run)
+            worker.finished.connect(self._on_manual_update_result)
+            worker.finished.connect(thread.quit)
+            worker.finished.connect(worker.deleteLater)
+            thread.finished.connect(thread.deleteLater)
+            thread.finished.connect(self._forget_update_thread)
+            self._update_thread = thread
+            app = QtWidgets.QApplication.instance()
+            if app is not None:
+                app.aboutToQuit.connect(self._stop_update_thread)
+            thread.start()
+        except Exception as e:  # pragma: no cover - defensive
+            logger.debug(f"Could not start the update check: {e}")
+
+    def _on_manual_update_result(self, result):
+        """Report the on-demand check's outcome (newer / current / error)."""
+        from picasso_workflow.update_check import (
+            RELEASES_PAGE_URL,
+            UpdateInfo,
+        )
+
+        try:
+            if result.status == "update":
+                # Also raise the passive banner, for consistency with startup.
+                self._on_update_check_result(
+                    UpdateInfo(result.latest, result.url)
+                )
+                self._update_message_box(
+                    "Update available",
+                    "A newer version of picasso-workflow is available."
+                    f"<br><br>Installed: <b>{result.current}</b><br>"
+                    f"Latest: <b>{result.latest}</b><br><br>"
+                    f'Download it from <a href="{result.url}">the releases '
+                    "page</a>.",
+                )
+            elif result.status == "current":
+                QtWidgets.QMessageBox.information(
+                    self,
+                    "Check for updates",
+                    "picasso-workflow is up to date "
+                    f"(version {result.current}).",
+                )
+            else:  # "error"
+                detail = f":<br><br>{result.error}" if result.error else "."
+                self._update_message_box(
+                    "Check for updates",
+                    f"Could not check for updates{detail}<br><br>"
+                    f'See <a href="{RELEASES_PAGE_URL}">the releases '
+                    "page</a>.",
+                    warning=True,
+                )
+        except Exception as e:  # pragma: no cover - defensive
+            logger.debug(f"Could not show the update result: {e}")
+
+    def _update_message_box(self, title, html, warning=False):
+        """A rich-text message box whose ``<a href>`` links open in a browser.
+
+        QMessageBox renders rich text but its labels don't follow external
+        links by default -- enable it so the releases link is clickable.
+        """
+        box = QtWidgets.QMessageBox(self)
+        box.setIcon(
+            QtWidgets.QMessageBox.Icon.Warning
+            if warning
+            else QtWidgets.QMessageBox.Icon.Information
+        )
+        box.setWindowTitle(title)
+        box.setTextFormat(Qt.TextFormat.RichText)
+        box.setText(html)
+        for label in box.findChildren(QtWidgets.QLabel):
+            label.setOpenExternalLinks(True)
+        box.exec()
 
     def _forget_update_thread(self):
         self._update_thread = None

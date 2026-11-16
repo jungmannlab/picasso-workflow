@@ -10,6 +10,15 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ## [Unreleased]
 
+### Added
+- **Help → "Check for updates…".** A menu item that checks GitHub for a newer
+  release on demand (off the UI thread) and reports the outcome in a dialog —
+  newer available (with a download link + the passive banner), already up to
+  date, or couldn't-check (with a link to the releases page). Parity with
+  monet / PycroFlow. New `update_check.fetch_latest_release` (3-way result);
+  `check_for_update` is now a thin wrapper over it (passive-banner behaviour
+  unchanged). (`gui.py`, `update_check.py`)
+
 ### Changed
 - **Admin console UX polish.** The Images tab now shows a label for *every*
   image — a `develop-<sha>` image displays its tag (e.g. `develop-ef8b42`)
