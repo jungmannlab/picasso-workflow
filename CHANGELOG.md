@@ -10,6 +10,19 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ## [Unreleased]
 
+### Fixed
+- **Cluster-image listing filled the dropdown off the GUI thread.** The
+  off-thread listing's completion handler was wired to the worker's
+  `finished` signal through a lambda — a context-less functor connection
+  that Qt runs in the *worker* thread, so the dropdown (a widget) was being
+  mutated off the GUI thread (undefined behaviour / crash). The worker now
+  echoes its context back through the signal and the handler is connected as
+  a bound method, so Qt delivers it queued to the GUI thread. Also: the lazy
+  auto-populate's one-shot flag is now consumed only once a listing actually
+  launches, so a first view that can't attempt yet (no `image_dir`, or the
+  connection can't be built) retries on the next view instead of giving up
+  for the session. (`gui.py`)
+
 ### Changed
 - **Run tab cluster config laid out as a grid.** The ~11 cluster controls
   (host, #nodes/#cores/#GPUs, partition/memory/timeout, modules, Apptainer

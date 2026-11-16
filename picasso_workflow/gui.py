@@ -10007,19 +10007,30 @@ class _ClusterImageListWorker(QtCore.QObject):
 
     The listing is a blocking SSH round-trip, so it must not run on the GUI
     thread (it would freeze the window, sometimes for seconds behind a VPN).
-    Emits ``finished(images, error)``: ``images`` is the sorted list of
-    ``.sif`` basenames (possibly empty) on success, or ``None`` when the
-    listing failed -- in which case ``error`` is a short human-readable
-    message. Never raises into the thread (a dead listing must not abort the
-    process); failures travel back as ``error``.
+    Emits ``finished(images, error, image_dir, host, auto)``: ``images`` is the
+    sorted list of ``.sif`` basenames (possibly empty) on success, or ``None``
+    when the listing failed -- in which case ``error`` is a short
+    human-readable message. The ``image_dir``/``host``/``auto`` context is
+    echoed back so the GUI-thread handler can be a plain bound method; a
+    lambda carrying that context would be a context-less functor connection
+    that Qt runs in THIS worker thread (mutating widgets off the GUI thread).
+    Never raises into the thread (a dead listing must not abort the process);
+    failures travel back as ``error``.
     """
 
-    finished = QtCore.pyqtSignal(object, object)
+    finished = QtCore.pyqtSignal(object, object, object, object, object)
 
-    def __init__(self, communicator, image_dir: str) -> None:
+    def __init__(self, communicator, image_dir, host, auto) -> None:
         super().__init__()
         self._comm = communicator
         self._image_dir = image_dir
+        self._host = host
+        self._auto = auto
+
+    def _emit(self, images, error) -> None:
+        self.finished.emit(
+            images, error, self._image_dir, self._host, self._auto
+        )
 
     def run(self) -> None:
         try:
@@ -10027,10 +10038,10 @@ class _ClusterImageListWorker(QtCore.QObject):
                 f"ls -1 {shlex.quote(self._image_dir)}"
             )
         except Exception as exc:  # noqa: BLE001 - reported to the GUI thread
-            self.finished.emit(None, str(exc))
+            self._emit(None, str(exc))
             return
         if not result.get("success"):
-            self.finished.emit(
+            self._emit(
                 None,
                 f"exit {result.get('return_code')}: "
                 f"{(result.get('stderr', '') or '').strip()}",
@@ -10041,7 +10052,7 @@ class _ClusterImageListWorker(QtCore.QObject):
             for name in (result.get("stdout", "") or "").splitlines()
             if name.strip().endswith(".sif")
         )
-        self.finished.emit(images, None)
+        self._emit(images, None)
 
 
 class Window(QtWidgets.QMainWindow):
@@ -16500,13 +16511,18 @@ class Window(QtWidgets.QMainWindow):
         deferred to actual use (not startup -- that would connect on every
         launch even for users who never submit to the cluster) and runs
         off-thread via :meth:`_refresh_cluster_images`.
+
+        The one-shot flag is consumed only once a listing actually launches
+        (in :meth:`_refresh_cluster_images`), so a view that can't attempt
+        yet -- no ``image_dir`` configured, or the connection can't be built
+        -- retries on the next view rather than silently giving up for the
+        session.
         """
         if self._cluster_images_autolisted:
             return
         # Only when the cluster sub-tab is the one actually on screen.
         if not self.run_tabs.isVisible() or self.run_tabs.currentIndex() != 0:
             return
-        self._cluster_images_autolisted = True
         self._refresh_cluster_images(auto=True)
 
     def _refresh_cluster_images(self, auto=False):
@@ -16554,23 +16570,30 @@ class Window(QtWidgets.QMainWindow):
         # (missing dir, no read permission) surfaces as a non-zero exit with a
         # message, instead of looking like an empty folder.
         try:
-            worker = _ClusterImageListWorker(comm, image_dir)
+            worker = _ClusterImageListWorker(
+                comm, image_dir, host_cluster, auto
+            )
             thread = QtCore.QThread(self)
             worker.moveToThread(thread)
             # Keep the worker alive for the thread's lifetime (PyQt may GC it
             # before ``started`` fires otherwise).
             thread._pw_worker = worker
             thread.started.connect(worker.run)
-            worker.finished.connect(
-                lambda images, error: self._on_cluster_images_listed(
-                    images, error, image_dir, host_cluster, auto
-                )
-            )
+            # Connect the bound method (a QObject slot living in the GUI
+            # thread), NOT a lambda: a context-less functor connection would
+            # run in the worker thread and mutate widgets off the GUI thread.
+            # The worker echoes image_dir/host/auto back through the signal.
+            worker.finished.connect(self._on_cluster_images_listed)
             worker.finished.connect(thread.quit)
             worker.finished.connect(worker.deleteLater)
             thread.finished.connect(thread.deleteLater)
             thread.finished.connect(self._forget_cluster_image_thread)
             self._cluster_image_thread = thread
+            if auto:
+                # Consume the one-shot now that a listing has launched, so a
+                # later failure (offline cluster) doesn't re-trigger an SSH
+                # connect on every tab view this session.
+                self._cluster_images_autolisted = True
             # aboutToQuit->_stop_cluster_image_thread is connected once in
             # __init__.
             thread.start()
