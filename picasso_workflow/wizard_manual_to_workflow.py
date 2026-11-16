@@ -236,6 +236,30 @@ class _ReconstructWorker(QtCore.QObject):
         self.finished.emit(result)
 
 
+class _DragDropLineEdit(QtWidgets.QLineEdit):
+    """QLineEdit that accepts dropped folder paths (for drag-drop convenience)."""
+
+    def dragEnterEvent(self, event):
+        """Accept drops of files/folders."""
+        if event.mimeData().hasUrls():
+            event.accept()
+        else:
+            event.ignore()
+
+    def dropEvent(self, event):
+        """Handle dropped paths: use the first folder."""
+        urls = event.mimeData().urls()
+        if urls:
+            path = urls[0].toLocalFile()
+            # If it's a file, use its parent directory
+            import os
+
+            if os.path.isfile(path):
+                path = os.path.dirname(path)
+            self.setText(path)
+            event.accept()
+
+
 class _SelectFolderPage(QtWidgets.QWizardPage):
     """Page 1: manual folder, start mode, raw-data folder, and pixel size."""
 
@@ -248,7 +272,7 @@ class _SelectFolderPage(QtWidgets.QWizardPage):
         )
         layout = QtWidgets.QFormLayout(self)
 
-        self.manual_edit = QtWidgets.QLineEdit()
+        self.manual_edit = _DragDropLineEdit()
         manual_browse = QtWidgets.QPushButton("Browse…")
         manual_browse.clicked.connect(self._browse_manual)
         layout.addRow(
@@ -394,9 +418,13 @@ class _ReviewPage(QtWidgets.QWizardPage):
         )
         self.to_agg_button.clicked.connect(self._move_selected_to_aggregation)
         channel_row.addWidget(self.to_agg_button)
-        channel_row.addWidget(
-            QtWidgets.QLabel("(right-click a row to remove a step)")
+        self.remove_button = QtWidgets.QPushButton("Remove selected step")
+        self.remove_button.setToolTip(
+            "Delete the selected row (a step or bridge module) from the "
+            "workflow. Note: loader and bridge modules usually cannot be removed."
         )
+        self.remove_button.clicked.connect(self._remove_selected_row)
+        channel_row.addWidget(self.remove_button)
         layout.addLayout(channel_row)
 
         self._columns = [
@@ -410,9 +438,16 @@ class _ReviewPage(QtWidgets.QWizardPage):
         ]
         self.table = QtWidgets.QTableWidget(0, len(self._columns))
         self.table.setHorizontalHeaderLabels(self._columns)
-        self.table.horizontalHeader().setStretchLastSection(True)
+        self.table.horizontalHeader().setStretchLastSection(False)
+        # Enable text wrapping and auto-resize columns to content width
+        self.table.resizeColumnsToContents()
         self.table.setEditTriggers(
             QtWidgets.QAbstractItemView.EditTrigger.NoEditTriggers
+        )
+        # Allow text wrapping in cells (requires re-wrapping on row height adjust)
+        self.table.setWordWrap(True)
+        self.table.verticalHeader().setSectionResizeMode(
+            QtWidgets.QHeaderView.ResizeMode.ResizeToContents
         )
         self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self._row_context_menu)
@@ -676,6 +711,47 @@ class _ReviewPage(QtWidgets.QWizardPage):
             del meta[idx]
             self._rebuild_table()
             self._revalidate()
+
+    def _remove_selected_row(self):
+        """Remove the selected step/row from the workflow.
+
+        Can remove any module except loaders (which are required) and bridge
+        modules (which are auto-generated). Shows a warning if removal is blocked.
+        """
+        row = self.table.currentRow()
+        rows = self._rows()
+        if row < 0 or row >= len(rows):
+            QtWidgets.QMessageBox.information(
+                self, "Remove step", "Select a row first."
+            )
+            return
+        _stage, list_name, idx = rows[row]
+        name = (
+            self._single[idx][0]
+            if list_name == "single"
+            else self._agg[idx][0]
+        )
+        if name in _LOADER_MODULES:
+            QtWidgets.QMessageBox.information(
+                self,
+                "Remove step",
+                f"Cannot remove '{name}': loader modules are required to "
+                "produce the per-channel localizations.",
+            )
+            return
+        if name in _BRIDGE_MODULES:
+            QtWidgets.QMessageBox.information(
+                self,
+                "Remove step",
+                f"'{name}' is an auto-generated bridge module. It will be "
+                "rebuilt when the single/aggregation boundary changes.",
+            )
+            return
+        modules, meta = self._buffers(list_name)
+        del modules[idx]
+        del meta[idx]
+        self._rebuild_table()
+        self._revalidate()
 
     def _move_selected_to_aggregation(self):
         """Split single/aggregation at the selected single-stage step.
