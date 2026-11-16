@@ -368,8 +368,8 @@ class _ReviewPage(QtWidgets.QWizardPage):
         self.setSubTitle(
             "Each step is mapped to a module with a confidence flag. Change a "
             "module via its dropdown, right-click to remove a step, and pick a "
-            "channel to see its parameters. Apply enables once nothing is "
-            "unresolved."
+            "channel to see its parameters. Unmapped steps are kept as no-op "
+            "placeholders you can delete or reassign here or in the GUI."
         )
         self.result = None
         self._thread = None
@@ -835,10 +835,11 @@ class _ReviewPage(QtWidgets.QWizardPage):
                     self._agg, modulespec.Scope.AGGREGATION
                 )
             ]
-        # Only unresolved placeholder modules block Apply -- they cannot run.
-        # Everything else (scope warnings, params not recovered, etc.) is shown
-        # but does NOT block: parameters are fine-tuned in the main GUI, so the
-        # workflow can be applied and the notes kept for reference.
+        # Apply is never blocked: placeholder modules (``dummy_module``) are
+        # runnable no-ops and can be deleted or reassigned from the main GUI
+        # after applying, and every other finding (scope warnings, params not
+        # recovered, etc.) is likewise fine-tuned there. They are surfaced as
+        # notes only.
         placeholders = sorted(
             {
                 n
@@ -846,13 +847,13 @@ class _ReviewPage(QtWidgets.QWizardPage):
                 if n in ("manual", "dummy_module")
             }
         )
-        self._apply_ready = not placeholders
+        self._apply_ready = True
         if placeholders:
             findings.insert(
                 0,
-                f"APPLY DISABLED: {len(placeholders)} unresolved step(s) "
-                "-- change their 'module' dropdown or right-click > remove: "
-                + ", ".join(placeholders),
+                f"NOTE: {len(placeholders)} placeholder step(s) kept as no-ops "
+                "-- delete or reassign them in the GUI (or via the 'module' "
+                "dropdown / right-click > remove): " + ", ".join(placeholders),
             )
         self.errors_box.setPlainText(
             "\n".join(findings) or "No consistency issues found."
