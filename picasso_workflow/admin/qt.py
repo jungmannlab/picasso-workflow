@@ -98,7 +98,7 @@ class AdminWindow(QMainWindow):
         self.activity.setMaximumBlockCount(5000)
         root.addWidget(self.activity, 1)
 
-        self.resize(820, 680)
+        self.resize(1000, 700)
 
     # -- connection panel -------------------------------------------------
     def _build_connection_panel(self) -> QWidget:
@@ -109,6 +109,7 @@ class AdminWindow(QMainWindow):
         self.host.addItems([str(h) for h in core.cluster_hosts()])
         self.user = QLineEdit(getpass.getuser())
         self.identity = QLineEdit(core.discover_ssh_key() or "")
+        self.identity.setMinimumWidth(420)  # SSH key paths are long
         browse = QPushButton("Browse…")
         browse.clicked.connect(self._pick_identity)
         key_row = QHBoxLayout()
@@ -160,18 +161,51 @@ class AdminWindow(QMainWindow):
         w = QWidget()
         lay = QVBoxLayout(w)
         form = QFormLayout()
-        # Default to the -test- image matching this GUI's version (the image
-        # that carries pytest); editable / resolved against image_dir on submit.
+        # Editable image combo + a List button that fills it from the shared
+        # mount (test images first). Defaults to the -test- image matching this
+        # GUI's version when that forms a clean name (blank on a dev build).
         self.test_image = QComboBox()
         self.test_image.setEditable(True)
+        self.test_image.setMinimumWidth(420)
         default = core.default_test_image_basename(core.this_gui_version())
         self.test_image.setCurrentText(default or "")
-        form.addRow("Test image", self.test_image)
+        self.test_image.setToolTip(
+            "The .sif to run pytest inside (needs the [dev]/pytest extra, i.e. "
+            "a picasso-workflow-test-<version>.sif). Click 'List' to pick from "
+            "the shared mount; a bare name is resolved against "
+            "ClusterApptainer.image_dir."
+        )
+        list_images = QPushButton("List")
+        list_images.setToolTip(
+            "List the .sif images on the shared folder over SSH (test images "
+            "first)."
+        )
+        list_images.clicked.connect(self._list_test_images)
+        img_row = QHBoxLayout()
+        img_row.addWidget(self.test_image, 1)
+        img_row.addWidget(list_images)
+        form.addRow("Test image", _row_widget(img_row))
         self.test_data_dir = QLineEdit()
+        self.test_data_dir.setMinimumWidth(420)
         self.test_data_dir.setPlaceholderText(
-            "PW_TEST_DATA_DIR on the cluster (blank = tiers 1-3 only)"
+            "e.g. /fs/pool/…/picasso-workflow_testdata  (blank = skip "
+            "tier 4 + templates)"
+        )
+        self.test_data_dir.setToolTip(
+            "Cluster path to a directory of real DNA-PAINT test datasets "
+            "(exported as PW_TEST_DATA_DIR / bound into the container). Only "
+            "tier 4 (real data) and the template workflow runs need it; leave "
+            "it blank to run just tiers 1-3."
         )
         form.addRow("Test data dir", self.test_data_dir)
+        # Which jobs to run. Tiers 1-3 are self-contained (no data); tier 4 +
+        # templates additionally need the test data dir.
+        self.test_tiers13 = QCheckBox("Tiers 1-3 (unit + integration)")
+        self.test_tiers13.setToolTip(
+            "Unit tests + template validation + synthetic-data integration, "
+            "run as `pytest --pyargs picasso_workflow` inside the image. "
+            "Self-contained -- needs no test data."
+        )
         self.test_tier4 = QCheckBox("Tier 4 (real data)")
         self.test_templates = QCheckBox("Template workflow runs")
         self.test_templates.setToolTip(
@@ -180,13 +214,15 @@ class AdminWindow(QMainWindow):
             "based (regenerate them from the Run tab) -- a conda-based script "
             "would need a login-node environment."
         )
+        self.test_tiers13.setChecked(True)
         self.test_tier4.setChecked(True)
         self.test_templates.setChecked(True)
         toggles = QHBoxLayout()
+        toggles.addWidget(self.test_tiers13)
         toggles.addWidget(self.test_tier4)
         toggles.addWidget(self.test_templates)
         toggles.addStretch(1)
-        form.addRow("Also run", _row_widget(toggles))
+        form.addRow("Run", _row_widget(toggles))
         lay.addLayout(form)
         bar = QHBoxLayout()
         submit = QPushButton("Submit test chain")
@@ -201,6 +237,30 @@ class AdminWindow(QMainWindow):
         lay.addWidget(self.test_summary, 1)
         return w
 
+    def _list_test_images(self) -> None:
+        """Populate the test-image combo from the shared mount (test first)."""
+
+        def done(images):
+            # test images first, then lean, each alphabetical
+            names = [im.name for im in images if im.is_test] + [
+                im.name for im in images if not im.is_test
+            ]
+            current = self.test_image.currentText().strip()
+            self.test_image.blockSignals(True)
+            self.test_image.clear()
+            self.test_image.addItems(names)
+            if current in names:
+                self.test_image.setCurrentText(current)
+            elif names:
+                self.test_image.setCurrentText(names[0])
+            self.test_image.blockSignals(False)
+            n_test = sum(1 for im in images if im.is_test)
+            self.activity.appendPlainText(
+                f"✓ {len(images)} image(s), {n_test} test image(s)"
+            )
+
+        self._run(lambda a: a.list_images(), done, busy="listing images")
+
     def _submit_test_chain(self) -> None:
         version = core.this_gui_version()
         # Snapshot ALL widget inputs on the GUI thread (widgets aren't
@@ -208,6 +268,7 @@ class AdminWindow(QMainWindow):
         ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         image_sel = self.test_image.currentText().strip()
         data_dir = self.test_data_dir.text().strip() or None
+        run_tiers13 = self.test_tiers13.isChecked()
         run_tier4 = self.test_tier4.isChecked()
         run_templates = self.test_templates.isChecked()
 
@@ -228,6 +289,7 @@ class AdminWindow(QMainWindow):
                 version=version,
                 timestamp=ts,
                 test_data_dir=data_dir,
+                run_tiers13=run_tiers13,
                 run_tier4=run_tier4,
                 run_templates=run_templates,
             )
@@ -236,7 +298,7 @@ class AdminWindow(QMainWindow):
             self._test_run_dir = result["run_dir"]
             lines = [
                 f"run dir: {result['run_dir']}",
-                f"tiers 1-3 job: {result['tiers_job']}",
+                f"tiers 1-3 job: {result['tiers_job'] or '(skipped)'}",
                 f"tier 4 job: {result['tier4_job'] or '(skipped)'}",
                 f"template jobs: {len(result['template_jobs'])}",
                 f"summary job: {result['summary_job']}",
@@ -360,17 +422,24 @@ class AdminWindow(QMainWindow):
             )
             self.image_table.setRowCount(len(images))
             for r, im in enumerate(images):
-                match = "✓ this GUI" if im.version == gui_version else ""
+                # Match only on a clean release version (im.version); a
+                # develop-<sha> image has version=None so never "matches".
+                match = (
+                    "✓ this GUI"
+                    if im.version and im.version == gui_version
+                    else ""
+                )
                 cells = [
                     im.name,
-                    im.version or "",
-                    "yes" if im.is_test else "",
+                    im.tag,  # "0.9.0" or "develop-<sha>" (always shown)
+                    "test" if im.is_test else "lean",
                     im.size,
                     im.mtime,
                     match,
                 ]
                 for c, text in enumerate(cells):
                     self.image_table.setItem(r, c, QTableWidgetItem(text))
+            self.image_table.resizeColumnsToContents()
             self.activity.appendPlainText(f"✓ {len(images)} image(s)")
 
         self._run(

@@ -278,12 +278,17 @@ class TestChainSubmitter:
         version,
         timestamp,
         test_data_dir=None,
+        run_tiers13=True,
         run_tier4=True,
         run_templates=True,
     ):
-        """Stage + submit the whole chain; return a summary dict.
+        """Stage + submit the selected jobs; return a summary dict.
 
-        Returns ``{run_dir, tiers_job, tier4_job, template_jobs, summary_job}``.
+        At least one of ``run_tiers13`` / ``run_tier4`` / ``run_templates``
+        (the latter two only with a ``test_data_dir``) must be selected. When
+        tiers 1-3 run, tier 4 and the template runs gate on them
+        (``afterok``); when tiers 1-3 are skipped they run ungated. Returns
+        ``{run_dir, tiers_job, tier4_job, template_jobs, summary_job}``.
         """
         if not self.test_results_dir:
             raise RuntimeError(
@@ -310,23 +315,36 @@ class TestChainSubmitter:
             + " "
             + shlex.quote(f"{run_dir}/.mpl")
         )
+        # Nothing to do? Abort before staging/queueing anything.
+        tier4_wanted = bool(run_tier4 and test_data_dir)
+        if not (run_tiers13 or tier4_wanted or templates):
+            raise RuntimeError(
+                "Nothing selected to run: enable tiers 1-3, or tier 4 / "
+                "template runs with a test data dir."
+            )
         # stage the stdlib-only summarizer for the (on-node) summary job.
         self._stage(self.summarize_source, f"{run_dir}/summarize.py")
 
-        tiers_job = self._sbatch(
-            "tiers1_3",
-            tiers1_3_commands(
-                self.image_path, run_dir, self.module, self.bind_paths
-            ),
-            _RES_TIERS,
-            run_dir,
-        )
+        rows = []
+        dep_ids = []
 
-        rows = [
-            ("tier", tiers_job, "tier1_2", "-"),
-            ("tier", tiers_job, "tier3", "-"),
-        ]
-        dep_ids = [tiers_job]
+        # Tiers 1-3 (optional): when present, tier 4 + templates gate on it.
+        tiers_job = None
+        if run_tiers13:
+            tiers_job = self._sbatch(
+                "tiers1_3",
+                tiers1_3_commands(
+                    self.image_path, run_dir, self.module, self.bind_paths
+                ),
+                _RES_TIERS,
+                run_dir,
+            )
+            rows += [
+                ("tier", tiers_job, "tier1_2", "-"),
+                ("tier", tiers_job, "tier3", "-"),
+            ]
+            dep_ids.append(tiers_job)
+        gate_dep = f"afterok:{tiers_job}" if tiers_job else None
 
         tier4_job = None
         if run_tier4 and test_data_dir:
@@ -341,7 +359,7 @@ class TestChainSubmitter:
                 ),
                 _RES_TIER4,
                 run_dir,
-                dependency=f"afterok:{tiers_job}",
+                dependency=gate_dep,
             )
             rows.append(("tier", tier4_job, "tier4", "-"))
             dep_ids.append(tier4_job)
@@ -349,7 +367,7 @@ class TestChainSubmitter:
         template_jobs = []
         for script in templates:
             folder = posixpath.dirname(script)
-            jid = self._submit(script, dependency=f"afterok:{tiers_job}")
+            jid = self._submit(script, dependency=gate_dep)
             template_jobs.append((jid, script))
             # 4th column is the template FOLDER (summarize.py scans
             # <folder>/logs/ for the per-job logs); the label is its basename.
@@ -365,7 +383,7 @@ class TestChainSubmitter:
                     "version": version or "dev",
                     "image": self.image_path,
                     "test_data_dir": test_data_dir or "<none>",
-                    "tiers1_3_job": tiers_job,
+                    "tiers1_3_job": tiers_job or "<skipped>",
                     "tier4_job": tier4_job or "<skipped>",
                     "templates": len(template_jobs),
                 }

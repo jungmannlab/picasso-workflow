@@ -89,6 +89,22 @@ def parse_image_name(name):
     return None, is_test
 
 
+def image_tag(name):
+    """The human-readable label after the prefix (for the Images table).
+
+    ``picasso-workflow-0.9.0.sif`` -> ``"0.9.0"``;
+    ``picasso-workflow-test-0.9.0.sif`` -> ``"0.9.0"``;
+    ``picasso-workflow-develop-ef8b42.sif`` -> ``"develop-ef8b42"``. Unlike
+    :func:`parse_image_name` (which returns a version only for a clean release,
+    for match-highlighting), this always yields something to show.
+    """
+    stem = name[:-4] if name.endswith(".sif") else name
+    for prefix in ("picasso-workflow-test-", "picasso-workflow-"):
+        if stem.startswith(prefix):
+            return stem[len(prefix) :]
+    return stem
+
+
 # ---------------------------------------------------------------------------
 # Dataclasses
 # ---------------------------------------------------------------------------
@@ -97,7 +113,8 @@ class ImageInfo:
     """One ``.sif`` on the shared mount."""
 
     name: str
-    version: str | None
+    version: str | None  # clean release version (for match), else None
+    tag: str  # label to display (release version, or "develop-<sha>", …)
     is_test: bool
     size: str  # human-readable (e.g. "4.2G"), "" if unknown
     mtime: str  # "YYYY-MM-DD HH:MM", "" if unknown
@@ -153,6 +170,7 @@ def parse_image_listing(stdout):
             ImageInfo(
                 name=name,
                 version=version,
+                tag=image_tag(name),
                 is_test=is_test,
                 size=_human_size(parts[4]),
                 mtime=f"{parts[5]} {parts[6]}",
@@ -398,6 +416,7 @@ class ClusterAdmin:
         version,
         timestamp,
         test_data_dir=None,
+        run_tiers13=True,
         run_tier4=True,
         run_templates=True,
     ):
@@ -422,6 +441,7 @@ class ClusterAdmin:
             version=version,
             timestamp=timestamp,
             test_data_dir=test_data_dir,
+            run_tiers13=run_tiers13,
             run_tier4=run_tier4,
             run_templates=run_templates,
         )

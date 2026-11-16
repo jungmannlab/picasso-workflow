@@ -78,13 +78,25 @@ def test_parse_image_listing():
     ]
     lean = images[0]
     assert lean.version == "0.9.0" and lean.is_test is False
+    assert lean.tag == "0.9.0"
     assert lean.mtime == "2026-11-12 10:30"
     assert lean.size.endswith("G")  # ~4.1 GB -> human readable
-    assert images[2].is_test is True
+    assert images[1].tag == "latest"  # symlink alias shows its label
+    assert images[2].is_test is True and images[2].tag == "0.9.0"
 
 
 def test_parse_image_listing_empty():
     assert core.parse_image_listing("total 0\n") == []
+
+
+def test_image_tag():
+    # release / test both show the version; a develop image shows its label
+    assert core.image_tag("picasso-workflow-0.9.0.sif") == "0.9.0"
+    assert core.image_tag("picasso-workflow-test-0.9.0.sif") == "0.9.0"
+    assert (
+        core.image_tag("picasso-workflow-develop-ef8b42.sif")
+        == "develop-ef8b42"
+    )
 
 
 # --------------------------------------------------------------------------- #
