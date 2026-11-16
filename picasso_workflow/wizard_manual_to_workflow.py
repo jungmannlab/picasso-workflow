@@ -696,36 +696,14 @@ class _ReviewPage(QtWidgets.QWizardPage):
         meta[idx]["notes"] = "edited"
         self._revalidate()
 
-    def _row_context_menu(self, pos):
-        row = self.table.rowAt(pos.y())
-        rows = self._rows()
-        if row < 0 or row >= len(rows):
-            return
-        _stage, list_name, idx = rows[row]
-        menu = QtWidgets.QMenu(self)
-        remove = menu.addAction("Remove this step")
-        chosen = menu.exec(self.table.viewport().mapToGlobal(pos))
-        if chosen is remove:
-            modules, meta = self._buffers(list_name)
-            del modules[idx]
-            del meta[idx]
-            self._rebuild_table()
-            self._revalidate()
+    def _delete_row(self, list_name, idx):
+        """Delete a module row, refusing loaders and bridge modules.
 
-    def _remove_selected_row(self):
-        """Remove the selected step/row from the workflow.
-
-        Can remove any module except loaders (which are required) and bridge
-        modules (which are auto-generated). Shows a warning if removal is blocked.
+        Loaders are required to produce the per-channel localizations and
+        bridge modules are auto-generated, so both are protected here. Shared
+        by the right-click menu and the "Remove selected step" button so the
+        guards cannot diverge. Returns ``True`` if the row was removed.
         """
-        row = self.table.currentRow()
-        rows = self._rows()
-        if row < 0 or row >= len(rows):
-            QtWidgets.QMessageBox.information(
-                self, "Remove step", "Select a row first."
-            )
-            return
-        _stage, list_name, idx = rows[row]
         name = (
             self._single[idx][0]
             if list_name == "single"
@@ -738,7 +716,7 @@ class _ReviewPage(QtWidgets.QWizardPage):
                 f"Cannot remove '{name}': loader modules are required to "
                 "produce the per-channel localizations.",
             )
-            return
+            return False
         if name in _BRIDGE_MODULES:
             QtWidgets.QMessageBox.information(
                 self,
@@ -746,12 +724,42 @@ class _ReviewPage(QtWidgets.QWizardPage):
                 f"'{name}' is an auto-generated bridge module. It will be "
                 "rebuilt when the single/aggregation boundary changes.",
             )
-            return
+            return False
         modules, meta = self._buffers(list_name)
         del modules[idx]
         del meta[idx]
         self._rebuild_table()
         self._revalidate()
+        return True
+
+    def _row_context_menu(self, pos):
+        row = self.table.rowAt(pos.y())
+        rows = self._rows()
+        if row < 0 or row >= len(rows):
+            return
+        _stage, list_name, idx = rows[row]
+        menu = QtWidgets.QMenu(self)
+        remove = menu.addAction("Remove this step")
+        chosen = menu.exec(self.table.viewport().mapToGlobal(pos))
+        if chosen is remove:
+            self._delete_row(list_name, idx)
+
+    def _remove_selected_row(self):
+        """Remove the selected step/row from the workflow.
+
+        Can remove any module except loaders (which are required) and bridge
+        modules (which are auto-generated). Shows a warning if removal is
+        blocked.
+        """
+        row = self.table.currentRow()
+        rows = self._rows()
+        if row < 0 or row >= len(rows):
+            QtWidgets.QMessageBox.information(
+                self, "Remove step", "Select a row first."
+            )
+            return
+        _stage, list_name, idx = rows[row]
+        self._delete_row(list_name, idx)
 
     def _move_selected_to_aggregation(self):
         """Split single/aggregation at the selected single-stage step.

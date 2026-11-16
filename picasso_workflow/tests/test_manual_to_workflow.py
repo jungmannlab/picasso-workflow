@@ -1009,3 +1009,33 @@ def test_reconstruct_flags_unmapped_step(tmp_path):
     confidences = [r["confidence"] for r in res.review]
     assert m.CONF_UNMAPPED in confidences
     assert any("unresolved" in e for e in res.errors)
+
+
+def test_find_picks_file_ignores_info_sidecars(tmp_path):
+    # picasso's per-step info sidecars (e.g. ..._picked.yaml) also contain the
+    # substring "pick" but pair with a same-stem .hdf5; they must not be taken
+    # for a standalone picks-regions file.
+    d = tmp_path / "man"
+    d.mkdir()
+    base = "Cell 1_ALFA-L1"
+    (d / f"{base}_locs_picked.hdf5").write_text("")
+    (d / f"{base}_locs_picked.yaml").write_text("")
+    assert m._find_picks_file(str(d), base) is None
+    # A standalone picks file (no .hdf5 sibling) is returned.
+    (d / f"{base}_picks.yaml").write_text("")
+    assert m._find_picks_file(str(d), base) == str(d / f"{base}_picks.yaml")
+
+
+def test_agg_param_divergence_ignores_key_order():
+    def step(params):
+        return m.MappedStep(
+            source="x", module_name="align_channels", params=params
+        )
+
+    ch0 = [step({"a": 1, "b": 2})]
+    # Equal params, different insertion order -> no spurious divergence.
+    ch_same = [step({"b": 2, "a": 1})]
+    assert m._agg_param_divergence([ch0, ch_same], ["c0", "c1"]) == []
+    # Genuinely different params -> a warning.
+    ch_diff = [step({"a": 9, "b": 2})]
+    assert m._agg_param_divergence([ch0, ch_diff], ["c0", "c1"])

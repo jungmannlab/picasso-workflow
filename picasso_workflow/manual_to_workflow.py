@@ -90,7 +90,6 @@ KNOWN_SUFFIXES = (
     "molmap",
     "resi",
     "multi",
-    "apicked",
     "apick",
     "properties",
     "grouped",
@@ -539,7 +538,12 @@ def scan_folder(manual_dir, progress=None, should_cancel=None):
                 if os.path.exists(yaml_path):
                     file_lengths.append((_count_info_docs(yaml_path), name))
             file_lengths.sort()
-        base_info_len = file_lengths[0][0] if file_lengths else 0
+        # base_info_len is the step count baked into base_hdf5 (the shortest
+        # file, the downstream-mode start) specifically — not the global
+        # minimum, which can belong to a different file when name length and
+        # doc count disagree (renamed / re-saved checkpoints).
+        counts_by_name = {name: count for count, name in file_lengths}
+        base_info_len = counts_by_name.get(shortest, 0)
         dataset, channel = _split_dataset_channel(base_stem)
         picks_path = _find_picks_file(manual_dir, base_stem)
         chains.append(
@@ -559,15 +563,27 @@ def scan_folder(manual_dir, progress=None, should_cancel=None):
 
 
 def _find_picks_file(manual_dir, base_stem):
-    """Return a ``<base>_picks*.yaml`` pick file for a channel, if any."""
+    """Return a ``<base>_picks*.yaml`` pick file for a channel, if any.
+
+    A picks file is a standalone pick-regions YAML. It is distinguished from
+    picasso's per-step *info* sidecars (e.g. ``..._picked.yaml`` /
+    ``..._apicked.yaml``, which also contain the substring ``"pick"``) by the
+    absence of a matching ``.hdf5`` sibling: every info sidecar pairs with a
+    same-stem localization file, a picks-regions file does not.
+    """
     for name in os.listdir(manual_dir):
         low = name.lower()
-        if (
-            low.endswith(".yaml")
-            and name.startswith(base_stem)
-            and "pick" in low
-        ):
-            return os.path.join(manual_dir, name)
+        if not (low.endswith(".yaml") and name.startswith(base_stem)):
+            continue
+        if "pick" not in low:
+            continue
+        # Skip per-step info sidecars (they pair with a same-stem .hdf5).
+        hdf5_sibling = os.path.join(
+            manual_dir, name[: -len(".yaml")] + ".hdf5"
+        )
+        if os.path.exists(hdf5_sibling):
+            continue
+        return os.path.join(manual_dir, name)
     return None
 
 
@@ -1690,7 +1706,7 @@ def _agg_param_divergence(per_channel_agg, channels):
             other = per_channel_agg[ci]
             if pos >= len(other) or other[pos].module_name != step.module_name:
                 continue
-            if repr(other[pos].params) != repr(step.params):
+            if other[pos].params != step.params:
                 warnings.append(
                     f"channel {channels[ci]} has different {step.module_name} "
                     f"parameters in the aggregation stage; using channel "
