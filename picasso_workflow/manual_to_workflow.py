@@ -43,15 +43,12 @@ CONF_OK = "ok"  # mapped with recovered parameters
 CONF_RETRO = "retro"  # parameters retro-calculated from saved data
 CONF_LOW = "low"  # mapped but parameters fell back to defaults
 CONF_UNMAPPED = "unmapped"  # no confident mapping -> placeholder
-CONF_SKIP = "skip"  # non-pipeline step (measurement/metadata) -> no module
 
-# Sentinel target for steps that have no workflow equivalent and are dropped
-# from the module list (reported for transparency, never emitted as a module).
+# Sentinel STEP_MAP target for steps that have no workflow equivalent; map_step
+# turns it into a flagged ``dummy_module`` placeholder (kept, not dropped).
 SKIP_MODULE = "__skip__"
 
-# Modules whose parameters cannot be recovered from the info: flag them for
 # review even though the mapping itself is confident.
-PARAMS_NOT_RECOVERABLE = frozenset({"filter_locs"})
 
 # Cross-channel modules: the first one seen marks the single -> aggregation
 # boundary. All of these are aggregation-scope in the registry.
@@ -527,20 +524,24 @@ def scan_folder(manual_dir, progress=None, should_cancel=None):
         # earliest localized checkpoint, used as the downstream-mode start.
         deepest = max(files, key=len)
         shortest = min(files, key=len)
-        # Doc count per file -> attribute each step to the file that saved it.
-        file_lengths = []
-        for name in files:
-            yaml_path = os.path.join(
-                manual_dir, name[: -len(".hdf5")] + ".yaml"
-            )
-            if os.path.exists(yaml_path):
-                file_lengths.append((_count_info_docs(yaml_path), name))
-        file_lengths.sort()
-        base_info_len = file_lengths[0][0] if file_lengths else 0
+        # Load deepest file's info first, then map steps to source files.
         base_path = os.path.join(manual_dir, shortest)
         deepest_path = os.path.join(manual_dir, deepest)
         info_path = deepest_path[: -len(".hdf5")] + ".yaml"
         info_steps = _load_info(info_path) if os.path.exists(info_path) else []
+
+        # Build file_lengths: map each step to the file that first saved it.
+        # Only scan file lengths if there are steps (optimization for empty chains).
+        file_lengths = []
+        if info_steps:
+            for name in files:
+                yaml_path = os.path.join(
+                    manual_dir, name[: -len(".hdf5")] + ".yaml"
+                )
+                if os.path.exists(yaml_path):
+                    file_lengths.append((_count_info_docs(yaml_path), name))
+            file_lengths.sort()
+        base_info_len = file_lengths[0][0] if file_lengths else 0
         dataset, channel = _split_dataset_channel(base_stem)
         picks_path = _find_picks_file(manual_dir, base_stem)
         chains.append(
@@ -910,7 +911,7 @@ def map_step(step, pixelsize=130.0):
             messages = []
             if not params and not no_params_expected:
                 messages.append("parameters fell back to module defaults")
-            if module_name in PARAMS_NOT_RECOVERABLE:
+            if module_name == "filter_locs":
                 conf = CONF_LOW
                 messages.append(
                     "parameters not recovered from the manual step; set them "
@@ -1061,6 +1062,10 @@ def _localizations_loader_step():
 # ---------------------------------------------------------------------------
 # 3. find_similar parameter retro-calculation.
 # ---------------------------------------------------------------------------
+# Note: retro_calc_find_similar and retro_calc_from_picked have similar numeric
+# logic (looping over picks/groups, computing fracs and rmsds from enclosed locs,
+# deriving min/max with margin). A future refactoring could extract a shared
+# _retro_calc_thresholds_core(x_nm, y_nm, centers_or_groups, ...) helper.
 def retro_calc_find_similar(
     locs, centers_nm, diameter_nm, pixelsize, n_frames, margin=0.1
 ):
@@ -1373,14 +1378,28 @@ def diff_single_stage(per_channel_single, channels):
 
 
 def _all_equal(values):
-    """True when every value equals the first (by repr for robustness)."""
-    first = repr(values[0])
-    return all(repr(v) == first for v in values[1:])
+    """True when every value equals the first (by direct equality)."""
+    if not values:
+        return True
+    first = values[0]
+    return all(v == first for v in values[1:])
 
 
 # ---------------------------------------------------------------------------
 # 6. Bridge modules + aggregation list assembly.
 # ---------------------------------------------------------------------------
+# Bridge modules connecting single and aggregation workflows; exported for use
+# in the wizard's resplit logic and elsewhere.
+BRIDGE_MODULES = frozenset(
+    {
+        "save_single_dataset",
+        "analysis_documentation",
+        "load_datasets_to_aggregate",
+        "save_datasets_aggregated",
+    }
+)
+
+
 def _save_single_bridge():
     """The ``save_single_dataset`` module closing the single stage."""
     return ("save_single_dataset", {"filename": ("$$map", "#tags")})

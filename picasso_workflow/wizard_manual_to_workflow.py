@@ -41,14 +41,13 @@ _CONF_LABEL = {
 }
 
 # Wizard-added plumbing modules (not user processing steps) -- excluded when
-# re-splitting single/aggregation stages.
-_BRIDGE_MODULES = frozenset(
-    {
-        "save_single_dataset",
-        "analysis_documentation",
-        "load_datasets_to_aggregate",
-        "save_datasets_aggregated",
-    }
+# re-splitting single/aggregation stages (imported from engine for consistency).
+_BRIDGE_MODULES = mtw.BRIDGE_MODULES
+
+# Loader modules must stay in the single stage (they produce the per-channel
+# localizations the aggregation stage loads back), so they cannot be moved.
+_LOADER_MODULES = frozenset(
+    {"load_dataset_movie", "load_dataset_localizations"}
 )
 
 # Aggregation workflow type index in the main GUI's workflow_type combo.
@@ -695,11 +694,17 @@ class _ReviewPage(QtWidgets.QWizardPage):
             )
             return
         _stage, list_name, idx = rows[row]
-        if list_name != "single" or self._single[idx][0] in _BRIDGE_MODULES:
+        name = self._single[idx][0] if list_name == "single" else None
+        if (
+            list_name != "single"
+            or name in _BRIDGE_MODULES
+            or name in _LOADER_MODULES
+        ):
             QtWidgets.QMessageBox.information(
                 self,
                 "Move to aggregation",
-                "Pick a single-stage processing step (not a bridge module).",
+                "Pick a single-stage processing step after the loader (not "
+                "the loader or a bridge module).",
             )
             return
 

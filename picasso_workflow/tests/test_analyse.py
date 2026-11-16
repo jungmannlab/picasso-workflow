@@ -979,7 +979,9 @@ class TestAnalyseModules(unittest.TestCase):
         # clean up
         shutil.rmtree(os.path.join(self.results_folder, "00_align_channels"))
 
-    def combine_channels(self):
+    def test_combine_channels_all(self):
+        # Backward compatibility: with no 'channels' subset, all channels are
+        # combined into a single channel (the previous behaviour).
         # create locs to be combined
         locs_dtype = [
             ("frame", "u4"),
@@ -1008,7 +1010,12 @@ class TestAnalyseModules(unittest.TestCase):
         self.ap.channel_locs = [locs1, locs2]
         self.ap.channel_info = [["info1"], ["info2"]]
         self.ap.channel_tags = ["1", "2"]
-        self.ap.combine_channels(0, {})
+        self.ap.combine_channels(0, {"tag": "combined"})
+
+        # All channels collapsed into one combined channel.
+        self.assertEqual(self.ap.channel_tags, ["combined"])
+        self.assertEqual(len(self.ap.channel_locs), 1)
+        self.assertEqual(len(self.ap.channel_locs[0]), 2 * len(self.ap.movie))
 
         shutil.rmtree(os.path.join(self.results_folder, "00_combine_channels"))
 
