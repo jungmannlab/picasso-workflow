@@ -99,6 +99,22 @@ def test_configured_test_data_dir():
         core.configured_test_data_dir({"TestData": {"directory": None}}) == ""
     )
     assert core.configured_test_data_dir({}) == ""
+    # a malformed (non-dict) TestData must NOT crash -> "" (GUI startup safety)
+    assert core.configured_test_data_dir({"TestData": "/fs/td"}) == ""
+    assert core.configured_test_data_dir({"TestData": ["/fs/td"]}) == ""
+
+
+def test_configured_test_data_dir_default_config():
+    # the GUI calls it with no args -> reads the module CONFIG (the real call
+    # site); mutate+restore the shared dict to exercise that branch.
+    saved = dict(core.CONFIG)
+    try:
+        core.CONFIG.clear()
+        core.CONFIG["TestData"] = {"directory": "/fs/from-config"}
+        assert core.configured_test_data_dir() == "/fs/from-config"
+    finally:
+        core.CONFIG.clear()
+        core.CONFIG.update(saved)
 
 
 def test_image_tag():
@@ -109,6 +125,10 @@ def test_image_tag():
         core.image_tag("picasso-workflow-develop-ef8b42.sif")
         == "develop-ef8b42"
     )
+    # a non-picasso-workflow name: tag is the whole stem, and it is NOT
+    # mis-parsed as a version even if it is all-digits.
+    assert core.image_tag("123.sif") == "123"
+    assert core.parse_image_name("123.sif") == (None, False)
 
 
 # --------------------------------------------------------------------------- #

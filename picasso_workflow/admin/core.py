@@ -64,6 +64,23 @@ def default_test_image_basename(version):
     return base.replace("picasso-workflow-", "picasso-workflow-test-", 1)
 
 
+def _split_image_name(name):
+    """``(label, is_test, matched)`` for a ``.sif`` basename.
+
+    ``label`` is the stem after the ``picasso-workflow[-test-]`` prefix (or the
+    whole stem when no prefix matched); ``is_test`` reflects the ``-test-``
+    marker; ``matched`` says a picasso-workflow prefix was present. Single
+    source of the prefix-stripping shared by :func:`parse_image_name` and
+    :func:`image_tag`.
+    """
+    stem = name[:-4] if name.endswith(".sif") else name
+    if stem.startswith("picasso-workflow-test-"):
+        return stem[len("picasso-workflow-test-") :], True, True
+    if stem.startswith("picasso-workflow-"):
+        return stem[len("picasso-workflow-") :], False, True
+    return stem, False, False
+
+
 def parse_image_name(name):
     """Split a ``.sif`` basename into ``(version, is_test)``.
 
@@ -72,20 +89,15 @@ def parse_image_name(name):
     anything else (e.g. ``...-develop-<sha>.sif``) -> ``(None, is_test)`` with
     ``is_test`` reflecting the ``-test-`` marker.
     """
-    stem = name[:-4] if name.endswith(".sif") else name
-    is_test = stem.startswith("picasso-workflow-test-")
-    if is_test:
-        version = stem[len("picasso-workflow-test-") :]
-    elif stem.startswith("picasso-workflow-"):
-        version = stem[len("picasso-workflow-") :]
-    else:
+    label, is_test, matched = _split_image_name(name)
+    if not matched:
         return None, is_test
     # A plain release version is dot-separated digit groups ("0.9.0");
     # develop-<sha>, malformed dotted names ("0..0"), etc. are left unparsed
     # (shown verbatim by the caller, not matched to a version).
-    groups = version.split(".")
-    if version and all(g.isdigit() for g in groups):
-        return version, is_test
+    groups = label.split(".")
+    if label and all(g.isdigit() for g in groups):
+        return label, is_test
     return None, is_test
 
 
@@ -102,7 +114,12 @@ def configured_test_data_dir(config=None):
     """
     if config is None:
         config = CONFIG
-    return str((config.get("TestData") or {}).get("directory") or "")
+    # Tolerate a malformed (non-dict) TestData in a hand-edited config.yaml:
+    # fall back to blank rather than crashing GUI startup on `.get`.
+    test_data = config.get("TestData")
+    if not isinstance(test_data, dict):
+        return ""
+    return str(test_data.get("directory") or "")
 
 
 def image_tag(name):
@@ -114,11 +131,7 @@ def image_tag(name):
     :func:`parse_image_name` (which returns a version only for a clean release,
     for match-highlighting), this always yields something to show.
     """
-    stem = name[:-4] if name.endswith(".sif") else name
-    for prefix in ("picasso-workflow-test-", "picasso-workflow-"):
-        if stem.startswith(prefix):
-            return stem[len(prefix) :]
-    return stem
+    return _split_image_name(name)[0]
 
 
 # ---------------------------------------------------------------------------

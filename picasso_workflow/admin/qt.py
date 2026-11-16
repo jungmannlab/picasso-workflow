@@ -184,6 +184,9 @@ class AdminWindow(QMainWindow):
             "against ClusterApptainer.image_dir."
         )
         form.addRow("Test image", self.test_image)
+        # Updated by 'Refresh images': warns when the mount has no test image.
+        self.test_image_status = QLabel("")
+        form.addRow("", self.test_image_status)
         self.test_data_dir = QLineEdit()
         self.test_data_dir.setMinimumWidth(420)
         # Pre-fill from config TestData.directory -- the same source
@@ -443,21 +446,29 @@ class AdminWindow(QMainWindow):
     def _fill_test_images(self, images):
         """Put the TEST images into the Test-runs dropdown (editable).
 
-        An empty list leaves the combo's current text (the version default or a
-        typed name) untouched, so a mount with no test image doesn't wipe it.
+        A non-empty current text (a deliberately typed name/path, or the version
+        default) is always preserved -- items are offered, but a typed entry is
+        never silently replaced. When the mount has no test image, a warning
+        label points the user at building/downloading one.
         """
         names = [im.name for im in images if im.is_test]
         current = self.test_image.currentText().strip()
         self.test_image.blockSignals(True)
         self.test_image.clear()
-        if names:
-            self.test_image.addItems(names)
-            self.test_image.setCurrentText(
-                current if current in names else names[0]
-            )
-        else:
-            self.test_image.setCurrentText(current)  # preserve, no items
+        self.test_image.addItems(names)
+        # Keep the user's entry if they typed one; else default to the first
+        # listed test image. clear() wipes the line-edit, so restore explicitly.
+        if current:
+            self.test_image.setCurrentText(current)
+        elif names:
+            self.test_image.setCurrentText(names[0])
         self.test_image.blockSignals(False)
+        self.test_image_status.setText(
+            ""
+            if names
+            else "⚠ No test image on the mount — build/download a "
+            "picasso-workflow-test-<version>.sif (it carries pytest)."
+        )
 
     def _refresh_jobs(self) -> None:
         def done(result):

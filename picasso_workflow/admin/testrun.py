@@ -344,10 +344,10 @@ class TestChainSubmitter:
                 ("tier", tiers_job, "tier3", "-"),
             ]
             dep_ids.append(tiers_job)
-        gate_dep = f"afterok:{tiers_job}" if tiers_job else None
+        gate_dep = f"afterok:{tiers_job}" if tiers_job is not None else None
 
         tier4_job = None
-        if run_tier4 and test_data_dir:
+        if tier4_wanted:
             tier4_job = self._sbatch(
                 "tier4",
                 tier4_commands(
