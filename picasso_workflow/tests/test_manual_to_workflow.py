@@ -293,7 +293,6 @@ def test_apply_find_similar_retrocalc_monkeypatched(tmp_path, monkeypatch):
         dataset="Cell 1",
         base_hdf5=str(base),
         deepest_hdf5=str(base),
-        deepest_info_path="",
         raw_filepath=None,
         picks_path=str(picks),
         steps=[
@@ -352,14 +351,44 @@ def test_diff_single_stage_scalar_vs_map():
             params={"box_size": 13, "min_gradient": 5000.0},
         )
     ]
-    folded, tile = m.diff_single_stage([ch0, ch1], ["c0", "c1"])
+    folded, tile, warnings = m.diff_single_stage([ch0, ch1], ["c0", "c1"])
     name, params = folded[0]
     assert name == "identify"
+    assert warnings == []
     # min_gradient identical -> scalar; box_size varies -> $$map.
     assert params["min_gradient"] == 5000.0
     assert params["box_size"][0] == "$$map"
     col = params["box_size"][1]
     assert tile[col] == {"c0": 11, "c1": 13}
+
+
+def test_diff_single_stage_keeps_spine_and_warns_on_divergence():
+    # Channel 0 has an extra step; the spine must not be truncated to the
+    # shorter channel, and the divergence must be reported, not silently lost.
+    ch0 = [
+        m.MappedStep(source="", module_name="picasso_localize"),
+        m.MappedStep(source="", module_name="picasso_undrift_rcc"),
+    ]
+    ch1 = [m.MappedStep(source="", module_name="picasso_localize")]
+    folded, tile, warnings = m.diff_single_stage([ch0, ch1], ["c0", "c1"])
+    assert [n for n, _ in folded] == [
+        "picasso_localize",
+        "picasso_undrift_rcc",
+    ]
+    assert any("diverges" in w for w in warnings)
+
+
+def test_agg_param_divergence_warns():
+    agg0 = [
+        m.MappedStep(source="", module_name="dbscan", params={"radius": 5.0})
+    ]
+    agg1 = [
+        m.MappedStep(source="", module_name="dbscan", params={"radius": 8.0})
+    ]
+    warnings = m._agg_param_divergence([agg0, agg1], ["c0", "c1"])
+    assert any("dbscan" in w and "aggregation" in w for w in warnings)
+    # Identical params -> no warning.
+    assert m._agg_param_divergence([agg0, agg0], ["c0", "c1"]) == []
 
 
 # ---------------------------------------------------------------------------

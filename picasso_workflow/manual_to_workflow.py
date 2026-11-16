@@ -135,11 +135,9 @@ class ChannelChain:
     dataset: str  # "Cell 1" (dataset part of the manual base name)
     base_hdf5: str | None  # shortest-stem localization file
     deepest_hdf5: str  # longest-chain file (authoritative info source)
-    deepest_info_path: str  # .yaml sidecar of the deepest file
     raw_filepath: str | None  # resolved raw movie (.ome.tif)
     picks_path: str | None  # *_picks*.yaml if present
     info_steps: list[dict] = field(default_factory=list)
-    suffix_ops: list[str] = field(default_factory=list)
     steps: list[MappedStep] = field(default_factory=list)
 
 
@@ -259,12 +257,6 @@ def _strip_suffixes(stem):
     return stem
 
 
-def _suffix_ops(base_stem, deepest_stem):
-    """Return the ordered suffix tokens between base and deepest stem."""
-    rest = deepest_stem[len(base_stem) :]
-    return [t for t in rest.split("_") if t]
-
-
 def _split_dataset_channel(base_stem):
     """Split a manual base stem into ``(dataset, channel)``.
 
@@ -278,23 +270,37 @@ def _split_dataset_channel(base_stem):
     return "dataset", base_stem.strip()
 
 
-def _resolve_raw_filepath(info_steps, root):
-    """Find the raw ``.ome.tif`` for a channel from its info + the root tree.
+def _build_raw_index(root):
+    """Index raw files under ``root`` by basename for channel resolution.
+
+    One ``os.walk`` over the (potentially large) raw-data tree, shared across
+    all channels, instead of one walk per channel.
+
+    Returns
+    -------
+    dict[str, str]
+        ``{basename: absolute_path}`` (first occurrence wins).
+    """
+    index: dict[str, str] = {}
+    for dirpath, _dirs, files in os.walk(root):
+        for name in files:
+            index.setdefault(name, os.path.join(dirpath, name))
+    return index
+
+
+def _resolve_raw_filepath(info_steps, raw_index):
+    """Resolve a channel's raw ``.ome.tif`` from its info + the raw index.
 
     The first info dict records the source movie under ``File``; its basename
-    (e.g. ``08_ALFA_L1_100pM_1_MMStack_Pos0.ome.tif``) identifies the raw
-    acquisition folder under ``root``. Returns the resolved path or ``None``.
+    (e.g. ``08_ALFA_L1_100pM_1_MMStack_Pos0.ome.tif``) identifies the raw file
+    in ``raw_index``. Returns the resolved path or ``None``.
     """
     if not info_steps:
         return None
     file_field = info_steps[0].get("File")
     if not file_field:
         return None
-    basename = os.path.basename(str(file_field))
-    for dirpath, _dirs, files in os.walk(root):
-        if basename in files:
-            return os.path.join(dirpath, basename)
-    return None
+    return raw_index.get(os.path.basename(str(file_field)))
 
 
 def scan_folder(root, manual_subdir="analysis_manual"):
@@ -322,6 +328,8 @@ def scan_folder(root, manual_subdir="analysis_manual"):
 
     hdf5s = [f for f in os.listdir(manual_dir) if f.lower().endswith(".hdf5")]
     groups = _group_by_base_stem(hdf5s)
+    # Walk the raw-data tree once and share the basename index across channels.
+    raw_index = _build_raw_index(root)
 
     chains = []
     for base_stem in sorted(groups):
@@ -343,11 +351,9 @@ def scan_folder(root, manual_subdir="analysis_manual"):
                 dataset=dataset,
                 base_hdf5=base_path,
                 deepest_hdf5=deepest_path,
-                deepest_info_path=info_path,
-                raw_filepath=_resolve_raw_filepath(info_steps, root),
+                raw_filepath=_resolve_raw_filepath(info_steps, raw_index),
                 picks_path=picks_path,
                 info_steps=info_steps,
-                suffix_ops=_suffix_ops(base_stem, deepest[: -len(".hdf5")]),
             )
         )
     return chains
@@ -773,6 +779,9 @@ def apply_find_similar_retrocalc(chain, pixelsize=130.0):
         locs, info = _load_locs(chain.base_hdf5 or chain.deepest_hdf5)
     except Exception as exc:  # pragma: no cover - depends on picasso/data
         for s in fs_steps:
+            # Flag for review: the step keeps only module defaults, so it must
+            # not read as a confidently-recovered module.
+            s.confidence = CONF_LOW
             s.messages.append(f"could not load locs for retro-calc: {exc}")
         return
     n_frames = _n_frames_from_info(info)
@@ -832,48 +841,68 @@ def _tile_column_name(module_name, param, position):
 def diff_single_stage(per_channel_single, channels):
     """Fold per-channel single-dataset steps into one list with ``$$map``.
 
-    Parameters position-aligned across channels are compared: identical values
-    stay scalar; values that vary across channels become
-    ``("$$map", "<column>", <default>)`` and the column is registered in the
-    returned ``tile_params``.
+    The canonical spine is the first channel's full step list (not the shortest
+    channel, which would silently truncate it). At each position, only channels
+    whose step matches the spine module contribute parameters; a channel that is
+    shorter or whose module differs is recorded as a divergence warning rather
+    than silently dropped. Parameters identical across the contributing channels
+    stay scalar; values that vary become ``("$$map", "<column>", <default>)``
+    and the column is registered in ``tile_params``.
 
     Parameters
     ----------
     per_channel_single : list[list[MappedStep]]
-        One single-dataset step list per channel (assumed same spine).
+        One single-dataset step list per channel; the first is the spine.
     channels : list[str]
         Channel tags, aligned with ``per_channel_single``.
 
     Returns
     -------
-    tuple[list[tuple[str, dict]], dict]
-        The folded single-dataset module list and a ``tile_params`` dict
-        ``{column: {channel: value}}``.
+    tuple[list[tuple[str, dict]], dict, list[str]]
+        The folded single-dataset module list, a ``tile_params`` dict
+        ``{column: {channel: value}}``, and divergence warnings.
     """
     if not per_channel_single:
-        return [], {}
-    spine_len = min(len(s) for s in per_channel_single)
+        return [], {}, []
+    spine = per_channel_single[0]
     folded = []
     tile_params: dict[str, dict] = {}
-    for pos in range(spine_len):
-        module_name = per_channel_single[0][pos].module_name
-        # Union of parameter keys at this position across channels.
-        keys = set()
-        for ch_steps in per_channel_single:
-            keys.update(ch_steps[pos].params.keys())
+    warnings: list[str] = []
+    for pos in range(len(spine)):
+        module_name = spine[pos].module_name
+        # Channels that have a matching step at this position contribute.
+        aligned = []
+        for ci, ch_steps in enumerate(per_channel_single):
+            if (
+                pos < len(ch_steps)
+                and ch_steps[pos].module_name == module_name
+            ):
+                aligned.append(ci)
+            else:
+                warnings.append(
+                    f"channel {channels[ci]} diverges from the single-stage "
+                    f"spine at step {pos:02d} ({module_name}); using spine "
+                    "channel values there"
+                )
         merged = {}
+        keys = set()
+        for ci in aligned:
+            keys.update(per_channel_single[ci][pos].params.keys())
         for key in sorted(keys):
-            values = [ch[pos].params.get(key) for ch in per_channel_single]
+            values = [
+                per_channel_single[ci][pos].params.get(key) for ci in aligned
+            ]
             if _all_equal(values):
                 merged[key] = values[0]
             else:
                 col = _tile_column_name(module_name, key, pos)
                 tile_params[col] = {
-                    channels[i]: values[i] for i in range(len(channels))
+                    channels[ci]: per_channel_single[ci][pos].params.get(key)
+                    for ci in aligned
                 }
                 merged[key] = ("$$map", col, values[0])
         folded.append((module_name, merged))
-    return folded, tile_params
+    return folded, tile_params, warnings
 
 
 def _all_equal(values):
@@ -991,11 +1020,15 @@ def reconstruct_workflow(
         per_channel_single.append(single_steps)
         per_channel_agg.append(agg_steps)
 
-    single_folded, tile_params = diff_single_stage(
-        per_channel_single, [c.tag for c in chains]
+    tags = [c.tag for c in chains]
+    single_folded, tile_params, diverge_warnings = diff_single_stage(
+        per_channel_single, tags
     )
-    # The aggregation spine is taken from the first channel (same across all).
+    # The aggregation spine is taken from the first channel (same across all);
+    # unlike the single stage it is not tiled per channel, so warn if the
+    # per-channel aggregation parameters actually differ.
     agg_steps = per_channel_agg[0] if per_channel_agg else []
+    diverge_warnings += _agg_param_divergence(per_channel_agg, tags)
 
     single_modules = list(single_folded)
     single_modules.append(_save_single_bridge())
@@ -1010,8 +1043,8 @@ def reconstruct_workflow(
         agg_modules.append(("save_datasets_aggregated", {}))
 
     tree_data = _build_tree_data(chains, tile_params)
-    review = _build_review(chains, per_channel_single, per_channel_agg)
-    errors = validate(single_modules, agg_modules, chains)
+    review = _build_review(chains)
+    errors = validate(single_modules, agg_modules, chains) + diverge_warnings
 
     return ReconstructionResult(
         tree_data=tree_data,
@@ -1048,13 +1081,38 @@ def _build_tree_data(chains, tile_params):
     }
 
 
-def _build_review(chains, per_channel_single, per_channel_agg):
+def _agg_param_divergence(per_channel_agg, channels):
+    """Warn when per-channel aggregation-stage parameters differ.
+
+    The aggregation stage runs once (it is not tiled per channel), so only the
+    first channel's parameters are used. Unlike the single stage, differing
+    per-channel values cannot be expressed via ``$$map`` there, so surface them
+    for the user rather than letting channel-0 values silently win.
+    """
+    warnings = []
+    if len(per_channel_agg) < 2:
+        return warnings
+    spine = per_channel_agg[0]
+    for pos, step in enumerate(spine):
+        for ci in range(1, len(per_channel_agg)):
+            other = per_channel_agg[ci]
+            if pos >= len(other) or other[pos].module_name != step.module_name:
+                continue
+            if repr(other[pos].params) != repr(step.params):
+                warnings.append(
+                    f"channel {channels[ci]} has different {step.module_name} "
+                    f"parameters in the aggregation stage; using channel "
+                    f"{channels[0]} values (aggregation is not per-channel)"
+                )
+    return warnings
+
+
+def _build_review(chains):
     """Build the per-module review rows from the first channel's spine."""
     review = []
     if not chains:
         return review
-    first = chains[0]
-    single_steps, agg_steps = split_stages(first.steps)
+    single_steps, agg_steps = split_stages(chains[0].steps)
     for s in single_steps:
         review.append(_review_row(s, "single"))
     for s in agg_steps:

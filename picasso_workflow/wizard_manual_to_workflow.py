@@ -48,6 +48,17 @@ def apply_result_to_window(window, result):
     workflow type, installs ``tree_data`` (via ``_restore_dataset_table``), sets
     both module lists, and refreshes the list widgets, module palette and the
     Workflow Config tab. Qt-free so it can be unit-tested with a stub window.
+
+    Parameters
+    ----------
+    window : picasso_workflow.gui.Window
+        The main GUI window to populate (or a duck-typed stub in tests).
+    result : manual_to_workflow.ReconstructionResult
+        The reconstructed workflow to install.
+
+    Returns
+    -------
+    None
     """
     window._restore_dataset_table(
         {
@@ -194,6 +205,10 @@ class _ReviewPage(QtWidgets.QWizardPage):
         layout.addWidget(self.errors_box)
 
     def initializePage(self):
+        # Re-entering the page (Back then Next) must not leave a prior worker
+        # thread running: stop it first so a stale _on_finished cannot race the
+        # new run and overwrite the table/result.
+        self._stop_worker()
         self.result = None
         self.table.setRowCount(0)
         self.errors_box.setPlainText("")
@@ -215,6 +230,18 @@ class _ReviewPage(QtWidgets.QWizardPage):
         self._worker.finished.connect(self._thread.quit)
         self._worker.failed.connect(self._thread.quit)
         self._thread.start()
+
+    def _stop_worker(self):
+        """Quit and dispose any running reconstruction thread/worker."""
+        thread = getattr(self, "_thread", None)
+        if thread is not None:
+            try:
+                thread.quit()
+                thread.wait()
+            except RuntimeError:
+                pass  # already deleted
+        self._thread = None
+        self._worker = None
 
     def _on_failed(self, message):
         self.status.setText(f"Reconstruction failed: {message}")
