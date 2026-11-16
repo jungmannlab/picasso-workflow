@@ -780,9 +780,12 @@ class PicassoSetCoreMixin:
         self.channel_locs = new_locs
         self.channel_info = new_info
         results["per_channel"] = per_channel
-        for key, val in per_channel[0].items() if per_channel else []:
-            if key != "tag" and isinstance(val, (int, float)):
-                results[key] = sum(c[key] for c in per_channel)
+        # Sum the per-channel numeric stats into top-level totals (the stats
+        # keys are the same for every channel, so key off the first).
+        if per_channel:
+            for key, val in per_channel[0].items():
+                if key != "tag" and isinstance(val, (int, float)):
+                    results[key] = sum(c[key] for c in per_channel)
         return results
 
     @module_decorator
@@ -1252,6 +1255,10 @@ class PicassoSetCoreMixin:
                 group_column=group_column,
             )
 
+        # The calibration file is the same for every channel; parse it at
+        # most once (per-channel re-reads are wasteful on networked storage).
+        _calib_cache = {}
+
         def _load_calib(locs, tag=None):
             # astigmatism 3D data needs a calibration; spline 3D data
             # recovers z directly and needs none (mirrors the CLI).
@@ -1262,8 +1269,10 @@ class PicassoSetCoreMixin:
                         "A calibration file ('calibration') is required for "
                         f"astigmatism 3D data{where}."
                     )
-                with open(calibration, "r") as f:
-                    return yaml.full_load(f)
+                if "calib" not in _calib_cache:
+                    with open(calibration, "r") as f:
+                        _calib_cache["calib"] = yaml.full_load(f)
+                return _calib_cache["calib"]
             return None
 
         if self.locs is None:  # aggregation: map each channel independently
@@ -1279,11 +1288,11 @@ class PicassoSetCoreMixin:
                         "'min_locs'."
                     )
                 g5m_info[-1]["Wrapped by"] = "picasso-workflow : picasso_g5m"
-                io.save_locs(
-                    os.path.join(results["folder"], f"{tag}_locs_molmap.hdf5"),
-                    mols,
-                    g5m_info,
+                fp_molmap = os.path.join(
+                    results["folder"], f"{tag}_locs_molmap.hdf5"
                 )
+                io.save_locs(fp_molmap, mols, g5m_info)
+                results[f"filepath_locs_molmap_{tag}"] = fp_molmap
                 return mols, g5m_info, {"n_molecules": len(mols)}
 
             self._cluster_each_channel(results, _cluster)
