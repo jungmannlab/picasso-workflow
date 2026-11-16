@@ -28,6 +28,15 @@ This file was started after v0.5.6; earlier history is in the git log.
   (`gui.py`, `config_template.yaml`)
 
 ### Added
+- **Run tab Apptainer image dropdown auto-populates.** The first time the "Run
+  on SLURM Cluster" sub-tab is shown, the shared folder's `.sif` images are
+  listed over SSH and the dropdown is filled (defaulting to the image matching
+  this GUI's version) — no need to hit "List". The listing runs off the UI
+  thread so the window never freezes, and is deferred to that first view
+  (not startup, which would connect on every launch); it is silent on
+  failure (an offline/misconfigured cluster can't nag), while the "List"
+  button still reports failures as before and is now also non-blocking.
+  (`gui.py`)
 - **Help → "Check for updates…".** A menu item that checks GitHub for a newer
   release on demand (off the UI thread) and reports the outcome in a dialog —
   newer available (with a download link + the passive banner), already up to

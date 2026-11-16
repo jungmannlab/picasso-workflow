@@ -10002,6 +10002,48 @@ class _ReleaseCheckWorker(QtCore.QObject):
         self.finished.emit(fetch_latest_release(self._current_version))
 
 
+class _ClusterImageListWorker(QtCore.QObject):
+    """List a shared folder's ``.sif`` images over SSH, off the GUI thread.
+
+    The listing is a blocking SSH round-trip, so it must not run on the GUI
+    thread (it would freeze the window, sometimes for seconds behind a VPN).
+    Emits ``finished(images, error)``: ``images`` is the sorted list of
+    ``.sif`` basenames (possibly empty) on success, or ``None`` when the
+    listing failed -- in which case ``error`` is a short human-readable
+    message. Never raises into the thread (a dead listing must not abort the
+    process); failures travel back as ``error``.
+    """
+
+    finished = QtCore.pyqtSignal(object, object)
+
+    def __init__(self, communicator, image_dir: str) -> None:
+        super().__init__()
+        self._comm = communicator
+        self._image_dir = image_dir
+
+    def run(self) -> None:
+        try:
+            result = self._comm.execute_ssh_command(
+                f"ls -1 {shlex.quote(self._image_dir)}"
+            )
+        except Exception as exc:  # noqa: BLE001 - reported to the GUI thread
+            self.finished.emit(None, str(exc))
+            return
+        if not result.get("success"):
+            self.finished.emit(
+                None,
+                f"exit {result.get('return_code')}: "
+                f"{(result.get('stderr', '') or '').strip()}",
+            )
+            return
+        images = sorted(
+            name.strip()
+            for name in (result.get("stdout", "") or "").splitlines()
+            if name.strip().endswith(".sif")
+        )
+        self.finished.emit(images, None)
+
+
 class Window(QtWidgets.QMainWindow):
     """Main window for the picasso-workflow GUI application."""
 
@@ -10378,7 +10420,7 @@ class Window(QtWidgets.QMainWindow):
             "picasso-workflow-<this GUI's version>.sif."
         )
         self.cluster_image_refresh_button.clicked.connect(
-            self._refresh_cluster_images
+            lambda: self._refresh_cluster_images(auto=False)
         )
         cluster_config_layout.addWidget(
             self.cluster_image_refresh_button, 4, 5
@@ -10668,13 +10710,21 @@ class Window(QtWidgets.QMainWindow):
         # update banner if so. Fully passive and fail-soft -- never blocks
         # startup or shows anything when offline / up to date.
         self._update_thread = None
-        # Join the update-check thread on quit (destroying a live QThread
-        # aborts the process). Connected ONCE here -- both the startup check
-        # and the on-demand Help check reuse the self._update_thread slot, so a
-        # per-check connect would accumulate duplicate aboutToQuit handlers.
+        # The cluster-image dropdown auto-populates (off-thread) the first time
+        # the "Run on SLURM Cluster" sub-tab is shown; these back that.
+        self._cluster_image_thread = None
+        self._cluster_images_autolisted = False
+        self.run_tabs.currentChanged.connect(
+            lambda *_: self._maybe_autolist_cluster_images()
+        )
+        # Join background threads on quit (destroying a live QThread aborts the
+        # process). Connected ONCE here -- the startup check, the on-demand
+        # Help check and the manual "List" button all reuse their one thread
+        # slot, so a per-use connect would accumulate duplicate handlers.
         app = QtWidgets.QApplication.instance()
         if app is not None:
             app.aboutToQuit.connect(self._stop_update_thread)
+            app.aboutToQuit.connect(self._stop_cluster_image_thread)
         self._start_update_check()
 
         # Tools menu: the cluster admin console (shared-mount Apptainer images,
@@ -12778,8 +12828,9 @@ class Window(QtWidgets.QMainWindow):
             pass
 
     def closeEvent(self, event):
-        """Join the update-check thread before the window is destroyed."""
+        """Join background threads before the window is destroyed."""
         self._stop_update_thread()
+        self._stop_cluster_image_thread()
         super().closeEvent(event)
 
     # -- getting-started onboarding ----------------------------------------
@@ -12844,6 +12895,9 @@ class Window(QtWidgets.QMainWindow):
                 self.doctor_tab.refresh()
             except Exception as e:
                 logger.debug(f"Could not refresh the Doctor tab: {e}")
+        # Switching to the Run tab makes the cluster sub-tab visible without a
+        # sub-tab change, so catch the one-shot image auto-populate here too.
+        self._maybe_autolist_cluster_images()
 
     # ------------------------------------------------------------------
     # Results tab: HTML report viewer
@@ -16437,60 +16491,116 @@ class Window(QtWidgets.QMainWindow):
             self.cluster_image_combo.setCurrentText(default)
         self._cluster_image_default = default
 
-    def _refresh_cluster_images(self):
+    def _maybe_autolist_cluster_images(self):
+        """Lazily populate the image dropdown the first time it is shown.
+
+        Fires once, when the Run tab's "Run on SLURM Cluster" sub-tab first
+        becomes visible, so the user doesn't have to hit "List" to see the
+        shared folder's images. The listing is an SSH round-trip, so it is
+        deferred to actual use (not startup -- that would connect on every
+        launch even for users who never submit to the cluster) and runs
+        off-thread via :meth:`_refresh_cluster_images`.
+        """
+        if self._cluster_images_autolisted:
+            return
+        # Only when the cluster sub-tab is the one actually on screen.
+        if not self.run_tabs.isVisible() or self.run_tabs.currentIndex() != 0:
+            return
+        self._cluster_images_autolisted = True
+        self._refresh_cluster_images(auto=True)
+
+    def _refresh_cluster_images(self, auto=False):
         """List the shared folder's .sif images over SSH into the dropdown.
 
-        Best-effort: on any SSH/listing failure the user is told and the
-        editable field is left as-is (they can still type a name by hand).
+        Runs the (blocking) SSH listing on a background thread so the GUI
+        never freezes; the dropdown is filled on the GUI thread when it
+        returns (:meth:`_on_cluster_images_listed`).
+
+        Best-effort: on any SSH/listing failure the editable field is left
+        as-is (the user can still type a name by hand). ``auto=False`` (the
+        explicit "List" button) reports failures/emptiness in a dialog;
+        ``auto=True`` (the one-shot lazy populate) stays silent so an
+        offline/misconfigured cluster can't nag on first view.
         """
+        # Re-entry guard: one listing at a time (the lazy populate and a
+        # button click can race).
+        if getattr(self, "_cluster_image_thread", None) is not None:
+            return
         host_cluster = str(self.cluster_host_combo.currentText())
         image_dir, _module, _binds = self._apptainer_config(host_cluster)
         if not image_dir:
-            QtWidgets.QMessageBox.warning(
-                self,
-                "No image folder configured",
-                "ClusterApptainer.image_dir is not set in config.yaml, so "
-                "there is no shared folder to list. Configure it, or type the "
-                "image filename by hand.",
-            )
+            if not auto:
+                QtWidgets.QMessageBox.warning(
+                    self,
+                    "No image folder configured",
+                    "ClusterApptainer.image_dir is not set in config.yaml, "
+                    "so there is no shared folder to list. Configure it, or "
+                    "type the image filename by hand.",
+                )
             return
         try:
-            self._ensure_slurm_communicator(host_cluster)
-            # List the folder (basenames, one per line) and filter to .sif
-            # client-side. Listing the directory itself -- rather than globbing
-            # `*.sif` with stderr suppressed -- means a real failure (missing
-            # dir, no read permission) surfaces as a non-zero exit with a
-            # message, instead of looking like an empty folder.
-            result = self.slurm_communicator.execute_ssh_command(
-                f"ls -1 {shlex.quote(image_dir)}"
-            )
+            comm = self._ensure_slurm_communicator(host_cluster)
         except Exception as exc:  # noqa: BLE001 - surfaced to the user
-            QtWidgets.QMessageBox.warning(
-                self,
-                "Could not list images",
-                f"Listing {image_dir} on {host_cluster} failed:\n{exc}",
-            )
+            if not auto:
+                QtWidgets.QMessageBox.warning(
+                    self,
+                    "Could not list images",
+                    f"Connecting to {host_cluster} failed:\n{exc}",
+                )
             return
-        if not result.get("success"):
-            QtWidgets.QMessageBox.warning(
-                self,
-                "Could not list images",
-                f"Listing {image_dir} on {host_cluster} failed (exit "
-                f"{result.get('return_code')}):\n"
-                f"{(result.get('stderr', '') or '').strip()}",
+        # List the folder (basenames, one per line) and filter to .sif
+        # client-side off-thread. Listing the directory itself -- rather than
+        # globbing `*.sif` with stderr suppressed -- means a real failure
+        # (missing dir, no read permission) surfaces as a non-zero exit with a
+        # message, instead of looking like an empty folder.
+        try:
+            worker = _ClusterImageListWorker(comm, image_dir)
+            thread = QtCore.QThread(self)
+            worker.moveToThread(thread)
+            # Keep the worker alive for the thread's lifetime (PyQt may GC it
+            # before ``started`` fires otherwise).
+            thread._pw_worker = worker
+            thread.started.connect(worker.run)
+            worker.finished.connect(
+                lambda images, error: self._on_cluster_images_listed(
+                    images, error, image_dir, host_cluster, auto
+                )
             )
+            worker.finished.connect(thread.quit)
+            worker.finished.connect(worker.deleteLater)
+            thread.finished.connect(thread.deleteLater)
+            thread.finished.connect(self._forget_cluster_image_thread)
+            self._cluster_image_thread = thread
+            # aboutToQuit->_stop_cluster_image_thread is connected once in
+            # __init__.
+            thread.start()
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug(f"Could not start the image listing: {exc}")
+
+    def _on_cluster_images_listed(
+        self, images, error, image_dir, host_cluster, auto
+    ):
+        """Fill the image dropdown from an off-thread listing (GUI thread).
+
+        ``images`` is ``None`` on failure (``error`` carries the message),
+        else the sorted list of ``.sif`` basenames.
+        """
+        if images is None:
+            if not auto:
+                QtWidgets.QMessageBox.warning(
+                    self,
+                    "Could not list images",
+                    f"Listing {image_dir} on {host_cluster} failed "
+                    f"({error}).",
+                )
             return
-        images = sorted(
-            name.strip()
-            for name in (result.get("stdout", "") or "").splitlines()
-            if name.strip().endswith(".sif")
-        )
         if not images:
-            QtWidgets.QMessageBox.information(
-                self,
-                "No images found",
-                f"No .sif files found in {image_dir} on {host_cluster}.",
-            )
+            if not auto:
+                QtWidgets.QMessageBox.information(
+                    self,
+                    "No images found",
+                    f"No .sif files found in {image_dir} on {host_cluster}.",
+                )
             return
         current = self.cluster_image_combo.currentText().strip()
         self.cluster_image_combo.blockSignals(True)
@@ -16510,6 +16620,26 @@ class Window(QtWidgets.QMainWindow):
         # treats it as a default (re-applying that cluster's version default),
         # not as a hand-typed manual pick.
         self._cluster_image_default = chosen
+
+    def _forget_cluster_image_thread(self):
+        self._cluster_image_thread = None
+
+    def _stop_cluster_image_thread(self):
+        """Quit/join the image-listing thread on shutdown.
+
+        Destroying a live QThread aborts the process. Clears the reference
+        first (closeEvent and aboutToQuit both call this) and tolerates the
+        C++ object already being torn down after normal completion.
+        """
+        thread = getattr(self, "_cluster_image_thread", None)
+        self._cluster_image_thread = None
+        if thread is None:
+            return
+        try:
+            thread.quit()
+            thread.wait()
+        except RuntimeError:
+            pass
 
     # ------------------------------------------------------------------ #
     # Live progress monitor
