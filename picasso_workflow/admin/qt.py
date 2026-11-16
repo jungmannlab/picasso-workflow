@@ -177,8 +177,8 @@ class AdminWindow(QMainWindow):
         )
         list_images = QPushButton("List")
         list_images.setToolTip(
-            "List the .sif images on the shared folder over SSH (test images "
-            "first)."
+            "List the test .sif images (those carrying pytest) on the shared "
+            "folder over SSH. Use the Images tab to see lean images too."
         )
         list_images.clicked.connect(self._list_test_images)
         img_row = QHBoxLayout()
@@ -248,22 +248,34 @@ class AdminWindow(QMainWindow):
         """Populate the test-image combo from the shared mount (test first)."""
 
         def done(images):
-            # test images first, then lean, each alphabetical
-            names = [im.name for im in images if im.is_test] + [
-                im.name for im in images if not im.is_test
-            ]
+            # Only TEST images: the chain runs pytest inside the image, which a
+            # lean image lacks, so a lean pick would just fail. The combo stays
+            # editable, so an oddly-named test image can still be typed.
+            names = [im.name for im in images if im.is_test]
+            if not names:
+                self.activity.appendPlainText(
+                    f"✓ {len(images)} image(s), 0 test image(s)"
+                )
+                QMessageBox.information(
+                    self,
+                    "No test images",
+                    "No test images (picasso-workflow-test-<version>.sif) on "
+                    "the shared mount. The test chain runs pytest inside the "
+                    "image, which the lean image doesn't carry -- build or "
+                    "download a -test- image (or type its name).",
+                )
+                return
             current = self.test_image.currentText().strip()
             self.test_image.blockSignals(True)
             self.test_image.clear()
             self.test_image.addItems(names)
             if current in names:
                 self.test_image.setCurrentText(current)
-            elif names:
+            else:
                 self.test_image.setCurrentText(names[0])
             self.test_image.blockSignals(False)
-            n_test = sum(1 for im in images if im.is_test)
             self.activity.appendPlainText(
-                f"✓ {len(images)} image(s), {n_test} test image(s)"
+                f"✓ {len(names)} test image(s) of {len(images)}"
             )
 
         self._run(lambda a: a.list_images(), done, busy="listing images")
