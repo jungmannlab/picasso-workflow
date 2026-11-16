@@ -105,6 +105,13 @@ def test_config_template_has_clusterapptainer_section():
     assert isinstance(section.get("bind_paths"), list)
 
 
+def test_config_template_admin_console_hidden_by_default():
+    """The admin-console menu is restricted: hidden unless opted in."""
+    template = Path(__file__).resolve().parents[1] / "config_template.yaml"
+    cfg = yaml.safe_load(template.read_text())
+    assert cfg["AdminConsole"]["enabled"] is False
+
+
 def _comm():
     return SlurmCommunicator("login-node", "user")
 

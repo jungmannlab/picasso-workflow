@@ -10,6 +10,13 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ## [Unreleased]
 
+### Changed
+- **Admin console hidden from the main GUI by default.** The *Tools → Admin
+  console…* menu item now appears only when `AdminConsole.enabled: true` is set
+  in `config.yaml` (default `false`) — it is cluster-admin tooling, not for
+  every user. The standalone `picasso-workflow-admin-gui` command is unaffected.
+  (`gui.py`, `config_template.yaml`)
+
 ### Added
 - **Help → "Check for updates…".** A menu item that checks GitHub for a newer
   release on demand (off the UI thread) and reports the outcome in a dialog —

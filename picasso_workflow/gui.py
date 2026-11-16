@@ -10661,9 +10661,14 @@ class Window(QtWidgets.QMainWindow):
         self._start_update_check()
 
         # Tools menu: the cluster admin console (shared-mount Apptainer images,
-        # SLURM queue, disk usage) in its own window.
-        tools_menu = self.menuBar().addMenu("Tools")
-        tools_menu.addAction("Admin console…", self._open_admin_console)
+        # SLURM queue, disk usage). Cluster-admin tooling, so it is HIDDEN
+        # unless config AdminConsole.enabled is true (the standalone
+        # `picasso-workflow-admin-gui` command still works regardless). A
+        # malformed / missing AdminConsole degrades to hidden.
+        _admin_cfg = CONFIG.get("AdminConsole")
+        if isinstance(_admin_cfg, dict) and _admin_cfg.get("enabled"):
+            tools_menu = self.menuBar().addMenu("Tools")
+            tools_menu.addAction("Admin console…", self._open_admin_console)
 
         # Help menu: re-openable onboarding + a shortcut to the settings file.
         help_menu = self.menuBar().addMenu("Help")
