@@ -17,7 +17,10 @@ This file was started after v0.5.6; earlier history is in the git log.
   was squeezed too narrow to use. They now sit in a `QGridLayout` with
   stretching field columns, grouped by row (resources / scheduling / modules /
   image / debug), and the Memory/Timeout fields no longer carry a 100 px cap.
-  (`gui.py`)
+  The Files tab's aggregation buttons are regrouped one coherent row per group
+  — utilities (Find in folder / Per-Channel Params / Clear), then all dataset
+  actions (Add/Rename/Remove Dataset), then all channel actions
+  (Add/Rename/Remove Channel) — instead of interleaved by verb. (`gui.py`)
 - **Admin console hidden from the main GUI by default.** The *Tools → Admin
   console…* menu item now appears only when `AdminConsole.enabled: true` is set
   in `config.yaml` (default `false`) — it is cluster-admin tooling, not for

@@ -12245,20 +12245,23 @@ class Window(QtWidgets.QMainWindow):
             self.clear_tree_button = QtWidgets.QPushButton("Clear")
             self.clear_tree_button.clicked.connect(self.clear_tree)
 
-            # Many buttons: wrap to 3 columns so labels stay readable.
-            # Grouped by verb, and within each verb dataset before channel -
-            # matching the tree's parent/child nesting.
+            # Wrap to 3 columns (row-major) so labels stay readable. One
+            # coherent row per group: utilities, then all dataset actions,
+            # then all channel actions (add/rename/remove in each).
             self._lay_out_file_buttons(
                 [
+                    # row 1: utilities
                     self.find_files_button,
-                    self.add_dataset_button,
-                    self.add_channel_button,
-                    self.rename_dataset_button,
-                    self.rename_channel_button,
-                    self.remove_dataset_button,
-                    self.remove_channel_button,
                     self.tile_params_button,
                     self.clear_tree_button,
+                    # row 2: dataset actions
+                    self.add_dataset_button,
+                    self.rename_dataset_button,
+                    self.remove_dataset_button,
+                    # row 3: channel actions
+                    self.add_channel_button,
+                    self.rename_channel_button,
+                    self.remove_channel_button,
                 ],
                 columns=3,
             )
