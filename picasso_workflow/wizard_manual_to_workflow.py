@@ -16,6 +16,8 @@ can be unit-tested against a stub window with no display.
 
 from __future__ import annotations
 
+import os
+
 from PyQt6 import QtCore, QtGui, QtWidgets
 from PyQt6.QtCore import QThread, pyqtSignal
 
@@ -149,8 +151,6 @@ class _SelectFolderPage(QtWidgets.QWizardPage):
 
     def _autodetect_manual(self, folder):
         """Pre-fill the manual subfolder if a likely one is present."""
-        import os
-
         candidates = []
         try:
             for name in os.listdir(folder):
@@ -232,7 +232,20 @@ class _ReviewPage(QtWidgets.QWizardPage):
         self._thread.start()
 
     def _stop_worker(self):
-        """Quit and dispose any running reconstruction thread/worker."""
+        """Quit and dispose any running reconstruction thread/worker.
+
+        Disconnect the old worker's signals first: ``run()`` is not
+        interruptible, so it may still emit ``finished`` while ``wait()`` blocks
+        the UI thread; without disconnecting, that stale result would be
+        delivered to ``_on_finished`` after the new run has started.
+        """
+        worker = getattr(self, "_worker", None)
+        if worker is not None:
+            try:
+                worker.finished.disconnect()
+                worker.failed.disconnect()
+            except (TypeError, RuntimeError):
+                pass  # nothing connected / already deleted
         thread = getattr(self, "_thread", None)
         if thread is not None:
             try:

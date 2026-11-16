@@ -928,7 +928,7 @@ def diff_single_stage(per_channel_single, channels):
 def _all_equal(values):
     """True when every value equals the first (by repr for robustness)."""
     first = repr(values[0])
-    return all(repr(v) == first for v in values)
+    return all(repr(v) == first for v in values[1:])
 
 
 # ---------------------------------------------------------------------------
