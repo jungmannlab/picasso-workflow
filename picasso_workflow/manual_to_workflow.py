@@ -48,8 +48,6 @@ CONF_UNMAPPED = "unmapped"  # no confident mapping -> placeholder
 # turns it into a flagged ``dummy_module`` placeholder (kept, not dropped).
 SKIP_MODULE = "__skip__"
 
-# review even though the mapping itself is confident.
-
 # Cross-channel modules: the first one seen marks the single -> aggregation
 # boundary. All of these are aggregation-scope in the registry.
 CROSS_CHANNEL_MODULES = frozenset(
