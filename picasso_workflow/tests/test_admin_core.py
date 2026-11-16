@@ -78,13 +78,57 @@ def test_parse_image_listing():
     ]
     lean = images[0]
     assert lean.version == "0.9.0" and lean.is_test is False
+    assert lean.tag == "0.9.0"
     assert lean.mtime == "2026-11-12 10:30"
     assert lean.size.endswith("G")  # ~4.1 GB -> human readable
-    assert images[2].is_test is True
+    assert images[1].tag == "latest"  # symlink alias shows its label
+    assert images[2].is_test is True and images[2].tag == "0.9.0"
 
 
 def test_parse_image_listing_empty():
     assert core.parse_image_listing("total 0\n") == []
+
+
+def test_configured_test_data_dir():
+    assert (
+        core.configured_test_data_dir({"TestData": {"directory": "/fs/td"}})
+        == "/fs/td"
+    )
+    # unset / null / missing -> "" (blank => tiers 1-3 only)
+    assert (
+        core.configured_test_data_dir({"TestData": {"directory": None}}) == ""
+    )
+    assert core.configured_test_data_dir({}) == ""
+    # a malformed (non-dict) TestData must NOT crash -> "" (GUI startup safety)
+    assert core.configured_test_data_dir({"TestData": "/fs/td"}) == ""
+    assert core.configured_test_data_dir({"TestData": ["/fs/td"]}) == ""
+
+
+def test_configured_test_data_dir_default_config():
+    # the GUI calls it with no args -> reads the module CONFIG (the real call
+    # site); mutate+restore the shared dict to exercise that branch.
+    saved = dict(core.CONFIG)
+    try:
+        core.CONFIG.clear()
+        core.CONFIG["TestData"] = {"directory": "/fs/from-config"}
+        assert core.configured_test_data_dir() == "/fs/from-config"
+    finally:
+        core.CONFIG.clear()
+        core.CONFIG.update(saved)
+
+
+def test_image_tag():
+    # release / test both show the version; a develop image shows its label
+    assert core.image_tag("picasso-workflow-0.9.0.sif") == "0.9.0"
+    assert core.image_tag("picasso-workflow-test-0.9.0.sif") == "0.9.0"
+    assert (
+        core.image_tag("picasso-workflow-develop-ef8b42.sif")
+        == "develop-ef8b42"
+    )
+    # a non-picasso-workflow name: tag is the whole stem, and it is NOT
+    # mis-parsed as a version even if it is all-digits.
+    assert core.image_tag("123.sif") == "123"
+    assert core.parse_image_name("123.sif") == (None, False)
 
 
 # --------------------------------------------------------------------------- #

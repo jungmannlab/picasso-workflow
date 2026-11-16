@@ -10,6 +10,17 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ## [Unreleased]
 
+### Changed
+- **Admin console UX polish.** The Images tab now shows a label for *every*
+  image — a `develop-<sha>` image displays its tag (e.g. `develop-ef8b42`)
+  instead of a blank Version, and the Test column reads `test`/`lean` (Match
+  still highlights only a clean release matching this GUI). The Test-runs tab
+  gained a **List** button that fills the image dropdown from the shared mount
+  (test images first), a selectable **Tiers 1-3** checkbox (so you can run any
+  subset — tiers 1-3, tier 4, and/or template runs; tier 4 + templates gate on
+  tiers 1-3 only when they're included), clearer *Test data dir* help, and
+  wider image/data-dir/identity fields. (`picasso_workflow/admin/`)
+
 ### Fixed
 - **Apptainer submit-path hardening (follow-up to the GUI/cluster Apptainer
   work).** `assemble_slurm_commands` now treats an empty `image_path` like

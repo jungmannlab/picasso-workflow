@@ -64,6 +64,23 @@ def default_test_image_basename(version):
     return base.replace("picasso-workflow-", "picasso-workflow-test-", 1)
 
 
+def _split_image_name(name):
+    """``(label, is_test, matched)`` for a ``.sif`` basename.
+
+    ``label`` is the stem after the ``picasso-workflow[-test-]`` prefix (or the
+    whole stem when no prefix matched); ``is_test`` reflects the ``-test-``
+    marker; ``matched`` says a picasso-workflow prefix was present. Single
+    source of the prefix-stripping shared by :func:`parse_image_name` and
+    :func:`image_tag`.
+    """
+    stem = name[:-4] if name.endswith(".sif") else name
+    if stem.startswith("picasso-workflow-test-"):
+        return stem[len("picasso-workflow-test-") :], True, True
+    if stem.startswith("picasso-workflow-"):
+        return stem[len("picasso-workflow-") :], False, True
+    return stem, False, False
+
+
 def parse_image_name(name):
     """Split a ``.sif`` basename into ``(version, is_test)``.
 
@@ -72,21 +89,49 @@ def parse_image_name(name):
     anything else (e.g. ``...-develop-<sha>.sif``) -> ``(None, is_test)`` with
     ``is_test`` reflecting the ``-test-`` marker.
     """
-    stem = name[:-4] if name.endswith(".sif") else name
-    is_test = stem.startswith("picasso-workflow-test-")
-    if is_test:
-        version = stem[len("picasso-workflow-test-") :]
-    elif stem.startswith("picasso-workflow-"):
-        version = stem[len("picasso-workflow-") :]
-    else:
+    label, is_test, matched = _split_image_name(name)
+    if not matched:
         return None, is_test
     # A plain release version is dot-separated digit groups ("0.9.0");
     # develop-<sha>, malformed dotted names ("0..0"), etc. are left unparsed
     # (shown verbatim by the caller, not matched to a version).
-    groups = version.split(".")
-    if version and all(g.isdigit() for g in groups):
-        return version, is_test
+    groups = label.split(".")
+    if label and all(g.isdigit() for g in groups):
+        return label, is_test
     return None, is_test
+
+
+def configured_test_data_dir(config=None):
+    """The configured test-data dir (``TestData.directory``), or ``""``.
+
+    The same source ``tools/cluster_tests/submit_all.sh`` and the
+    ``network_test_data`` pytest fixture use to resolve ``PW_TEST_DATA_DIR``
+    when the env var is unset -- so a GUI-launched test run exercises the same
+    datasets (tier 4 + the per-template workflow runs). ``config`` defaults to
+    the package ``CONFIG``. Note it must be valid on the cluster compute node
+    (where ``submit_all.sh`` runs it is, being read from the login node's
+    config).
+    """
+    if config is None:
+        config = CONFIG
+    # Tolerate a malformed (non-dict) TestData in a hand-edited config.yaml:
+    # fall back to blank rather than crashing GUI startup on `.get`.
+    test_data = config.get("TestData")
+    if not isinstance(test_data, dict):
+        return ""
+    return str(test_data.get("directory") or "")
+
+
+def image_tag(name):
+    """The human-readable label after the prefix (for the Images table).
+
+    ``picasso-workflow-0.9.0.sif`` -> ``"0.9.0"``;
+    ``picasso-workflow-test-0.9.0.sif`` -> ``"0.9.0"``;
+    ``picasso-workflow-develop-ef8b42.sif`` -> ``"develop-ef8b42"``. Unlike
+    :func:`parse_image_name` (which returns a version only for a clean release,
+    for match-highlighting), this always yields something to show.
+    """
+    return _split_image_name(name)[0]
 
 
 # ---------------------------------------------------------------------------
@@ -97,7 +142,8 @@ class ImageInfo:
     """One ``.sif`` on the shared mount."""
 
     name: str
-    version: str | None
+    version: str | None  # clean release version (for match), else None
+    tag: str  # label to display (release version, or "develop-<sha>", …)
     is_test: bool
     size: str  # human-readable (e.g. "4.2G"), "" if unknown
     mtime: str  # "YYYY-MM-DD HH:MM", "" if unknown
@@ -153,6 +199,7 @@ def parse_image_listing(stdout):
             ImageInfo(
                 name=name,
                 version=version,
+                tag=image_tag(name),
                 is_test=is_test,
                 size=_human_size(parts[4]),
                 mtime=f"{parts[5]} {parts[6]}",
@@ -398,6 +445,7 @@ class ClusterAdmin:
         version,
         timestamp,
         test_data_dir=None,
+        run_tiers13=True,
         run_tier4=True,
         run_templates=True,
     ):
@@ -422,6 +470,7 @@ class ClusterAdmin:
             version=version,
             timestamp=timestamp,
             test_data_dir=test_data_dir,
+            run_tiers13=run_tiers13,
             run_tier4=run_tier4,
             run_templates=run_templates,
         )
