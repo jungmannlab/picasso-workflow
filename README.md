@@ -400,8 +400,8 @@ Two things to know:
 A separate admin GUI inspects the cluster without hand-rolled SSH — the
 shared-mount Apptainer image inventory (filename, baked version, size, mtime,
 and which image matches this GUI's version), the SLURM queue + recent jobs, and
-image-folder disk usage. Launch it standalone or from the main GUI's **Tools →
-Admin console…** menu:
+image-folder disk usage. It is **cluster-admin tooling, so the main GUI hides it
+by default** — launch it standalone, or enable the menu entry (below):
 
 ```bash
 picasso-workflow-admin-gui          # PyQt6 window (needs the [gui] extra)
@@ -409,9 +409,18 @@ picasso-workflow-admin-cli --host clusterXXX images   # headless equivalent
 picasso-workflow-admin-cli --host clusterXXX jobs
 ```
 
-It reads the connection + image settings from `config.yaml` (`SlurmLoginNodes`,
-`ClusterApptainer`) and authenticates with the same SSH key discovery as the Run
-tab, so no extra configuration is needed.
+To also expose it from the main GUI's **Tools → Admin console…** menu, opt in
+via `config.yaml`:
+
+```yaml
+AdminConsole:
+  enabled: true     # default false -> the Tools menu is hidden
+```
+
+The console reads the connection + image settings from `config.yaml`
+(`SlurmLoginNodes`, `ClusterApptainer`) and authenticates with the same SSH key
+discovery as the Run tab, so no extra configuration is needed. (The standalone
+command works regardless of the `AdminConsole.enabled` flag.)
 
 The console's **Test runs** tab submits the tiered cluster test chain (tiers 1-3
 → tier 4 → per-template workflows → summary) **inside an Apptainer image** —

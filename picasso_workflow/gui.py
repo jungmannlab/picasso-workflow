@@ -10658,12 +10658,26 @@ class Window(QtWidgets.QMainWindow):
         # update banner if so. Fully passive and fail-soft -- never blocks
         # startup or shows anything when offline / up to date.
         self._update_thread = None
+        # Join the update-check thread on quit (destroying a live QThread
+        # aborts the process). Connected ONCE here -- both the startup check
+        # and the on-demand Help check reuse the self._update_thread slot, so a
+        # per-check connect would accumulate duplicate aboutToQuit handlers.
+        app = QtWidgets.QApplication.instance()
+        if app is not None:
+            app.aboutToQuit.connect(self._stop_update_thread)
         self._start_update_check()
 
         # Tools menu: the cluster admin console (shared-mount Apptainer images,
-        # SLURM queue, disk usage) in its own window.
-        tools_menu = self.menuBar().addMenu("Tools")
-        tools_menu.addAction("Admin console…", self._open_admin_console)
+        # SLURM queue, disk usage). Cluster-admin tooling, so it is HIDDEN
+        # unless config AdminConsole.enabled is true (the standalone
+        # `picasso-workflow-admin-gui` command still works regardless). A
+        # malformed / missing AdminConsole degrades to hidden.
+        _admin_cfg = CONFIG.get("AdminConsole")
+        # Require an explicit boolean true -- a stray `enabled: "no"` (a truthy
+        # string) must NOT reveal the menu.
+        if isinstance(_admin_cfg, dict) and _admin_cfg.get("enabled") is True:
+            tools_menu = self.menuBar().addMenu("Tools")
+            tools_menu.addAction("Admin console…", self._open_admin_console)
 
         # Help menu: re-openable onboarding + a shortcut to the settings file.
         help_menu = self.menuBar().addMenu("Help")
@@ -12622,9 +12636,7 @@ class Window(QtWidgets.QMainWindow):
             thread.finished.connect(thread.deleteLater)
             thread.finished.connect(self._forget_update_thread)
             self._update_thread = thread
-            app = QtWidgets.QApplication.instance()
-            if app is not None:
-                app.aboutToQuit.connect(self._stop_update_thread)
+            # aboutToQuit->_stop_update_thread is connected once in __init__.
             thread.start()
         except Exception as e:  # pragma: no cover - defensive
             logger.debug(f"Could not start the update check: {e}")
@@ -12665,9 +12677,7 @@ class Window(QtWidgets.QMainWindow):
             thread.finished.connect(thread.deleteLater)
             thread.finished.connect(self._forget_update_thread)
             self._update_thread = thread
-            app = QtWidgets.QApplication.instance()
-            if app is not None:
-                app.aboutToQuit.connect(self._stop_update_thread)
+            # aboutToQuit->_stop_update_thread is connected once in __init__.
             thread.start()
         except Exception as e:  # pragma: no cover - defensive
             logger.debug(f"Could not start the update check: {e}")
