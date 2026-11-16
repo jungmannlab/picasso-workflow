@@ -11,6 +11,16 @@ This file was started after v0.5.6; earlier history is in the git log.
 ## [Unreleased]
 
 ### Changed
+- **Run tab cluster config laid out as a grid.** The ~11 cluster controls
+  (host, #nodes/#cores/#GPUs, partition/memory/timeout, modules, Apptainer
+  image + List, faulthandler / CPU-only) were all in one `QHBoxLayout`, so each
+  was squeezed too narrow to use. They now sit in a `QGridLayout` with
+  stretching field columns, grouped by row (resources / scheduling / modules /
+  image / debug), and the Memory/Timeout fields no longer carry a 100 px cap.
+  The Files tab's aggregation buttons are regrouped one coherent row per group
+  — utilities (Find in folder / Per-Channel Params / Clear), then all dataset
+  actions (Add/Rename/Remove Dataset), then all channel actions
+  (Add/Rename/Remove Channel) — instead of interleaved by verb. (`gui.py`)
 - **Admin console hidden from the main GUI by default.** The *Tools → Admin
   console…* menu item now appears only when `AdminConsole.enabled: true` is set
   in `config.yaml` (default `false`) — it is cluster-admin tooling, not for
@@ -18,6 +28,15 @@ This file was started after v0.5.6; earlier history is in the git log.
   (`gui.py`, `config_template.yaml`)
 
 ### Added
+- **Run tab Apptainer image dropdown auto-populates.** The first time the "Run
+  on SLURM Cluster" sub-tab is shown, the shared folder's `.sif` images are
+  listed over SSH and the dropdown is filled (defaulting to the image matching
+  this GUI's version) — no need to hit "List". The listing runs off the UI
+  thread so the window never freezes, and is deferred to that first view
+  (not startup, which would connect on every launch); it is silent on
+  failure (an offline/misconfigured cluster can't nag), while the "List"
+  button still reports failures as before and is now also non-blocking.
+  (`gui.py`)
 - **Help → "Check for updates…".** A menu item that checks GitHub for a newer
   release on demand (off the UI thread) and reports the outcome in a dialog —
   newer available (with a download link + the passive banner), already up to

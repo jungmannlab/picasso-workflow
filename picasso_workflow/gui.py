@@ -10002,6 +10002,48 @@ class _ReleaseCheckWorker(QtCore.QObject):
         self.finished.emit(fetch_latest_release(self._current_version))
 
 
+class _ClusterImageListWorker(QtCore.QObject):
+    """List a shared folder's ``.sif`` images over SSH, off the GUI thread.
+
+    The listing is a blocking SSH round-trip, so it must not run on the GUI
+    thread (it would freeze the window, sometimes for seconds behind a VPN).
+    Emits ``finished(images, error)``: ``images`` is the sorted list of
+    ``.sif`` basenames (possibly empty) on success, or ``None`` when the
+    listing failed -- in which case ``error`` is a short human-readable
+    message. Never raises into the thread (a dead listing must not abort the
+    process); failures travel back as ``error``.
+    """
+
+    finished = QtCore.pyqtSignal(object, object)
+
+    def __init__(self, communicator, image_dir: str) -> None:
+        super().__init__()
+        self._comm = communicator
+        self._image_dir = image_dir
+
+    def run(self) -> None:
+        try:
+            result = self._comm.execute_ssh_command(
+                f"ls -1 {shlex.quote(self._image_dir)}"
+            )
+        except Exception as exc:  # noqa: BLE001 - reported to the GUI thread
+            self.finished.emit(None, str(exc))
+            return
+        if not result.get("success"):
+            self.finished.emit(
+                None,
+                f"exit {result.get('return_code')}: "
+                f"{(result.get('stderr', '') or '').strip()}",
+            )
+            return
+        images = sorted(
+            name.strip()
+            for name in (result.get("stdout", "") or "").splitlines()
+            if name.strip().endswith(".sif")
+        )
+        self.finished.emit(images, None)
+
+
 class Window(QtWidgets.QMainWindow):
     """Main window for the picasso-workflow GUI application."""
 
@@ -10259,43 +10301,46 @@ class Window(QtWidgets.QMainWindow):
         run_on_cluster_layout = QtWidgets.QVBoxLayout(run_on_cluster_tab)
         self.run_tabs.addTab(run_on_cluster_tab, "Run on SLURM Cluster")
 
-        # Cluster configuration widgets
-        cluster_config_layout = QtWidgets.QHBoxLayout()
+        # Cluster configuration grid -- a grid (not a single HBox row) so the
+        # many controls keep usable width. Field columns (1/3/5) stretch; the
+        # label columns (0/2/4) stay compact.
+        cluster_config_layout = QtWidgets.QGridLayout()
         cluster_config_widget = QtWidgets.QWidget()
         cluster_config_widget.setLayout(cluster_config_layout)
         run_on_cluster_layout.addWidget(cluster_config_widget)
+        for _col in (1, 3, 5):
+            cluster_config_layout.setColumnStretch(_col, 1)
 
-        # Cluster Host dropdown
-        cluster_config_layout.addWidget(QtWidgets.QLabel("Cluster Host:"))
+        # Cluster Host dropdown (row 0, full width)
+        cluster_config_layout.addWidget(
+            QtWidgets.QLabel("Cluster Host:"), 0, 0
+        )
         self.cluster_host_combo = QtWidgets.QComboBox()
         for host in CONFIG["SlurmLoginNodes"].keys():
             self.cluster_host_combo.addItem(host)
         self.cluster_host_combo.setEditable(True)
-        # self.cluster_host_combo.addItems(["localhost", "cluster.example.com"])
-        cluster_config_layout.addWidget(self.cluster_host_combo)
+        cluster_config_layout.addWidget(self.cluster_host_combo, 0, 1, 1, 5)
 
-        # Number of nodes
-        cluster_config_layout.addWidget(QtWidgets.QLabel("#nodes:"))
+        # Resources (row 1): nodes / cores / GPUs
+        cluster_config_layout.addWidget(QtWidgets.QLabel("#nodes:"), 1, 0)
         self.cluster_nodes_spin = QtWidgets.QSpinBox()
         self.cluster_nodes_spin.setMinimum(1)
         self.cluster_nodes_spin.setMaximum(1000)
         self.cluster_nodes_spin.setValue(
             CONFIG["SlurmDefault"].get("nodes", 1)
         )
-        cluster_config_layout.addWidget(self.cluster_nodes_spin)
+        cluster_config_layout.addWidget(self.cluster_nodes_spin, 1, 1)
 
-        # Number of cores per node
-        cluster_config_layout.addWidget(QtWidgets.QLabel("#cores/node:"))
+        cluster_config_layout.addWidget(QtWidgets.QLabel("#cores/node:"), 1, 2)
         self.cluster_cores_spin = QtWidgets.QSpinBox()
         self.cluster_cores_spin.setMinimum(1)
         self.cluster_cores_spin.setMaximum(256)
         self.cluster_cores_spin.setValue(
             CONFIG["SlurmDefault"].get("cores", 1)
         )
-        cluster_config_layout.addWidget(self.cluster_cores_spin)
+        cluster_config_layout.addWidget(self.cluster_cores_spin, 1, 3)
 
-        # Number of GPUs per node (0 = no GPU requested)
-        cluster_config_layout.addWidget(QtWidgets.QLabel("#GPUs/node:"))
+        cluster_config_layout.addWidget(QtWidgets.QLabel("#GPUs/node:"), 1, 4)
         self.cluster_gpus_spin = QtWidgets.QSpinBox()
         self.cluster_gpus_spin.setMinimum(0)
         self.cluster_gpus_spin.setMaximum(64)
@@ -10304,14 +10349,15 @@ class Window(QtWidgets.QMainWindow):
             "Number of GPUs to request per node via SLURM "
             "(adds '#SBATCH --gres=gpu:N'). 0 = no GPU."
         )
-        cluster_config_layout.addWidget(self.cluster_gpus_spin)
+        cluster_config_layout.addWidget(self.cluster_gpus_spin, 1, 5)
 
         # SLURM partition (queue). GPU nodes usually live in a dedicated
         # partition, so a --gres=gpu request must target it or the job never
         # schedules. Populated per selected cluster from config
         # (SlurmPartitions) and editable, so an unlisted partition can be
         # typed by hand. Blank -> omit --partition and use SLURM's default.
-        cluster_config_layout.addWidget(QtWidgets.QLabel("Partition:"))
+        # Scheduling (row 2): partition / memory / timeout
+        cluster_config_layout.addWidget(QtWidgets.QLabel("Partition:"), 2, 0)
         self.cluster_partition_combo = QtWidgets.QComboBox()
         self.cluster_partition_combo.setEditable(True)
         self.cluster_partition_combo.setToolTip(
@@ -10319,7 +10365,7 @@ class Window(QtWidgets.QMainWindow):
             "GPU nodes usually require a dedicated partition; leave blank to "
             "use the cluster default partition."
         )
-        cluster_config_layout.addWidget(self.cluster_partition_combo)
+        cluster_config_layout.addWidget(self.cluster_partition_combo, 2, 1)
         self._populate_cluster_partitions(
             str(self.cluster_host_combo.currentText())
         )
@@ -10334,7 +10380,7 @@ class Window(QtWidgets.QMainWindow):
         # and editable. GPU fitting needs a CUDA toolkit providing libNVVM, so
         # a cuda module is loaded here (also sets CUDA_HOME for numba). Blank
         # -> load nothing.
-        cluster_config_layout.addWidget(QtWidgets.QLabel("Modules:"))
+        cluster_config_layout.addWidget(QtWidgets.QLabel("Modules:"), 3, 0)
         self.cluster_modules_edit = QtWidgets.QLineEdit()
         self.cluster_modules_edit.setPlaceholderText("e.g., cuda/13.0")
         self.cluster_modules_edit.setToolTip(
@@ -10346,7 +10392,7 @@ class Window(QtWidgets.QMainWindow):
         # preserved across cluster changes while an untouched field follows the
         # new cluster's config.
         self._cluster_modules_default = ""
-        cluster_config_layout.addWidget(self.cluster_modules_edit)
+        cluster_config_layout.addWidget(self.cluster_modules_edit, 3, 1, 1, 5)
         self._populate_cluster_modules(
             str(self.cluster_host_combo.currentText())
         )
@@ -10360,11 +10406,13 @@ class Window(QtWidgets.QMainWindow):
         # host conda env). Editable; defaults to picasso-workflow-<GUI
         # version>.sif. "List" fills the dropdown from the shared folder
         # (config ClusterApptainer.image_dir) over SSH.
-        cluster_config_layout.addWidget(QtWidgets.QLabel("Apptainer image:"))
+        cluster_config_layout.addWidget(
+            QtWidgets.QLabel("Apptainer image:"), 4, 0
+        )
         self.cluster_image_combo = QtWidgets.QComboBox()
         self.cluster_image_combo.setEditable(True)
         self.cluster_image_combo.setMinimumWidth(240)
-        cluster_config_layout.addWidget(self.cluster_image_combo)
+        cluster_config_layout.addWidget(self.cluster_image_combo, 4, 1, 1, 4)
         self.cluster_image_refresh_button = QtWidgets.QPushButton("List")
         self.cluster_image_refresh_button.setToolTip(
             "List the .sif images in the shared folder on the selected "
@@ -10372,9 +10420,11 @@ class Window(QtWidgets.QMainWindow):
             "picasso-workflow-<this GUI's version>.sif."
         )
         self.cluster_image_refresh_button.clicked.connect(
-            self._refresh_cluster_images
+            lambda: self._refresh_cluster_images(auto=False)
         )
-        cluster_config_layout.addWidget(self.cluster_image_refresh_button)
+        cluster_config_layout.addWidget(
+            self.cluster_image_refresh_button, 4, 5
+        )
         # Version-derived default image name (host-independent); computed once
         # since the installed version cannot change at runtime. Prefer the
         # installed dist metadata (present even in a non-git wheel install,
@@ -10393,25 +10443,23 @@ class Window(QtWidgets.QMainWindow):
             self._populate_cluster_images
         )
 
-        # Memory
-        cluster_config_layout.addWidget(QtWidgets.QLabel("Memory:"))
+        # Memory (row 2, col 2-3)
+        cluster_config_layout.addWidget(QtWidgets.QLabel("Memory:"), 2, 2)
         self.cluster_memory_edit = QtWidgets.QLineEdit()
         self.cluster_memory_edit.setPlaceholderText("e.g., 4GB")
         self.cluster_memory_edit.setText(
             CONFIG["SlurmDefault"].get("memory", "4GB")
         )
-        self.cluster_memory_edit.setMaximumWidth(100)
-        cluster_config_layout.addWidget(self.cluster_memory_edit)
+        cluster_config_layout.addWidget(self.cluster_memory_edit, 2, 3)
 
-        # Timeout
-        cluster_config_layout.addWidget(QtWidgets.QLabel("Timeout:"))
+        # Timeout (row 2, col 4-5)
+        cluster_config_layout.addWidget(QtWidgets.QLabel("Timeout:"), 2, 4)
         self.cluster_timeout_edit = QtWidgets.QLineEdit()
         self.cluster_timeout_edit.setPlaceholderText("e.g., 24:00:00")
         self.cluster_timeout_edit.setText(
             CONFIG["SlurmDefault"].get("timeout", "24:00:00")
         )
-        self.cluster_timeout_edit.setMaximumWidth(100)
-        cluster_config_layout.addWidget(self.cluster_timeout_edit)
+        cluster_config_layout.addWidget(self.cluster_timeout_edit, 2, 5)
 
         # Faulthandler: dump the Python->C traceback on a native crash (a
         # LAPACK/CUDA fault in a fit/CRLB call leaves no Python exception).
@@ -10425,7 +10473,9 @@ class Window(QtWidgets.QMainWindow):
             "the error log instead of dying silently. Inherited by "
             "multiprocessing workers. Negligible overhead; recommended on."
         )
-        cluster_config_layout.addWidget(self.cluster_faulthandler_check)
+        cluster_config_layout.addWidget(
+            self.cluster_faulthandler_check, 5, 0, 1, 2
+        )
 
         # Debug: hide every GPU (CUDA_VISIBLE_DEVICES="") so the fit/CRLB run
         # on the CPU kernels. Off by default; use it to bisect a GPU-side crash
@@ -10439,7 +10489,9 @@ class Window(QtWidgets.QMainWindow):
             "GPU-side crash (a spline CRLB kernel fault dies as a hard "
             "SIGSEGV, not a catchable error). Leave off for normal / GPU runs."
         )
-        cluster_config_layout.addWidget(self.cluster_cpu_only_check)
+        cluster_config_layout.addWidget(
+            self.cluster_cpu_only_check, 5, 2, 1, 2
+        )
 
         # self.cluster_use_module = QtWidgets.QCheckBox("Use p-w module")
         # self.cluster_use_module.setMaximumWidth(200)
@@ -10658,13 +10710,21 @@ class Window(QtWidgets.QMainWindow):
         # update banner if so. Fully passive and fail-soft -- never blocks
         # startup or shows anything when offline / up to date.
         self._update_thread = None
-        # Join the update-check thread on quit (destroying a live QThread
-        # aborts the process). Connected ONCE here -- both the startup check
-        # and the on-demand Help check reuse the self._update_thread slot, so a
-        # per-check connect would accumulate duplicate aboutToQuit handlers.
+        # The cluster-image dropdown auto-populates (off-thread) the first time
+        # the "Run on SLURM Cluster" sub-tab is shown; these back that.
+        self._cluster_image_thread = None
+        self._cluster_images_autolisted = False
+        self.run_tabs.currentChanged.connect(
+            lambda *_: self._maybe_autolist_cluster_images()
+        )
+        # Join background threads on quit (destroying a live QThread aborts the
+        # process). Connected ONCE here -- the startup check, the on-demand
+        # Help check and the manual "List" button all reuse their one thread
+        # slot, so a per-use connect would accumulate duplicate handlers.
         app = QtWidgets.QApplication.instance()
         if app is not None:
             app.aboutToQuit.connect(self._stop_update_thread)
+            app.aboutToQuit.connect(self._stop_cluster_image_thread)
         self._start_update_check()
 
         # Tools menu: the cluster admin console (shared-mount Apptainer images,
@@ -12235,20 +12295,23 @@ class Window(QtWidgets.QMainWindow):
             self.clear_tree_button = QtWidgets.QPushButton("Clear")
             self.clear_tree_button.clicked.connect(self.clear_tree)
 
-            # Many buttons: wrap to 3 columns so labels stay readable.
-            # Grouped by verb, and within each verb dataset before channel -
-            # matching the tree's parent/child nesting.
+            # Wrap to 3 columns (row-major) so labels stay readable. One
+            # coherent row per group: utilities, then all dataset actions,
+            # then all channel actions (add/rename/remove in each).
             self._lay_out_file_buttons(
                 [
+                    # row 1: utilities
                     self.find_files_button,
-                    self.add_dataset_button,
-                    self.add_channel_button,
-                    self.rename_dataset_button,
-                    self.rename_channel_button,
-                    self.remove_dataset_button,
-                    self.remove_channel_button,
                     self.tile_params_button,
                     self.clear_tree_button,
+                    # row 2: dataset actions
+                    self.add_dataset_button,
+                    self.rename_dataset_button,
+                    self.remove_dataset_button,
+                    # row 3: channel actions
+                    self.add_channel_button,
+                    self.rename_channel_button,
+                    self.remove_channel_button,
                 ],
                 columns=3,
             )
@@ -12765,8 +12828,9 @@ class Window(QtWidgets.QMainWindow):
             pass
 
     def closeEvent(self, event):
-        """Join the update-check thread before the window is destroyed."""
+        """Join background threads before the window is destroyed."""
         self._stop_update_thread()
+        self._stop_cluster_image_thread()
         super().closeEvent(event)
 
     # -- getting-started onboarding ----------------------------------------
@@ -12831,6 +12895,9 @@ class Window(QtWidgets.QMainWindow):
                 self.doctor_tab.refresh()
             except Exception as e:
                 logger.debug(f"Could not refresh the Doctor tab: {e}")
+        # Switching to the Run tab makes the cluster sub-tab visible without a
+        # sub-tab change, so catch the one-shot image auto-populate here too.
+        self._maybe_autolist_cluster_images()
 
     # ------------------------------------------------------------------
     # Results tab: HTML report viewer
@@ -16424,60 +16491,116 @@ class Window(QtWidgets.QMainWindow):
             self.cluster_image_combo.setCurrentText(default)
         self._cluster_image_default = default
 
-    def _refresh_cluster_images(self):
+    def _maybe_autolist_cluster_images(self):
+        """Lazily populate the image dropdown the first time it is shown.
+
+        Fires once, when the Run tab's "Run on SLURM Cluster" sub-tab first
+        becomes visible, so the user doesn't have to hit "List" to see the
+        shared folder's images. The listing is an SSH round-trip, so it is
+        deferred to actual use (not startup -- that would connect on every
+        launch even for users who never submit to the cluster) and runs
+        off-thread via :meth:`_refresh_cluster_images`.
+        """
+        if self._cluster_images_autolisted:
+            return
+        # Only when the cluster sub-tab is the one actually on screen.
+        if not self.run_tabs.isVisible() or self.run_tabs.currentIndex() != 0:
+            return
+        self._cluster_images_autolisted = True
+        self._refresh_cluster_images(auto=True)
+
+    def _refresh_cluster_images(self, auto=False):
         """List the shared folder's .sif images over SSH into the dropdown.
 
-        Best-effort: on any SSH/listing failure the user is told and the
-        editable field is left as-is (they can still type a name by hand).
+        Runs the (blocking) SSH listing on a background thread so the GUI
+        never freezes; the dropdown is filled on the GUI thread when it
+        returns (:meth:`_on_cluster_images_listed`).
+
+        Best-effort: on any SSH/listing failure the editable field is left
+        as-is (the user can still type a name by hand). ``auto=False`` (the
+        explicit "List" button) reports failures/emptiness in a dialog;
+        ``auto=True`` (the one-shot lazy populate) stays silent so an
+        offline/misconfigured cluster can't nag on first view.
         """
+        # Re-entry guard: one listing at a time (the lazy populate and a
+        # button click can race).
+        if getattr(self, "_cluster_image_thread", None) is not None:
+            return
         host_cluster = str(self.cluster_host_combo.currentText())
         image_dir, _module, _binds = self._apptainer_config(host_cluster)
         if not image_dir:
-            QtWidgets.QMessageBox.warning(
-                self,
-                "No image folder configured",
-                "ClusterApptainer.image_dir is not set in config.yaml, so "
-                "there is no shared folder to list. Configure it, or type the "
-                "image filename by hand.",
-            )
+            if not auto:
+                QtWidgets.QMessageBox.warning(
+                    self,
+                    "No image folder configured",
+                    "ClusterApptainer.image_dir is not set in config.yaml, "
+                    "so there is no shared folder to list. Configure it, or "
+                    "type the image filename by hand.",
+                )
             return
         try:
-            self._ensure_slurm_communicator(host_cluster)
-            # List the folder (basenames, one per line) and filter to .sif
-            # client-side. Listing the directory itself -- rather than globbing
-            # `*.sif` with stderr suppressed -- means a real failure (missing
-            # dir, no read permission) surfaces as a non-zero exit with a
-            # message, instead of looking like an empty folder.
-            result = self.slurm_communicator.execute_ssh_command(
-                f"ls -1 {shlex.quote(image_dir)}"
-            )
+            comm = self._ensure_slurm_communicator(host_cluster)
         except Exception as exc:  # noqa: BLE001 - surfaced to the user
-            QtWidgets.QMessageBox.warning(
-                self,
-                "Could not list images",
-                f"Listing {image_dir} on {host_cluster} failed:\n{exc}",
-            )
+            if not auto:
+                QtWidgets.QMessageBox.warning(
+                    self,
+                    "Could not list images",
+                    f"Connecting to {host_cluster} failed:\n{exc}",
+                )
             return
-        if not result.get("success"):
-            QtWidgets.QMessageBox.warning(
-                self,
-                "Could not list images",
-                f"Listing {image_dir} on {host_cluster} failed (exit "
-                f"{result.get('return_code')}):\n"
-                f"{(result.get('stderr', '') or '').strip()}",
+        # List the folder (basenames, one per line) and filter to .sif
+        # client-side off-thread. Listing the directory itself -- rather than
+        # globbing `*.sif` with stderr suppressed -- means a real failure
+        # (missing dir, no read permission) surfaces as a non-zero exit with a
+        # message, instead of looking like an empty folder.
+        try:
+            worker = _ClusterImageListWorker(comm, image_dir)
+            thread = QtCore.QThread(self)
+            worker.moveToThread(thread)
+            # Keep the worker alive for the thread's lifetime (PyQt may GC it
+            # before ``started`` fires otherwise).
+            thread._pw_worker = worker
+            thread.started.connect(worker.run)
+            worker.finished.connect(
+                lambda images, error: self._on_cluster_images_listed(
+                    images, error, image_dir, host_cluster, auto
+                )
             )
+            worker.finished.connect(thread.quit)
+            worker.finished.connect(worker.deleteLater)
+            thread.finished.connect(thread.deleteLater)
+            thread.finished.connect(self._forget_cluster_image_thread)
+            self._cluster_image_thread = thread
+            # aboutToQuit->_stop_cluster_image_thread is connected once in
+            # __init__.
+            thread.start()
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug(f"Could not start the image listing: {exc}")
+
+    def _on_cluster_images_listed(
+        self, images, error, image_dir, host_cluster, auto
+    ):
+        """Fill the image dropdown from an off-thread listing (GUI thread).
+
+        ``images`` is ``None`` on failure (``error`` carries the message),
+        else the sorted list of ``.sif`` basenames.
+        """
+        if images is None:
+            if not auto:
+                QtWidgets.QMessageBox.warning(
+                    self,
+                    "Could not list images",
+                    f"Listing {image_dir} on {host_cluster} failed "
+                    f"({error}).",
+                )
             return
-        images = sorted(
-            name.strip()
-            for name in (result.get("stdout", "") or "").splitlines()
-            if name.strip().endswith(".sif")
-        )
         if not images:
-            QtWidgets.QMessageBox.information(
-                self,
-                "No images found",
-                f"No .sif files found in {image_dir} on {host_cluster}.",
-            )
+            if not auto:
+                QtWidgets.QMessageBox.information(
+                    self,
+                    "No images found",
+                    f"No .sif files found in {image_dir} on {host_cluster}.",
+                )
             return
         current = self.cluster_image_combo.currentText().strip()
         self.cluster_image_combo.blockSignals(True)
@@ -16497,6 +16620,26 @@ class Window(QtWidgets.QMainWindow):
         # treats it as a default (re-applying that cluster's version default),
         # not as a hand-typed manual pick.
         self._cluster_image_default = chosen
+
+    def _forget_cluster_image_thread(self):
+        self._cluster_image_thread = None
+
+    def _stop_cluster_image_thread(self):
+        """Quit/join the image-listing thread on shutdown.
+
+        Destroying a live QThread aborts the process. Clears the reference
+        first (closeEvent and aboutToQuit both call this) and tolerates the
+        C++ object already being torn down after normal completion.
+        """
+        thread = getattr(self, "_cluster_image_thread", None)
+        self._cluster_image_thread = None
+        if thread is None:
+            return
+        try:
+            thread.quit()
+            thread.wait()
+        except RuntimeError:
+            pass
 
     # ------------------------------------------------------------------ #
     # Live progress monitor
