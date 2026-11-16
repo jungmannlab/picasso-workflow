@@ -255,6 +255,26 @@ class TestValidateWorkflow(unittest.TestCase):
         ]
         self.assertEqual([], validate_workflow(steps, Scope.AGGREGATION))
 
+    def test_picasso_set_clusterers_validate_in_aggregation(self):
+        # picasso_dbscan / picasso_hdbscan / picasso_g5m are both-scope, so
+        # post-alignment per-channel clustering validates in the aggregation
+        # stage (not only the single stage).
+        for mod, params in [
+            ("picasso_dbscan", {"radius": 0.5, "density": 4}),
+            ("picasso_hdbscan", {"min_cluster": 10, "min_samples": 5}),
+        ]:
+            steps = [("load_datasets_to_aggregate", {}), (mod, params)]
+            self.assertEqual(
+                [], validate_workflow(steps, Scope.AGGREGATION), mod
+            )
+        # g5m requires clustered input, so it follows a clusterer.
+        steps = [
+            ("load_datasets_to_aggregate", {}),
+            ("picasso_dbscan", {"radius": 0.5, "density": 4}),
+            ("picasso_g5m", {}),
+        ]
+        self.assertEqual([], validate_workflow(steps, Scope.AGGREGATION))
+
     def test_load_localizations_then_cluster_validates(self):
         # A loaded locs file is assumed drift-corrected, so analysis requiring
         # locs_undrifted validates after a plain load.
