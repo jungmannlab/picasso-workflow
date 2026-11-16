@@ -51,7 +51,13 @@ This file was started after v0.5.6; earlier history is in the git log.
   converted to the units the modules expect, the `fit_method` enum (which
   changed across versions) is normalized to a current alias for the re-localize
   path, and the source picasso version(s) are surfaced in the findings (the
-  workflow always runs on the installed picasso ≥1.0). Reconstruction runs off the UI thread and reports a
+  workflow always runs on the installed picasso ≥1.0). Channel tags come from
+  the acquisition root (before `_MMStack`) under raw-acquisition naming so each
+  channel is distinct (fixing per-channel parameters); the parameters column
+  resolves `filepath`/`#tags` to the selected channel's value; plain picasso
+  *Render* (display-only) steps are skipped; and only unresolved placeholder
+  modules block *Apply* (with an explicit reason) while *Apply to GUI* keeps the
+  wizard open so the notes stay for reference. Reconstruction runs off the UI thread and reports a
   progress bar with a per-channel status line and a rough ETA (the slow part is
   loading each channel's localization file for the pick retro-calculation), and
   can be aborted mid-scan via a Stop button or the wizard's Cancel. New modules

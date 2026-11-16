@@ -104,6 +104,10 @@ def test_group_by_base_stem_handles_unknown_suffixes():
 def test_split_dataset_channel():
     assert m._split_dataset_channel("Cell 1_ALFA-L1") == ("Cell 1", "ALFA-L1")
     assert m._split_dataset_channel("AcTub-R5") == ("dataset", "AcTub-R5")
+    # Raw-acquisition naming: channel = acquisition root before _MMStack, so
+    # each channel gets a distinct tag (not the shared "_ali"/"_render" suffix).
+    stem = "08_ALFA_L1_100pM_1_MMStack_Pos0.ome_locs_undrift_render_ali"
+    assert m._split_dataset_channel(stem) == ("dataset", "08_ALFA_L1_100pM_1")
 
 
 def _manual(root, sub="analysis_manual"):
@@ -790,13 +794,25 @@ def test_reconstruct_meta_parallel_and_source_file(tmp_path):
 def test_format_params_resolves_map_per_channel():
     from picasso_workflow import wizard_manual_to_workflow as wiz
 
-    tile = {"01_x__box": {"values": {"c0": 11, "c1": 13}, "default": None}}
+    tree = {
+        "tile_params": {
+            "01_x__box": {"values": {"c0": 11, "c1": 13}, "default": None}
+        },
+        "file_paths": {"dataset": {"c0": "/d/c0.hdf5", "c1": "/d/c1.hdf5"}},
+    }
     params = {"radius": 5.0, "box": ("$$map", "01_x__box", 11)}
-    assert wiz._format_params(params, "c0", tile) == "radius=5.0, box=11"
-    assert wiz._format_params(params, "c1", tile) == "radius=5.0, box=13"
+    assert wiz._format_params(params, "c0", tree) == "radius=5.0, box=11"
+    assert wiz._format_params(params, "c1", tree) == "radius=5.0, box=13"
+    # filepath / #tags resolve to the per-channel file and tag.
+    plumbing = {
+        "filename": ("$$map", "filepath"),
+        "tags": ("$$map", "#tags"),
+    }
+    out = wiz._format_params(plumbing, "c1", tree)
+    assert "filename=/d/c1.hdf5" in out and "tags=c1" in out
     # prior-result references render as a placeholder.
     pr = {"fp": ("$$get_prior_result", "all_results, ...")}
-    assert "<$$get_prior_result>" in wiz._format_params(pr, "c0", tile)
+    assert "<$$get_prior_result>" in wiz._format_params(pr, "c0", tree)
 
 
 def test_apply_result_to_window(tmp_path):

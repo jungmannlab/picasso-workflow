@@ -46,10 +46,28 @@ _AGGREGATION_TYPE_INDEX = 1
 _WORKFLOW_CONFIG_TAB = 0
 
 
-def _format_value(value, channel, tile_params):
-    """Render one parameter value, resolving ``$$map`` for ``channel``."""
+def _resolve_filepath(channel, tree_data):
+    """The per-channel input file behind ``("$$map", "filepath")``."""
+    for _ds, chans in tree_data.get("file_paths", {}).items():
+        if channel in chans:
+            return chans[channel]
+    return None
+
+
+def _format_value(value, channel, tree_data):
+    """Render one parameter value, resolving ``$$map`` for ``channel``.
+
+    ``("$$map", "filepath")`` / ``("$$map", "#tags")`` are the per-channel file
+    and tag columns; other ``$$map`` columns come from ``tile_params``. Other
+    ``$``-commands (e.g. ``$$get_prior_result``) render as a short placeholder.
+    """
+    tile_params = tree_data.get("tile_params", {})
     if isinstance(value, tuple) and value and value[0] == "$$map":
         col = value[1] if len(value) > 1 else ""
+        if col == "filepath":
+            return _resolve_filepath(channel, tree_data) or "<filepath>"
+        if col == "#tags":
+            return channel
         entry = tile_params.get(col)
         if isinstance(entry, dict):
             vals = entry.get("values", {})
@@ -67,10 +85,10 @@ def _format_value(value, channel, tile_params):
     return str(value)
 
 
-def _format_params(params, channel, tile_params):
+def _format_params(params, channel, tree_data):
     """Compact ``key=value`` rendering of a module's params for ``channel``."""
     return ", ".join(
-        f"{k}={_format_value(v, channel, tile_params)}"
+        f"{k}={_format_value(v, channel, tree_data)}"
         for k, v in params.items()
     )
 
@@ -273,7 +291,7 @@ class _ReviewPage(QtWidgets.QWizardPage):
         self._agg = []
         self._single_meta = []
         self._agg_meta = []
-        self._tile_params = {}
+        self._tree_data = {}
         self._channels = []
         self._apply_ready = False
         self._building = False
@@ -453,7 +471,7 @@ class _ReviewPage(QtWidgets.QWizardPage):
         self._agg = list(result.agg_modules)
         self._single_meta = [dict(m) for m in result.single_meta]
         self._agg_meta = [dict(m) for m in result.agg_meta]
-        self._tile_params = result.tree_data.get("tile_params", {})
+        self._tree_data = result.tree_data
         self._channels = list(result.channels)
 
         self.channel_combo.blockSignals(True)
@@ -525,7 +543,7 @@ class _ReviewPage(QtWidgets.QWizardPage):
                     row,
                     5,
                     QtWidgets.QTableWidgetItem(
-                        _format_params(params, channel, self._tile_params)
+                        _format_params(params, channel, self._tree_data)
                     ),
                 )
                 self.table.setItem(
@@ -586,34 +604,41 @@ class _ReviewPage(QtWidgets.QWizardPage):
 
     # -- validation / apply ---------------------------------------------
     def _revalidate(self):
-        errors = list(getattr(self, "_base_findings", []))
-        errors += [
+        findings = list(getattr(self, "_base_findings", []))
+        findings += [
             f"single[{e}"
             for e in modulespec.validate_workflow(
                 self._single, modulespec.Scope.SINGLE
             )
         ]
         if self._agg:
-            errors += [
+            findings += [
                 f"aggregation[{e}"
                 for e in modulespec.validate_workflow(
                     self._agg, modulespec.Scope.AGGREGATION
                 )
             ]
-        placeholders = [
-            n
-            for n, _ in (self._single + self._agg)
-            if n in ("manual", "dummy_module")
-        ]
+        # Only unresolved placeholder modules block Apply -- they cannot run.
+        # Everything else (scope warnings, params not recovered, etc.) is shown
+        # but does NOT block: parameters are fine-tuned in the main GUI, so the
+        # workflow can be applied and the notes kept for reference.
+        placeholders = sorted(
+            {
+                n
+                for n, _ in (self._single + self._agg)
+                if n in ("manual", "dummy_module")
+            }
+        )
+        self._apply_ready = not placeholders
         if placeholders:
-            errors.append(
-                "unresolved placeholder modules (pick a module or remove the "
-                f"row): {', '.join(sorted(set(placeholders)))}"
+            findings.insert(
+                0,
+                f"APPLY DISABLED: {len(placeholders)} unresolved step(s) "
+                "-- change their 'module' dropdown or right-click > remove: "
+                + ", ".join(placeholders),
             )
-        hard = [e for e in errors if not e.startswith("info:")]
-        self._apply_ready = not hard
         self.errors_box.setPlainText(
-            "\n".join(errors) or "No consistency issues found."
+            "\n".join(findings) or "No consistency issues found."
         )
         self.completeChanged.emit()
 
@@ -640,8 +665,14 @@ class ManualToWorkflowWizard(QtWidgets.QWizard):
         review = _ReviewPage(self)
         self._select_page_id = self.addPage(select)
         self._review_page_id = self.addPage(review)
+        # "Apply to GUI" applies but keeps the wizard open (so the review table
+        # and its notes stay for reference); "Close" dismisses it.
+        self.setOption(QtWidgets.QWizard.WizardOption.NoCancelButton, False)
         self.setButtonText(
             QtWidgets.QWizard.WizardButton.FinishButton, "Apply to GUI"
+        )
+        self.setButtonText(
+            QtWidgets.QWizard.WizardButton.CancelButton, "Close"
         )
 
     def accept(self):
@@ -657,7 +688,12 @@ class ManualToWorkflowWizard(QtWidgets.QWizard):
                     f"Could not apply the reconstructed workflow: {exc}",
                 )
                 return
-        super().accept()
+        # Keep the wizard open on Apply so the notes stay visible; the user
+        # closes it with "Close". (Do not call super().accept().)
+        review.status.setText(
+            "Applied to the GUI ✓ — review/edit there; this window stays open "
+            "for reference. Use 'Close' when done."
+        )
 
     def reject(self):
         # Cancelling the wizard must abort (and join) any running scan so no

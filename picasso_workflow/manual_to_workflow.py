@@ -359,10 +359,19 @@ def _strip_suffixes(stem):
 def _split_dataset_channel(base_stem):
     """Split a manual base stem into ``(dataset, channel)``.
 
-    picasso manual exports are named ``"<dataset>_<channel>"`` (e.g.
-    ``"Cell 1_ALFA-L1"``). The channel is the last underscore-group; the
-    dataset is the remainder. Falls back to ``("dataset", stem)``.
+    Two naming conventions occur:
+
+    * Raw-acquisition-based, e.g.
+      ``"08_ALFA_L1_100pM_1_MMStack_Pos0.ome_locs_undrift_render_ali"`` -- the
+      processing suffixes make the last underscore-group meaningless, so the
+      channel is the acquisition root *before* ``_MMStack`` (``08_ALFA_L1_
+      100pM_1``), unique and human-recognizable. Rename channels later if wanted.
+    * picasso manual exports named ``"<dataset>_<channel>"`` (e.g.
+      ``"Cell 1_ALFA-L1"``) -- the channel is the last underscore-group.
     """
+    marker = base_stem.lower().find("_mmstack")
+    if marker > 0:
+        return "dataset", base_stem[:marker].strip()
     if "_" in base_stem:
         dataset, channel = base_stem.rsplit("_", 1)
         return dataset.strip(), channel.strip()
@@ -814,7 +823,20 @@ STEP_MAP = [
     ("density", "density", _extract_density),
     ("filter", "filter_locs", _extract_none),
     ("align", "picasso_align", _extract_none),
+    # Plain "Render" (not "Render : Pick", matched above; "Render : NeNA"
+    # matched by "nena" at the top) renders a display image and does not
+    # transform the localizations -> skip it.
+    ("render", SKIP_MODULE, _extract_none),
 ]
+
+# Extra review notes attached to a mapped module (independent of parameters).
+NOTES_BY_MODULE = {
+    "picasso_picked_locs": (
+        "picks saved from the manual Render window; if they came from "
+        "pick-similar, switch the module to find_similar and set its "
+        "parameters"
+    ),
+}
 
 
 def _registry_fallback(source):
@@ -868,6 +890,8 @@ def map_step(step, pixelsize=130.0):
                     "parameters not recovered from the manual step; set them "
                     "in the module"
                 )
+            if module_name in NOTES_BY_MODULE:
+                messages.append(NOTES_BY_MODULE[module_name])
             return MappedStep(
                 source=source,
                 module_name=module_name,
