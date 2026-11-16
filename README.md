@@ -304,16 +304,22 @@ How it works:
   above). `find_similar` (pick-similar) thresholds that picasso does not save
   are retro-calculated from the saved picks and localizations.
 - **Checks and reviews.** The reconstruction is validated with
-  `validate_workflow`, and a review table shows each step's module, a confidence
-  flag (OK / retro-calc / defaults / unmapped) and any consistency findings.
-  *Apply* writes the Files tree and module lists into the GUI; review them in the
-  Workflow Config tab and launch from the Run tab as usual.
+  `validate_workflow`, and an **editable** review table shows each step as a row:
+  *stage · source · file · confidence · module · parameters · notes*. The
+  **file** column names the manual `.hdf5` the step first appears in (to map
+  back to what you did by hand); the **module** cell is a dropdown you can change;
+  **right-click a row to remove** a step; and a **channel selector** shows that
+  channel's resolved parameters. Edits re-validate live, and *Apply* enables once
+  nothing is unresolved. *Apply* writes the Files tree and module lists into the
+  GUI; review them in the Workflow Config tab and launch from the Run tab.
 
-**Start mode.** Choose *Re-localize from the raw movies* for the full pipeline
-(load the movie → identify/localize/undrift → … — needs the raw data), or
-*Start downstream from the localized files* to load each channel's manual
-localization file directly and run only the steps applied after it (the
-baked-in localize/undrift steps are skipped, and no raw data is needed).
+**Start mode.** Manual analyses begin from a localized file (picasso Localize is
+a separate GUI), so the wizard **starts downstream from the localized files** by
+default — loading each channel's manual file directly and running only the steps
+applied after it. Tick *Also re-localize from the raw movies* to prepend the
+load-movie + localize steps (parameters recovered from the hdf5 info); that mode
+needs the raw data. Non-pipeline steps (picasso's *Convert units*, *Render :
+NeNA*) are skipped, and picasso's *Combine* maps to `combine_channels`.
 
 **Progress & abort.** Reconstruction runs off the UI thread with a progress bar,
 a per-channel status line and a rough ETA; the slow part is loading each

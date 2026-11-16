@@ -134,6 +134,7 @@ class MappedStep:
     confidence: str = CONF_OK
     cross_channel: bool = False
     messages: list[str] = field(default_factory=list)
+    source_file: str | None = None  # manual .hdf5 that first saved this step
 
 
 @dataclass
@@ -149,6 +150,9 @@ class ChannelChain:
     info_steps: list[dict] = field(default_factory=list)
     # number of info steps baked into base_hdf5 (the downstream-mode start)
     base_info_len: int = 0
+    # sorted (info_doc_count, hdf5_basename) for every file in the chain, used
+    # to attribute each step to the manual file that first saved it
+    file_lengths: list = field(default_factory=list)
     steps: list[MappedStep] = field(default_factory=list)
     skipped: list[str] = field(default_factory=list)  # non-pipeline sources
 
@@ -183,6 +187,10 @@ class ReconstructionResult:
     channels: list
     errors: list = field(default_factory=list)
     raw_root: str | None = None
+    # Per-module metadata (source / confidence / notes), parallel to
+    # single_modules / agg_modules, for the editable review table.
+    single_meta: list = field(default_factory=list)
+    agg_meta: list = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -197,6 +205,33 @@ def _load_info(info_path):
     with open(info_path, "r") as f:
         docs = [d for d in yaml.safe_load_all(f) if d is not None]
     return docs
+
+
+def _count_info_docs(yaml_path):
+    """Count the YAML documents (info steps) in a sidecar, cheaply.
+
+    Counts bare ``---`` separators without parsing the (large) movie-metadata
+    document; the count is ``separators + 1``.
+    """
+    seps = 0
+    with open(yaml_path, "r") as f:
+        for line in f:
+            if line.strip() == "---":
+                seps += 1
+    return seps + 1
+
+
+def _file_for_index(file_lengths, info_index):
+    """Return the manual file that first saved info step ``info_index``.
+
+    ``file_lengths`` is a sorted ``[(doc_count, basename), ...]``; the step at
+    ``info_index`` first appears in the shortest file whose info includes it
+    (``doc_count > info_index``).
+    """
+    for doc_count, name in file_lengths:
+        if doc_count > info_index:
+            return name
+    return None
 
 
 def _load_picks_yaml(picks_path):
@@ -450,11 +485,17 @@ def scan_folder(manual_dir, progress=None, should_cancel=None):
         # earliest localized checkpoint, used as the downstream-mode start.
         deepest = max(files, key=len)
         shortest = min(files, key=len)
+        # Doc count per file -> attribute each step to the file that saved it.
+        file_lengths = []
+        for name in files:
+            yaml_path = os.path.join(
+                manual_dir, name[: -len(".hdf5")] + ".yaml"
+            )
+            if os.path.exists(yaml_path):
+                file_lengths.append((_count_info_docs(yaml_path), name))
+        file_lengths.sort()
+        base_info_len = file_lengths[0][0] if file_lengths else 0
         base_path = os.path.join(manual_dir, shortest)
-        base_yaml = base_path[: -len(".hdf5")] + ".yaml"
-        base_info_len = (
-            len(_load_info(base_yaml)) if os.path.exists(base_yaml) else 0
-        )
         deepest_path = os.path.join(manual_dir, deepest)
         info_path = deepest_path[: -len(".hdf5")] + ".yaml"
         info_steps = _load_info(info_path) if os.path.exists(info_path) else []
@@ -470,6 +511,7 @@ def scan_folder(manual_dir, progress=None, should_cancel=None):
                 picks_path=picks_path,
                 info_steps=info_steps,
                 base_info_len=base_info_len,
+                file_lengths=file_lengths,
             )
         )
     return chains
@@ -792,20 +834,28 @@ def map_chain(chain, pixelsize=130.0, start_from="raw"):
     are skipped. A manual identify+fit pair (both ``picasso_localize``) is
     collapsed, and any ``picasso_picked_locs`` step is pointed at the picks file.
     """
+    base_name = os.path.basename(chain.base_hdf5) if chain.base_hdf5 else None
     steps = []
     if start_from == "localizations":
-        steps.append(_localizations_loader_step())
+        loader = _localizations_loader_step()
+        loader.source_file = base_name
+        steps.append(loader)
         # Skip the header + the steps already baked into the localized file.
-        for step in chain.info_steps[max(chain.base_info_len, 1) :]:
-            steps.append(map_step(step, pixelsize))
+        start = max(chain.base_info_len, 1)
+        for j, step in enumerate(chain.info_steps[start:], start=start):
+            mapped = map_step(step, pixelsize)
+            mapped.source_file = _file_for_index(chain.file_lengths, j)
+            steps.append(mapped)
     else:
         saw_header = False
-        for step in chain.info_steps:
+        for j, step in enumerate(chain.info_steps):
             if _is_movie_header(step) and not saw_header:
                 saw_header = True
                 steps.append(_loader_step(chain, step))
                 continue
-            steps.append(map_step(step, pixelsize))
+            mapped = map_step(step, pixelsize)
+            mapped.source_file = _file_for_index(chain.file_lengths, j)
+            steps.append(mapped)
     # Drop non-pipeline steps (measurements / metadata) from the module list,
     # but record their sources so they can be surfaced for transparency.
     chain.skipped = [s.source for s in steps if s.module_name == SKIP_MODULE]
@@ -841,6 +891,8 @@ def _collapse_localize(steps):
             prev.messages = list(dict.fromkeys(prev.messages + step.messages))
             if CONF_OK in (prev.confidence, step.confidence):
                 prev.confidence = CONF_OK
+            # the fit completes the localization: attribute to its file
+            prev.source_file = step.source_file or prev.source_file
             continue
         collapsed.append(step)
     return collapsed
@@ -1274,17 +1326,24 @@ def reconstruct_workflow(
     agg_steps = per_channel_agg[0] if per_channel_agg else []
     diverge_warnings += _agg_param_divergence(per_channel_agg, tags)
 
+    single_spine = per_channel_single[0] if per_channel_single else []
     single_modules = list(single_folded)
+    single_meta = [_step_meta(s) for s in single_spine]
     single_modules.append(_save_single_bridge())
+    single_meta.append(_bridge_meta())
     save_index = len(single_modules) - 1
 
     agg_modules = []
+    agg_meta = []
     if agg_steps:
         agg_modules.append(("analysis_documentation", {}))
         agg_modules.append(_load_aggregate_bridge(save_index))
+        agg_meta += [_bridge_meta(), _bridge_meta()]
         # The first agg step is the cross-channel boundary module itself.
         agg_modules += _steps_to_modules(agg_steps)
+        agg_meta += [_step_meta(s) for s in agg_steps]
         agg_modules.append(("save_datasets_aggregated", {}))
+        agg_meta.append(_bridge_meta())
 
     tree_data = _build_tree_data(chains, tile_params)
     review = _build_review(chains)
@@ -1312,7 +1371,29 @@ def reconstruct_workflow(
         channels=[c.tag for c in chains],
         errors=errors,
         raw_root=effective_raw_root,
+        single_meta=single_meta,
+        agg_meta=agg_meta,
     )
+
+
+def _step_meta(step):
+    """Per-module review metadata for one mapped step."""
+    return {
+        "source": step.source,
+        "confidence": step.confidence,
+        "notes": "; ".join(step.messages),
+        "source_file": step.source_file,
+    }
+
+
+def _bridge_meta():
+    """Review metadata for a wizard-added bridge/plumbing module."""
+    return {
+        "source": "(added by wizard)",
+        "confidence": CONF_OK,
+        "notes": "",
+        "source_file": None,
+    }
 
 
 def _build_tree_data(chains, tile_params):

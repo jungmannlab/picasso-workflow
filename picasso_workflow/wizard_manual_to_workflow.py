@@ -21,9 +21,10 @@ import threading
 import time
 
 from PyQt6 import QtCore, QtGui, QtWidgets
-from PyQt6.QtCore import QThread, pyqtSignal
+from PyQt6.QtCore import Qt, QThread, pyqtSignal
 
 from picasso_workflow import manual_to_workflow as mtw
+from picasso_workflow import modulespec
 
 # Review-table colours per confidence level.
 _CONF_COLOR = {
@@ -43,6 +44,35 @@ _CONF_LABEL = {
 _AGGREGATION_TYPE_INDEX = 1
 # "Workflow Config" tab index.
 _WORKFLOW_CONFIG_TAB = 0
+
+
+def _format_value(value, channel, tile_params):
+    """Render one parameter value, resolving ``$$map`` for ``channel``."""
+    if isinstance(value, tuple) and value and value[0] == "$$map":
+        col = value[1] if len(value) > 1 else ""
+        entry = tile_params.get(col)
+        if isinstance(entry, dict):
+            vals = entry.get("values", {})
+            if channel in vals:
+                return str(vals[channel])
+            if entry.get("default") is not None:
+                return str(entry["default"])
+        if len(value) > 2 and value[2] is not None:
+            return str(value[2])
+        return f"<{col}>"
+    if isinstance(value, tuple) and value and str(value[0]).startswith("$"):
+        return f"<{value[0]}>"
+    if isinstance(value, dict):
+        return "{…}"
+    return str(value)
+
+
+def _format_params(params, channel, tile_params):
+    """Compact ``key=value`` rendering of a module's params for ``channel``."""
+    return ", ".join(
+        f"{k}={_format_value(v, channel, tile_params)}"
+        for k, v in params.items()
+    )
 
 
 def apply_result_to_window(window, result):
@@ -143,21 +173,16 @@ class _SelectFolderPage(QtWidgets.QWizardPage):
             self._with_button(self.manual_edit, manual_browse),
         )
 
-        # Start mode: re-localize from raw, or start downstream from the
-        # already-localized manual files.
-        self.mode_raw = QtWidgets.QRadioButton(
-            "Re-localize from the raw movies (full pipeline)"
+        # Manual workflows start from a localized file (picasso Localize is a
+        # separate GUI), so default to loading localizations. Optionally
+        # prepend the raw-load + localize steps (parameters recovered from the
+        # hdf5 info) to re-localize from the raw movies.
+        self.relocalize_check = QtWidgets.QCheckBox(
+            "Also re-localize from the raw movies "
+            "(recovered localization parameters)"
         )
-        self.mode_raw.setChecked(True)
-        self.mode_loc = QtWidgets.QRadioButton(
-            "Start downstream from the localized files (skip re-localization)"
-        )
-        mode_box = QtWidgets.QVBoxLayout()
-        mode_box.addWidget(self.mode_raw)
-        mode_box.addWidget(self.mode_loc)
-        mode_holder = QtWidgets.QWidget()
-        mode_holder.setLayout(mode_box)
-        layout.addRow("Start from:", mode_holder)
+        self.relocalize_check.setChecked(False)
+        layout.addRow("", self.relocalize_check)
 
         self.raw_edit = QtWidgets.QLineEdit()
         self.raw_edit.setPlaceholderText("auto-detected — leave blank to auto")
@@ -173,7 +198,8 @@ class _SelectFolderPage(QtWidgets.QWizardPage):
             self._with_button(self.raw_edit, self.raw_browse),
         )
         # The raw folder only matters when re-localizing from raw.
-        self.mode_loc.toggled.connect(self._on_mode_changed)
+        self.relocalize_check.toggled.connect(self._on_relocalize_toggled)
+        self._on_relocalize_toggled(False)
 
         self.pixelsize_spin = QtWidgets.QDoubleSpinBox()
         self.pixelsize_spin.setRange(1.0, 10000.0)
@@ -184,9 +210,13 @@ class _SelectFolderPage(QtWidgets.QWizardPage):
         # The manual folder is mandatory; the raw folder is optional (auto).
         self.registerField("manual_dir*", self.manual_edit)
 
-    def _on_mode_changed(self, downstream):
-        self.raw_edit.setEnabled(not downstream)
-        self.raw_browse.setEnabled(not downstream)
+    def start_from(self):
+        """Return the engine ``start_from`` mode for the current selection."""
+        return "raw" if self.relocalize_check.isChecked() else "localizations"
+
+    def _on_relocalize_toggled(self, relocalize):
+        self.raw_edit.setEnabled(relocalize)
+        self.raw_browse.setEnabled(relocalize)
 
     @staticmethod
     def _with_button(line_edit, button):
@@ -229,13 +259,24 @@ class _ReviewPage(QtWidgets.QWizardPage):
         super().__init__(parent)
         self.setTitle("Review reconstructed workflow")
         self.setSubTitle(
-            "Steps are mapped to modules with a confidence flag. Resolve any "
-            "'unmapped' placeholders before applying."
+            "Each step is mapped to a module with a confidence flag. Change a "
+            "module via its dropdown, right-click to remove a step, and pick a "
+            "channel to see its parameters. Apply enables once nothing is "
+            "unresolved."
         )
         self.result = None
         self._thread = None
         self._worker = None
         self._start_time = None
+        # Editable buffers (copies of the reconstruction, mutated by the table).
+        self._single = []
+        self._agg = []
+        self._single_meta = []
+        self._agg_meta = []
+        self._tile_params = {}
+        self._channels = []
+        self._apply_ready = False
+        self._building = False
 
         layout = QtWidgets.QVBoxLayout(self)
         self.status = QtWidgets.QLabel("")
@@ -252,14 +293,36 @@ class _ReviewPage(QtWidgets.QWizardPage):
         progress_row.addWidget(self.stop_button)
         layout.addLayout(progress_row)
 
-        self.table = QtWidgets.QTableWidget(0, 4)
-        self.table.setHorizontalHeaderLabels(
-            ["Stage", "Module", "Confidence", "Source / notes"]
+        channel_row = QtWidgets.QHBoxLayout()
+        channel_row.addWidget(QtWidgets.QLabel("Show parameters for channel:"))
+        self.channel_combo = QtWidgets.QComboBox()
+        self.channel_combo.currentIndexChanged.connect(
+            lambda _i: self._rebuild_table()
         )
+        channel_row.addWidget(self.channel_combo)
+        channel_row.addStretch(1)
+        channel_row.addWidget(
+            QtWidgets.QLabel("(right-click a row to remove a step)")
+        )
+        layout.addLayout(channel_row)
+
+        self._columns = [
+            "Stage",
+            "Source",
+            "File",
+            "Confidence",
+            "Module",
+            "Parameters",
+            "Notes",
+        ]
+        self.table = QtWidgets.QTableWidget(0, len(self._columns))
+        self.table.setHorizontalHeaderLabels(self._columns)
         self.table.horizontalHeader().setStretchLastSection(True)
         self.table.setEditTriggers(
             QtWidgets.QAbstractItemView.EditTrigger.NoEditTriggers
         )
+        self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.table.customContextMenuRequested.connect(self._row_context_menu)
         layout.addWidget(self.table)
 
         self.errors_box = QtWidgets.QPlainTextEdit()
@@ -288,7 +351,7 @@ class _ReviewPage(QtWidgets.QWizardPage):
         manual_dir = select.manual_edit.text()
         raw_root = select.raw_edit.text().strip() or None
         pixelsize = select.pixelsize_spin.value()
-        start_from = "localizations" if select.mode_loc.isChecked() else "raw"
+        start_from = select.start_from()
 
         self._thread = QThread(self)
         self._worker = _ReconstructWorker(
@@ -385,57 +448,183 @@ class _ReviewPage(QtWidgets.QWizardPage):
         self.progress_bar.setValue(1000)
         self.stop_button.setEnabled(False)
         self.result = result
-        self._populate_table(result)
-        n_unmapped = sum(
-            1 for r in result.review if r["confidence"] == mtw.CONF_UNMAPPED
-        )
+        # Editable copies the table mutates; Apply uses these.
+        self._single = list(result.single_modules)
+        self._agg = list(result.agg_modules)
+        self._single_meta = [dict(m) for m in result.single_meta]
+        self._agg_meta = [dict(m) for m in result.agg_meta]
+        self._tile_params = result.tree_data.get("tile_params", {})
+        self._channels = list(result.channels)
+
+        self.channel_combo.blockSignals(True)
+        self.channel_combo.clear()
+        self.channel_combo.addItems(self._channels)
+        self.channel_combo.blockSignals(False)
+
         summary = (
             f"{len(result.channels)} channels, "
-            f"{len(result.single_modules)} single + "
-            f"{len(result.agg_modules)} aggregation modules."
+            f"{len(self._single)} single + {len(self._agg)} aggregation "
+            "modules."
         )
         if result.raw_root:
             summary += f" Raw data: {result.raw_root}."
-        else:
-            summary += " Raw data folder not found (loading manual locs)."
-        if n_unmapped:
-            summary += (
-                f" {n_unmapped} unmapped step(s) must be resolved before "
-                "applying."
-            )
         self.status.setText(summary)
+        # Keep engine findings that _revalidate does not re-derive (the
+        # single[/aggregation[ validation lines are recomputed on each edit).
+        self._base_findings = [
+            e
+            for e in result.errors
+            if not e.startswith("single[") and not e.startswith("aggregation[")
+        ]
+        self._rebuild_table()
+        self._revalidate()
+
+    # -- table -----------------------------------------------------------
+    def _rows(self):
+        """Ordered (stage, list_name, index) tuples for the current buffers."""
+        rows = [("single", "single", i) for i in range(len(self._single))]
+        rows += [("aggregation", "agg", i) for i in range(len(self._agg))]
+        return rows
+
+    def _buffers(self, list_name):
+        if list_name == "single":
+            return self._single, self._single_meta
+        return self._agg, self._agg_meta
+
+    def _rebuild_table(self):
+        self._building = True
+        try:
+            channel = self.channel_combo.currentText()
+            rows = self._rows()
+            self.table.setRowCount(len(rows))
+            for row, (stage, list_name, idx) in enumerate(rows):
+                modules, meta = self._buffers(list_name)
+                name, params = modules[idx]
+                m = meta[idx]
+                self.table.setItem(row, 0, QtWidgets.QTableWidgetItem(stage))
+                self.table.setItem(
+                    row, 1, QtWidgets.QTableWidgetItem(m.get("source", ""))
+                )
+                self.table.setItem(
+                    row,
+                    2,
+                    QtWidgets.QTableWidgetItem(m.get("source_file") or ""),
+                )
+                conf = m.get("confidence", "")
+                conf_item = QtWidgets.QTableWidgetItem(
+                    _CONF_LABEL.get(conf, conf)
+                )
+                color = _CONF_COLOR.get(conf)
+                if color:
+                    conf_item.setForeground(QtGui.QColor(color))
+                self.table.setItem(row, 3, conf_item)
+                self.table.setCellWidget(
+                    row, 4, self._module_combo(stage, list_name, idx, name)
+                )
+                self.table.setItem(
+                    row,
+                    5,
+                    QtWidgets.QTableWidgetItem(
+                        _format_params(params, channel, self._tile_params)
+                    ),
+                )
+                self.table.setItem(
+                    row, 6, QtWidgets.QTableWidgetItem(m.get("notes", ""))
+                )
+            self.table.resizeColumnsToContents()
+        finally:
+            self._building = False
+
+    def _module_combo(self, stage, list_name, idx, current):
+        scope = (
+            modulespec.Scope.SINGLE
+            if stage == "single"
+            else modulespec.Scope.AGGREGATION
+        )
+        names = sorted(
+            n
+            for n, spec in modulespec.MODULE_REGISTRY.items()
+            if scope in spec.scopes and not spec.experimental
+        )
+        if current not in names:
+            names = sorted(set(names) | {current})
+        combo = QtWidgets.QComboBox()
+        combo.addItems(names)
+        combo.setCurrentText(current)
+        combo.currentTextChanged.connect(
+            lambda text, ln=list_name, i=idx: self._on_module_changed(
+                ln, i, text
+            )
+        )
+        return combo
+
+    def _on_module_changed(self, list_name, idx, new_name):
+        if self._building:
+            return
+        modules, meta = self._buffers(list_name)
+        _name, params = modules[idx]
+        modules[idx] = (new_name, params)
+        meta[idx]["confidence"] = mtw.CONF_OK
+        meta[idx]["notes"] = "edited"
+        self._revalidate()
+
+    def _row_context_menu(self, pos):
+        row = self.table.rowAt(pos.y())
+        rows = self._rows()
+        if row < 0 or row >= len(rows):
+            return
+        _stage, list_name, idx = rows[row]
+        menu = QtWidgets.QMenu(self)
+        remove = menu.addAction("Remove this step")
+        chosen = menu.exec(self.table.viewport().mapToGlobal(pos))
+        if chosen is remove:
+            modules, meta = self._buffers(list_name)
+            del modules[idx]
+            del meta[idx]
+            self._rebuild_table()
+            self._revalidate()
+
+    # -- validation / apply ---------------------------------------------
+    def _revalidate(self):
+        errors = list(getattr(self, "_base_findings", []))
+        errors += [
+            f"single[{e}"
+            for e in modulespec.validate_workflow(
+                self._single, modulespec.Scope.SINGLE
+            )
+        ]
+        if self._agg:
+            errors += [
+                f"aggregation[{e}"
+                for e in modulespec.validate_workflow(
+                    self._agg, modulespec.Scope.AGGREGATION
+                )
+            ]
+        placeholders = [
+            n
+            for n, _ in (self._single + self._agg)
+            if n in ("manual", "dummy_module")
+        ]
+        if placeholders:
+            errors.append(
+                "unresolved placeholder modules (pick a module or remove the "
+                f"row): {', '.join(sorted(set(placeholders)))}"
+            )
+        hard = [e for e in errors if not e.startswith("info:")]
+        self._apply_ready = not hard
         self.errors_box.setPlainText(
-            "\n".join(result.errors) or "No consistency issues found."
+            "\n".join(errors) or "No consistency issues found."
         )
         self.completeChanged.emit()
 
-    def _populate_table(self, result):
-        self.table.setRowCount(len(result.review))
-        for row, item in enumerate(result.review):
-            notes = item["source"]
-            if item["messages"]:
-                notes += "  —  " + "; ".join(item["messages"])
-            cells = [
-                item["stage"],
-                item["module"],
-                _CONF_LABEL.get(item["confidence"], item["confidence"]),
-                notes,
-            ]
-            for col, text in enumerate(cells):
-                cell = QtWidgets.QTableWidgetItem(text)
-                if col == 2:
-                    color = _CONF_COLOR.get(item["confidence"])
-                    if color:
-                        cell.setForeground(QtGui.QColor(color))
-                self.table.setItem(row, col, cell)
-        self.table.resizeColumnsToContents()
+    def current_result(self):
+        """Return the reconstruction with the table's edits applied."""
+        self.result.single_modules = self._single
+        self.result.agg_modules = self._agg
+        return self.result
 
     def isComplete(self):
-        if self.result is None:
-            return False
-        return not any(
-            r["confidence"] == mtw.CONF_UNMAPPED for r in self.result.review
-        )
+        return self.result is not None and self._apply_ready
 
 
 class ManualToWorkflowWizard(QtWidgets.QWizard):
@@ -460,7 +649,7 @@ class ManualToWorkflowWizard(QtWidgets.QWizard):
         parent = self.parent()
         if review.result is not None and parent is not None:
             try:
-                apply_result_to_window(parent, review.result)
+                apply_result_to_window(parent, review.current_result())
             except Exception as exc:  # noqa: BLE001 - surfaced to the user
                 QtWidgets.QMessageBox.critical(
                     self,
