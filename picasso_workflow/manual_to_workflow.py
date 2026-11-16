@@ -748,17 +748,19 @@ def _extract_density(step, pixelsize):
     return params
 
 
-def _extract_dbscan(step, pixelsize):
-    # native dbscan: radius in nm, min_samples = minimum local density.
+def _extract_picasso_dbscan(step, pixelsize):
+    # picasso_dbscan config: radius in camera px (the module multiplies by
+    # pixelsize before calling picasso, which records "Radius (nm)"), and
+    # density = picasso's minimum local density (min_samples).
     params = {}
     rad = _radius_value(step)
     if rad is not None:
         value, unit = rad
         params["radius"] = (
-            float(value) if unit == "nm" else float(value) * pixelsize
+            float(value) if unit == "px" else float(value) / pixelsize
         )
     if "Minimum local density" in step:
-        params["min_samples"] = step["Minimum local density"]
+        params["density"] = step["Minimum local density"]
     return params
 
 
@@ -836,14 +838,16 @@ STEP_MAP = [
     ("aim", "picasso_undrift_aim", _extract_undrift_aim),
     ("undrift", "picasso_undrift_rcc", _extract_undrift_rcc),
     ("render : pick", "picasso_picked_locs", _extract_none),
-    # --- clustering / density / link / filter: native both-scope modules,
-    #     themselves 1:1 picasso wrappers, so they are valid in the
-    #     aggregation stage (where post-alignment per-channel clustering runs)
-    #     as well as the single stage.
-    ("hdbscan", "hdbscan", _extract_hdbscan),
-    ("dbscan", "dbscan", _extract_dbscan),
+    # --- clustering: prefer the picasso-set (picasso_*) wrappers, which call
+    #     picasso's native clusterer 1:1, for fidelity to the manual GUI run
+    #     (consistent with the picasso_* mapping used above). picasso_hdbscan
+    #     (min_cluster/min_samples) and picasso_g5m (min_locs) take the same
+    #     parameter names the native extractors already recover, so those
+    #     extractors are reused; picasso_dbscan needs radius in px + density.
+    ("hdbscan", "picasso_hdbscan", _extract_hdbscan),
+    ("dbscan", "picasso_dbscan", _extract_picasso_dbscan),
     ("smlm clusterer", "smlm_clusterer", _extract_smlm),
-    ("g5m", "gaussian_mixture_cluster", _extract_g5m),
+    ("g5m", "picasso_g5m", _extract_g5m),
     ("link", "link_locs", _extract_link),
     ("density", "density", _extract_density),
     ("filter", "filter_locs", _extract_none),

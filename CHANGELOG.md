@@ -24,11 +24,12 @@ This file was started after v0.5.6; earlier history is in the git log.
   analysis. It scans the selected dataset root (raw acquisition folders + a
   manual-analysis subfolder), reads each channel's cumulative info-yaml chain to
   recover the ordered processing steps, maps them to workflow modules — the
-  single-stage localize/undrift/zfit/pick steps to the **`picasso_*`
-  picasso-set** modules (1:1 recapitulations of native picasso, for maximal
-  fidelity to what was done by hand), and clustering/density/link/filter to the
-  native both-scope modules (themselves 1:1 picasso wrappers, so they stay valid
-  in the aggregation stage); the mapping is keyed on the exact picasso info
+  single-stage localize/undrift/zfit/pick and clustering (DBSCAN / HDBSCAN /
+  G5M) steps to the **`picasso_*` picasso-set** modules (1:1 recapitulations of
+  native picasso, for maximal fidelity to what was done by hand), and
+  density/link/filter to the native both-scope modules (themselves 1:1 picasso
+  wrappers, so they stay valid in the aggregation stage); the mapping is keyed
+  on the exact picasso info
   step strings and parameter keys (verified against picassosr 1.0.0rc1, with
   backward-compatible fallbacks for the pre-1.0 key spellings since a manual
   analysis may predate the upgrade) with a flagged `manual` placeholder for
