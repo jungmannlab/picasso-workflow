@@ -409,10 +409,16 @@ def _radius_value(step):
 
 
 def _extract_localize(step, pixelsize):
-    """picasso_localize (identify+fit) with the native CLI parameter names."""
+    """picasso_localize (identify+fit) with the native CLI parameter names.
+
+    The identification entry carries ``Box Size`` / ``Min. Net Gradient``; the
+    fit entry carries ``Fit method`` and (picasso >=1.0) ``Fit box size``.
+    """
     params = {}
     if "Box Size" in step:
         params["box_side_length"] = step["Box Size"]
+    elif "Fit box size" in step:  # picasso >=1.0 fit entry
+        params["box_side_length"] = step["Fit box size"]
     if "Min. Net Gradient" in step:
         params["gradient"] = step["Min. Net Gradient"]
     if "Fit method" in step:
@@ -447,21 +453,29 @@ def _extract_undrift_aim(step, pixelsize):
 
 
 def _extract_link(step, pixelsize):
-    # native link_locs: d_max in camera pixels (the info stores the px value
-    # directly), tolerance in frames.
+    # native link_locs: d_max in camera pixels, tolerance in frames. picasso
+    # >=1.0 records "Max. distance (nm)" (nm) / "Max. transient dark frames";
+    # older files used "Maximum Distance" (px) / "Maximum Transient Dark Time".
     params = {}
-    if "Maximum Distance" in step:
+    if "Max. distance (nm)" in step:
+        params["d_max"] = _px(step["Max. distance (nm)"], pixelsize)
+    elif "Maximum Distance" in step:
         params["d_max"] = step["Maximum Distance"]
-    if "Maximum Transient Dark Time" in step:
+    if "Max. transient dark frames" in step:
+        params["tolerance"] = step["Max. transient dark frames"]
+    elif "Maximum Transient Dark Time" in step:
         params["tolerance"] = step["Maximum Transient Dark Time"]
     return params
 
 
 def _extract_density(step, pixelsize):
-    # native density: radius in camera pixels (the info records it in nm).
+    # native density: radius in camera pixels. picasso >=1.0 records it under
+    # "Radius (nm)" (nm); older files used "Radius" (already px).
     params = {}
-    if "Radius" in step:
-        params["radius"] = _px(step["Radius"], pixelsize)
+    if "Radius (nm)" in step:
+        params["radius"] = _px(step["Radius (nm)"], pixelsize)
+    elif "Radius" in step:
+        params["radius"] = step["Radius"]
     return params
 
 
@@ -531,7 +545,13 @@ STEP_MAP = [
     ("undrift_from_picked", "undrift_from_picked", _extract_none),
     ("undrift from picked", "undrift_from_picked", _extract_none),
     # --- picasso-set (1:1 native picasso) processing steps ---
+    # The 3D *localization* fit steps ("Fit 3D spline"/"Fit 3D phasor") contain
+    # "fit 3d" but are part of localize, so they must precede the generic
+    # "fit 3d" row (which is the astigmatism z-fit -> picasso_zfit).
     ("identify", "picasso_localize", _extract_localize),
+    ("fit 3d spline", "picasso_localize", _extract_localize),
+    ("fit 3d phasor", "picasso_localize", _extract_localize),
+    ("fit multi-emitter", "picasso_localize", _extract_localize),
     ("fit 2d", "picasso_localize", _extract_localize),
     ("localize", "picasso_localize", _extract_localize),
     ("fit 3d", "picasso_zfit", _extract_none),
