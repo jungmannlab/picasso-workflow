@@ -57,7 +57,11 @@ This file was started after v0.5.6; earlier history is in the git log.
   resolves `filepath`/`#tags` to the selected channel's value; plain picasso
   *Render* (display-only) steps are skipped; and only unresolved placeholder
   modules block *Apply* (with an explicit reason) while *Apply to GUI* keeps the
-  wizard open so the notes stay for reference. Reconstruction runs off the UI thread and reports a
+  wizard open so the notes stay for reference. For a manual *Render : Pick*
+  (mapped to `picasso_picked_locs`), the pick-similar thresholds (diameter,
+  nlocs-per-frame, rmsd) are derived from the grouped picked localizations and
+  put in the step's notes, so the user can switch the module to `find_similar`
+  and reproduce the picks. Reconstruction runs off the UI thread and reports a
   progress bar with a per-channel status line and a rough ETA (the slow part is
   loading each channel's localization file for the pick retro-calculation), and
   can be aborted mid-scan via a Stop button or the wizard's Cancel. New modules

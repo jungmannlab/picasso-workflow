@@ -544,6 +544,57 @@ def test_retro_calc_empty_when_no_locs_in_picks():
     assert m.retro_calc_find_similar(locs, centers, 100.0, 130.0, 10) == {}
 
 
+def test_retro_calc_from_picked_grouped():
+    px = 130.0
+    # group 0: 2 tight locs; group 1: 4 spread locs.
+    x = np.array([10.0, 10.1, 50.0, 50.3, 49.7, 50.1])
+    y = np.array([10.0, 9.9, 50.0, 50.2, 49.8, 50.0])
+    grp = np.array([0, 0, 1, 1, 1, 1])
+    picked = np.rec.fromarrays([x, y, grp], names="x,y,group")
+    params = m.retro_calc_from_picked(picked, 800.0, px, 100)
+    assert params["diameter"] == 800.0
+    # 2 and 4 locs over 100 frames.
+    assert params["min_n_locs_per_frame"] <= 0.02
+    assert params["max_n_locs_per_frame"] >= 0.04
+    assert params["min_rmsd"] < params["max_rmsd"]
+    # No group column -> empty.
+    assert (
+        m.retro_calc_from_picked(
+            np.rec.fromarrays([x, y], names="x,y"), 800.0, px, 100
+        )
+        == {}
+    )
+
+
+def test_apply_pick_similar_retrocalc_notes(tmp_path, monkeypatch):
+    chain = m.ChannelChain(
+        tag="ALFA-L1",
+        dataset="dataset",
+        base_hdf5=None,
+        deepest_hdf5=str(tmp_path / "x.hdf5"),
+        raw_filepath=None,
+        picks_path=None,
+        info_steps=[{"Frames": 100}],
+        steps=[
+            m.MappedStep(
+                source="Picasso v0.11.1 Render : Pick",
+                module_name="picasso_picked_locs",
+                source_file="x_cents.hdf5",
+                info_dict={"Pick Diameter (nm)": 800.0},
+            )
+        ],
+    )
+    x = np.array([10.0, 10.1, 50.0, 50.3])
+    y = np.array([10.0, 9.9, 50.0, 50.2])
+    grp = np.array([0, 0, 1, 1])
+    picked = np.rec.fromarrays([x, y, grp], names="x,y,group")
+    monkeypatch.setattr(m, "_load_locs", lambda p: (picked, [{"Frames": 100}]))
+    m.apply_pick_similar_retrocalc(chain, str(tmp_path), pixelsize=130.0)
+    note = " ".join(chain.steps[0].messages)
+    assert "pick-similar parameters" in note
+    assert "diameter=800" in note and "find_similar" in note
+
+
 def test_apply_find_similar_retrocalc_monkeypatched(tmp_path, monkeypatch):
     man = tmp_path / "root" / "analysis_manual"
     man.mkdir(parents=True)

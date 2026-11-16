@@ -135,6 +135,7 @@ class MappedStep:
     cross_channel: bool = False
     messages: list[str] = field(default_factory=list)
     source_file: str | None = None  # manual .hdf5 that first saved this step
+    info_dict: dict | None = None  # the raw info step dict it was mapped from
 
 
 @dataclass
@@ -899,6 +900,7 @@ def map_step(step, pixelsize=130.0):
                 confidence=conf,
                 cross_channel=module_name in CROSS_CHANNEL_MODULES,
                 messages=messages,
+                info_dict=step,
             )
     guess = _registry_fallback(low)
     if guess is not None:
@@ -1138,6 +1140,110 @@ def apply_find_similar_retrocalc(chain, pixelsize=130.0):
         else:
             s.params.setdefault("diameter", float(diameter))
             s.messages.append("picks enclosed no localizations; review")
+
+
+def retro_calc_from_picked(
+    picked_locs, diameter_nm, pixelsize, n_frames, margin=0.1
+):
+    """Recover ``find_similar`` thresholds from grouped picked localizations.
+
+    The manual *Render : Pick* saves the picked localizations with a ``group``
+    column (one group per pick) but not the pick thresholds. For each group,
+    count the enclosed localizations (as a per-frame fraction) and their RMS
+    distance from the group centre, and set the min/max bounds to span the
+    observed distributions (with a relative ``margin``). ``diameter`` comes from
+    the step's ``Pick Diameter (nm)``.
+
+    Parameters
+    ----------
+    picked_locs : recarray or DataFrame
+        Picked localizations with ``x`` / ``y`` (camera pixels) and ``group``.
+    diameter_nm : float
+        Pick diameter in nm.
+    pixelsize : float
+        Camera pixel size in nm.
+    n_frames : int
+        Number of movie frames.
+
+    Returns
+    -------
+    dict
+        ``diameter`` plus ``min/max_n_locs_per_frame`` / ``min/max_rmsd``.
+        Empty when there is no usable group column.
+    """
+    try:
+        x = np.asarray(picked_locs["x"], dtype=float) * pixelsize
+        y = np.asarray(picked_locs["y"], dtype=float) * pixelsize
+        groups = np.asarray(picked_locs["group"])
+    except (KeyError, ValueError, TypeError, IndexError):
+        return {}
+    n_frames = max(int(n_frames or 1), 1)
+    fracs = []
+    rmsds = []
+    for g in np.unique(groups):
+        mask = groups == g
+        n = int(np.count_nonzero(mask))
+        if n == 0:
+            continue
+        gx = x[mask]
+        gy = y[mask]
+        cx = gx.mean()
+        cy = gy.mean()
+        fracs.append(n / n_frames)
+        rmsds.append(float(np.sqrt(np.mean((gx - cx) ** 2 + (gy - cy) ** 2))))
+    if not fracs:
+        return {}
+    fracs = np.asarray(fracs)
+    rmsds = np.asarray(rmsds)
+    return {
+        "diameter": float(diameter_nm),
+        "min_n_locs_per_frame": float(fracs.min() * (1 - margin)),
+        "max_n_locs_per_frame": float(fracs.max() * (1 + margin)),
+        "min_rmsd": float(rmsds.min() * (1 - margin)),
+        "max_rmsd": float(rmsds.max() * (1 + margin)),
+    }
+
+
+def apply_pick_similar_retrocalc(chain, manual_dir, pixelsize=130.0):
+    """Note the pick-similar parameters behind a ``picasso_picked_locs`` step.
+
+    The manual *Render : Pick* only records the pick diameter/shape, not whether
+    pick-similar was used nor its thresholds. From the grouped picked
+    localizations it saved, compute the ``find_similar`` thresholds and attach
+    them as a note, so the user can switch the module to ``find_similar`` and
+    set them to reproduce the picks. Best-effort: silent-ish on load failure.
+    """
+    n_frames = _n_frames_from_info(chain.info_steps)
+    for s in chain.steps:
+        if s.module_name != "picasso_picked_locs":
+            continue
+        diameter = (s.info_dict or {}).get("Pick Diameter (nm)")
+        if not diameter or not s.source_file:
+            continue
+        path = os.path.join(manual_dir, s.source_file)
+        try:
+            picked, _info = _load_locs(path)
+        except Exception as exc:  # pragma: no cover - depends on picasso/data
+            s.messages.append(
+                f"could not load picked locs to derive pick-similar "
+                f"parameters: {exc}"
+            )
+            continue
+        params = retro_calc_from_picked(picked, diameter, pixelsize, n_frames)
+        if params:
+            summary = ", ".join(
+                f"{k}={round(v, 4)}" for k, v in params.items()
+            )
+            s.messages.append(
+                "pick-similar parameters (if pick-similar produced these "
+                f"picks): {summary} -- switch the module to find_similar and "
+                "set these to reproduce the picks"
+            )
+        else:
+            s.messages.append(
+                f"pick diameter {diameter} nm; could not derive nlocs/rmsd "
+                "(no group column in the picked file)"
+            )
 
 
 def _n_frames_from_info(info):
@@ -1398,7 +1504,10 @@ def reconstruct_workflow(
             frac,
         )
         map_chain(chain, pixelsize=pixelsize, start_from=start_from)
-        if chain.picks_path:
+        needs_locs = chain.picks_path or any(
+            s.module_name == "picasso_picked_locs" for s in chain.steps
+        )
+        if needs_locs:
             _report(
                 progress,
                 f"Channel {i + 1}/{total} ({chain.tag}): loading "
@@ -1406,6 +1515,7 @@ def reconstruct_workflow(
                 frac,
             )
         apply_find_similar_retrocalc(chain, pixelsize=pixelsize)
+        apply_pick_similar_retrocalc(chain, manual_dir, pixelsize=pixelsize)
 
     _report(progress, "Folding and validating the workflow…", 0.95)
 
