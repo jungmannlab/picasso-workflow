@@ -517,31 +517,31 @@ def scan_folder(manual_dir, progress=None, should_cancel=None):
             None,
         )
         files = groups[base_stem]
-        # deepest = longest filename (longest suffix chain); shortest = the
-        # earliest localized checkpoint, used as the downstream-mode start.
-        deepest = max(files, key=len)
+        # Count the info-history documents of every file in the chain up front:
+        # the deepest file is the one with the MOST history, not merely the
+        # longest name. picasso does not always add a filename suffix per step
+        # (e.g. "Undrift from picked" is baked into whatever file is saved
+        # next), so the fullest info chain can live in a file whose name is not
+        # the longest.
+        file_lengths = []
+        for name in files:
+            yaml_path = os.path.join(
+                manual_dir, name[: -len(".hdf5")] + ".yaml"
+            )
+            if os.path.exists(yaml_path):
+                file_lengths.append((_count_info_docs(yaml_path), name))
+        file_lengths.sort()
+        # deepest = most info steps (authoritative cumulative history);
+        # shortest = earliest localized checkpoint (the downstream-mode start).
+        # Fall back to filename length when no sidecars are present.
+        deepest = file_lengths[-1][1] if file_lengths else max(files, key=len)
         shortest = min(files, key=len)
-        # Load deepest file's info first, then map steps to source files.
         base_path = os.path.join(manual_dir, shortest)
         deepest_path = os.path.join(manual_dir, deepest)
         info_path = deepest_path[: -len(".hdf5")] + ".yaml"
         info_steps = _load_info(info_path) if os.path.exists(info_path) else []
-
-        # Build file_lengths: map each step to the file that first saved it.
-        # Only scan file lengths if there are steps (optimization for empty chains).
-        file_lengths = []
-        if info_steps:
-            for name in files:
-                yaml_path = os.path.join(
-                    manual_dir, name[: -len(".hdf5")] + ".yaml"
-                )
-                if os.path.exists(yaml_path):
-                    file_lengths.append((_count_info_docs(yaml_path), name))
-            file_lengths.sort()
         # base_info_len is the step count baked into base_hdf5 (the shortest
-        # file, the downstream-mode start) specifically — not the global
-        # minimum, which can belong to a different file when name length and
-        # doc count disagree (renamed / re-saved checkpoints).
+        # file, the downstream-mode start) specifically.
         counts_by_name = {name: count for count, name in file_lengths}
         base_info_len = counts_by_name.get(shortest, 0)
         dataset, channel = _split_dataset_channel(base_stem)

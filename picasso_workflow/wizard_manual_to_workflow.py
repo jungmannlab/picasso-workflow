@@ -438,14 +438,24 @@ class _ReviewPage(QtWidgets.QWizardPage):
         ]
         self.table = QtWidgets.QTableWidget(0, len(self._columns))
         self.table.setHorizontalHeaderLabels(self._columns)
-        self.table.horizontalHeader().setStretchLastSection(False)
-        # Enable text wrapping and auto-resize columns to content width
-        self.table.resizeColumnsToContents()
         self.table.setEditTriggers(
             QtWidgets.QAbstractItemView.EditTrigger.NoEditTriggers
         )
-        # Allow text wrapping in cells (requires re-wrapping on row height adjust)
+        # Wrap long cell text instead of eliding it: word-wrap on, elide off,
+        # columns at bounded interactive widths (so text must wrap rather than
+        # stretch the column to fit), and rows auto-grow to fit the wrapped
+        # lines. resizeColumnsToContents() is deliberately NOT used -- it sizes
+        # every column to its widest cell, which prevents wrapping entirely.
         self.table.setWordWrap(True)
+        self.table.setTextElideMode(Qt.TextElideMode.ElideNone)
+        header = self.table.horizontalHeader()
+        header.setStretchLastSection(False)
+        header.setSectionResizeMode(
+            QtWidgets.QHeaderView.ResizeMode.Interactive
+        )
+        # Stage, Source, File, Confidence, Module, Parameters, Notes
+        for col, width in enumerate((70, 160, 150, 90, 150, 240, 240)):
+            self.table.setColumnWidth(col, width)
         self.table.verticalHeader().setSectionResizeMode(
             QtWidgets.QHeaderView.ResizeMode.ResizeToContents
         )
@@ -659,7 +669,9 @@ class _ReviewPage(QtWidgets.QWizardPage):
                 self.table.setItem(
                     row, 6, QtWidgets.QTableWidgetItem(m.get("notes", ""))
                 )
-            self.table.resizeColumnsToContents()
+            # Grow row heights to fit the wrapped cell text (columns keep their
+            # bounded widths set in the constructor, so text wraps).
+            self.table.resizeRowsToContents()
         finally:
             self._building = False
 
