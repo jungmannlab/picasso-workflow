@@ -26,6 +26,13 @@ ConfluenceTest: # target for the pytest suite
   Space: "~user"
   DefaultPage: ""
   Username: ""
+# The cluster admin console (shared-mount Apptainer images, SLURM queue, test
+# runs) is HIDDEN from the main GUI by default -- it is cluster-admin tooling,
+# not for every user. Set enabled: true in your site/user config.yaml to show
+# the "Tools -> Admin console..." menu item. The standalone
+# `picasso-workflow-admin-gui` command always works regardless of this flag.
+AdminConsole:
+  enabled: false
 SlurmDefault:
   nodes: 2
   cores: 12

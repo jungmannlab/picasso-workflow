@@ -96,6 +96,65 @@ This file was started after v0.5.6; earlier history is in the git log.
   now show the real defaults — `std_range` 1.4 and `mean_rmsd` 50.0 nm — so the
   values used are visible and correct.
 
+- **Cluster-image listing filled the dropdown off the GUI thread.** The
+  off-thread listing's completion handler was wired to the worker's
+  `finished` signal through a lambda — a context-less functor connection
+  that Qt runs in the *worker* thread, so the dropdown (a widget) was being
+  mutated off the GUI thread (undefined behaviour / crash). The worker now
+  echoes its context back through the signal and the handler is connected as
+  a bound method, so Qt delivers it queued to the GUI thread. Also: the lazy
+  auto-populate's one-shot flag is now consumed only once a listing actually
+  launches, so a first view that can't attempt yet (no `image_dir`, or the
+  connection can't be built) retries on the next view instead of giving up
+  for the session. (`gui.py`)
+
+### Changed
+- **Run tab cluster config laid out as a grid.** The ~11 cluster controls
+  (host, #nodes/#cores/#GPUs, partition/memory/timeout, modules, Apptainer
+  image + List, faulthandler / CPU-only) were all in one `QHBoxLayout`, so each
+  was squeezed too narrow to use. They now sit in a `QGridLayout` with
+  stretching field columns, grouped by row (resources / scheduling / modules /
+  image / debug), and the Memory/Timeout fields no longer carry a 100 px cap.
+  The Files tab's aggregation buttons are regrouped one coherent row per group
+  — utilities (Find in folder / Per-Channel Params / Clear), then all dataset
+  actions (Add/Rename/Remove Dataset), then all channel actions
+  (Add/Rename/Remove Channel) — instead of interleaved by verb. (`gui.py`)
+- **Admin console hidden from the main GUI by default.** The *Tools → Admin
+  console…* menu item now appears only when `AdminConsole.enabled: true` is set
+  in `config.yaml` (default `false`) — it is cluster-admin tooling, not for
+  every user. The standalone `picasso-workflow-admin-gui` command is unaffected.
+  (`gui.py`, `config_template.yaml`)
+
+### Added
+- **Run tab Apptainer image dropdown auto-populates.** The first time the "Run
+  on SLURM Cluster" sub-tab is shown, the shared folder's `.sif` images are
+  listed over SSH and the dropdown is filled (defaulting to the image matching
+  this GUI's version) — no need to hit "List". The listing runs off the UI
+  thread so the window never freezes, and is deferred to that first view
+  (not startup, which would connect on every launch); it is silent on
+  failure (an offline/misconfigured cluster can't nag), while the "List"
+  button still reports failures as before and is now also non-blocking.
+  (`gui.py`)
+- **Help → "Check for updates…".** A menu item that checks GitHub for a newer
+  release on demand (off the UI thread) and reports the outcome in a dialog —
+  newer available (with a download link + the passive banner), already up to
+  date, or couldn't-check (with a link to the releases page). Parity with
+  monet / PycroFlow. New `update_check.fetch_latest_release` (3-way result);
+  `check_for_update` is now a thin wrapper over it (passive-banner behaviour
+  unchanged). (`gui.py`, `update_check.py`)
+
+### Changed
+- **Admin console UX polish.** The Images tab now shows a label for *every*
+  image — a `develop-<sha>` image displays its tag (e.g. `develop-ef8b42`)
+  instead of a blank Version, and the Test column reads `test`/`lean` (Match
+  still highlights only a clean release matching this GUI). The Test-runs tab
+  gained a **List** button that fills the image dropdown from the shared mount
+  (test images first), a selectable **Tiers 1-3** checkbox (so you can run any
+  subset — tiers 1-3, tier 4, and/or template runs; tier 4 + templates gate on
+  tiers 1-3 only when they're included), clearer *Test data dir* help, and
+  wider image/data-dir/identity fields. (`picasso_workflow/admin/`)
+
+### Fixed
 - **Apptainer submit-path hardening (follow-up to the GUI/cluster Apptainer
   work).** `assemble_slurm_commands` now treats an empty `image_path` like
   `None` (host-conda `srun python`) instead of emitting `apptainer exec '' …`,

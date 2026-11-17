@@ -98,7 +98,7 @@ class AdminWindow(QMainWindow):
         self.activity.setMaximumBlockCount(5000)
         root.addWidget(self.activity, 1)
 
-        self.resize(820, 680)
+        self.resize(1000, 700)
 
     # -- connection panel -------------------------------------------------
     def _build_connection_panel(self) -> QWidget:
@@ -109,6 +109,7 @@ class AdminWindow(QMainWindow):
         self.host.addItems([str(h) for h in core.cluster_hosts()])
         self.user = QLineEdit(getpass.getuser())
         self.identity = QLineEdit(core.discover_ssh_key() or "")
+        self.identity.setMinimumWidth(420)  # SSH key paths are long
         browse = QPushButton("Browse…")
         browse.clicked.connect(self._pick_identity)
         key_row = QHBoxLayout()
@@ -121,9 +122,17 @@ class AdminWindow(QMainWindow):
         form.addRow("Cluster", self.host)
         form.addRow("User", self.user)
         form.addRow("Identity file", key_w)
+        # Connection-level actions shared by both tabs: Refresh images lists the
+        # mount once and fills BOTH the Images table and the Test-runs dropdown.
         test = QPushButton("Test connection")
         test.clicked.connect(self._on_test)
-        form.addRow(test, self.conn_status)
+        refresh = QPushButton("Refresh images")
+        refresh.clicked.connect(self._refresh_images)
+        actions = QHBoxLayout()
+        actions.addWidget(test)
+        actions.addWidget(refresh)
+        actions.addWidget(self.conn_status, 1)
+        form.addRow("", _row_widget(actions))
         return box
 
     def _pick_identity(self) -> None:
@@ -144,10 +153,9 @@ class AdminWindow(QMainWindow):
     def _build_images_tab(self) -> QWidget:
         w = QWidget()
         lay = QVBoxLayout(w)
-        refresh = QPushButton("Refresh images")
-        refresh.clicked.connect(self._refresh_images)
-        lay.addWidget(refresh)
-        self.image_dir_label = QLabel("")
+        self.image_dir_label = QLabel(
+            "Click 'Refresh images' (top) to list the shared mount."
+        )
         lay.addWidget(self.image_dir_label)
         self.image_table = self._make_table(
             ["Image", "Version", "Test", "Size", "Modified", "Match"]
@@ -160,33 +168,78 @@ class AdminWindow(QMainWindow):
         w = QWidget()
         lay = QVBoxLayout(w)
         form = QFormLayout()
-        # Default to the -test- image matching this GUI's version (the image
-        # that carries pytest); editable / resolved against image_dir on submit.
+        # Editable image combo, filled by the top 'Refresh images' button with
+        # the mount's TEST images (the chain runs pytest inside the image, which
+        # a lean image lacks). Defaults to the -test- image matching this GUI's
+        # version when that forms a clean name (blank on a dev build).
         self.test_image = QComboBox()
         self.test_image.setEditable(True)
+        self.test_image.setMinimumWidth(420)
         default = core.default_test_image_basename(core.this_gui_version())
         self.test_image.setCurrentText(default or "")
+        self.test_image.setToolTip(
+            "The .sif to run pytest inside (needs the [dev]/pytest extra, i.e. "
+            "a picasso-workflow-test-<version>.sif). 'Refresh images' (top) "
+            "fills this with the mount's test images; a bare name is resolved "
+            "against ClusterApptainer.image_dir."
+        )
         form.addRow("Test image", self.test_image)
+        # Updated by 'Refresh images': warns when the mount has no test image.
+        self.test_image_status = QLabel("")
+        form.addRow("", self.test_image_status)
         self.test_data_dir = QLineEdit()
+        self.test_data_dir.setMinimumWidth(420)
+        # Pre-fill from config TestData.directory -- the same source
+        # submit_all.sh resolves PW_TEST_DATA_DIR from, so a GUI run exercises
+        # the same datasets. Editable; blank = tiers 1-3 only.
+        self.test_data_dir.setText(core.configured_test_data_dir())
         self.test_data_dir.setPlaceholderText(
-            "PW_TEST_DATA_DIR on the cluster (blank = tiers 1-3 only)"
+            "e.g. /fs/pool/…/picasso-workflow_testdata  (blank = skip "
+            "tier 4 + templates)"
+        )
+        self.test_data_dir.setToolTip(
+            "Cluster path to a directory of real DNA-PAINT test datasets, "
+            "exported as PW_TEST_DATA_DIR + bound into the container (tier 4 "
+            "runs real_data tests over it; template runs are the "
+            "run_workflow_slurm.sh scripts found under it). Pre-filled from "
+            "config.yaml TestData.directory -- the same key submit_all.sh "
+            "uses. Must be valid on the cluster compute node. Blank = tiers "
+            "1-3 only."
         )
         form.addRow("Test data dir", self.test_data_dir)
+        # Which jobs to run. Tiers 1-3 are self-contained (no data); tier 4 +
+        # templates additionally need the test data dir.
+        self.test_tiers13 = QCheckBox("Tiers 1-3 (unit + integration)")
+        self.test_tiers13.setToolTip(
+            "Unit tests + template validation + synthetic-data integration, "
+            "run as `pytest --pyargs picasso_workflow` inside the image. "
+            "Self-contained -- needs no test data."
+        )
         self.test_tier4 = QCheckBox("Tier 4 (real data)")
+        self.test_tier4.setToolTip(
+            "The test SUITE's real-data tier: pytest -m 'integration and "
+            "real_data' over the datasets in the test data dir (the real_data-"
+            "marked tests in test_real_data_integration.py / "
+            "test_z_integration.py -- assertion-based correctness checks)."
+        )
         self.test_templates = QCheckBox("Template workflow runs")
         self.test_templates.setToolTip(
-            "Submit each run_workflow_slurm.sh found under the test data dir. "
-            "These are submitted as-is, so they must already be Apptainer-"
-            "based (regenerate them from the Run tab) -- a conda-based script "
-            "would need a login-node environment."
+            "End-to-end WORKFLOW runs (not pytest): submit each "
+            "run_workflow_slurm.sh found under the test data dir -- each runs "
+            "the full pipeline on its template's data; the verdict is 'ran "
+            "through with no error'. Submitted as-is, so they must already be "
+            "Apptainer-based (regenerate them from the Run tab) -- a conda-"
+            "based script would need a login-node environment."
         )
+        self.test_tiers13.setChecked(True)
         self.test_tier4.setChecked(True)
         self.test_templates.setChecked(True)
         toggles = QHBoxLayout()
+        toggles.addWidget(self.test_tiers13)
         toggles.addWidget(self.test_tier4)
         toggles.addWidget(self.test_templates)
         toggles.addStretch(1)
-        form.addRow("Also run", _row_widget(toggles))
+        form.addRow("Run", _row_widget(toggles))
         lay.addLayout(form)
         bar = QHBoxLayout()
         submit = QPushButton("Submit test chain")
@@ -208,6 +261,7 @@ class AdminWindow(QMainWindow):
         ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         image_sel = self.test_image.currentText().strip()
         data_dir = self.test_data_dir.text().strip() or None
+        run_tiers13 = self.test_tiers13.isChecked()
         run_tier4 = self.test_tier4.isChecked()
         run_templates = self.test_templates.isChecked()
 
@@ -228,6 +282,7 @@ class AdminWindow(QMainWindow):
                 version=version,
                 timestamp=ts,
                 test_data_dir=data_dir,
+                run_tiers13=run_tiers13,
                 run_tier4=run_tier4,
                 run_templates=run_templates,
             )
@@ -236,7 +291,7 @@ class AdminWindow(QMainWindow):
             self._test_run_dir = result["run_dir"]
             lines = [
                 f"run dir: {result['run_dir']}",
-                f"tiers 1-3 job: {result['tiers_job']}",
+                f"tiers 1-3 job: {result['tiers_job'] or '(skipped)'}",
                 f"tier 4 job: {result['tier4_job'] or '(skipped)'}",
                 f"template jobs: {len(result['template_jobs'])}",
                 f"summary job: {result['summary_job']}",
@@ -351,6 +406,12 @@ class AdminWindow(QMainWindow):
         )
 
     def _refresh_images(self) -> None:
+        """List the mount once; fill the Images table AND the test dropdown.
+
+        Shared by both tabs (one SSH listing): the Images table shows every
+        image; the Test-runs dropdown gets only the TEST images (the chain runs
+        pytest inside the image, which a lean image lacks).
+        """
         gui_version = core.this_gui_version()
 
         def done(result):
@@ -360,23 +421,61 @@ class AdminWindow(QMainWindow):
             )
             self.image_table.setRowCount(len(images))
             for r, im in enumerate(images):
-                match = "✓ this GUI" if im.version == gui_version else ""
+                # Match only on a clean release version (im.version); a
+                # develop-<sha> image has version=None so never "matches".
+                match = (
+                    "✓ this GUI"
+                    if im.version and im.version == gui_version
+                    else ""
+                )
                 cells = [
                     im.name,
-                    im.version or "",
-                    "yes" if im.is_test else "",
+                    im.tag,  # "0.9.0" or "develop-<sha>" (always shown)
+                    "test" if im.is_test else "lean",
                     im.size,
                     im.mtime,
                     match,
                 ]
                 for c, text in enumerate(cells):
                     self.image_table.setItem(r, c, QTableWidgetItem(text))
-            self.activity.appendPlainText(f"✓ {len(images)} image(s)")
+            self.image_table.resizeColumnsToContents()
+            self._fill_test_images(images)
+            n_test = sum(1 for im in images if im.is_test)
+            self.activity.appendPlainText(
+                f"✓ {len(images)} image(s), {n_test} test image(s)"
+            )
 
         self._run(
             lambda a: (a.image_dir(), a.list_images()),
             done,
             busy="listing images",
+        )
+
+    def _fill_test_images(self, images):
+        """Put the TEST images into the Test-runs dropdown (editable).
+
+        A non-empty current text (a deliberately typed name/path, or the version
+        default) is always preserved -- items are offered, but a typed entry is
+        never silently replaced. When the mount has no test image, a warning
+        label points the user at building/downloading one.
+        """
+        names = [im.name for im in images if im.is_test]
+        current = self.test_image.currentText().strip()
+        self.test_image.blockSignals(True)
+        self.test_image.clear()
+        self.test_image.addItems(names)
+        # Keep the user's entry if they typed one; else default to the first
+        # listed test image. clear() wipes the line-edit, so restore explicitly.
+        if current:
+            self.test_image.setCurrentText(current)
+        elif names:
+            self.test_image.setCurrentText(names[0])
+        self.test_image.blockSignals(False)
+        self.test_image_status.setText(
+            ""
+            if names
+            else "⚠ No test image on the mount — build/download a "
+            "picasso-workflow-test-<version>.sif (it carries pytest)."
         )
 
     def _refresh_jobs(self) -> None:

@@ -21,6 +21,9 @@ GITHUB_REPO = "jungmannlab/picasso-workflow"
 RELEASES_API_URL = (
     f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 )
+# Human-facing releases page -- the fall-back link shown in the on-demand
+# "Check for updates" dialog (e.g. when the check couldn't reach the API).
+RELEASES_PAGE_URL = f"https://github.com/{GITHUB_REPO}/releases"
 # Short timeout: a slow / unreachable API must not delay the check (it runs off
 # the GUI thread, but we still don't want it lingering).
 _TIMEOUT_S = 4.0
@@ -31,6 +34,21 @@ class UpdateInfo(NamedTuple):
 
     latest: str  # version string of the latest release, e.g. "0.6.0"
     url: str  # the release's human-facing html_url
+
+
+class CheckResult(NamedTuple):
+    """Outcome of an on-demand release check (for the menu dialog).
+
+    Unlike :class:`UpdateInfo` (returned only when newer), this reports all
+    three outcomes so the dialog can distinguish "up to date" from "couldn't
+    check".
+    """
+
+    status: str  # "update" | "current" | "error"
+    current: str  # the running version (v-stripped)
+    latest: str | None  # latest tag, or None on error
+    url: str | None  # the release html_url, or None on error
+    error: str | None  # error text when status == "error"
 
 
 def _is_newer(latest: str, current: str) -> bool:
@@ -58,15 +76,16 @@ def _is_newer(latest: str, current: str) -> bool:
         return _nums(latest) > _nums(current)
 
 
-def check_for_update(
+def fetch_latest_release(
     current_version: str,
     url: str = RELEASES_API_URL,
     timeout: float = _TIMEOUT_S,
-) -> UpdateInfo | None:
-    """Return :class:`UpdateInfo` if a newer release exists, else ``None``.
+) -> CheckResult:
+    """Query GitHub's latest release; return a 3-way :class:`CheckResult`.
 
-    Never raises -- any error (network, HTTP, JSON, version parse) is treated
-    as "no update available".
+    Distinguishes "update" / "current" / "error" so the on-demand dialog can
+    report which happened (:func:`check_for_update` collapses the last two to
+    ``None`` for the passive startup banner). Never raises.
 
     Parameters
     ----------
@@ -78,6 +97,7 @@ def check_for_update(
     timeout : float
         Per-request timeout in seconds.
     """
+    current = str(current_version).lstrip("v")
     try:
         req = urllib.request.Request(
             url,
@@ -91,10 +111,38 @@ def check_for_update(
         tag = str(data.get("tag_name") or "").lstrip("v")
         html_url = str(data.get("html_url") or "")
         if not tag or not html_url:
-            return None
-        current = str(current_version).lstrip("v")
+            return CheckResult(
+                "error", current, None, None, "malformed GitHub response"
+            )
         if _is_newer(tag, current):
-            return UpdateInfo(latest=tag, url=html_url)
-    except Exception:
-        return None
+            return CheckResult("update", current, tag, html_url, None)
+        return CheckResult("current", current, tag, html_url, None)
+    except Exception as exc:  # fails soft -- report, don't raise
+        return CheckResult("error", current, None, None, str(exc))
+
+
+def check_for_update(
+    current_version: str,
+    url: str = RELEASES_API_URL,
+    timeout: float = _TIMEOUT_S,
+) -> UpdateInfo | None:
+    """Return :class:`UpdateInfo` if a newer release exists, else ``None``.
+
+    Never raises -- any error (network, HTTP, JSON, version parse) is treated
+    as "no update available". Thin wrapper over :func:`fetch_latest_release`
+    for the passive startup banner.
+
+    Parameters
+    ----------
+    current_version : str
+        The running version (e.g. ``picasso_workflow.__version__``). A leading
+        ``v`` is tolerated.
+    url : str
+        GitHub "latest release" API endpoint; overridable for tests.
+    timeout : float
+        Per-request timeout in seconds.
+    """
+    result = fetch_latest_release(current_version, url=url, timeout=timeout)
+    if result.status == "update":
+        return UpdateInfo(latest=result.latest, url=result.url)
     return None

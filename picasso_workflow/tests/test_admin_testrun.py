@@ -202,6 +202,38 @@ def test_submit_tiers_only_when_no_data_dir():
     assert "afterany:101" in sbatches[-1]
 
 
+def test_submit_skip_tiers13_runs_tier4_ungated():
+    # tiers 1-3 off + tier4 on: tier4 has NO afterok gate (nothing to gate on);
+    # summary afterany spans just tier4.
+    admin = _FakeAdmin(templates=["/fs/d/t1/run_workflow_slurm.sh"])
+    result = _submitter(admin).submit(
+        version="0.9.0",
+        timestamp="T",
+        test_data_dir="/fs/d",
+        run_tiers13=False,
+    )
+    assert result["tiers_job"] is None
+    sbatches = [c for c in admin.commands if c.startswith("sbatch")]
+    # tier4 (101), template (102), summary (103) — no tiers1_3 job
+    assert "--dependency" not in sbatches[0]  # tier4 ungated
+    assert "--dependency" not in sbatches[1]  # template ungated
+    assert "afterany:101:102" in sbatches[-1]  # summary over tier4 + template
+
+
+def test_submit_nothing_selected_raises():
+    import pytest
+
+    admin = _FakeAdmin(templates=[])
+    with pytest.raises(RuntimeError):
+        _submitter(admin).submit(
+            version="0.9.0",
+            timestamp="T",
+            test_data_dir=None,
+            run_tiers13=False,
+        )
+    assert not any(c.startswith("sbatch") for c in admin.commands)
+
+
 def test_submit_aborts_before_queueing_when_discovery_fails():
     # a missing/inaccessible test data dir makes `find` fail -- submit must
     # abort with NOTHING queued (no orphaned tier jobs without a summary).
