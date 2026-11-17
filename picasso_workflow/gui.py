@@ -3496,6 +3496,16 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             in the decorator wrapper
         """
         parameters_spec = {
+            "channels": {
+                "type": "list",
+                "element_type": "str",
+                "description": "Tags of the channels to combine (a subset). "
+                "Only these are combined into 'tag'; the other channels are "
+                "kept. Leave empty to combine all channels. Use several "
+                "combine_channels modules for several RESI targets (e.g. the "
+                "GFP rounds into 'GFP', the ALFA rounds into 'ALFA').",
+                "required": False,
+            },
             "channel_weights": {
                 "type": "list",
                 "description": "Relative weights for each channel",
@@ -5624,13 +5634,17 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             "std_range": {
                 "type": "float",
                 "description": "The pick-similar std_range parameter "
-                "identifying gold",
+                "identifying gold (picasso.pick_gold default 1.4)",
+                "min": 0.0,
+                "default": 1.4,
                 "required": False,
             },
             "mean_rmsd": {
                 "type": "float",
-                "description": "The pick-similar mean_rmsd parameter "
-                "identifying gold",
+                "description": "The pick-similar mean_rmsd (nm) identifying "
+                "gold (picasso.pick_gold default 50.0)",
+                "min": 0.0,
+                "default": 50.0,
                 "required": False,
             },
         }
@@ -10739,16 +10753,20 @@ class Window(QtWidgets.QMainWindow):
         self._start_update_check()
 
         # Tools menu: the cluster admin console (shared-mount Apptainer images,
-        # SLURM queue, disk usage). Cluster-admin tooling, so it is HIDDEN
-        # unless config AdminConsole.enabled is true (the standalone
-        # `picasso-workflow-admin-gui` command still works regardless). A
-        # malformed / missing AdminConsole degrades to hidden.
+        # SLURM queue, disk usage). The Tools menu always carries the
+        # Manual → Workflow wizard; the Admin console below it is cluster-admin
+        # tooling, HIDDEN unless config AdminConsole.enabled is true (the
+        # standalone `picasso-workflow-admin-gui` command still works
+        # regardless). A malformed / missing AdminConsole degrades to hidden.
+        tools_menu = self.menuBar().addMenu("Tools")
         _admin_cfg = CONFIG.get("AdminConsole")
         # Require an explicit boolean true -- a stray `enabled: "no"` (a truthy
         # string) must NOT reveal the menu.
         if isinstance(_admin_cfg, dict) and _admin_cfg.get("enabled") is True:
-            tools_menu = self.menuBar().addMenu("Tools")
             tools_menu.addAction("Admin console…", self._open_admin_console)
+        tools_menu.addAction(
+            "Manual → Workflow…", self._open_manual_to_workflow_wizard
+        )
 
         # Help menu: re-openable onboarding + a shortcut to the settings file.
         help_menu = self.menuBar().addMenu("Help")
@@ -16479,6 +16497,34 @@ class Window(QtWidgets.QMainWindow):
         win.show()
         win.raise_()
         win.activateWindow()
+
+    def _open_manual_to_workflow_wizard(self):
+        """Open the wizard that reconstructs a workflow from a manual analysis.
+
+        Scans a manually-performed analysis folder, maps its saved steps back to
+        workflow modules, and (on Apply) populates the Files tree and module
+        lists here. Opened *non-modally* so the main GUI stays editable while the
+        wizard (and its review notes) remains visible. Lazy-imported so a
+        PyQt/import problem surfaces a message rather than blocking startup.
+        """
+        try:
+            from picasso_workflow.wizard_manual_to_workflow import (
+                ManualToWorkflowWizard,
+            )
+        except Exception as exc:  # noqa: BLE001 - surfaced to the user
+            QtWidgets.QMessageBox.critical(
+                self,
+                "Manual → Workflow",
+                f"Could not open the wizard: {exc}",
+            )
+            return
+        # Keep a reference so the non-modal window is not garbage-collected.
+        wizard = ManualToWorkflowWizard(self)
+        wizard.setModal(False)
+        self._manual_wizard = wizard
+        wizard.show()
+        wizard.raise_()
+        wizard.activateWindow()
 
     def _populate_cluster_images(self, host_cluster):
         """Set the Apptainer image field's default for the selected cluster.

@@ -980,6 +980,11 @@ class TestAnalyseModules(unittest.TestCase):
         shutil.rmtree(os.path.join(self.results_folder, "00_align_channels"))
 
     def combine_channels(self):
+        # Named for the module (no ``test_`` prefix) so the ``test_modules``
+        # reconciliation invokes it; the ``test_combine_channels_*`` methods
+        # below cover the subset behaviour as standalone tests.
+        # Backward compatibility: with no 'channels' subset, all channels are
+        # combined into a single channel (the previous behaviour).
         # create locs to be combined
         locs_dtype = [
             ("frame", "u4"),
@@ -1008,7 +1013,85 @@ class TestAnalyseModules(unittest.TestCase):
         self.ap.channel_locs = [locs1, locs2]
         self.ap.channel_info = [["info1"], ["info2"]]
         self.ap.channel_tags = ["1", "2"]
-        self.ap.combine_channels(0, {})
+        self.ap.combine_channels(0, {"tag": "combined"})
+
+        # All channels collapsed into one combined channel.
+        self.assertEqual(self.ap.channel_tags, ["combined"])
+        self.assertEqual(len(self.ap.channel_locs), 1)
+        self.assertEqual(len(self.ap.channel_locs[0]), 2 * len(self.ap.movie))
+
+        shutil.rmtree(os.path.join(self.results_folder, "00_combine_channels"))
+
+    def test_combine_channels_subset(self):
+        # Combine only a subset of channels into a new named channel (e.g. the
+        # GFP RESI rounds), keeping the other channels untouched.
+        locs_dtype = [
+            ("frame", "u4"),
+            ("photons", "f4"),
+            ("x", "f4"),
+            ("y", "f4"),
+            ("lpx", "f4"),
+            ("lpy", "f4"),
+        ]
+
+        def mklocs():
+            arr = np.rec.array(
+                [
+                    tuple([i] + list(np.random.rand(len(locs_dtype) - 1)))
+                    for i in range(len(self.ap.movie))
+                ],
+                dtype=locs_dtype,
+            )
+            return pd.DataFrame(arr)
+
+        n = len(self.ap.movie)
+        self.ap.channel_locs = [mklocs(), mklocs(), mklocs()]
+        self.ap.channel_info = [["i0"], ["i1"], ["i2"]]
+        self.ap.channel_tags = ["GFP-A", "GFP-B", "ALFA"]
+
+        self.ap.combine_channels(
+            0, {"channels": ["GFP-A", "GFP-B"], "tag": "GFP"}
+        )
+
+        # The two GFP channels are combined into "GFP"; ALFA is kept; the
+        # combined channel is appended last and carries combine_id.
+        self.assertEqual(self.ap.channel_tags, ["ALFA", "GFP"])
+        self.assertEqual(len(self.ap.channel_locs), 2)
+        self.assertEqual(len(self.ap.channel_locs[-1]), 2 * n)
+        self.assertIn("combine_id", self.ap.channel_locs[-1].columns)
+
+        shutil.rmtree(os.path.join(self.results_folder, "00_combine_channels"))
+
+    def test_combine_channels_subset_no_match(self):
+        # A subset that matches no existing tag is a no-op, but must still
+        # populate results["combine_map"] so the Confluence reporter (which
+        # reads it unconditionally) does not KeyError.
+        locs_dtype = [
+            ("frame", "u4"),
+            ("photons", "f4"),
+            ("x", "f4"),
+            ("y", "f4"),
+            ("lpx", "f4"),
+            ("lpy", "f4"),
+        ]
+        arr = np.rec.array(
+            [
+                tuple([i] + list(np.random.rand(len(locs_dtype) - 1)))
+                for i in range(len(self.ap.movie))
+            ],
+            dtype=locs_dtype,
+        )
+        self.ap.channel_locs = [pd.DataFrame(arr)]
+        self.ap.channel_info = [["i0"]]
+        self.ap.channel_tags = ["ALFA"]
+
+        _, results = self.ap.combine_channels(
+            0, {"channels": ["does-not-exist"], "tag": "GFP"}
+        )
+
+        # Channels untouched, and combine_map present (empty) for the reporter.
+        self.assertEqual(self.ap.channel_tags, ["ALFA"])
+        self.assertEqual(results["combine_map"], {})
 
         shutil.rmtree(os.path.join(self.results_folder, "00_combine_channels"))
 

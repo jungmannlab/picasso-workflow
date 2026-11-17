@@ -10,7 +10,92 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ## [Unreleased]
 
+### Added
+- **`combine_channels` can combine a subset of channels.** A new optional
+  `channels` parameter (a list of channel tags) combines only that subset into
+  the new `tag` channel and keeps the other channels untouched, so a RESI
+  dataset with several targets can combine, e.g., the GFP rounds into `GFP` and
+  the ALFA rounds into `ALFA` (one `combine_channels` module each) while leaving
+  non-RESI channels alone. Omitting `channels` combines all channels (the
+  previous behaviour). Exposed in the GUI module editor.
+
+- **Manual → Workflow wizard (GUI).** A new *Tools → Manual → Workflow…* wizard
+  reconstructs a runnable aggregation workflow from a manually-performed picasso
+  analysis. It scans the selected dataset root (raw acquisition folders + a
+  manual-analysis subfolder), reads each channel's cumulative info-yaml chain to
+  recover the ordered processing steps, maps them to workflow modules — the
+  single-stage localize/undrift/zfit/pick and clustering (DBSCAN / HDBSCAN /
+  G5M) steps to the **`picasso_*` picasso-set** modules (1:1 recapitulations of
+  native picasso, for maximal fidelity to what was done by hand), and
+  density/link/filter to the native both-scope modules (themselves 1:1 picasso
+  wrappers, so they stay valid in the aggregation stage); the mapping is keyed
+  on the exact picasso info
+  step strings and parameter keys (verified against picassosr 1.0.0rc1, with
+  backward-compatible fallbacks for the pre-1.0 key spellings since a manual
+  analysis may predate the upgrade) with a flagged `manual` placeholder for
+  anything it can't confidently map — and splits the sequence
+  into single-dataset modules up to the first cross-channel step and aggregation
+  modules from there on. Parameters that vary across channels are lifted to
+  `("$$map", …)` tile columns; `find_similar` (pick-similar) thresholds that
+  picasso does not persist are retro-calculated from the saved picks and
+  localizations. The result is checked with `validate_workflow` and a per-step
+  review table (with confidence flags), then applied into the Files tree and
+  module lists so it can be run directly via the Run tab. The user browses
+  straight to the manual-analysis folder (e.g. `analysis_manual`); the dataset
+  root holding the raw movies — which can sit several levels above it — is
+  auto-detected by walking upward and resolving the movies via the MicroManager
+  naming convention (a direct lookup, no recursive tree walk), and is shown
+  editable. Starts downstream from each channel's localized file by default
+  (manual analyses begin from a localized file); tick *Also re-localize from
+  the raw movies* to prepend load-movie + localize (parameters recovered from
+  the hdf5 info). The review table is **editable**: columns stage · source ·
+  file · confidence · module · parameters · notes, where the *file* column names
+  the manual `.hdf5` a step first appears in, the *module* cell is a dropdown,
+  right-click removes a step, and a channel selector shows per-channel resolved
+  parameters; edits re-validate live and gate Apply. picasso's *Combine* maps to
+  `combine_channels`; non-pipeline steps (*Convert units*, *Render : NeNA*) are
+  skipped; a *Custom Batch Filtering Script* maps to `filter_locs` flagged
+  (criteria not recoverable). Handles mixed picasso versions in the recorded
+  info: numeric/physical parameters (nm, counts) are version-independent and
+  converted to the units the modules expect, the `fit_method` enum (which
+  changed across versions) is normalized to a current alias for the re-localize
+  path, and the source picasso version(s) are surfaced in the findings (the
+  workflow always runs on the installed picasso ≥1.0). Channel tags come from
+  the acquisition root (before `_MMStack`) under raw-acquisition naming so each
+  channel is distinct (fixing per-channel parameters); the parameters column
+  resolves `filepath`/`#tags` to the selected channel's value; plain picasso
+  *Render* (display-only) steps are skipped; and only unresolved placeholder
+  modules block *Apply* (with an explicit reason) while *Apply to GUI* keeps the
+  wizard open so the notes stay for reference. For a manual *Render : Pick*
+  (mapped to `picasso_picked_locs`), the pick-similar thresholds (diameter,
+  nlocs-per-frame, rmsd) are derived from the grouped picked localizations and
+  put in the step's notes, so the user can switch the module to `find_similar`
+  and reproduce the picks. Raw movies resolve even when the recorded `File` is a
+  Windows path (so re-localization correctly uses `load_dataset_movie` with the
+  raw file). Steps with no automatic mapping (display *Render*, unit
+  conversions, a channel-alignment render) are kept as a `dummy_module`
+  placeholder (removable, or reclassifiable via the dropdown) rather than
+  dropped. A *Move selected step → aggregation* button makes the selected
+  single-stage step the cross-channel boundary — it and every later step move to
+  the aggregation stage with the save/load/documentation bridge modules
+  rebuilt (useful when channel alignment was not recorded as a distinct step).
+  The wizard opens non-modally so the main GUI stays editable while it (and the
+  notes) remain visible. Reconstruction runs off the UI thread and reports a
+  progress bar with a per-channel status line and a rough ETA (the slow part is
+  loading each channel's localization file for the pick retro-calculation), and
+  can be aborted mid-scan via a Stop button or the wizard's Cancel. New modules
+  `manual_to_workflow.py` (Qt-free
+  engine, with an optional `progress(message, fraction)` callback) and
+  `wizard_manual_to_workflow.py` (PyQt6 wizard); a one-line `Tools` menu hook in
+  `gui.py`.
+
 ### Fixed
+- **`find_gold` default parameters shown in the GUI.** The `std_range` /
+  `mean_rmsd` fields had no default (so they showed `0`, which the module treats
+  as "unset" and silently falls back to `picasso.pick_gold`'s defaults). They
+  now show the real defaults — `std_range` 1.4 and `mean_rmsd` 50.0 nm — so the
+  values used are visible and correct.
+
 - **Cluster-image listing filled the dropdown off the GUI thread.** The
   off-thread listing's completion handler was wired to the worker's
   `finished` signal through a lambda — a context-less functor connection
