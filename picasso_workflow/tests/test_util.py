@@ -653,3 +653,28 @@ class TestUtil(unittest.TestCase):
             assert "pos2" in keys
             assert "pos10" in keys
             assert keys.index("pos2") < keys.index("pos10")
+
+
+# ---------------------------------------------------------------------------
+# tests.temp_folder -- read-only-filesystem-safe result dir resolution
+# ---------------------------------------------------------------------------
+def test_temp_folder_honors_env(tmp_path, monkeypatch):
+    from picasso_workflow.tests import temp_folder
+
+    target = tmp_path / "pwtemp"
+    monkeypatch.setenv("PW_TEST_TEMP_DIR", str(target))
+    assert temp_folder() == str(target)
+    assert target.is_dir()
+
+
+def test_temp_folder_falls_back_when_parent_readonly(tmp_path, monkeypatch):
+    # No env override, and the repo-root temp's parent is "read-only" -> fall
+    # back to <cwd>/temp (the behaviour inside a read-only Apptainer install).
+    import picasso_workflow.tests as pwtests
+
+    monkeypatch.delenv("PW_TEST_TEMP_DIR", raising=False)
+    monkeypatch.setattr(pwtests.os, "access", lambda *a, **k: False)
+    monkeypatch.setattr(pwtests.os, "getcwd", lambda: str(tmp_path))
+    expected = str(tmp_path / "temp")
+    assert pwtests.temp_folder() == expected
+    assert (tmp_path / "temp").is_dir()

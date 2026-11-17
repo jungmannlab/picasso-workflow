@@ -20,6 +20,15 @@ This file was started after v0.5.6; earlier history is in the git log.
   `ClusterAdmin.cancel_jobs` in `admin/core.py`; both run off the GUI thread.
 
 ### Fixed
+- **Cluster test chain: result-artefact dir is writable inside a read-only
+  SIF.** The test suite wrote result folders to `<package>/../../temp`, which in
+  a source checkout is the repo-root `temp/` but inside an Apptainer image is
+  `site-packages/temp` — on the read-only SIF `tests/__init__` crashed pytest
+  *collection* with `OSError: Read-only file system`. A new
+  `picasso_workflow.tests.temp_folder()` resolves a writable dir
+  (`$PW_TEST_TEMP_DIR` → repo-root `temp/` when writable → `<cwd>/temp`), all
+  test modules use it, and the admin test chain exports `PW_TEST_TEMP_DIR` under
+  the writable run dir (`cache_env`). (`tests/__init__.py`, `admin/testrun.py`)
 - **Admin test runs: map the test-data dir to the cluster via Drivepaths.**
   `ClusterAdmin.submit_test_chain` now rewrites the test-data directory from the
   GUI machine's layout (e.g. a Mac `/Volumes/...` mount, as pre-filled from

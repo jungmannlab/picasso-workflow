@@ -62,11 +62,14 @@ def cache_env(run_dir):
 
     ``@numba.njit(cache=True)`` and matplotlib otherwise try to write next to
     their read-only in-image package files and fail; point them at the run
-    directory (bound in) instead.
+    directory (bound in) instead. ``PW_TEST_TEMP_DIR`` likewise redirects the
+    test suite's result-artefact folder (whose default ``<pkg>/../../temp`` is
+    the read-only ``site-packages/temp`` inside the image) into the run dir.
     """
     return {
         "NUMBA_CACHE_DIR": posixpath.join(run_dir, ".numba"),
         "MPLCONFIGDIR": posixpath.join(run_dir, ".mpl"),
+        "PW_TEST_TEMP_DIR": posixpath.join(run_dir, ".pwtemp"),
     }
 
 

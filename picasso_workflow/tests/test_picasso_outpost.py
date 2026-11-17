@@ -18,6 +18,7 @@ import pytest
 # from matplotlib import cm
 
 
+from picasso_workflow.tests import temp_folder
 from picasso_workflow.outpost.formats import zeiss
 from picasso_workflow.outpost.alignment import channels
 from picasso_workflow.outpost.picks import picks as picks_mod
@@ -91,12 +92,9 @@ class TestPicassoOutpost(unittest.TestCase):
         mock_movie.__getitem__.return_value = movie
         mock_load_czi.return_value = (mock_movie, [{}])
 
-        temp_folder = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)), "..", "..", "temp"
-        )
-        os.makedirs(temp_folder, exist_ok=True)
-        filepath_czi = os.path.join(temp_folder, "zeissfile.czi")
-        filepath_raw = os.path.join(temp_folder, "myrawfile.raw")
+        tmp_dir = temp_folder()
+        filepath_czi = os.path.join(tmp_dir, "zeissfile.czi")
+        filepath_raw = os.path.join(tmp_dir, "myrawfile.raw")
         info = {"Byte Order": "<", "Camera": "FusionBT"}
         zeiss.convert_zeiss_file(filepath_czi, filepath_raw, info)
 

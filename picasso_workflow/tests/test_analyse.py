@@ -17,6 +17,7 @@ import pandas as pd
 from unittest.mock import patch, MagicMock
 
 from picasso_workflow import analyse, util
+from picasso_workflow.tests import temp_folder
 from picasso_workflow.outpost.spinna import wrappers as spinna_wrappers
 
 logger = logging.getLogger(__name__)
@@ -72,9 +73,7 @@ class TestAnalyseModules(unittest.TestCase):
     ]
 
     def setUp(self):
-        self.results_folder = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)), "..", "..", "temp"
-        )
+        self.results_folder = temp_folder()
         analysis_config = {
             "camera_info": {
                 "Gain": 1,
@@ -4191,11 +4190,7 @@ class TestAnalyse(unittest.TestCase):
     ]
 
     def setUp(self):
-        self.results_folder = os.path.normpath(
-            os.path.join(
-                os.path.dirname(os.path.abspath(__file__)), "..", "..", "temp"
-            )
-        )
+        self.results_folder = temp_folder()
         analysis_config = {
             "camera_info": {
                 "Gain": 1,

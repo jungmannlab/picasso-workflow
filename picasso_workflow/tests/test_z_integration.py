@@ -46,6 +46,7 @@ from picasso_workflow.workflow import (  # noqa: E402
 )
 import picasso_workflow.standard_singledataset_workflows as ssw  # noqa: E402
 import picasso_workflow.standard_aggregation_workflows as saw  # noqa: E402
+from picasso_workflow.tests import temp_folder  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -84,9 +85,7 @@ _SMOKE_TEST_FILE = os.path.join(
     "3C_30px_1kframes_MMStack_Pos0.ome.tif",
 )
 
-_RESULTS_DIR = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)), "..", "..", "temp"
-)
+_RESULTS_DIR = temp_folder()
 
 # Live-Confluence tests need the test token; non-secret connection settings
 # come from the ConfluenceTest config section (resolver). Without a token the
