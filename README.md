@@ -826,6 +826,14 @@ pytest suite, CI, and GUI-launched workflows):
   chmod 600 ~/.picasso_secrets
   ```
 
+  **From the GUI (no terminal needed):** the **Doctor** tab's *Cluster secrets
+  (SLURM)* panel can both *check* whether the cluster already has
+  `~/.picasso_secrets` and `~/.config/picasso_workflow/.env` (and holds the
+  expected keys) and *write* both files over SSH with `chmod 600` — using the
+  token already configured locally, or ones you type into its masked fields. It
+  targets the cluster selected in the Run tab, and never puts a token value on a
+  command line or in a log.
+
   Both job paths source this file unconditionally
   (`[ -f ~/.picasso_secrets ] && source ~/.picasso_secrets`): the test
   tiers under `tools/cluster_tests/` and the `run_workflow_slurm.sh` scripts
