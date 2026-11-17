@@ -10,6 +10,14 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ## [Unreleased]
 
+### Changed
+- **Hosted unit tests run a Python matrix (3.11–3.14).** `unit-tests-hosted.yml`
+  now tests the full declared-supported range instead of only 3.11, mirroring
+  the sibling repos (monet / picasso-registry / PycroFlow); `fail-fast: false`
+  keeps a red exploratory 3.13/3.14 leg from cancelling the supported legs, and
+  `fetch-depth: 0` + `cache: pip` are added. Each leg is a separate status check
+  (`unit-tests (3.11)` …); update branch protection to gate on the chosen legs.
+
 ### Added
 - **Admin console: fetch a test run's logs and cancel its jobs.** The Test-runs
   tab gains a *Fetch logs* button (tails the per-job `.log` files in the run dir
