@@ -34,19 +34,14 @@ def temp_folder():
     return base
 
 
-def ensure_temp_folder():
-    """Ensure the shared test ``temp/`` folder exists (see :func:`temp_folder`).
-
-    Kept for backwards compatibility; delegates to :func:`temp_folder`, which
-    is read-only-filesystem safe.
-    """
-    temp_folder()
-
-
+# Each test resolves (and creates) its result dir via `temp_folder()` in setUp
+# / at module scope, so the tests package has no import-time side effects -- an
+# eager `os.mkdir` here was what crashed pytest collection on a read-only
+# Apptainer install.
+#
 # Confluence test credentials are resolved on demand via
 # picasso_workflow.confluence.resolve_confluence_credentials("ConfluenceTest")
 # -- non-secret fields come from config.yaml's ConfluenceTest section (each
 # overridable by a TEST_CONFLUENCE_* env var) and the token from the
 # TEST_CONFLUENCE_TOKEN env var. The resolver strips any surrounding quotes,
 # so no separate env-var sanitisation step is needed here.
-ensure_temp_folder()
