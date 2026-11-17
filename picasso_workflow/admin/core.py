@@ -21,6 +21,8 @@ import os
 import shlex
 from dataclasses import dataclass
 
+from loguru import logger
+
 from picasso_workflow import CONFIG
 from picasso_workflow.slurm_submit import (
     SlurmCommunicator,
@@ -456,6 +458,32 @@ class ClusterAdmin:
         controls the clock). See :class:`testrun.TestChainSubmitter`.
         """
         from picasso_workflow.admin.testrun import TestChainSubmitter
+        from picasso_workflow.util import convert_filepath_for_machine
+
+        # The test-data dir is configured / typed in the GUI machine's layout
+        # (e.g. a Mac "/Volumes/..." mount), but `find` + the apptainer binds
+        # run on the cluster login node. Translate it to the host's layout via
+        # the Drivepaths config (dest_machine = the cluster key) so it resolves
+        # there. A path under no known drive root, or an unmapped host, is
+        # returned unchanged.
+        if test_data_dir:
+            # Drivepaths rewriting is a best-effort convenience; guard it so any
+            # unexpected failure in the shared PathParser degrades to "use the
+            # entered path" (which then resolves as-is or fails later with a
+            # clear `find` error) rather than aborting the submit with an opaque
+            # traceback at this GUI boundary.
+            try:
+                test_data_dir = convert_filepath_for_machine(
+                    test_data_dir, dest_machine=self.host
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Drivepaths conversion of {!r} for host {!r} failed "
+                    "({}); using the entered path unchanged.",
+                    test_data_dir,
+                    self.host,
+                    exc,
+                )
 
         image_dir, module, bind_paths = apptainer_config(self.host)
         submitter = TestChainSubmitter(
@@ -481,3 +509,47 @@ class ClusterAdmin:
             f"cat {shlex.quote(run_dir)}/SUMMARY.txt 2>/dev/null"
         )
         return result.get("stdout", "") or ""
+
+    def fetch_logs(self, run_dir, tail=400):
+        """Return the per-job ``.log`` files in ``run_dir`` (each tailed).
+
+        The tier/summary jobs write ``<label>_<jobid>.log`` into the run dir;
+        this concatenates them (last ``tail`` lines each, under a ``===== path
+        =====`` header) so a failed tier's error output is visible from the
+        console without hand-SSH. Returns ``""`` when none exist yet (the
+        no-match ``*.log`` glob is skipped rather than catted literally).
+        Template workflow logs live under each template's own ``logs/`` and are
+        not included here.
+        """
+        glob = f"{shlex.quote(run_dir)}/*.log"
+        # `for f in <glob>` iterates the literal pattern when nothing matches,
+        # so guard each entry with `[ -e ]` before tailing.
+        cmd = (
+            f"for f in {glob}; do "
+            '[ -e "$f" ] || continue; '
+            'printf "\\n===== %s =====\\n" "$f"; '
+            f'tail -n {int(tail)} "$f" 2>/dev/null || true; '
+            "done"
+        )
+        # Use ``_run`` (not a raw ``execute_ssh_command``): the remote command
+        # always exits 0 (no matching files -> loop body never runs; a single
+        # unreadable log is swallowed by ``|| true``), so a non-zero exit is a
+        # genuine SSH / auth failure (ssh itself returns 255) that must surface
+        # as an error -- not be masked as the empty "(no logs yet)" string the
+        # caller shows on "".
+        return self._run(cmd)
+
+    def cancel_jobs(self, job_ids):
+        """``scancel`` the given job ids; return the number cancelled.
+
+        Filters out blanks / the ``-`` placeholder (so a skipped tier's
+        ``None`` job never reaches ``scancel``) and is a no-op returning ``0``
+        when nothing valid remains. One ``scancel`` call cancels them all --
+        ``scancel`` exits 0 even for already-finished ids, so a stuck run can be
+        cleared after a gating tier fails.
+        """
+        ids = [str(j) for j in job_ids if j and str(j) != "-"]
+        if not ids:
+            return 0
+        self._run("scancel " + " ".join(shlex.quote(i) for i in ids))
+        return len(ids)

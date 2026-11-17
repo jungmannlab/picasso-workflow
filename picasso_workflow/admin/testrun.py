@@ -400,6 +400,7 @@ class TestChainSubmitter:
 
         return {
             "run_dir": run_dir,
+            "test_data_dir": test_data_dir,
             "tiers_job": tiers_job,
             "tier4_job": tier4_job,
             "template_jobs": template_jobs,

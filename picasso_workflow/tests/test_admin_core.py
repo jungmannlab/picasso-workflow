@@ -188,3 +188,203 @@ def test_parse_df_no_data():
     assert (
         core.parse_df("Filesystem Size Used Avail Use% Mounted on\n") is None
     )
+
+
+# --------------------------------------------------------------------------- #
+# cancel_jobs / fetch_logs (SSH ops against a recording fake comm)
+# --------------------------------------------------------------------------- #
+class _FakeComm:
+    """Records SSH commands; replies success with a canned stdout."""
+
+    def __init__(self, stdout=""):
+        self.commands = []
+        self.stdout = stdout
+
+    def execute_ssh_command(self, command):
+        self.commands.append(command)
+        return {
+            "success": True,
+            "stdout": self.stdout,
+            "stderr": "",
+            "return_code": 0,
+        }
+
+
+def _admin(stdout=""):
+    return core.ClusterAdmin(_FakeComm(stdout), "clusterXXX", "u")
+
+
+def test_cancel_jobs_one_scancel_for_all():
+    admin = _admin()
+    assert admin.cancel_jobs(["101", "102", "103"]) == 3
+    # a single scancel lists every id (not one call per job)
+    scancels = [c for c in admin.comm.commands if c.startswith("scancel ")]
+    assert len(scancels) == 1
+    assert "101" in scancels[0] and "103" in scancels[0]
+
+
+def test_cancel_jobs_filters_none_and_placeholder():
+    # skipped tiers hand us None / '-'; those must never reach scancel.
+    admin = _admin()
+    assert admin.cancel_jobs([None, "-", "101"]) == 1
+    assert admin.comm.commands == ["scancel 101"]
+
+
+def test_cancel_jobs_noop_when_empty():
+    admin = _admin()
+    assert admin.cancel_jobs([None, "-"]) == 0
+    # nothing to cancel => no SSH at all
+    assert admin.comm.commands == []
+
+
+def test_fetch_logs_tails_run_dir_logs():
+    admin = _admin(stdout="===== /run/tiers1_3_101.log =====\nFAILED\n")
+    out = admin.fetch_logs("/scratch/run", tail=50)
+    assert "FAILED" in out
+    (cmd,) = admin.comm.commands
+    # globs the run dir's *.log, guards each entry, tails it; an unreadable
+    # single log is swallowed so it doesn't look like an SSH failure
+    assert "/scratch/run/*.log" in cmd
+    assert "tail -n 50" in cmd
+    assert '[ -e "$f" ]' in cmd
+    assert "|| true" in cmd
+
+
+def test_fetch_logs_empty_when_none():
+    admin = _admin(stdout="")
+    assert admin.fetch_logs("/scratch/run") == ""
+
+
+# --------------------------------------------------------------------------- #
+# submit_test_chain: Drivepaths mapping of the test-data dir
+# --------------------------------------------------------------------------- #
+class _SubmitComm:
+    """Fake comm for submit_test_chain: hands out job ids, records commands."""
+
+    def __init__(self):
+        self.commands = []
+        self._next = 100
+
+    def execute_ssh_command(self, command):
+        self.commands.append(command)
+        stdout = ""
+        if command.startswith("sbatch"):
+            self._next += 1
+            stdout = f"{self._next}\n"
+        return {
+            "success": True,
+            "stdout": stdout,
+            "stderr": "",
+            "return_code": 0,
+        }
+
+    def put_file(self, content, remote, make_executable=False):
+        return {"success": True, "stdout": "", "stderr": "", "return_code": 0}
+
+    def create_slurm_script(self, name, commands, **kw):
+        return "#script\n"
+
+
+def test_submit_test_chain_maps_test_data_dir_via_drivepaths(monkeypatch):
+    # A local "/Volumes/..." test-data dir must be rewritten to the cluster
+    # host's "/fs/mpib/..." layout (via Drivepaths) before the remote `find`
+    # and the apptainer binds use it -- otherwise it is a no-such-dir on the
+    # login node.
+    monkeypatch.setitem(
+        core.CONFIG,
+        "Drivepaths",
+        {
+            "pcjuXX.local": ["/Volumes/pool-miblab1"],
+            "hpcl8XXX": ["/fs/mpib/pool-miblab1"],
+        },
+    )
+    monkeypatch.setattr(
+        core, "apptainer_config", lambda host: ("/sw", "apptainer/1.4.1", [])
+    )
+    monkeypatch.setattr(
+        core, "apptainer_test_results_dir", lambda host: "/scratch/tr"
+    )
+
+    admin = core.ClusterAdmin(_SubmitComm(), "hpcl8XXX", "u")
+    result = admin.submit_test_chain(
+        image_path="/sw/x-test.sif",
+        version="0.9.0",
+        timestamp="T",
+        test_data_dir="/Volumes/pool-miblab1/templates",
+        run_tier4=False,
+    )
+    # the returned (converted) dir and the remote `find` both use the cluster
+    # layout, never the local /Volumes path.
+    assert result["test_data_dir"] == "/fs/mpib/pool-miblab1/templates"
+    finds = [c for c in admin.comm.commands if c.startswith("find ")]
+    assert len(finds) == 1
+    assert "/fs/mpib/pool-miblab1/templates" in finds[0]
+    assert "/Volumes" not in finds[0]
+
+
+def test_submit_test_chain_path_beside_mapped_root_passes_through(monkeypatch):
+    # A dir BESIDE a mapped root (".../pool-miblab1-extra" next to the
+    # ".../pool-miblab1" root) is NOT under it, so conversion leaves it
+    # unchanged -- and the submit proceeds with the entered path rather than
+    # crashing (this exercised the old substring-match crash; now a clean
+    # no-op). See test_util for the metaworkflow-level coverage.
+    monkeypatch.setitem(
+        core.CONFIG,
+        "Drivepaths",
+        {
+            "pcjuXX.local": ["/Volumes/pool-miblab1"],
+            "hpcl8XXX": ["/fs/mpib/pool-miblab1"],
+        },
+    )
+    monkeypatch.setattr(
+        core, "apptainer_config", lambda host: ("/sw", "apptainer/1.4.1", [])
+    )
+    monkeypatch.setattr(
+        core, "apptainer_test_results_dir", lambda host: "/scratch/tr"
+    )
+
+    admin = core.ClusterAdmin(_SubmitComm(), "hpcl8XXX", "u")
+    result = admin.submit_test_chain(
+        image_path="/sw/x-test.sif",
+        version="0.9.0",
+        timestamp="T",
+        test_data_dir="/Volumes/pool-miblab1-extra/templates",
+        run_tier4=False,
+    )
+    # beside-root -> not under any root -> left unchanged, submit proceeded
+    assert result["test_data_dir"] == "/Volumes/pool-miblab1-extra/templates"
+    finds = [c for c in admin.comm.commands if c.startswith("find ")]
+    assert len(finds) == 1
+    assert "/Volumes/pool-miblab1-extra/templates" in finds[0]
+
+
+def test_submit_test_chain_guards_conversion_exception(monkeypatch):
+    # The call-site try/except is defence-in-depth: if the shared converter
+    # ever raises, the submit must fall back to the entered path, not abort
+    # with a traceback at the GUI boundary.
+    import picasso_workflow.util as pwutil
+
+    def _boom(path, dest_machine=None):
+        raise RuntimeError("converter blew up")
+
+    monkeypatch.setattr(pwutil, "convert_filepath_for_machine", _boom)
+    monkeypatch.setattr(
+        core, "apptainer_config", lambda host: ("/sw", "apptainer/1.4.1", [])
+    )
+    monkeypatch.setattr(
+        core, "apptainer_test_results_dir", lambda host: "/scratch/tr"
+    )
+
+    admin = core.ClusterAdmin(_SubmitComm(), "hpcl8XXX", "u")
+    result = admin.submit_test_chain(
+        image_path="/sw/x-test.sif",
+        version="0.9.0",
+        timestamp="T",
+        test_data_dir="/Volumes/pool-miblab1/templates",
+        run_tier4=False,
+    )
+    # converter raised -> entered path kept, no exception propagated
+    assert result["test_data_dir"] == "/Volumes/pool-miblab1/templates"
+    finds = [c for c in admin.comm.commands if c.startswith("find ")]
+    assert len(finds) == 1
+    assert "/Volumes/pool-miblab1/templates" in finds[0]

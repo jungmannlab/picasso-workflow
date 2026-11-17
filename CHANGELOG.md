@@ -11,6 +11,33 @@ This file was started after v0.5.6; earlier history is in the git log.
 ## [Unreleased]
 
 ### Added
+- **Admin console: fetch a test run's logs and cancel its jobs.** The Test-runs
+  tab gains a *Fetch logs* button (tails the per-job `.log` files in the run dir
+  — tiers + summary — so a failed tier's error output is visible without a
+  hand-SSH) and a *Cancel run* button (`scancel`s exactly the last run's job
+  ids, clearing the tier 4 / template jobs left pending when a gating tier
+  fails — not the user's whole queue). Backed by `ClusterAdmin.fetch_logs` and
+  `ClusterAdmin.cancel_jobs` in `admin/core.py`; both run off the GUI thread.
+
+### Fixed
+- **Admin test runs: map the test-data dir to the cluster via Drivepaths.**
+  `ClusterAdmin.submit_test_chain` now rewrites the test-data directory from the
+  GUI machine's layout (e.g. a Mac `/Volumes/...` mount, as pre-filled from
+  `config.yaml TestData.directory`) to the selected cluster host's layout
+  (`/fs/mpib/...`) using the `Drivepaths` config before the remote `find` and
+  the Apptainer binds use it — previously a local mount path reached the login
+  node verbatim and failed with `No such file or directory`. The resolved
+  cluster path is shown in the submit summary. (`admin/core.py`)
+- **Robust `Drivepaths` path conversion (`metaworkflow.PathParser`).** Source-root
+  matching is now path-component prefixing, not substring containment, so a
+  sibling dir like `/Volumes/pool-miblab-software/…` is no longer mistaken for
+  being under the `/Volumes/pool-miblab` root (which previously picked the wrong
+  drive map and then crashed with `TypeError: … not NoneType`). The posix/Windows
+  rewriters pick the longest matching root and leave an unmatched path unchanged
+  instead of raising, and source detection skips machine keys with no configured
+  roots (`None`/empty) — fixing crashes on empty/short/`None` `Drivepaths`
+  entries. All callers (`analyse`, `workflow`, `slurm_submit`, `cluster_submit`,
+  the GUI, the admin console) benefit. (`metaworkflow.py`)
 - **Doctor tab: set up & check cluster Confluence secrets from the GUI.** A new
   *Cluster secrets (SLURM)* panel checks whether the selected Run-tab cluster
   has `~/.config/picasso_workflow/.env` and `~/.picasso_secrets` (existence,
