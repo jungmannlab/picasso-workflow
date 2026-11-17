@@ -528,13 +528,15 @@ class ClusterAdmin:
             f"for f in {glob}; do "
             '[ -e "$f" ] || continue; '
             'printf "\\n===== %s =====\\n" "$f"; '
-            f'tail -n {int(tail)} "$f"; '
+            f'tail -n {int(tail)} "$f" 2>/dev/null || true; '
             "done"
         )
-        # Use ``_run`` (not a raw ``execute_ssh_command``): the for-loop exits 0
-        # even with no matching files, so a non-zero exit is a genuine SSH /
-        # auth failure that must surface as an error -- not be masked as the
-        # empty "(no logs yet)" string the caller shows on "".
+        # Use ``_run`` (not a raw ``execute_ssh_command``): the remote command
+        # always exits 0 (no matching files -> loop body never runs; a single
+        # unreadable log is swallowed by ``|| true``), so a non-zero exit is a
+        # genuine SSH / auth failure (ssh itself returns 255) that must surface
+        # as an error -- not be masked as the empty "(no logs yet)" string the
+        # caller shows on "".
         return self._run(cmd)
 
     def cancel_jobs(self, job_ids):

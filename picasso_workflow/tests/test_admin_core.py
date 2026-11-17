@@ -242,10 +242,12 @@ def test_fetch_logs_tails_run_dir_logs():
     out = admin.fetch_logs("/scratch/run", tail=50)
     assert "FAILED" in out
     (cmd,) = admin.comm.commands
-    # globs the run dir's *.log, guards each entry, tails it
+    # globs the run dir's *.log, guards each entry, tails it; an unreadable
+    # single log is swallowed so it doesn't look like an SSH failure
     assert "/scratch/run/*.log" in cmd
     assert "tail -n 50" in cmd
     assert '[ -e "$f" ]' in cmd
+    assert "|| true" in cmd
 
 
 def test_fetch_logs_empty_when_none():
@@ -349,8 +351,40 @@ def test_submit_test_chain_path_beside_mapped_root_passes_through(monkeypatch):
         test_data_dir="/Volumes/pool-miblab1-extra/templates",
         run_tier4=False,
     )
-    # conversion raised internally -> path kept as entered, submit proceeded
+    # beside-root -> not under any root -> left unchanged, submit proceeded
     assert result["test_data_dir"] == "/Volumes/pool-miblab1-extra/templates"
     finds = [c for c in admin.comm.commands if c.startswith("find ")]
     assert len(finds) == 1
     assert "/Volumes/pool-miblab1-extra/templates" in finds[0]
+
+
+def test_submit_test_chain_guards_conversion_exception(monkeypatch):
+    # The call-site try/except is defence-in-depth: if the shared converter
+    # ever raises, the submit must fall back to the entered path, not abort
+    # with a traceback at the GUI boundary.
+    import picasso_workflow.util as pwutil
+
+    def _boom(path, dest_machine=None):
+        raise RuntimeError("converter blew up")
+
+    monkeypatch.setattr(pwutil, "convert_filepath_for_machine", _boom)
+    monkeypatch.setattr(
+        core, "apptainer_config", lambda host: ("/sw", "apptainer/1.4.1", [])
+    )
+    monkeypatch.setattr(
+        core, "apptainer_test_results_dir", lambda host: "/scratch/tr"
+    )
+
+    admin = core.ClusterAdmin(_SubmitComm(), "hpcl8XXX", "u")
+    result = admin.submit_test_chain(
+        image_path="/sw/x-test.sif",
+        version="0.9.0",
+        timestamp="T",
+        test_data_dir="/Volumes/pool-miblab1/templates",
+        run_tier4=False,
+    )
+    # converter raised -> entered path kept, no exception propagated
+    assert result["test_data_dir"] == "/Volumes/pool-miblab1/templates"
+    finds = [c for c in admin.comm.commands if c.startswith("find ")]
+    assert len(finds) == 1
+    assert "/Volumes/pool-miblab1/templates" in finds[0]

@@ -558,6 +558,45 @@ class TestUtil(unittest.TestCase):
             pp.convert_path("/src/c/x/data.hdf5", None) == "/src/c/x/data.hdf5"
         )
 
+    @patch("picasso_workflow.metaworkflow.CONFIG", {"Drivepaths": {}})
+    def test_13_is_under_root_prefix_and_drive(self):
+        """``is_under_root`` matches by path-component prefix / drive, never by
+        substring, and a malformed bare-name root (no drive) matches nothing.
+        """
+        from picasso_workflow.metaworkflow import PathParser
+
+        pp = PathParser()
+        # posix: true child yes, sibling-with-shared-prefix no
+        assert pp.is_under_root("/a/pool/x", "/a/pool") is True
+        assert pp.is_under_root("/a/pool", "/a/pool") is True
+        assert pp.is_under_root("/a/pool-extra/x", "/a/pool") is False
+        # Windows drive-letter root matches on the drive
+        assert pp.is_under_root("U:/x/y", "U:") is True
+        assert pp.is_under_root("W:/x/y", "U:") is False
+        # a bare-name root has no Windows drive -> must NOT match every path
+        assert pp.is_under_root("/other/place/x", "pool") is False
+
+    @patch("picasso_workflow.metaworkflow.platform.node")
+    @patch(
+        "picasso_workflow.metaworkflow.CONFIG",
+        {
+            "Drivepaths": {
+                "srcXXX": [None, "/src/pool"],
+                "dstXXX": [None, "/dst/pool"],
+            }
+        },
+    )
+    def test_14_convert_path_tolerates_none_drive_root(self, mock_node):
+        """A ``None`` entry in a machine's root list (YAML ``~``) becomes a
+        ``None`` drive_map key; sorting/matching must not crash on it."""
+        from picasso_workflow.metaworkflow import PathParser
+
+        mock_node.return_value = "dst001"
+        assert (
+            PathParser().convert_path("/src/pool/x/data.hdf5", None)
+            == "/dst/pool/x/data.hdf5"
+        )
+
     def test_07_get_movie_groups(self):
         from picasso_workflow.util import get_movie_groups
 

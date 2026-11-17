@@ -95,7 +95,11 @@ class PathParser:
         """
         winpath = pathlib.PureWindowsPath(winpath)
         if not winpath.drive:
-            # relative path: no drive to remap -> normalise separators only.
+            # Relative path: no drive to remap. Preserve the destination roots'
+            # style -- keep Windows separators when the destination is itself
+            # Windows (as the old code did), else normalise to posix.
+            if any(":" in str(v) for v in drive_map.values()):
+                return str(winpath)
             return str(pathlib.PurePosixPath(*winpath.parts))
         dest_root = drive_map.get(winpath.drive)
         if dest_root is None:
@@ -135,8 +139,12 @@ class PathParser:
         # only ever splits on "/").
         p = pathlib.PurePosixPath(str(posixpath).replace("\\", "/"))
         # Longest root first so a nested root wins over its parent when both
-        # are prefixes (e.g. "/a/b" over "/a").
-        for src_root in sorted(drive_map, key=len, reverse=True):
+        # are prefixes (e.g. "/a/b" over "/a"). Key on len(str(...)) so a
+        # non-string key (e.g. a malformed ``None`` drivepath from YAML) sorts
+        # harmlessly instead of raising in ``len``.
+        for src_root in sorted(
+            drive_map, key=lambda k: len(str(k)), reverse=True
+        ):
             root_parts = pathlib.PurePosixPath(
                 str(src_root).replace("\\", "/")
             ).parts
@@ -211,8 +219,8 @@ class PathParser:
         Uses path-component prefixing for posix roots (so the sibling
         ``/a/pool-extra`` is NOT treated as under ``/a/pool``) and drive
         equality for Windows drive-letter roots -- NOT plain substring
-        containment, which mismatched directory names whose prefix happens to
-        equal a shorter root's name.
+        containment, which would treat such a sibling as a match whenever its
+        name merely starts with a shorter root's name.
 
         Parameters
         ----------
@@ -235,9 +243,13 @@ class PathParser:
             ).parts
             return path_parts[: len(root_parts)] == root_parts
         # Windows drive-letter root (e.g. "U:"): match on the drive alone.
-        return (
-            pathlib.PureWindowsPath(path).drive.lower()
-            == pathlib.PureWindowsPath(root).drive.lower()
+        # Require a real drive on the root, else a malformed bare-name root
+        # (whose Windows ``drive`` is "") would spuriously match every path.
+        # Case-sensitive to stay consistent with the drive-map lookup in
+        # ``windows_path_to_curr_os`` (which is keyed on the configured drive).
+        root_drive = pathlib.PureWindowsPath(root).drive
+        return bool(root_drive) and (
+            pathlib.PureWindowsPath(path).drive == root_drive
         )
 
     def get_machine_drivepaths(self, machine: str) -> list | None:
@@ -390,11 +402,16 @@ class PathParser:
         dest_paths = self.get_machine_drivepaths(dest_machine)
 
         for src_machine, drivepaths in self.drive_paths.items():
-            src_on_machine = []
-            for srcp in src_dict.values():
-                src_on_machine.append(any([p in srcp for p in drivepaths]))
-            if all(src_on_machine):
-                # src_machine has all drive paths defined
+            # Skip machine keys with no roots (None/empty) rather than
+            # iterating None; match by path-prefix (is_under_root), not
+            # substring containment -- same fix as convert_path.
+            if not drivepaths:
+                continue
+            if all(
+                any(self.is_under_root(srcp, p) for p in drivepaths)
+                for srcp in src_dict.values()
+            ):
+                # every source path is under one of src_machine's roots
                 break
 
         logger.debug(f"found src machine: {src_machine}")
@@ -1790,10 +1807,8 @@ class InvestigationWorkflowCoordinator(AbstractWorkflowCoordinator):
         successes = {}
         for mod, res in agg_results.items():
             successes[mod] = res.get("success", False)
-            logger.debug(
-                f"""{cell_type}, {cell_name}, {mod}:
-                {res.get('success', False)}"""
-            )
+            logger.debug(f"""{cell_type}, {cell_name}, {mod}:
+                {res.get('success', False)}""")
         return_val = (cell_type, cell_name, successes)
         queue.put(return_val)
         with lock:
