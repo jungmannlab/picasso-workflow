@@ -11,6 +11,14 @@ This file was started after v0.5.6; earlier history is in the git log.
 ## [Unreleased]
 
 ### Added
+- **Nightly develop Apptainer image build.** `build-apptainer.yml` now also
+  runs on a daily schedule, producing a fresh
+  `picasso-workflow-[test-]develop-<sha>.sif` to pull to the login node and
+  test on the cluster before a `develop → master` release. A `gate` job skips
+  the heavy build on nights when `develop` had no new commit. Note: GitHub
+  fires `schedule:` only from the default branch (`master`), so the cron
+  activates once this reaches `master` (same caveat as
+  `picasso-early-warning.yml`). (`.github/workflows/build-apptainer.yml`)
 - **picasso-set clusterers run in the aggregation stage.** `picasso_dbscan`,
   `picasso_hdbscan` and `picasso_g5m` are now both-scope: in an aggregation
   workflow they cluster each channel in `channel_locs` independently
