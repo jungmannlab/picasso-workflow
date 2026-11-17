@@ -28,6 +28,9 @@ def test_cache_env():
     env = testrun.cache_env("/scratch/run")
     assert env["NUMBA_CACHE_DIR"] == "/scratch/run/.numba"
     assert env["MPLCONFIGDIR"] == "/scratch/run/.mpl"
+    # redirect the test suite's result-artefact dir into the writable run dir
+    # (its default site-packages/temp is read-only inside the SIF).
+    assert env["PW_TEST_TEMP_DIR"] == "/scratch/run/.pwtemp"
 
 
 def test_pytest_command_tiers():

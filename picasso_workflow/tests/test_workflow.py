@@ -18,6 +18,7 @@ from unittest.mock import patch, MagicMock
 import yaml
 
 from picasso_workflow.analyse import AutoPicassoError
+from picasso_workflow.tests import temp_folder
 from picasso_workflow.workflow import (
     WorkflowRunner,
     AggregationWorkflowRunner,
@@ -34,9 +35,7 @@ logger = logging.getLogger(__name__)
 # @unittest.skip("")
 class TestWorkflow(unittest.TestCase):
     def setUp(self):
-        self.results_folder = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)), "..", "..", "temp"
-        )
+        self.results_folder = temp_folder()
 
     def tearDown(self):
         pass
@@ -575,9 +574,7 @@ class Test_F_CheckpointResume(unittest.TestCase):
     ]
 
     def setUp(self):
-        self.results_folder = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)), "..", "..", "temp"
-        )
+        self.results_folder = temp_folder()
 
     def _make_runner(self, workflow_modules, succeeded, warm=False):
         """Build a runner simulating a resumed run.

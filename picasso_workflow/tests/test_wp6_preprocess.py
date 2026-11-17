@@ -12,7 +12,6 @@ Description: WP-6 -- the preprocess recipe, its live-locs reuse seam, and the
     fresh in-memory SQLite db) or a tiny local double -- never a real service.
 """
 
-import os
 import shutil
 import unittest
 from unittest.mock import patch, MagicMock
@@ -20,6 +19,7 @@ from unittest.mock import patch, MagicMock
 import numpy as np
 
 from picasso_workflow import standard_singledataset_workflows as ssw
+from picasso_workflow.tests import temp_folder
 from picasso_workflow.live_locs import (
     LiveLocsDescriptor,
     frame_range_checksum,
@@ -347,9 +347,7 @@ class TestResultExtraction(unittest.TestCase):
 # ---------------------------------------------------------------------------
 class TestWorkflowRunnerRegistryWiring(unittest.TestCase):
     def setUp(self):
-        self.results_folder = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)), "..", "..", "temp"
-        )
+        self.results_folder = temp_folder()
 
     @patch("picasso_workflow.workflow.ConfluenceReporter", MagicMock)
     @patch("picasso_workflow.workflow.AutoPicasso", MagicMock)
