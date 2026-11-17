@@ -150,8 +150,12 @@ class PathParser:
             ).parts
             if p.parts[: len(root_parts)] != root_parts:
                 continue
-            rest = p.parts[len(root_parts) :]
             dest_root = drive_map[src_root]
+            if dest_root is None:
+                # root with no mapped counterpart (e.g. a null dest entry);
+                # try a shorter root rather than crashing on ``":" in None``.
+                continue
+            rest = p.parts[len(root_parts) :]
             logger.debug(f"mapping root {src_root} -> {dest_root}")
             if ":" in dest_root:  # destination is a Windows drive
                 return str(pathlib.PureWindowsPath(dest_root, *rest))
@@ -394,32 +398,49 @@ class PathParser:
         #         ({self.drive_paths.keys()})"
         #     )
 
-        # find current machine key
+        # find destination machine key -- regex pattern match (check_machine),
+        # not substring, which never matches an "X"-wildcard pattern against a
+        # concrete hostname (same fix as convert_path). Leave it None if the
+        # current host is not configured (get_machine_drivepaths would raise on
+        # a None machine, so guard the call).
         if dest_machine is None:
-            for dest_machine in self.drive_paths.keys():
-                if dest_machine in platform.node():
+            node = platform.node()
+            for machine in self.drive_paths.keys():
+                if self.check_machine(node, machine):
+                    dest_machine = machine
                     break
-        dest_paths = self.get_machine_drivepaths(dest_machine)
+        dest_paths = (
+            self.get_machine_drivepaths(dest_machine)
+            if dest_machine is not None
+            else None
+        )
 
-        for src_machine, drivepaths in self.drive_paths.items():
-            # Skip machine keys with no roots (None/empty) rather than
-            # iterating None; match by path-prefix (is_under_root), not
-            # substring containment -- same fix as convert_path.
+        # find the source machine: the one whose roots every source path is
+        # under (path-prefix match, skipping keys with no roots).
+        src_machine = None
+        for machine, drivepaths in self.drive_paths.items():
             if not drivepaths:
                 continue
             if all(
                 any(self.is_under_root(srcp, p) for p in drivepaths)
                 for srcp in src_dict.values()
             ):
-                # every source path is under one of src_machine's roots
+                src_machine = machine
                 break
 
         logger.debug(f"found src machine: {src_machine}")
         logger.debug(f"dest machine: {dest_machine}")
 
+        # Build the root map only when BOTH ends resolved; otherwise leave it
+        # empty so the rewriters pass every path through unchanged (mirrors
+        # convert_path returning the path unchanged on an unresolved machine,
+        # rather than mis-mapping through a leaked last-machine key).
         drive_map = {}
-        for src_p, dest_p in zip(self.drive_paths[src_machine], dest_paths):
-            drive_map[src_p] = dest_p
+        if src_machine is not None and dest_paths:
+            for src_p, dest_p in zip(
+                self.drive_paths[src_machine], dest_paths
+            ):
+                drive_map[src_p] = dest_p
 
         logger.debug(f"drive map is {drive_map}")
 

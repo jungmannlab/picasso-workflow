@@ -597,6 +597,27 @@ class TestUtil(unittest.TestCase):
             == "/dst/pool/x/data.hdf5"
         )
 
+    @patch("picasso_workflow.metaworkflow.platform.node")
+    @patch(
+        "picasso_workflow.metaworkflow.CONFIG",
+        {
+            "Drivepaths": {
+                "srcXXX": ["/src/pool"],
+                "dstXXX": [None],
+            }
+        },
+    )
+    def test_15_convert_path_tolerates_none_dest_value(self, mock_node):
+        """A matched root mapping to a ``None`` destination (a null dest entry)
+        must leave the path unchanged, not crash on ``":" in None``."""
+        from picasso_workflow.metaworkflow import PathParser
+
+        mock_node.return_value = "dst001"
+        assert (
+            PathParser().convert_path("/src/pool/x/data.hdf5", None)
+            == "/src/pool/x/data.hdf5"
+        )
+
     def test_07_get_movie_groups(self):
         from picasso_workflow.util import get_movie_groups
 
