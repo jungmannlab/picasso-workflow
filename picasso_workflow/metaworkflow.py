@@ -73,15 +73,20 @@ class PathParser:
     def windows_path_to_curr_os(self, winpath: str, drive_map: dict) -> str:
         """Convert a Windows-style path to the current OS's drive layout.
 
-        Replaces the Windows drive (e.g. ``X:``) with the mapped drive.
+        Looks the source drive (e.g. ``"U:"``) up in ``drive_map`` and
+        replaces it with the mapped destination root, preserving the remaining
+        path components. An unmapped drive -- or a drive-less relative path --
+        is returned unchanged (apart from separator normalisation), never a
+        ``KeyError`` (so a ``drive_map`` missing this drive, e.g. from a
+        shorter destination root list, degrades gracefully).
 
         Parameters
         ----------
         winpath : str
             The Windows-style path to convert.
         drive_map : dict
-            Map from Windows drive (e.g. ``"W:"``) to the target drive
-            (e.g. ``"/Volumes/pool-miblab4"``).
+            Map from Windows drive (e.g. ``"U:"``) to the destination root
+            (e.g. ``"/Volumes/pool-miblab4"`` or another drive ``"W:"``).
 
         Returns
         -------
@@ -89,43 +94,34 @@ class PathParser:
             The converted path.
         """
         winpath = pathlib.PureWindowsPath(winpath)
-        if winpath.drive:
-            # absolute path
-            drive = drive_map[winpath.drive]
-            # currospath = pathlib.Path(drive, *winpath.parts[1:])
-
-            # change logic to not convert to current os but new drive type os
-            if ":" in drive:  # converted path is a windows path
-                currospath = pathlib.PureWindowsPath(drive, *winpath.parts[1:])
-            else:  # converted path is a Posix path
-                currospath = pathlib.PurePosixPath(drive, *winpath.parts[1:])
-        else:
-            # relative path
-            # currospath = pathlib.Path(*winpath.parts)
-
-            # change logic to not convert to current os but new drive type os
-            if (
-                ":" in list(drive_map.values())[0][:3]
-            ):  # converted path is a windows path
-                # currospath = pathlib.PureWindowsPath(drive, *winpath.parts[1:])
-                currospath = pathlib.PureWindowsPath(winpath)
-            else:  # converted path is a Posix path
-                # currospath = pathlib.PurePosixPath(drive, *winpath.parts[1:])
-                currospath = pathlib.PurePosixPath(winpath)
-        return str(currospath)
+        if not winpath.drive:
+            # relative path: no drive to remap -> normalise separators only.
+            return str(pathlib.PurePosixPath(*winpath.parts))
+        dest_root = drive_map.get(winpath.drive)
+        if dest_root is None:
+            return str(winpath)
+        rest = winpath.parts[1:]  # drop the "<drive>\" anchor
+        if ":" in dest_root:  # destination is itself a Windows drive
+            return str(pathlib.PureWindowsPath(dest_root, *rest))
+        return str(pathlib.PurePosixPath(dest_root, *rest))
 
     def posix_path_to_curr_os(self, posixpath: str, drive_map: dict) -> str:
         """Convert a posix-style path to the current OS's drive layout.
 
-        Replaces the source drive root with the mapped drive.
+        Replaces the LONGEST source root in ``drive_map`` that is a true
+        path-prefix of ``posixpath`` (component-wise, so ``/a/pool`` matches
+        ``/a/pool/x`` but NOT the sibling ``/a/pool-extra/x``) with its mapped
+        destination root, preserving the remainder. A path under no mapped
+        root is returned unchanged -- never a crash, even when ``drive_map`` is
+        empty or the roots have differing depths.
 
         Parameters
         ----------
         posixpath : str
             The posix-style path to convert.
         drive_map : dict
-            Map from source drive (e.g. ``"W:"``) to the target drive
-            (e.g. ``"/Volumes/pool-miblab4"``).
+            Map from source root (e.g. ``"/Volumes/pool-miblab4"``) to the
+            destination root (e.g. ``"/fs/mpib/pool-miblab4"`` or ``"W:"``).
 
         Returns
         -------
@@ -137,59 +133,23 @@ class PathParser:
         # path (e.g. "U:/a/b\\c\\d") splits into every component, instead
         # of leaving a backslash-joined tail unconverted (PurePosixPath
         # only ever splits on "/").
-        posixpath = pathlib.PurePosixPath(str(posixpath).replace("\\", "/"))
-        if posixpath.drive:
-            # absolute path
-            drive = drive_map[posixpath.drive]
-            logger.debug(f"old drive: {posixpath.drive}")
-            logger.debug(f"new drive: {drive}")
-            # currospath = pathlib.Path(drive, *posixpath.parts[1:])
-
-            # change logic to not convert to current os but new drive type os
-            if ":" in drive:  # converted path is a windows path
-                currospath = pathlib.PureWindowsPath(
-                    drive, *posixpath.parts[1:]
-                )
-            else:  # converted path is a Posix path
-                currospath = pathlib.PurePosixPath(drive, *posixpath.parts[1:])
-        else:
-            # print('no drive')
-            drivelen = len(pathlib.Path(list(drive_map.keys())[0]).parts)
-            pseudodrive = pathlib.PurePosixPath(*posixpath.parts[:drivelen])
-            # print('pseudodrive:', pseudodrive)
-            # print(drive_map)
-            if drive := drive_map.get(str(pseudodrive)):
-                # print('found drive:', drive)
-                # found the drive after all
-                # currospath = pathlib.Path(drive, *posixpath.parts[drivelen:])
-
-                # change logic to not convert to current os but new drive type os
-                if ":" in drive:  # converted path is a windows path
-                    currospath = pathlib.PureWindowsPath(
-                        drive, *posixpath.parts[drivelen:]
-                    )
-                else:  # converted path is a Posix path
-                    currospath = pathlib.PurePosixPath(
-                        drive, *posixpath.parts[drivelen:]
-                    )
-            else:
-                # print("did not find a drive")
-                # relative path
-                # currospath = pathlib.Path(*posixpath.parts)
-
-                # change logic to not convert to current os but new drive type os
-                if (
-                    ":" in list(drive_map.values())[0]
-                ):  # converted path is a windows path
-                    currospath = pathlib.PureWindowsPath(
-                        drive, *posixpath.parts[1:]
-                    )
-                else:  # converted path is a Posix path
-                    currospath = pathlib.PurePosixPath(
-                        drive, *posixpath.parts[drivelen:]
-                    )
-        # print('new path:', currospath)
-        return str(currospath)
+        p = pathlib.PurePosixPath(str(posixpath).replace("\\", "/"))
+        # Longest root first so a nested root wins over its parent when both
+        # are prefixes (e.g. "/a/b" over "/a").
+        for src_root in sorted(drive_map, key=len, reverse=True):
+            root_parts = pathlib.PurePosixPath(
+                str(src_root).replace("\\", "/")
+            ).parts
+            if p.parts[: len(root_parts)] != root_parts:
+                continue
+            rest = p.parts[len(root_parts) :]
+            dest_root = drive_map[src_root]
+            logger.debug(f"mapping root {src_root} -> {dest_root}")
+            if ":" in dest_root:  # destination is a Windows drive
+                return str(pathlib.PureWindowsPath(dest_root, *rest))
+            return str(pathlib.PurePosixPath(dest_root, *rest))
+        # Not under any mapped root -> unchanged.
+        return str(p)
 
     def check_path_style(self, path: str) -> bool:
         """Check whether a path is windows- or posix-style.
@@ -244,6 +204,41 @@ class PathParser:
         regex = f"^{regex}$"
         # print('machine', machine, 'pattern', pattern, 'regex', regex)
         return re.fullmatch(regex, machine) is not None
+
+    def is_under_root(self, path: str, root: str) -> bool:
+        """Whether ``path`` is ``root`` itself or located beneath it.
+
+        Uses path-component prefixing for posix roots (so the sibling
+        ``/a/pool-extra`` is NOT treated as under ``/a/pool``) and drive
+        equality for Windows drive-letter roots -- NOT plain substring
+        containment, which mismatched directory names whose prefix happens to
+        equal a shorter root's name.
+
+        Parameters
+        ----------
+        path : str
+            The candidate path.
+        root : str
+            A configured drive root (a posix directory or a Windows drive
+            letter such as ``"U:"``).
+
+        Returns
+        -------
+        bool
+            True if ``path`` is located at or under ``root``.
+        """
+        root = str(root)
+        if self.check_path_style(root):  # posix root
+            root_parts = pathlib.PurePosixPath(root.replace("\\", "/")).parts
+            path_parts = pathlib.PurePosixPath(
+                str(path).replace("\\", "/")
+            ).parts
+            return path_parts[: len(root_parts)] == root_parts
+        # Windows drive-letter root (e.g. "U:"): match on the drive alone.
+        return (
+            pathlib.PureWindowsPath(path).drive.lower()
+            == pathlib.PureWindowsPath(root).drive.lower()
+        )
 
     def get_machine_drivepaths(self, machine: str) -> list | None:
         """Return the configured drive paths for a machine, or None.
@@ -311,7 +306,12 @@ class PathParser:
         # source path is located under
         src_machine = None
         for machine, drivepaths in self.drive_paths.items():
-            if any([p in src_path for p in drivepaths]):
+            # `drivepaths` may be None/empty for a machine key with no roots
+            # configured; skip it rather than iterating None. Match by
+            # path-prefix (is_under_root), not substring containment.
+            if drivepaths and any(
+                self.is_under_root(src_path, p) for p in drivepaths
+            ):
                 src_machine = machine
                 break
         if src_machine is None:
@@ -1790,8 +1790,10 @@ class InvestigationWorkflowCoordinator(AbstractWorkflowCoordinator):
         successes = {}
         for mod, res in agg_results.items():
             successes[mod] = res.get("success", False)
-            logger.debug(f"""{cell_type}, {cell_name}, {mod}:
-                {res.get('success', False)}""")
+            logger.debug(
+                f"""{cell_type}, {cell_name}, {mod}:
+                {res.get('success', False)}"""
+            )
         return_val = (cell_type, cell_name, successes)
         queue.put(return_val)
         with lock:

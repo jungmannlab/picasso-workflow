@@ -28,6 +28,16 @@ This file was started after v0.5.6; earlier history is in the git log.
   the Apptainer binds use it — previously a local mount path reached the login
   node verbatim and failed with `No such file or directory`. The resolved
   cluster path is shown in the submit summary. (`admin/core.py`)
+- **Robust `Drivepaths` path conversion (`metaworkflow.PathParser`).** Source-root
+  matching is now path-component prefixing, not substring containment, so a
+  sibling dir like `/Volumes/pool-miblab-software/…` is no longer mistaken for
+  being under the `/Volumes/pool-miblab` root (which previously picked the wrong
+  drive map and then crashed with `TypeError: … not NoneType`). The posix/Windows
+  rewriters pick the longest matching root and leave an unmatched path unchanged
+  instead of raising, and source detection skips machine keys with no configured
+  roots (`None`/empty) — fixing crashes on empty/short/`None` `Drivepaths`
+  entries. All callers (`analyse`, `workflow`, `slurm_submit`, `cluster_submit`,
+  the GUI, the admin console) benefit. (`metaworkflow.py`)
 - **Doctor tab: set up & check cluster Confluence secrets from the GUI.** A new
   *Cluster secrets (SLURM)* panel checks whether the selected Run-tab cluster
   has `~/.config/picasso_workflow/.env` and `~/.picasso_secrets` (existence,

@@ -273,6 +273,11 @@ class AdminWindow(QMainWindow):
 
     def _submit_test_chain(self) -> None:
         version = core.this_gui_version()
+        # A new submit supersedes any prior run: clear the tracked run up front
+        # so a FAILED submit (which never reaches `done`) can't leave 'Fetch
+        # logs' / 'Cancel run' pointing at the previous run's dir / job ids.
+        self._test_run_dir = None
+        self._test_run_jobs = []
         # Snapshot ALL widget inputs on the GUI thread (widgets aren't
         # thread-safe); the worker closure below touches only these locals.
         ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")

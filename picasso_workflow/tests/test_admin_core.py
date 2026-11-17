@@ -318,3 +318,39 @@ def test_submit_test_chain_maps_test_data_dir_via_drivepaths(monkeypatch):
     assert len(finds) == 1
     assert "/fs/mpib/pool-miblab1/templates" in finds[0]
     assert "/Volumes" not in finds[0]
+
+
+def test_submit_test_chain_path_beside_mapped_root_passes_through(monkeypatch):
+    # A dir BESIDE a mapped root (".../pool-miblab1-extra" next to the
+    # ".../pool-miblab1" root) is NOT under it, so conversion leaves it
+    # unchanged -- and the submit proceeds with the entered path rather than
+    # crashing (this exercised the old substring-match crash; now a clean
+    # no-op). See test_util for the metaworkflow-level coverage.
+    monkeypatch.setitem(
+        core.CONFIG,
+        "Drivepaths",
+        {
+            "pcjuXX.local": ["/Volumes/pool-miblab1"],
+            "hpcl8XXX": ["/fs/mpib/pool-miblab1"],
+        },
+    )
+    monkeypatch.setattr(
+        core, "apptainer_config", lambda host: ("/sw", "apptainer/1.4.1", [])
+    )
+    monkeypatch.setattr(
+        core, "apptainer_test_results_dir", lambda host: "/scratch/tr"
+    )
+
+    admin = core.ClusterAdmin(_SubmitComm(), "hpcl8XXX", "u")
+    result = admin.submit_test_chain(
+        image_path="/sw/x-test.sif",
+        version="0.9.0",
+        timestamp="T",
+        test_data_dir="/Volumes/pool-miblab1-extra/templates",
+        run_tier4=False,
+    )
+    # conversion raised internally -> path kept as entered, submit proceeded
+    assert result["test_data_dir"] == "/Volumes/pool-miblab1-extra/templates"
+    finds = [c for c in admin.comm.commands if c.startswith("find ")]
+    assert len(finds) == 1
+    assert "/Volumes/pool-miblab1-extra/templates" in finds[0]

@@ -21,6 +21,8 @@ import os
 import shlex
 from dataclasses import dataclass
 
+from loguru import logger
+
 from picasso_workflow import CONFIG
 from picasso_workflow.slurm_submit import (
     SlurmCommunicator,
@@ -465,9 +467,23 @@ class ClusterAdmin:
         # there. A path under no known drive root, or an unmapped host, is
         # returned unchanged.
         if test_data_dir:
-            test_data_dir = convert_filepath_for_machine(
-                test_data_dir, dest_machine=self.host
-            )
+            # Drivepaths rewriting is a best-effort convenience; guard it so any
+            # unexpected failure in the shared PathParser degrades to "use the
+            # entered path" (which then resolves as-is or fails later with a
+            # clear `find` error) rather than aborting the submit with an opaque
+            # traceback at this GUI boundary.
+            try:
+                test_data_dir = convert_filepath_for_machine(
+                    test_data_dir, dest_machine=self.host
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Drivepaths conversion of {!r} for host {!r} failed "
+                    "({}); using the entered path unchanged.",
+                    test_data_dir,
+                    self.host,
+                    exc,
+                )
 
         image_dir, module, bind_paths = apptainer_config(self.host)
         submitter = TestChainSubmitter(
@@ -515,8 +531,11 @@ class ClusterAdmin:
             f'tail -n {int(tail)} "$f"; '
             "done"
         )
-        result = self.comm.execute_ssh_command(cmd)
-        return result.get("stdout", "") or ""
+        # Use ``_run`` (not a raw ``execute_ssh_command``): the for-loop exits 0
+        # even with no matching files, so a non-zero exit is a genuine SSH /
+        # auth failure that must surface as an error -- not be masked as the
+        # empty "(no logs yet)" string the caller shows on "".
+        return self._run(cmd)
 
     def cancel_jobs(self, job_ids):
         """``scancel`` the given job ids; return the number cancelled.
