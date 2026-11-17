@@ -475,24 +475,38 @@ class _ClusterSecretsUploadWorker(QtCore.QObject):
                 f"Could not create {env_dir}: "
                 + ((mk.get("stderr") or "").strip())
             )
-        for content, path in (
-            (_env_file_content(self._op_token), env_path),
+        # Stage each file inside the 700-mode env_dir, tighten it to 600, then
+        # mv it into place. scp lands the body under the host umask (often
+        # world-readable); staging under the 700 dir hides it until the mode is
+        # fixed, and the mv publishes it atomically at 600 -- so the token file
+        # is never world-readable at its real path (and a pre-existing 400 file
+        # is still replaceable, since mv needs only the parent dir's write bit).
+        for content, path, staging_name in (
+            (_env_file_content(self._op_token), env_path, ".env.upload.tmp"),
             (
                 _secrets_file_content(self._op_token, self._test_token),
                 secrets_path,
+                ".secrets.upload.tmp",
             ),
         ):
-            put = self._comm.put_file(content, path)
+            staging = f"{env_dir}/{staging_name}"
+            put = self._comm.put_file(content, staging)
             if not put.get("success"):
                 return False, (
                     f"Could not write {path}: "
                     + ((put.get("stderr") or "").strip())
                 )
-            ch = self._comm.execute_ssh_command(
-                f"chmod 600 {shlex.quote(path)}"
+            mv = self._comm.execute_ssh_command(
+                f"chmod 600 {shlex.quote(staging)} "
+                f"&& mv -f {shlex.quote(staging)} {shlex.quote(path)}"
             )
-            if not ch.get("success"):
-                return False, f"Could not chmod {path}."
+            if not mv.get("success"):
+                # Best-effort cleanup so a failed upload leaves no stray temp.
+                self._comm.execute_ssh_command(f"rm -f {shlex.quote(staging)}")
+                return False, (
+                    f"Could not install {path}: "
+                    + ((mv.get("stderr") or "").strip())
+                )
         return True, f"Wrote {env_path} and {secrets_path} (chmod 600)."
 
 
@@ -522,6 +536,9 @@ class DoctorTab(QtWidgets.QWidget):
         # running QThread aborts the process)
         self._threads: list[QtCore.QThread] = []
         self._quit_hook_connected = False
+        # True while a cluster-secrets check/upload worker is in flight, so a
+        # second op (or a refresh) can't start a concurrent one.
+        self._cluster_busy = False
         self._build_ui()
         self.refresh()
 
@@ -788,8 +805,10 @@ class DoctorTab(QtWidgets.QWidget):
         can_ssh = bool(host) and hasattr(
             self.main_window, "_ensure_slurm_communicator"
         )
-        self._cluster_check_button.setEnabled(can_ssh)
-        self._cluster_upload_button.setEnabled(can_ssh)
+        # Disabled while a check/upload is in flight so the two can't overlap.
+        enabled = can_ssh and not self._cluster_busy
+        self._cluster_check_button.setEnabled(enabled)
+        self._cluster_upload_button.setEnabled(enabled)
         op_local, test_local = _local_tokens()
         self._op_token_edit.setPlaceholderText(
             "leave blank to reuse the token configured locally"
@@ -801,6 +820,11 @@ class DoctorTab(QtWidgets.QWidget):
             if test_local
             else "optional"
         )
+
+    def _set_cluster_busy(self, busy: bool) -> None:
+        """Mark a cluster op in/out of flight and refresh button state."""
+        self._cluster_busy = busy
+        self._refresh_cluster_secrets_ui()
 
     def _start_cluster_worker(self, worker, on_done) -> None:
         """Run a cluster-secrets ``worker`` off-thread (shared lifecycle)."""
@@ -822,6 +846,8 @@ class DoctorTab(QtWidgets.QWidget):
 
     def _check_cluster_secrets(self) -> None:
         """Check the two secret files on the selected cluster, off-thread."""
+        if self._cluster_busy:
+            return
         host = self._cluster_host()
         if not host or not hasattr(
             self.main_window, "_ensure_slurm_communicator"
@@ -835,14 +861,14 @@ class DoctorTab(QtWidgets.QWidget):
                 f"{html.escape(str(e))}</span>"
             )
             return
-        self._cluster_check_button.setEnabled(False)
+        self._set_cluster_busy(True)
         self._cluster_status.setText("checking…")
         self._start_cluster_worker(
             _ClusterSecretsCheckWorker(comm), self._on_cluster_check_result
         )
 
     def _on_cluster_check_result(self, ok, message, parsed) -> None:
-        self._cluster_check_button.setEnabled(True)
+        self._set_cluster_busy(False)
         if not ok:
             self._cluster_status.setText(
                 f"<span style='color:#c62828'>Check failed: "
@@ -853,6 +879,8 @@ class DoctorTab(QtWidgets.QWidget):
 
     def _upload_cluster_secrets(self) -> None:
         """Write the two secret files to the selected cluster, off-thread."""
+        if self._cluster_busy:
+            return
         host = self._cluster_host()
         if not host or not hasattr(
             self.main_window, "_ensure_slurm_communicator"
@@ -887,7 +915,7 @@ class DoctorTab(QtWidgets.QWidget):
         except Exception as e:
             QtWidgets.QMessageBox.warning(self, "Could not connect", str(e))
             return
-        self._cluster_upload_button.setEnabled(False)
+        self._set_cluster_busy(True)
         self._cluster_status.setText("uploading…")
         self._start_cluster_worker(
             _ClusterSecretsUploadWorker(comm, op, test),
@@ -895,7 +923,7 @@ class DoctorTab(QtWidgets.QWidget):
         )
 
     def _on_cluster_upload_result(self, ok, message) -> None:
-        self._cluster_upload_button.setEnabled(True)
+        self._set_cluster_busy(False)
         # Don't leave token values sitting in the widgets after an upload.
         self._op_token_edit.clear()
         self._test_token_edit.clear()

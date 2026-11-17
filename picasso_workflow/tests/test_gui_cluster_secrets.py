@@ -9,6 +9,7 @@ only inside the written file bodies, never on an ssh/scp command line.
 """
 
 import os
+import shlex
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -105,7 +106,11 @@ def test_format_cluster_check_smoke():
 
 
 class _FakeComm:
-    """Records every ssh command and stores every scp'd file body."""
+    """Records every ssh command and stores every scp'd file body.
+
+    Emulates the staging ``... && mv -f SRC DST`` so tests can assert on the
+    final installed paths (uploads scp to a staging name, then mv into place).
+    """
 
     def __init__(self):
         self.calls = []
@@ -114,6 +119,11 @@ class _FakeComm:
     def execute_ssh_command(self, command, working_directory=None):
         self.calls.append(command)
         stdout = "/home/alice" if command.startswith("printf") else ""
+        if "mv -f " in command:
+            tail = command.split("mv -f ", 1)[1]
+            parts = shlex.split(tail)
+            if len(parts) >= 2 and parts[0] in self.files:
+                self.files[parts[1]] = self.files.pop(parts[0])
         return {
             "success": True,
             "stdout": stdout,
@@ -148,6 +158,21 @@ def test_upload_writes_both_files_chmod_600():
     assert any("chmod 600" in c and ".env" in c for c in comm.calls)
     assert any(
         "chmod 600" in c and ".picasso_secrets" in c for c in comm.calls
+    )
+
+
+def test_upload_stages_in_700_dir_then_mv_publishes():
+    # Window-closing property: the token file is never scp'd straight to its
+    # world-visible real path. It is staged inside the 700-mode config dir and
+    # published with `mv` (which preserves the 600 mode set on the staging
+    # file), so it is never world-readable at ~/.picasso_secrets.
+    comm = _FakeComm()
+    _ClusterSecretsUploadWorker(comm, "OPTOK", "TESTTOK")._do_upload()
+    staging = "/home/alice/.config/picasso_workflow/.secrets.upload.tmp"
+    final = "/home/alice/.picasso_secrets"
+    assert any(
+        "chmod 600" in c and "mv -f" in c and staging in c and final in c
+        for c in comm.calls
     )
 
 

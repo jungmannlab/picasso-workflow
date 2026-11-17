@@ -262,7 +262,10 @@ def test_non_containerized_run_is_plain_srun_python():
 
 
 # --------------------------------------------------------------------------- #
-# secrets provisioning (~/.picasso_secrets sourced before the run)
+# secrets provisioning -- assemble_slurm_commands sources ~/.picasso_secrets
+# on the node before the run (long-standing behaviour; locked in here because
+# the containerized path relies on it -- Apptainer then forwards the exported
+# CONFLUENCE_TOKEN into the image via its default host-env passthrough).
 # --------------------------------------------------------------------------- #
 SECRETS_SOURCE = "[ -f ~/.picasso_secrets ] && source ~/.picasso_secrets"
 

@@ -20,14 +20,6 @@ This file was started after v0.5.6; earlier history is in the git log.
   written file bodies (never on an ssh/scp command line), so the whole cluster
   secrets set-up can be done without opening a terminal. Both the check and the
   upload run off the GUI thread. (`doctor_tab.py`)
-- **Operational secrets provisioned into cluster jobs.** The GUI submit path
-  now sources `~/.picasso_secrets` on the node before the run (both the
-  containerized and host-conda paths), so `CONFLUENCE_TOKEN` and any other
-  exported credentials are in the job environment — and, for a containerized
-  run, forwarded into the image by Apptainer's default host-env passthrough.
-  The token is only sourced at run time, never written into the generated
-  sbatch script, so it stays out of logs and `ps`. Mirrors the admin test
-  chain's `_node_setup`. (`slurm_submit.py`)
 - **Nightly develop Apptainer image build.** `build-apptainer.yml` now also
   runs on a daily schedule, producing a fresh
   `picasso-workflow-[test-]develop-<sha>.sif` to pull to the login node and
