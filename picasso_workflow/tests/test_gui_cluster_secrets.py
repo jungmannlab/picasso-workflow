@@ -26,7 +26,6 @@ from picasso_workflow.doctor_tab import (  # noqa: E402
     _sh_squote,
 )
 
-
 # -- content builders ---------------------------------------------------------
 
 
