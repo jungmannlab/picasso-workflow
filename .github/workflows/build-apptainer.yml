@@ -25,6 +25,17 @@
 name: build-apptainer-image
 
 on:
+  # Nightly rebuild of the rolling develop image so there is always a fresh
+  # picasso-workflow-[test-]develop-<sha>.sif to pull to the login node and
+  # test on the cluster BEFORE a develop -> master release. The build bakes
+  # `develop` via paint.def's own PW_REF pin (PW_REF stays empty on schedule).
+  # NOTE: GitHub fires `schedule:` ONLY from the workflow file on the DEFAULT
+  # branch (`master`), so this cron activates once this change reaches master
+  # (it does NOT fire from develop) -- same as picasso-early-warning.yml.
+  # Cherry-pick to master if you want it live before the next release. The
+  # `gate` job skips the heavy build on nights when develop had no new commit.
+  schedule:
+    - cron: "0 3 * * *"         # daily 03:00 UTC
   workflow_dispatch:
     inputs:
       pw_ref:
@@ -45,7 +56,38 @@ permissions:
   contents: write               # upload the .sif as a release asset
 
 jobs:
+  # Decide whether to run the heavy (~1-2 GB x2) build. A scheduled nightly run
+  # proceeds only when develop advanced in the last day -- no point rebuilding
+  # an identical tip. Manual / release / PR runs always proceed.
+  gate:
+    runs-on: ubuntu-latest
+    outputs:
+      proceed: ${{ steps.decide.outputs.proceed }}
+    steps:
+      - if: github.event_name == 'schedule'
+        uses: actions/checkout@v4
+        with:
+          ref: develop
+          fetch-depth: 0        # full history so `git log --since` sees dates
+      - id: decide
+        run: |
+          if [ "${{ github.event_name }}" != "schedule" ]; then
+            echo "proceed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Scheduled: build only if develop has a commit in the last 24h
+          # (matches the daily cron), so an unchanged tip is not rebuilt.
+          if [ -n "$(git log --since='24 hours ago' --oneline)" ]; then
+            echo "develop advanced in the last 24h -> building"
+            echo "proceed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "no new develop commits in the last 24h -> skipping nightly"
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+          fi
+
   build:
+    needs: gate
+    if: needs.gate.outputs.proceed == 'true'
     # ubuntu-22.04 (jammy), NOT ubuntu-latest (now 24.04/noble): the Apptainer
     # .deb depends on libfuse3-3, which noble replaced with libfuse3-4 -> the
     # install fails with "libfuse3-3 … not installable". jammy still ships it.
