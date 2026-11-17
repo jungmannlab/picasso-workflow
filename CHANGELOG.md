@@ -11,6 +11,15 @@ This file was started after v0.5.6; earlier history is in the git log.
 ## [Unreleased]
 
 ### Added
+- **Doctor tab: set up & check cluster Confluence secrets from the GUI.** A new
+  *Cluster secrets (SLURM)* panel checks whether the selected Run-tab cluster
+  has `~/.config/picasso_workflow/.env` and `~/.picasso_secrets` (existence,
+  readability, perms, which token keys are present — never the values) and can
+  write both files over SSH (chmod 600) from masked token fields, defaulting to
+  the token already configured locally. Token values travel only inside the
+  written file bodies (never on an ssh/scp command line), so the whole cluster
+  secrets set-up can be done without opening a terminal. Both the check and the
+  upload run off the GUI thread. (`doctor_tab.py`)
 - **Nightly develop Apptainer image build.** `build-apptainer.yml` now also
   runs on a daily schedule, producing a fresh
   `picasso-workflow-[test-]develop-<sha>.sif` to pull to the login node and

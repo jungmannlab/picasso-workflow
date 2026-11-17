@@ -259,3 +259,47 @@ def test_non_containerized_run_is_plain_srun_python():
     # exit status capture unchanged.
     srun_i = next(i for i, c in enumerate(cmds) if c.startswith("srun "))
     assert cmds[srun_i + 1] == "PW_RC=$?"
+
+
+# --------------------------------------------------------------------------- #
+# secrets provisioning -- assemble_slurm_commands sources ~/.picasso_secrets
+# on the node before the run (long-standing behaviour; locked in here because
+# the containerized path relies on it -- Apptainer then forwards the exported
+# CONFLUENCE_TOKEN into the image via its default host-env passthrough).
+# --------------------------------------------------------------------------- #
+SECRETS_SOURCE = "[ -f ~/.picasso_secrets ] && source ~/.picasso_secrets"
+
+
+def test_secrets_sourced_before_srun_containerized():
+    # The operational token file is sourced on the node BEFORE the run so
+    # CONFLUENCE_TOKEN is in the env; Apptainer forwards it into the image.
+    cmds = _comm().assemble_slurm_commands(
+        "hpcl8XXX",
+        image_path="/sw/pw/x.sif",
+        bind_paths=["/scratch/paint"],
+    )
+    assert SECRETS_SOURCE in cmds
+    # sourced before the workflow runs (so the export is in effect).
+    srun_i = next(i for i, c in enumerate(cmds) if c.startswith("srun "))
+    assert cmds.index(SECRETS_SOURCE) < srun_i
+
+
+def test_secrets_sourced_before_srun_host_conda():
+    # Same provisioning on the non-containerized (host-conda) path.
+    cmds = _comm().assemble_slurm_commands(
+        "hpcl8XXX", scriptname="start_workflow.py"
+    )
+    assert SECRETS_SOURCE in cmds
+    srun_i = next(i for i, c in enumerate(cmds) if c.startswith("srun "))
+    assert cmds.index(SECRETS_SOURCE) < srun_i
+
+
+def test_secrets_source_never_embeds_the_token():
+    # The token is only *sourced* at run time -- never written into the
+    # script -- so a generated sbatch file stays free of the secret.
+    cmds = _comm().assemble_slurm_commands(
+        "hpcl8XXX", image_path="/sw/pw/x.sif"
+    )
+    joined = "\n".join(cmds)
+    assert "CONFLUENCE_TOKEN=" not in joined
+    assert "CONFLUENCE_BEARER=" not in joined
