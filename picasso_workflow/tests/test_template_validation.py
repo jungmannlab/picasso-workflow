@@ -26,6 +26,7 @@ import os
 import pytest
 
 from picasso_workflow import util
+from picasso_workflow.modulespec import MODULE_REGISTRY
 
 logger = logging.getLogger(__name__)
 
@@ -42,12 +43,20 @@ _TEMPLATES_DIR = os.path.join(
 
 
 def _available_modules():
-    """Return the set of public module names in AbstractModuleCollection."""
+    """Return the set of runnable module names.
+
+    Mirrors ``WorkflowRunner.run``: the public AbstractModuleCollection
+    contract plus the registry-backed picasso-set modules.
+    """
     return {
         name
         for name, obj in inspect.getmembers(util.AbstractModuleCollection)
         if (inspect.isfunction(obj) or inspect.ismethod(obj))
         and not name.startswith("_")
+    } | {
+        name
+        for name, spec in MODULE_REGISTRY.items()
+        if spec.module_set == "picasso"
     }
 
 

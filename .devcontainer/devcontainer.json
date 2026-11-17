@@ -37,7 +37,17 @@
   // Bring up the default-deny egress firewall every time the container starts.
   "postStartCommand": "sudo /usr/local/bin/init-firewall.sh",
 
-  "postCreateCommand": "pip install --user -e '.'",
+  // `[dev]` pulls the test/lint tooling now that it lives in an optional extra
+  // (out of runtime deps). No `--pre` needed: the picassosr pin references a
+  // pre-release (>=0.12.0a3), so pip allows pre-releases for that requirement
+  // only and resolves 0.12.0a3 on this 3.11 base.
+  //
+  // black/flake8 are not package deps (pre-commit owns them), so install them
+  // here at the SAME versions CI uses (.github/workflows/lint.yml, matching
+  // .pre-commit-config.yaml) — otherwise a bare `black`/`flake8` in the
+  // container drifts from CI and produces spurious reformat/lint diffs. Keep
+  // this pin in sync with lint.yml and .pre-commit-config.yaml.
+  "postCreateCommand": "pip install --user -e '.[dev]' && pip install --user black==26.5.1 flake8==7.1.1 Flake8-pyproject",
 
   "customizations": {
     "vscode": {

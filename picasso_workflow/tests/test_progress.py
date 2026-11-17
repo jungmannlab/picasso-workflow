@@ -55,6 +55,43 @@ class TestProgressManager(unittest.TestCase):
         self.assertEqual(pm.state["modules"][0]["status"], p.SKIPPED)
         self.assertEqual(pm.state["modules"][0]["fraction"], 1.0)
 
+    def test_branch_nested_lifecycle(self):
+        pm = p.ProgressManager(self.folder, sinks=[])
+        pm.start(["branch"])
+        pm.branch_init(
+            0,
+            [
+                ("cell0", "branch", ["create_mask2", "nneighbor"]),
+                ("cell1", "branch", ["create_mask2", "nneighbor"]),
+                ("join", "join", ["summarize_branches"]),
+            ],
+        )
+        sub = pm.state["modules"][0]["subgroups"]
+        self.assertEqual(len(sub), 3)
+        self.assertEqual(sub[2]["kind"], "join")
+        self.assertEqual(sub[0]["status"], p.PENDING)
+
+        # run cell0's two modules
+        pm.branch_submodule_start(0, 0, 0)
+        self.assertEqual(sub[0]["status"], p.RUNNING)
+        self.assertEqual(sub[0]["modules"][0]["status"], p.RUNNING)
+        pm.branch_submodule_end(0, 0, 0, p.DONE)
+        pm.branch_submodule_start(0, 0, 1)
+        pm.branch_submodule_end(0, 0, 1, p.DONE)
+        # group rolls up to done once all its modules are done
+        self.assertEqual(sub[0]["status"], p.DONE)
+        self.assertEqual(sub[0]["modules"][0]["fraction"], 1.0)
+        self.assertIsInstance(sub[0]["modules"][1]["elapsed"], float)
+
+        # a failing sub-module marks itself and its group failed
+        pm.branch_submodule_start(0, 1, 0)
+        pm.branch_submodule_end(0, 1, 0, p.FAILED)
+        self.assertEqual(sub[1]["modules"][0]["status"], p.FAILED)
+        self.assertEqual(sub[1]["status"], p.FAILED)
+
+        # the whole state stays JSON-serialisable (it is written to disk)
+        json.dumps(pm.state)
+
     def test_progress_clamped(self):
         pm = p.ProgressManager(self.folder, sinks=[])
         pm.start(["a"])
@@ -306,3 +343,52 @@ class TestAbortFlag(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestOverallFractionPaused(unittest.TestCase):
+    """A paused (stepwise-boundary) run must not read as 0% progress."""
+
+    def test_paused_modules_count_as_done(self):
+        state = {
+            "modules": [
+                {"status": "done", "fraction": 1.0},
+                {"status": "paused", "fraction": 0.0},
+            ]
+        }
+        self.assertEqual(1.0, p.overall_fraction(state))
+
+    def test_paused_datasets_count_as_done(self):
+        state = {
+            "datasets": [
+                {"i": 0, "state": "paused"},
+                {"i": 1, "state": "paused"},
+            ]
+        }
+        self.assertEqual(1.0, p.overall_fraction(state))
+
+
+class TestReportUrl(unittest.TestCase):
+    """set_report_url records a report page URL into the progress state."""
+
+    def setUp(self):
+        self.folder = tempfile.mkdtemp()
+
+    def tearDown(self):
+        shutil.rmtree(self.folder, ignore_errors=True)
+
+    def test_sets_string_url_and_persists(self):
+        pm = p.ProgressManager(self.folder, sinks=None)
+        pm.set_report_url("https://x/wiki/pages/viewpage.action?pageId=1")
+        self.assertEqual(
+            "https://x/wiki/pages/viewpage.action?pageId=1",
+            pm.state["report_url"],
+        )
+        state = p.read_progress(self.folder)
+        self.assertEqual(pm.state["report_url"], state["report_url"])
+
+    def test_ignores_non_string(self):
+        pm = p.ProgressManager(self.folder, sinks=[])
+        pm.set_report_url(None)
+        pm.set_report_url(object())  # non-serializable, must be ignored
+        pm.set_report_url("")
+        self.assertIsNone(pm.state["report_url"])

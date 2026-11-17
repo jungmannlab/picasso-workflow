@@ -24,7 +24,7 @@ from loguru import logger
 import time
 from datetime import datetime
 import hashlib
-from picasso import io
+from picasso_workflow._picasso_api import io
 import pathlib
 from functools import reduce
 import textwrap
@@ -73,15 +73,20 @@ class PathParser:
     def windows_path_to_curr_os(self, winpath: str, drive_map: dict) -> str:
         """Convert a Windows-style path to the current OS's drive layout.
 
-        Replaces the Windows drive (e.g. ``X:``) with the mapped drive.
+        Looks the source drive (e.g. ``"U:"``) up in ``drive_map`` and
+        replaces it with the mapped destination root, preserving the remaining
+        path components. An unmapped drive -- or a drive-less relative path --
+        is returned unchanged (apart from separator normalisation), never a
+        ``KeyError`` (so a ``drive_map`` missing this drive, e.g. from a
+        shorter destination root list, degrades gracefully).
 
         Parameters
         ----------
         winpath : str
             The Windows-style path to convert.
         drive_map : dict
-            Map from Windows drive (e.g. ``"W:"``) to the target drive
-            (e.g. ``"/Volumes/pool-miblab4"``).
+            Map from Windows drive (e.g. ``"U:"``) to the destination root
+            (e.g. ``"/Volumes/pool-miblab4"`` or another drive ``"W:"``).
 
         Returns
         -------
@@ -89,43 +94,38 @@ class PathParser:
             The converted path.
         """
         winpath = pathlib.PureWindowsPath(winpath)
-        if winpath.drive:
-            # absolute path
-            drive = drive_map[winpath.drive]
-            # currospath = pathlib.Path(drive, *winpath.parts[1:])
-
-            # change logic to not convert to current os but new drive type os
-            if ":" in drive:  # converted path is a windows path
-                currospath = pathlib.PureWindowsPath(drive, *winpath.parts[1:])
-            else:  # converted path is a Posix path
-                currospath = pathlib.PurePosixPath(drive, *winpath.parts[1:])
-        else:
-            # relative path
-            # currospath = pathlib.Path(*winpath.parts)
-
-            # change logic to not convert to current os but new drive type os
-            if (
-                ":" in list(drive_map.values())[0][:3]
-            ):  # converted path is a windows path
-                # currospath = pathlib.PureWindowsPath(drive, *winpath.parts[1:])
-                currospath = pathlib.PureWindowsPath(winpath)
-            else:  # converted path is a Posix path
-                # currospath = pathlib.PurePosixPath(drive, *winpath.parts[1:])
-                currospath = pathlib.PurePosixPath(winpath)
-        return str(currospath)
+        if not winpath.drive:
+            # Relative path: no drive to remap. Preserve the destination roots'
+            # style -- keep Windows separators when the destination is itself
+            # Windows (as the old code did), else normalise to posix.
+            if any(":" in str(v) for v in drive_map.values()):
+                return str(winpath)
+            return str(pathlib.PurePosixPath(*winpath.parts))
+        dest_root = drive_map.get(winpath.drive)
+        if dest_root is None:
+            return str(winpath)
+        rest = winpath.parts[1:]  # drop the "<drive>\" anchor
+        if ":" in dest_root:  # destination is itself a Windows drive
+            return str(pathlib.PureWindowsPath(dest_root, *rest))
+        return str(pathlib.PurePosixPath(dest_root, *rest))
 
     def posix_path_to_curr_os(self, posixpath: str, drive_map: dict) -> str:
         """Convert a posix-style path to the current OS's drive layout.
 
-        Replaces the source drive root with the mapped drive.
+        Replaces the LONGEST source root in ``drive_map`` that is a true
+        path-prefix of ``posixpath`` (component-wise, so ``/a/pool`` matches
+        ``/a/pool/x`` but NOT the sibling ``/a/pool-extra/x``) with its mapped
+        destination root, preserving the remainder. A path under no mapped
+        root is returned unchanged -- never a crash, even when ``drive_map`` is
+        empty or the roots have differing depths.
 
         Parameters
         ----------
         posixpath : str
             The posix-style path to convert.
         drive_map : dict
-            Map from source drive (e.g. ``"W:"``) to the target drive
-            (e.g. ``"/Volumes/pool-miblab4"``).
+            Map from source root (e.g. ``"/Volumes/pool-miblab4"``) to the
+            destination root (e.g. ``"/fs/mpib/pool-miblab4"`` or ``"W:"``).
 
         Returns
         -------
@@ -137,59 +137,31 @@ class PathParser:
         # path (e.g. "U:/a/b\\c\\d") splits into every component, instead
         # of leaving a backslash-joined tail unconverted (PurePosixPath
         # only ever splits on "/").
-        posixpath = pathlib.PurePosixPath(str(posixpath).replace("\\", "/"))
-        if posixpath.drive:
-            # absolute path
-            drive = drive_map[posixpath.drive]
-            logger.debug(f"old drive: {posixpath.drive}")
-            logger.debug(f"new drive: {drive}")
-            # currospath = pathlib.Path(drive, *posixpath.parts[1:])
-
-            # change logic to not convert to current os but new drive type os
-            if ":" in drive:  # converted path is a windows path
-                currospath = pathlib.PureWindowsPath(
-                    drive, *posixpath.parts[1:]
-                )
-            else:  # converted path is a Posix path
-                currospath = pathlib.PurePosixPath(drive, *posixpath.parts[1:])
-        else:
-            # print('no drive')
-            drivelen = len(pathlib.Path(list(drive_map.keys())[0]).parts)
-            pseudodrive = pathlib.PurePosixPath(*posixpath.parts[:drivelen])
-            # print('pseudodrive:', pseudodrive)
-            # print(drive_map)
-            if drive := drive_map.get(str(pseudodrive)):
-                # print('found drive:', drive)
-                # found the drive after all
-                # currospath = pathlib.Path(drive, *posixpath.parts[drivelen:])
-
-                # change logic to not convert to current os but new drive type os
-                if ":" in drive:  # converted path is a windows path
-                    currospath = pathlib.PureWindowsPath(
-                        drive, *posixpath.parts[drivelen:]
-                    )
-                else:  # converted path is a Posix path
-                    currospath = pathlib.PurePosixPath(
-                        drive, *posixpath.parts[drivelen:]
-                    )
-            else:
-                # print("did not find a drive")
-                # relative path
-                # currospath = pathlib.Path(*posixpath.parts)
-
-                # change logic to not convert to current os but new drive type os
-                if (
-                    ":" in list(drive_map.values())[0]
-                ):  # converted path is a windows path
-                    currospath = pathlib.PureWindowsPath(
-                        drive, *posixpath.parts[1:]
-                    )
-                else:  # converted path is a Posix path
-                    currospath = pathlib.PurePosixPath(
-                        drive, *posixpath.parts[drivelen:]
-                    )
-        # print('new path:', currospath)
-        return str(currospath)
+        p = pathlib.PurePosixPath(str(posixpath).replace("\\", "/"))
+        # Longest root first so a nested root wins over its parent when both
+        # are prefixes (e.g. "/a/b" over "/a"). Key on len(str(...)) so a
+        # non-string key (e.g. a malformed ``None`` drivepath from YAML) sorts
+        # harmlessly instead of raising in ``len``.
+        for src_root in sorted(
+            drive_map, key=lambda k: len(str(k)), reverse=True
+        ):
+            root_parts = pathlib.PurePosixPath(
+                str(src_root).replace("\\", "/")
+            ).parts
+            if p.parts[: len(root_parts)] != root_parts:
+                continue
+            dest_root = drive_map[src_root]
+            if dest_root is None:
+                # root with no mapped counterpart (e.g. a null dest entry);
+                # try a shorter root rather than crashing on ``":" in None``.
+                continue
+            rest = p.parts[len(root_parts) :]
+            logger.debug(f"mapping root {src_root} -> {dest_root}")
+            if ":" in dest_root:  # destination is a Windows drive
+                return str(pathlib.PureWindowsPath(dest_root, *rest))
+            return str(pathlib.PurePosixPath(dest_root, *rest))
+        # Not under any mapped root -> unchanged.
+        return str(p)
 
     def check_path_style(self, path: str) -> bool:
         """Check whether a path is windows- or posix-style.
@@ -244,6 +216,45 @@ class PathParser:
         regex = f"^{regex}$"
         # print('machine', machine, 'pattern', pattern, 'regex', regex)
         return re.fullmatch(regex, machine) is not None
+
+    def is_under_root(self, path: str, root: str) -> bool:
+        """Whether ``path`` is ``root`` itself or located beneath it.
+
+        Uses path-component prefixing for posix roots (so the sibling
+        ``/a/pool-extra`` is NOT treated as under ``/a/pool``) and drive
+        equality for Windows drive-letter roots -- NOT plain substring
+        containment, which would treat such a sibling as a match whenever its
+        name merely starts with a shorter root's name.
+
+        Parameters
+        ----------
+        path : str
+            The candidate path.
+        root : str
+            A configured drive root (a posix directory or a Windows drive
+            letter such as ``"U:"``).
+
+        Returns
+        -------
+        bool
+            True if ``path`` is located at or under ``root``.
+        """
+        root = str(root)
+        if self.check_path_style(root):  # posix root
+            root_parts = pathlib.PurePosixPath(root.replace("\\", "/")).parts
+            path_parts = pathlib.PurePosixPath(
+                str(path).replace("\\", "/")
+            ).parts
+            return path_parts[: len(root_parts)] == root_parts
+        # Windows drive-letter root (e.g. "U:"): match on the drive alone.
+        # Require a real drive on the root, else a malformed bare-name root
+        # (whose Windows ``drive`` is "") would spuriously match every path.
+        # Case-sensitive to stay consistent with the drive-map lookup in
+        # ``windows_path_to_curr_os`` (which is keyed on the configured drive).
+        root_drive = pathlib.PureWindowsPath(root).drive
+        return bool(root_drive) and (
+            pathlib.PureWindowsPath(path).drive == root_drive
+        )
 
     def get_machine_drivepaths(self, machine: str) -> list | None:
         """Return the configured drive paths for a machine, or None.
@@ -311,7 +322,12 @@ class PathParser:
         # source path is located under
         src_machine = None
         for machine, drivepaths in self.drive_paths.items():
-            if any([p in src_path for p in drivepaths]):
+            # `drivepaths` may be None/empty for a machine key with no roots
+            # configured; skip it rather than iterating None. Match by
+            # path-prefix (is_under_root), not substring containment.
+            if drivepaths and any(
+                self.is_under_root(src_path, p) for p in drivepaths
+            ):
                 src_machine = machine
                 break
         if src_machine is None:
@@ -382,27 +398,49 @@ class PathParser:
         #         ({self.drive_paths.keys()})"
         #     )
 
-        # find current machine key
+        # find destination machine key -- regex pattern match (check_machine),
+        # not substring, which never matches an "X"-wildcard pattern against a
+        # concrete hostname (same fix as convert_path). Leave it None if the
+        # current host is not configured (get_machine_drivepaths would raise on
+        # a None machine, so guard the call).
         if dest_machine is None:
-            for dest_machine in self.drive_paths.keys():
-                if dest_machine in platform.node():
+            node = platform.node()
+            for machine in self.drive_paths.keys():
+                if self.check_machine(node, machine):
+                    dest_machine = machine
                     break
-        dest_paths = self.get_machine_drivepaths(dest_machine)
+        dest_paths = (
+            self.get_machine_drivepaths(dest_machine)
+            if dest_machine is not None
+            else None
+        )
 
-        for src_machine, drivepaths in self.drive_paths.items():
-            src_on_machine = []
-            for srcp in src_dict.values():
-                src_on_machine.append(any([p in srcp for p in drivepaths]))
-            if all(src_on_machine):
-                # src_machine has all drive paths defined
+        # find the source machine: the one whose roots every source path is
+        # under (path-prefix match, skipping keys with no roots).
+        src_machine = None
+        for machine, drivepaths in self.drive_paths.items():
+            if not drivepaths:
+                continue
+            if all(
+                any(self.is_under_root(srcp, p) for p in drivepaths)
+                for srcp in src_dict.values()
+            ):
+                src_machine = machine
                 break
 
         logger.debug(f"found src machine: {src_machine}")
         logger.debug(f"dest machine: {dest_machine}")
 
+        # Build the root map only when BOTH ends resolved; otherwise leave it
+        # empty so the rewriters pass every path through unchanged (mirrors
+        # convert_path returning the path unchanged on an unresolved machine,
+        # rather than mis-mapping through a leaked last-machine key).
         drive_map = {}
-        for src_p, dest_p in zip(self.drive_paths[src_machine], dest_paths):
-            drive_map[src_p] = dest_p
+        if src_machine is not None and dest_paths:
+            for src_p, dest_p in zip(
+                self.drive_paths[src_machine], dest_paths
+            ):
+                drive_map[src_p] = dest_p
 
         logger.debug(f"drive map is {drive_map}")
 
@@ -495,7 +533,7 @@ def find_dnapaint_raw(working_folder: str) -> tuple[dict, str]:
         Path to the written ``src_loc.yaml`` describing the datasets.
     """
     from picasso_workflow import util
-    from picasso import io
+    from picasso_workflow._picasso_api import io
 
     datasets = util.find_raw_movies(working_folder)
 
@@ -938,7 +976,9 @@ class AbstractWorkflowCoordinator(abc.ABC):
         except Exception:
             pw_version = "unknown"
         try:
-            from picasso import __version__ as picasso_version
+            from picasso_workflow._picasso_api import (
+                __version__ as picasso_version,
+            )
         except Exception:
             picasso_version = "unknown"
 
@@ -1027,6 +1067,7 @@ class SingleWorkflowCoordinator(AbstractWorkflowCoordinator):
         self,
         workflow_modules: list[tuple],
         continue_previous_runners: bool = False,
+        stop_after: int | None = None,
     ) -> list[dict]:
         """Tile the workflow over datasets and build per-dataset runners.
 
@@ -1036,6 +1077,9 @@ class SingleWorkflowCoordinator(AbstractWorkflowCoordinator):
             The modules to run, as ``(module_name, parameters)``.
         continue_previous_runners : bool, optional
             Whether to continue previously aborted runners. Default is False.
+        stop_after : int, optional
+            Stepwise development runs: stop each runner cleanly after the
+            module with this index. Default is None (run to the end).
 
         Returns
         -------
@@ -1093,6 +1137,7 @@ class SingleWorkflowCoordinator(AbstractWorkflowCoordinator):
                 wkfl_mods,
                 continue_previous_runner=continue_previous_runners,
                 postfix="",
+                stop_after=stop_after,
             )
             run_wr_kwargs.append(
                 {
@@ -1106,6 +1151,7 @@ class SingleWorkflowCoordinator(AbstractWorkflowCoordinator):
         self,
         workflow_modules: list[tuple],
         continue_previous_runners: bool = False,
+        stop_after: int | None = None,
     ) -> None:
         """Prepare and run the per-dataset workflows handled by this rank.
 
@@ -1115,9 +1161,12 @@ class SingleWorkflowCoordinator(AbstractWorkflowCoordinator):
             The modules to run, as ``(module_name, parameters)``.
         continue_previous_runners : bool, optional
             Whether to continue previously aborted runners. Default is False.
+        stop_after : int, optional
+            Stepwise development runs: stop each runner cleanly after the
+            module with this index. Default is None (run to the end).
         """
         run_wr_kwargs = self.prepare_analysis(
-            workflow_modules, continue_previous_runners
+            workflow_modules, continue_previous_runners, stop_after=stop_after
         )
 
         # print(f'rank {self.rank}, size {self.size}: running {run_awr_kwargs}')
@@ -1209,6 +1258,7 @@ class AggregationWorkflowCoordinator(AbstractWorkflowCoordinator):
         workflow_modules_sgl: list[tuple],
         workflow_modules_agg: list[tuple],
         continue_previous_runners: bool = False,
+        stop_after: tuple | None = None,
     ) -> list[dict]:
         """Build the per-group aggregation runners for this rank.
 
@@ -1225,6 +1275,10 @@ class AggregationWorkflowCoordinator(AbstractWorkflowCoordinator):
             Modules run in the second stage (aggregation across rounds).
         continue_previous_runners : bool, optional
             Whether to continue previously aborted runners. Default is False.
+        stop_after : tuple, optional
+            Stepwise development boundary, as ``(phase, index)`` with phase
+            ``"single"`` or ``"aggregation"`` (see
+            :attr:`AggregationWorkflowRunner.stop_after`). Default is None.
 
         Returns
         -------
@@ -1352,6 +1406,7 @@ class AggregationWorkflowCoordinator(AbstractWorkflowCoordinator):
                 postfix=runstamp,
                 rank=runner_rank,
                 size=runner_size,
+                stop_after=stop_after,
             )
 
             # Write the run overview onto the dedicated aggregation page
@@ -1400,6 +1455,7 @@ class AggregationWorkflowCoordinator(AbstractWorkflowCoordinator):
         workflow_modules_sgl: list[tuple],
         workflow_modules_agg: list[tuple],
         continue_previous_runners: bool = False,
+        stop_after: tuple | None = None,
     ) -> None:
         """Prepare and run the aggregation workflows handled by this rank.
 
@@ -1411,11 +1467,16 @@ class AggregationWorkflowCoordinator(AbstractWorkflowCoordinator):
             Modules run in the second stage (aggregation across rounds).
         continue_previous_runners : bool, optional
             Whether to continue previously aborted runners. Default is False.
+        stop_after : tuple, optional
+            Stepwise development boundary, as ``(phase, index)`` with phase
+            ``"single"`` or ``"aggregation"`` (see
+            :attr:`AggregationWorkflowRunner.stop_after`). Default is None.
         """
         run_awr_kwargs = self.prepare_analysis(
             workflow_modules_sgl,
             workflow_modules_agg,
             continue_previous_runners,
+            stop_after=stop_after,
         )
 
         print(f"rank {self.rank}, size {self.size}: running {run_awr_kwargs}")
@@ -1444,7 +1505,7 @@ class AggregationWorkflowCoordinator(AbstractWorkflowCoordinator):
         plt.close("all")
 
 
-class InvestigationCoordinator(AbstractWorkflowCoordinator):
+class InvestigationWorkflowCoordinator(AbstractWorkflowCoordinator):
     """Coordinate the analysis of a measurement series.
 
     Covers multiple conditions / cell types, cells and target molecules.
@@ -2061,6 +2122,13 @@ class InvestigationCoordinator(AbstractWorkflowCoordinator):
             )
             if self.profiler is not None:
                 self.profiler.append_profile_page(kwargs["awr"].all_results)
+
+
+#: Backwards-compatible alias for the pre-rename class name. The coordinator
+#: was renamed to match the ``*WorkflowCoordinator`` convention of its siblings
+#: (``SingleWorkflowCoordinator`` / ``AggregationWorkflowCoordinator``) and the
+#: name the GUI emits; keep the old name importable for hand-written scripts.
+InvestigationCoordinator = InvestigationWorkflowCoordinator
 
 
 class PerformanceProfiler:

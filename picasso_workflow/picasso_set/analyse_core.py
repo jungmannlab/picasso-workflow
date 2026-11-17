@@ -1,0 +1,1488 @@
+#!/usr/bin/env python
+"""Tier 1 of the picasso-set: core pipeline modules.
+
+:class:`PicassoSetCoreMixin` contributes the ``picasso_*`` core-pipeline
+modules (localize, undrift, link, clustering, render, ...) to
+:class:`~picasso_workflow.analyse.AutoPicasso`. Each module mirrors the
+corresponding picasso CLI command (``picasso/__main__.py``) with identical
+parameter names and defaults, operating on the shared ``self.locs`` /
+``self.info`` state like the classic modules, so the two sets mix freely in
+one workflow. Deliberate deviations from the CLI (e.g. headless figure
+saving instead of interactive display) are noted per module.
+
+Output files land in the module's result folder with the CLI-identical
+suffix on the base name ``locs`` (e.g. the CLI's ``<base>_link.hdf5``
+becomes ``locs_link.hdf5``).
+
+Author: Heinrich Grabmayr
+Initial date: October 5, 2026
+"""
+
+from __future__ import annotations
+
+import os
+
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+
+from loguru import logger
+
+from picasso_workflow._picasso_api import __version__ as picassoversion
+from picasso_workflow._picasso_api import (
+    aim,
+    clusterer,
+    g5m,
+    io,
+    lib,
+    localize,
+    postprocess,
+    render,
+)
+
+from picasso_workflow.module_runtime import module_decorator
+
+
+class PicassoSetCoreMixin:
+    """Core-pipeline picasso-set modules (mixin for ``AutoPicasso``)."""
+
+    # ------------------------------------------------------------------
+    # helpers
+    # ------------------------------------------------------------------
+
+    def _picasso_set_camera_info(self, parameters):
+        """Resolve the camera parameters for ``picasso_localize``.
+
+        Each parameter defaults to ``None`` = "use the resolved camera
+        info" (a documented deviation from the CLI literals, which would
+        silently override correct metadata). Resolution order per
+        parameter: explicit value > the ``AutoPicasso.camera_info``
+        property (analysis_config camera_info, or derived from picasso's
+        CONFIG via the camera name in the metadata) > movie metadata >
+        the CLI literal as last resort.
+        """
+        cli_defaults = {
+            "baseline": 0,
+            "sensitivity": 1,
+            "gain": 1,
+            "qe": 1,
+            "pixelsize": 130,
+        }
+        try:
+            resolved = dict(self.camera_info or {})
+        except Exception:
+            # no camera_info config and no resolvable camera in the
+            # metadata (e.g. simulated data)
+            resolved = {}
+        camera_info = {}
+        for par, key in [
+            ("baseline", "Baseline"),
+            ("sensitivity", "Sensitivity"),
+            ("gain", "Gain"),
+            ("qe", "Qe"),
+            ("pixelsize", "Pixelsize"),
+        ]:
+            val = parameters.get(par)
+            if val is None:
+                val = resolved.get(key)
+            if val is None:
+                val = lib.get_from_metadata(
+                    self.info or [], key, cli_defaults[par]
+                )
+            camera_info[key] = val
+        return camera_info
+
+    def _picasso_set_pixelsize(self, default=None):
+        """The dataset pixel size in nm, or ``default``.
+
+        Uses the ``AutoPicasso.pixelsize`` property (metadata >
+        channel metadata > camera config/picasso CONFIG), falling back
+        to ``default`` when none of those resolves.
+        """
+        try:
+            return self.pixelsize
+        except Exception:
+            return default
+
+    def _require_pixelsize_nm(self):
+        """The dataset pixel size in nm, or raise if it cannot be resolved.
+
+        Use for nm conversions (multiplying a camera-pixel config by the pixel
+        size): a missing pixel size then fails with a clear message instead of
+        producing ``value * None`` (a cryptic TypeError).
+        """
+        pixelsize = self._picasso_set_pixelsize()
+        if pixelsize is None:
+            raise ValueError(
+                "No pixel size (nm) available for the nm conversion: set it in "
+                "the dataset metadata (Pixelsize), the camera_info, or the "
+                "module's 'pixelsize' parameter."
+            )
+        return pixelsize
+
+    def _picasso_set_save_locs(self, results, filename, key=None):
+        """Save ``self.locs``/``self.info`` into the module result folder.
+
+        Returns the file path and records it in ``results`` under
+        ``filepath_<key>`` (``key`` defaults to the file's stem). The file
+        is also registered as the module's resume checkpoint, so the
+        module decorator does not write a second, byte-identical copy
+        when ``always_save``/``save_locs`` is set.
+        """
+        fp = os.path.join(results["folder"], filename)
+        self._save_locs(fp)
+        key = key or os.path.splitext(filename)[0]
+        results[f"filepath_{key}"] = fp
+        results.setdefault("checkpoint", {})["single"] = {"filepath": fp}
+        return fp
+
+    def _picasso_set_save_drift(self, results, drift, driftfile_name):
+        """Save the drift table and its figure into the result folder.
+
+        Mirrors the CLI's ``io.save_drift`` text file; the figure replaces
+        the CLI's interactive ``--display`` (headless deviation).
+        """
+        fp_drift = os.path.join(results["folder"], driftfile_name)
+        io.save_drift(fp_drift, drift)
+        results["filepath_driftfile"] = fp_drift
+        fig = plt.figure(figsize=(10, 6), constrained_layout=True)
+        # picasso 1.0 plot_drift takes (drift, fig) -- the drift is already in
+        # nm, so the pixelsize argument is gone.
+        postprocess.plot_drift(drift, fig)
+        fp_fig = os.path.join(results["folder"], "drift.png")
+        fig.savefig(fp_fig)
+        results["fp_fig_drift"] = fp_fig
+
+    # ------------------------------------------------------------------
+    # localization (CLI: localize)
+    # ------------------------------------------------------------------
+
+    @module_decorator
+    def picasso_localize(self, i, parameters, results):
+        """Identify and fit single-molecule spots (native CLI: localize).
+
+        Wraps ``picasso.localize.localize`` at the CLI's granularity
+        (identification and fitting in one step) on the already-loaded
+        movie, with the CLI's parameter names. Deviations from the CLI,
+        both documented design decisions: ``drift`` defaults to 0 (the CLI
+        default 1000 would also undrift; the workflow has dedicated
+        undrift modules), and the camera parameters default to ``None`` =
+        "use the loaded movie metadata / camera config" instead of the CLI
+        literals. The CLI's ``--regions-separately``, ``--concat`` and
+        ``--database`` multi-file conveniences are out of scope.
+
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters : dict
+            Optional keys (CLI defaults unless noted):
+
+            ``fit_method`` : str, default "mle"
+                One of the CLI fit methods (mle, mle-gpu, mle-spherical,
+                mle-rotated, lq, lq-spherical, lq-rotated, lq-3d, lq-gpu,
+                mle-3d, spline, spline-mle, spline-gpu, spline-mle-gpu,
+                avg, and the -gpu/-3d combinations).
+            ``box_side_length`` : int, default 7
+                Side length of the fit box.
+            ``gradient`` : float, default 5000
+                Minimum net gradient for spot detection.
+            ``roi`` : list of int
+                One region of interest [y_min, x_min, y_max, x_max].
+            ``frame_bounds`` : list
+                One or more [start_frame, end_frame] segments (0-indexed,
+                inclusive).
+            ``temporal_median`` : int, default 0
+                Rolling temporal median background filter window.
+            ``gaussian_filter`` : float, default 0.0
+                Spatial Gaussian pre-filter sigma.
+            ``convergence`` : float, default 0
+                Fit tolerance; 0 = the fit method's own default.
+            ``max_iterations`` : int, default 0
+                Max iterations per spot; 0 = the method's own default.
+            ``baseline``, ``sensitivity``, ``gain``, ``qe``, ``pixelsize``
+                Camera parameters; None = from loaded metadata/config.
+            ``spline_calibration`` : str
+                Spline PSF calibration .hdf5 (required for spline methods).
+            ``affine_calibration`` : str or list of str
+                Lateral-correction calibration file(s).
+            ``camera_calibration`` : str
+                sCMOS camera calibration .hdf5.
+            ``zc`` : str
+                3D z-calibration file (required for -3d methods).
+            ``mf`` : float
+                Magnification factor (required for -3d methods).
+            ``fit_z_gpu`` : bool, default False
+                Fit z on the GPU (falls back to CPU if unavailable).
+            ``drift`` : int, default 0 (CLI: 1000)
+                RCC segmentation for post-fit undrift; 0 = off.
+            ``suffix`` : str
+                Inserted into the output file name.
+        results : dict
+            Module results (see
+            :class:`~picasso_workflow.util.AbstractModuleCollection`).
+        """
+        fit_method = parameters.get("fit_method", "mle")
+        box = parameters.get("box_side_length", 7)
+        gradient = parameters.get("gradient", 5000)
+        temporal_median = parameters.get("temporal_median", 0)
+        gaussian_filter = parameters.get("gaussian_filter", 0.0)
+        convergence = parameters.get("convergence", 0)
+        max_iterations = parameters.get("max_iterations", 0)
+        frame_bounds = parameters.get("frame_bounds")
+        suffix = parameters.get("suffix") or ""
+        drift = parameters.get("drift", 0)
+        fit_z_gpu = parameters.get("fit_z_gpu", False)
+
+        # picasso 1.0: the fit-method alias -> canonical method + fits_z flag.
+        fitting_method = localize.resolve_fit_method(fit_method)[0]
+        if fitting_method.endswith("-gpu") and not localize.CUDA_AVAILABLE:
+            raise RuntimeError(
+                "No CUDA-capable GPU found, so the requested GPU fit "
+                "method cannot run. Install the [gpu] extra and check the "
+                "driver (see README 'GPU-accelerated fitting')."
+            )
+
+        camera_info = self._picasso_set_camera_info(parameters)
+
+        roi = parameters.get("roi")
+        if roi is not None:
+            y_min, x_min, y_max, x_max = roi
+            roi = localize.clip_rois(
+                [[[y_min, x_min], [y_max, x_max]]], min_size=box
+            )
+
+        z_params = None
+        if "-3d" in fit_method:
+            zc = parameters.get("zc")
+            mf = parameters.get("mf", 0)
+            if not zc:
+                raise ValueError(
+                    "3D fitting requires the 'zc' z-calibration file "
+                    "parameter."
+                )
+            if not mf:
+                raise ValueError(
+                    "3D fitting requires a magnification factor 'mf' > 0."
+                )
+            z_params = (zc, mf, io.load_calibration(zc))
+            if fit_z_gpu:
+                from picasso_workflow._picasso_api import zfit
+
+                if not zfit.CUDA_AVAILABLE:
+                    logger.warning(
+                        "GPU z fitting requested (fit_z_gpu) but no "
+                        "CUDA-capable GPU is available. Falling back to "
+                        "multiprocessed CPU z fitting."
+                    )
+                    fit_z_gpu = False
+
+        spline_calibration = None
+        if fitting_method.startswith("spline"):
+            sc = parameters.get("spline_calibration")
+            if not sc:
+                raise ValueError(
+                    "Spline fitting requires the 'spline_calibration' "
+                    "parameter (<file.hdf5>). Build one with 'picasso "
+                    "spline-calibrate'."
+                )
+            spline_calibration = io.load_spline_calibration(sc)
+
+        # extra lateral affine corrections, applied after fitting on top of
+        # any the 3D / spline calibration carries (mirrors the CLI)
+        lateral_transforms = []
+        affine = parameters.get("affine_calibration") or []
+        if isinstance(affine, str):
+            affine = [affine]
+        for affine_path in affine:
+            found = lib.lateral_transforms(
+                io.load_any_calibration(affine_path)
+            )
+            if not found:
+                raise ValueError(
+                    f"No lateral corrections found in {affine_path}."
+                )
+            found, _duplicates = lib.drop_duplicate_lateral_transforms(
+                found, lateral_transforms
+            )
+            lateral_transforms.extend(found)
+
+        camera_calibration = None
+        if parameters.get("camera_calibration"):
+            camera_calibration = io.load_camera_calibration(
+                parameters["camera_calibration"]
+            )
+
+        # picasso 1.0 bundles the identification settings into an
+        # IdentificationParameters (a 0 window / sigma means the filter is
+        # off), and localize always returns (locs, info).
+        identification_parameters = localize.IdentificationParameters(
+            method=localize.NetGradient(gradient),
+            box=box,
+            temporal_median_window=int(temporal_median),
+            gaussian_filter_sigma=float(gaussian_filter),
+        )
+        locs, info = localize.localize(
+            self.movie,
+            camera_info=camera_info,
+            identification_parameters=identification_parameters,
+            roi=roi,
+            frame_bounds=frame_bounds,
+            movie_info=self.info,
+            fitting_method=fitting_method,
+            eps=convergence if convergence > 0 else None,
+            max_it=max_iterations if max_iterations > 0 else None,
+            spline_calibration=spline_calibration,
+            camera_calibration=camera_calibration,
+            parallel=True,
+        )
+
+        # post-fit steps, mirroring the CLI's _localize_finish
+        if z_params is not None:
+            from picasso_workflow._picasso_api import zfit
+
+            zpath, mf, z_calibration = z_params
+            z_calibration["Magnification Factor"] = mf
+            method = "gausslq" if "mle" not in fit_method else "gaussmle"
+            locs, info = zfit.zfit(
+                locs=locs,
+                info=info,
+                calibration=z_calibration,
+                fitting_method=method,
+                filter=0,
+                lateral_transforms=lateral_transforms,
+                parallel=not fit_z_gpu,
+                gpu=fit_z_gpu,
+            )
+            info[-1]["Z Calibration Path"] = zpath
+        elif lateral_transforms:
+            extra, _duplicates = lib.drop_duplicate_lateral_transforms(
+                lateral_transforms, spline_calibration
+            )
+            if extra:
+                locs = lib.apply_lateral_transforms(locs, extra)
+                info[-1]["Lateral corrections applied"] = info[-1].get(
+                    "Lateral corrections applied", []
+                ) + lib.describe_lateral_transforms(extra)
+
+        info[-1]["Wrapped by"] = "picasso-workflow : picasso_localize"
+        self.locs = locs
+        self.info = info
+        self._picasso_set_save_locs(results, f"locs{suffix}.hdf5", key="locs")
+        results["nlocs"] = len(self.locs)
+
+        if drift > 0:
+            undrift_info = {
+                "Generated by": f"Picasso v{picassoversion} Undrift",
+                "Segmentation": drift,
+                "Wrapped by": "picasso-workflow : picasso_localize",
+            }
+            # picasso 1.0 returns (locs, info, drift) and takes segmentation by
+            # keyword; the drift is in nm.
+            self.locs, _undrift_info, drift_df = postprocess.undrift(
+                self.locs, self.info, segmentation=drift, display=False
+            )
+            undrift_info["Drift X"] = float(drift_df["x"].mean())
+            undrift_info["Drift Y"] = float(drift_df["y"].mean())
+            self.drift = drift_df
+            self.info.append(undrift_info)
+            self._picasso_set_save_drift(results, drift_df, "drift.txt")
+            self._picasso_set_save_locs(results, f"locs{suffix}_undrift.hdf5")
+
+        return parameters, results
+
+    # ------------------------------------------------------------------
+    # drift correction (CLI: undrift / aim / undrift_fiducials)
+    # ------------------------------------------------------------------
+
+    @module_decorator
+    def picasso_undrift_rcc(self, i, parameters, results):
+        """Correct drift using RCC (native CLI: undrift).
+
+        Wraps ``picasso.postprocess.undrift``. Alternatively applies a
+        pre-computed drift file (CLI: ``--fromfile``).
+
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters : dict
+            Optional keys:
+
+            ``segmentation`` : float, default 1000
+                Number of frames combined into one temporal segment.
+            ``fromfile`` : str
+                Apply drift from this drift .txt file instead of
+                computing it.
+        results : dict
+            Module results (see
+            :class:`~picasso_workflow.util.AbstractModuleCollection`).
+        """
+        segmentation = parameters.get("segmentation", 1000)
+        fromfile = parameters.get("fromfile")
+        undrift_info = {
+            "Generated by": f"Picasso v{picassoversion} Undrift",
+            "Wrapped by": "picasso-workflow : picasso_undrift_rcc",
+        }
+        if fromfile is not None:
+            undrift_info["From File"] = fromfile
+            drift = io.load_drift(fromfile)
+            self.locs.x -= drift.loc[self.locs.frame, "x"].to_numpy()
+            self.locs.y -= drift.loc[self.locs.frame, "y"].to_numpy()
+        else:
+            undrift_info["Segmentation"] = segmentation
+            # picasso 1.0 returns (locs, info, drift); segmentation by keyword.
+            self.locs, _undrift_info, drift = postprocess.undrift(
+                self.locs, self.info, segmentation=segmentation, display=False
+            )
+            undrift_info["Drift X"] = float(drift["x"].mean())
+            undrift_info["Drift Y"] = float(drift["y"].mean())
+        self.drift = drift
+        self.info.append(undrift_info)
+        self._picasso_set_save_drift(results, drift, "drift.txt")
+        self._picasso_set_save_locs(results, "locs_undrift.hdf5")
+        results["nlocs"] = len(self.locs)
+        return parameters, results
+
+    @module_decorator
+    def picasso_undrift_aim(self, i, parameters, results):
+        """Correct drift using AIM (native CLI: aim).
+
+        Wraps ``picasso.aim.aim`` (adaptive intersection maximization).
+
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters : dict
+            Optional keys:
+
+            ``segmentation`` : float, default 100
+                Number of frames combined into one temporal segment.
+            ``intersectdist`` : float, default 20/130
+                Max. distance (camera pixels) between localizations in
+                consecutive segments to be considered as intersecting.
+            ``roiradius`` : float, default 60/130
+                Max. drift (camera pixels) between two consecutive
+                segments.
+        results : dict
+            Module results (see
+            :class:`~picasso_workflow.util.AbstractModuleCollection`).
+        """
+        segmentation = parameters.get("segmentation", 100)
+        intersectdist = parameters.get("intersectdist", 20 / 130)
+        roiradius = parameters.get("roiradius", 60 / 130)
+        # picasso 1.0 takes intersect_d / roi_r in nm by keyword (0.11 took
+        # camera pixels positionally), so convert the px config to nm. The
+        # 20/130, 60/130 defaults become picasso 1.0's 20 nm / 60 nm.
+        pixelsize = self._require_pixelsize_nm()
+        self.locs, new_info, drift = aim.aim(
+            self.locs,
+            self.info,
+            segmentation=segmentation,
+            intersect_d=intersectdist * pixelsize,
+            roi_r=roiradius * pixelsize,
+        )
+        self.info = new_info
+        self.info.append(
+            {"Wrapped by": "picasso-workflow : picasso_undrift_aim"}
+        )
+        self.drift = drift
+        self._picasso_set_save_drift(results, drift, "aimdrift.txt")
+        self._picasso_set_save_locs(results, "locs_aim.hdf5")
+        results["nlocs"] = len(self.locs)
+        return parameters, results
+
+    @module_decorator
+    def picasso_undrift_fiducials(self, i, parameters, results):
+        """Correct drift using fiducials (native CLI: undrift_fiducials).
+
+        Mirrors the CLI composite: RCC pre-undrift with segmentation 2000
+        so fiducials can be detected, then
+        ``picasso.postprocess.undrift_from_fiducials``.
+
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters : dict
+            (none)
+        results : dict
+            Module results (see
+            :class:`~picasso_workflow.util.AbstractModuleCollection`).
+        """
+        segmentation = 2000
+        undrift_info = {
+            "Generated by": (
+                f"Picasso v{picassoversion} Undrift by fiducials"
+            ),
+            "pre-RCC segmentation": segmentation,
+            "Wrapped by": "picasso-workflow : picasso_undrift_fiducials",
+        }
+        # pre-RCC undrift so fiducials can be detected. picasso 1.0 returns
+        # (locs, info, drift); only the undrifted locs are carried forward.
+        self.locs, _pre_info, _pre_drift = postprocess.undrift(
+            self.locs, self.info, segmentation=segmentation, display=False
+        )
+        self.locs, new_info, drift = postprocess.undrift_from_fiducials(
+            self.locs, self.info
+        )
+        undrift_info["Drift X"] = float(drift["x"].mean())
+        undrift_info["Drift Y"] = float(drift["y"].mean())
+        # picasso 1.0 records the fiducial pick by its diameter (was radius).
+        undrift_info["Number of picks"] = new_info[-1]["Number of picks"]
+        undrift_info["Pick diameter (nm)"] = new_info[-1]["Pick diameter (nm)"]
+        self.info.append(undrift_info)
+        self.drift = drift
+        self._picasso_set_save_drift(results, drift, "drift_fiducials.txt")
+        self._picasso_set_save_locs(results, "locs_undrift_fiducials.hdf5")
+        results["nlocs"] = len(self.locs)
+        return parameters, results
+
+    # ------------------------------------------------------------------
+    # linking / kinetics (CLI: link / dark / groupprops)
+    # ------------------------------------------------------------------
+
+    @module_decorator
+    def picasso_link(self, i, parameters, results):
+        """Link localizations in consecutive frames (native CLI: link).
+
+        Wraps ``picasso.postprocess.link``. The CLI's follow-up update of a
+        pre-existing ``_clusters.hdf5`` sibling file is out of scope here.
+
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters : dict
+            Optional keys:
+
+            ``distance`` : float, default 1.0
+                Maximum distance (camera pixels) between localizations to
+                consider them the same binding event.
+            ``tolerance`` : int, default 1
+                Maximum dark time between localizations to still consider
+                them the same binding event.
+        results : dict
+            Module results (see
+            :class:`~picasso_workflow.util.AbstractModuleCollection`).
+        """
+        distance = parameters.get("distance", 1.0)
+        tolerance = parameters.get("tolerance", 1)
+        # picasso 1.0 takes r_max in nm by keyword and returns (locs, info);
+        # the distance config is in camera pixels, so convert to nm.
+        pixelsize = self._require_pixelsize_nm()
+        self.locs, _ = postprocess.link(
+            self.locs,
+            self.info,
+            r_max=distance * pixelsize,
+            max_dark_time=tolerance,
+        )
+        link_info = {
+            "Maximum Distance": distance,
+            "Maximum Transient Dark Time": tolerance,
+            "Generated by": f"Picasso v{picassoversion} Link",
+            "Wrapped by": "picasso-workflow : picasso_link",
+        }
+        self.info.append(link_info)
+        self._picasso_set_save_locs(results, "locs_link.hdf5")
+        results["nlocs"] = len(self.locs)
+        return parameters, results
+
+    @module_decorator
+    def picasso_dark(self, i, parameters, results):
+        """Compute dark times for grouped localizations (native CLI: dark).
+
+        Wraps ``picasso.postprocess.compute_dark_times``.
+
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters : dict
+            (none)
+        results : dict
+            Module results (see
+            :class:`~picasso_workflow.util.AbstractModuleCollection`).
+        """
+        # picasso 1.0 returns (locs, info).
+        self.locs, _ = postprocess.compute_dark_times(self.locs, self.info)
+        d_info = {
+            "Generated by": f"Picasso v{picassoversion} Dark",
+            "Wrapped by": "picasso-workflow : picasso_dark",
+        }
+        self.info.append(d_info)
+        self._picasso_set_save_locs(results, "locs_dark.hdf5")
+        results["nlocs"] = len(self.locs)
+        return parameters, results
+
+    @module_decorator
+    def picasso_groupprops(self, i, parameters, results):
+        """Calculate kinetics/properties of localization groups
+        (native CLI: groupprops).
+
+        Wraps ``picasso.postprocess.groupprops`` and saves locs + groups
+        into one file via ``io.save_datasets``, like the CLI (which appends
+        no info entry).
+
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters : dict
+            (none)
+        results : dict
+            Module results (see
+            :class:`~picasso_workflow.util.AbstractModuleCollection`).
+        """
+        groups = postprocess.groupprops(self.locs)
+        fp = os.path.join(results["folder"], "locs_groupprops.hdf5")
+        io.save_datasets(fp, self.info, locs=self.locs, groups=groups)
+        results["filepath_locs_groupprops"] = fp
+        results["n_groups"] = len(groups)
+        return parameters, results
+
+    # ------------------------------------------------------------------
+    # density / pair correlation (CLI: density / pc)
+    # ------------------------------------------------------------------
+
+    @module_decorator
+    def picasso_density(self, i, parameters, results):
+        """Compute the local localization density (native CLI: density).
+
+        Wraps ``picasso.postprocess.compute_local_density`` exactly like the
+        ``picasso density`` CLI command: annotates every localization with
+        the number of neighbors within ``radius`` and saves the result as
+        ``locs_density.hdf5`` (the CLI's ``_density.hdf5`` output).
+
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters : dict
+            Required keys:
+
+            ``radius`` : float
+                Maximum distance (camera pixels) for localizations to count
+                as local.
+        results : dict
+            Module results (see
+            :class:`~picasso_workflow.util.AbstractModuleCollection`).
+        """
+        radius = float(parameters["radius"])
+        # picasso 1.0 takes the radius in nm by keyword and returns
+        # (locs, info); the config radius is in camera pixels.
+        pixelsize = self._require_pixelsize_nm()
+        self.locs, _ = postprocess.compute_local_density(
+            self.locs, self.info, radius=radius * pixelsize
+        )
+        density_info = {
+            "Generated by": f"Picasso v{picassoversion} Density",
+            "Radius": radius,
+            "Wrapped by": "picasso-workflow : picasso_density",
+        }
+        self.info.append(density_info)
+        self._picasso_set_save_locs(results, "locs_density.hdf5")
+        results["nlocs"] = len(self.locs)
+        return parameters, results
+
+    @module_decorator
+    def picasso_pair_correlation(self, i, parameters, results):
+        """Calculate the pair-correlation of localizations
+        (native CLI: pc).
+
+        Wraps ``picasso.postprocess.pair_correlation``. The CLI shows the
+        curve interactively; here it is saved as a figure plus the raw
+        curve data (headless deviation).
+
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters : dict
+            Optional keys:
+
+            ``binsize`` : float, default 0.1
+                The bin size (camera pixels).
+            ``rmax`` : float, default 10
+                The maximum distance to calculate the pair-correlation.
+        results : dict
+            Module results (see
+            :class:`~picasso_workflow.util.AbstractModuleCollection`).
+        """
+        binsize = parameters.get("binsize", 0.1)
+        rmax = parameters.get("rmax", 10)
+        # picasso 1.0 takes bin_size / r_max in nm by keyword (the config is
+        # in camera pixels) and returns bin centres in nm.
+        pixelsize = self._require_pixelsize_nm()
+        bin_size_nm = binsize * pixelsize
+        bins_lower, pc = postprocess.pair_correlation(
+            self.locs,
+            self.info,
+            bin_size=bin_size_nm,
+            r_max=rmax * pixelsize,
+        )
+        fig, ax = plt.subplots(figsize=(8, 5), constrained_layout=True)
+        ax.plot(bins_lower - bin_size_nm / 2, pc)
+        ax.set_xlabel("r (nm)")
+        ax.set_ylabel("pair-correlation (nm^-2)")
+        ax.set_title(f"Pair-correlation. Bin size: {binsize}, R max: {rmax}")
+        fp_fig = os.path.join(results["folder"], "pair_correlation.png")
+        fig.savefig(fp_fig)
+        results["fp_fig_pair_correlation"] = fp_fig
+        fp_data = os.path.join(results["folder"], "pair_correlation.txt")
+        np.savetxt(
+            fp_data,
+            np.column_stack([bins_lower, pc]),
+            header="bins_lower pair_correlation",
+        )
+        results["filepath_pair_correlation"] = fp_data
+        return parameters, results
+
+    # ------------------------------------------------------------------
+    # clustering (CLI: dbscan / hdbscan / smlm_cluster / nneighbor /
+    # clusterfilter / cluster_combine / cluster_combine_dist)
+    # ------------------------------------------------------------------
+
+    def _cluster_each_channel(self, results, cluster_one):
+        """Apply a per-channel clusterer across the aggregation channels.
+
+        The picasso-set clusterers are both-scope: in the single stage they
+        cluster ``self.locs``; in the aggregation stage ``self.locs`` is
+        ``None`` and each channel in ``self.channel_locs`` is clustered
+        independently (post-alignment per-channel clustering), mirroring the
+        aggregation branch of :meth:`AutoPicasso.smlm_clusterer`.
+
+        Parameters
+        ----------
+        results : dict
+            The module's results dict.
+        cluster_one : callable
+            ``cluster_one(tag, locs, info) -> (new_locs, new_info, stats)``:
+            clusters one channel and returns its replacement localizations,
+            the updated info list, and a dict of per-channel result scalars.
+
+        Returns
+        -------
+        dict
+            ``results``, with ``self.channel_locs`` / ``self.channel_info``
+            replaced by the per-channel outputs and the stats aggregated into
+            ``results["per_channel"]`` plus summed numeric totals.
+        """
+        new_locs, new_info, per_channel = [], [], []
+        for tag, info, locs in zip(
+            self.channel_tags, self.channel_info, self.channel_locs
+        ):
+            out_locs, out_info, stats = cluster_one(tag, locs, info)
+            new_locs.append(out_locs)
+            new_info.append(out_info)
+            per_channel.append({"tag": tag, **stats})
+        self.channel_locs = new_locs
+        self.channel_info = new_info
+        results["per_channel"] = per_channel
+        # Sum the per-channel numeric stats into top-level totals (the stats
+        # keys are the same for every channel, so key off the first).
+        if per_channel:
+            for key, val in per_channel[0].items():
+                if key != "tag" and isinstance(val, (int, float)):
+                    results[key] = sum(c[key] for c in per_channel)
+        return results
+
+    @module_decorator
+    def picasso_dbscan(self, i, parameters, results):
+        """Cluster localizations with DBSCAN (native CLI: dbscan).
+
+        Wraps ``picasso.clusterer.dbscan`` and, like the CLI, also computes
+        and saves the cluster centers
+        (``picasso.clusterer.find_cluster_centers``).
+
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters : dict
+            Required keys:
+
+            ``radius`` : float
+                Maximal distance (camera pixels) between two localizations
+                to be considered local.
+            ``density`` : int
+                Minimum local density for localizations to be assigned to
+                a cluster.
+
+            Optional keys:
+
+            ``pixelsize`` : int
+                Camera pixel size in nm (required for 3D localizations
+                only).
+            ``radius_z`` : float
+                DBSCAN epsilon in z (camera pixels). If set, enables
+                anisotropic 3D clustering.
+        results : dict
+            Module results (see
+            :class:`~picasso_workflow.util.AbstractModuleCollection`).
+        """
+        radius = parameters["radius"]
+        density = parameters["density"]
+        radius_z = parameters.get("radius_z")
+        # picasso 1.0 takes radius / radius_z in nm and drops the pixelsize
+        # argument (0.11 took camera pixels + a pixelsize). The config radii
+        # are in camera pixels, so convert to nm; it returns (locs, info) with
+        # the whole info list.
+        pixelsize = parameters.get("pixelsize") or self._require_pixelsize_nm()
+        radius_z_nm = (radius_z * pixelsize) if radius_z is not None else None
+
+        if (
+            self.locs is None
+        ):  # aggregation: cluster each channel independently
+
+            def _cluster(tag, locs, info):
+                clustered, cinfo = clusterer.dbscan(
+                    locs,
+                    info,
+                    radius=radius * pixelsize,
+                    min_samples=density,
+                    radius_z=radius_z_nm,
+                )
+                step = dict(cinfo[-1])
+                step["Wrapped by"] = "picasso-workflow : picasso_dbscan"
+                centers, _ = clusterer.find_cluster_centers(clustered, info)
+                out_info = info + [step]
+                io.save_locs(
+                    os.path.join(results["folder"], f"{tag}_locs_dbscan.hdf5"),
+                    clustered,
+                    out_info,
+                )
+                fp_centers = os.path.join(
+                    results["folder"], f"{tag}_locs_dbclusters.hdf5"
+                )
+                io.save_locs(fp_centers, centers, out_info)
+                results[f"filepath_locs_dbclusters_{tag}"] = fp_centers
+                return (
+                    clustered,
+                    out_info,
+                    {"nclusters": len(centers), "nlocs": len(clustered)},
+                )
+
+            self._cluster_each_channel(results, _cluster)
+            return parameters, results
+
+        self.locs, _dbscan_info = clusterer.dbscan(
+            self.locs,
+            self.info,
+            radius=radius * pixelsize,
+            min_samples=density,
+            radius_z=radius_z_nm,
+        )
+        dbscan_info = dict(_dbscan_info[-1])
+        clusters, _ = clusterer.find_cluster_centers(self.locs, self.info)
+        dbscan_info["Wrapped by"] = "picasso-workflow : picasso_dbscan"
+        self.info.append(dbscan_info)
+        self._picasso_set_save_locs(results, "locs_dbscan.hdf5")
+        fp_centers = os.path.join(results["folder"], "locs_dbclusters.hdf5")
+        io.save_locs(fp_centers, clusters, self.info)
+        results["filepath_locs_dbclusters"] = fp_centers
+        results["nclusters"] = len(clusters)
+        results["nlocs"] = len(self.locs)
+        return parameters, results
+
+    @module_decorator
+    def picasso_hdbscan(self, i, parameters, results):
+        """Cluster localizations with HDBSCAN (native CLI: hdbscan).
+
+        Wraps ``picasso.clusterer.hdbscan`` and, like the CLI, also saves
+        the cluster centers.
+
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters : dict
+            Required keys:
+
+            ``min_cluster`` : int
+                Smallest size grouping that is considered a cluster.
+            ``min_samples`` : int
+                The higher the more points are considered noise.
+
+            Optional keys:
+
+            ``pixelsize`` : int
+                Camera pixel size in nm (required for 3D localizations
+                only).
+        results : dict
+            Module results (see
+            :class:`~picasso_workflow.util.AbstractModuleCollection`).
+        """
+        min_cluster = parameters["min_cluster"]
+        min_samples = parameters["min_samples"]
+        # min_cluster_size / min_samples are counts (not lengths); picasso 1.0
+        # drops the pixelsize argument and returns (locs, info) as a list.
+        if (
+            self.locs is None
+        ):  # aggregation: cluster each channel independently
+
+            def _cluster(tag, locs, info):
+                clustered, cinfo = clusterer.hdbscan(
+                    locs,
+                    info,
+                    min_cluster_size=min_cluster,
+                    min_samples=min_samples,
+                )
+                step = dict(cinfo[-1])
+                step["Wrapped by"] = "picasso-workflow : picasso_hdbscan"
+                centers, _ = clusterer.find_cluster_centers(clustered, info)
+                out_info = info + [step]
+                io.save_locs(
+                    os.path.join(
+                        results["folder"], f"{tag}_locs_hdbscan.hdf5"
+                    ),
+                    clustered,
+                    out_info,
+                )
+                fp_centers = os.path.join(
+                    results["folder"], f"{tag}_locs_hdbclusters.hdf5"
+                )
+                io.save_locs(fp_centers, centers, out_info)
+                results[f"filepath_locs_hdbclusters_{tag}"] = fp_centers
+                return (
+                    clustered,
+                    out_info,
+                    {"nclusters": len(centers), "nlocs": len(clustered)},
+                )
+
+            self._cluster_each_channel(results, _cluster)
+            return parameters, results
+
+        self.locs, _hdbscan_info = clusterer.hdbscan(
+            self.locs,
+            self.info,
+            min_cluster_size=min_cluster,
+            min_samples=min_samples,
+        )
+        hdbscan_info = dict(_hdbscan_info[-1])
+        clusters, _ = clusterer.find_cluster_centers(self.locs, self.info)
+        hdbscan_info["Wrapped by"] = "picasso-workflow : picasso_hdbscan"
+        self.info.append(hdbscan_info)
+        self._picasso_set_save_locs(results, "locs_hdbscan.hdf5")
+        fp_centers = os.path.join(results["folder"], "locs_hdbclusters.hdf5")
+        io.save_locs(fp_centers, clusters, self.info)
+        results["filepath_locs_hdbclusters"] = fp_centers
+        results["nclusters"] = len(clusters)
+        results["nlocs"] = len(self.locs)
+        return parameters, results
+
+    @module_decorator
+    def picasso_smlm_cluster(self, i, parameters, results):
+        """Cluster localizations with the SMLM clusterer
+        (native CLI: smlm_cluster).
+
+        Wraps ``picasso.clusterer.cluster`` and, like the CLI, also saves
+        the cluster centers.
+
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters : dict
+            Required keys:
+
+            ``radius`` : float
+                Clustering radius (camera pixels).
+            ``min_locs`` : int
+                Minimum number of localizations in a cluster.
+
+            Optional keys:
+
+            ``pixelsize`` : int
+                Camera pixel size in nm (required for 3D localizations
+                only).
+            ``basic_fa`` : bool, default False
+                Whether to perform basic frame analysis (sticking event
+                removal).
+            ``radius_z`` : float
+                Clustering radius in axial direction (must be set for 3D).
+        results : dict
+            Module results (see
+            :class:`~picasso_workflow.util.AbstractModuleCollection`).
+        """
+        radius = parameters["radius"]
+        min_locs = parameters["min_locs"]
+        basic_fa = parameters.get("basic_fa", False)
+        radius_z = parameters.get("radius_z")
+        # picasso 1.0 takes radius_xy / radius_z in nm and drops the pixelsize
+        # argument (the config radii are in camera pixels); it returns
+        # (locs, info) with the whole info list.
+        pixelsize = parameters.get("pixelsize") or self._require_pixelsize_nm()
+        self.locs, _smlm_cluster_info = clusterer.cluster(
+            self.locs,
+            self.info,
+            radius_xy=radius * pixelsize,
+            radius_z=(radius_z * pixelsize) if radius_z is not None else None,
+            min_locs=min_locs,
+            frame_analysis=basic_fa,
+        )
+        smlm_cluster_info = dict(_smlm_cluster_info[-1])
+        clusters, _ = clusterer.find_cluster_centers(self.locs, self.info)
+        smlm_cluster_info["Wrapped by"] = (
+            "picasso-workflow : picasso_smlm_cluster"
+        )
+        self.info.append(smlm_cluster_info)
+        self._picasso_set_save_locs(results, "locs_clusters.hdf5")
+        fp_centers = os.path.join(
+            results["folder"], "locs_cluster_centers.hdf5"
+        )
+        io.save_locs(fp_centers, clusters, self.info)
+        results["filepath_locs_cluster_centers"] = fp_centers
+        results["nclusters"] = len(clusters)
+        results["nlocs"] = len(self.locs)
+        return parameters, results
+
+    @module_decorator
+    def picasso_nneighbor(self, i, parameters, results):
+        """Calculate nearest-neighbor distances of a clustered dataset
+        (native CLI: nneighbor).
+
+        Mirrors the CLI: loads a cluster file, computes each cluster
+        center's distance to its nearest neighbor via a KD-tree and saves
+        them as a text file (the CLI's ``_minval.txt``). The CLI reads the
+        old-style ``clusters`` table (``com_x``/``com_y``); as a workflow
+        convenience this module falls back to a cluster-centers locs file
+        (``x``/``y``) such as the ones the picasso-set clusterers save.
+
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters : dict
+            Required keys:
+
+            ``files`` : str
+                Path to the hdf5 cluster file (e.g. the
+                ``filepath_locs_cluster_centers`` result of a picasso-set
+                clusterer, via ``$get_prior_result``).
+        results : dict
+            Module results (see
+            :class:`~picasso_workflow.util.AbstractModuleCollection`).
+        """
+        from scipy.spatial import KDTree
+
+        path = parameters["files"]
+        try:
+            clusters = pd.read_hdf(path, key="clusters")
+            points = clusters[["com_x", "com_y"]].to_numpy()
+        except (KeyError, ValueError):
+            centers, _ = io.load_locs(path)
+            points = centers[["x", "y"]].to_numpy()
+        tree = KDTree(points)
+        minvals, _ = tree.query(points, k=2)
+        minvals = minvals[:, 1]
+        base = os.path.splitext(os.path.basename(path))[0]
+        fp = os.path.join(results["folder"], base + "_minval.txt")
+        np.savetxt(fp, minvals, newline="\r\n")
+        results["filepath_minval"] = fp
+        results["n_points"] = len(points)
+        results["nn_mean"] = float(np.mean(minvals))
+        return parameters, results
+
+    @module_decorator
+    def picasso_clusterfilter(self, i, parameters, results):
+        """Filter localizations by properties of their clusters
+        (native CLI: clusterfilter).
+
+        Mirrors the CLI: splits the current localizations into in-range
+        and out-of-range sets by a cluster-property window and saves both
+        (the CLI's ``_filter_in.hdf5`` / ``_filter_out.hdf5``). The
+        workflow continues with the in-range localizations.
+
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters : dict
+            Required keys:
+
+            ``clusterfile`` : str
+                Path to the hdf5 clusterfile.
+            ``parameter`` : str
+                Cluster parameter to be filtered.
+            ``minval`` : float
+                Lower boundary.
+            ``maxval`` : float
+                Upper boundary.
+        results : dict
+            Module results (see
+            :class:`~picasso_workflow.util.AbstractModuleCollection`).
+        """
+        clusterfile = parameters["clusterfile"]
+        parameter = parameters["parameter"]
+        minval = parameters["minval"]
+        maxval = parameters["maxval"]
+
+        # picasso 1.0 removed io.load_clusters: cluster centers are plain
+        # localization files now, so load them with io.load_locs and key on the
+        # "group" column (0.11's cluster table used a "groups" field).
+        clusters, _ = io.load_locs(clusterfile)
+        selector = (clusters[parameter] > minval) & (
+            clusters[parameter] < maxval
+        )
+        n_in = int(np.sum(selector))
+        if n_in == 0 or n_in == len(selector):
+            results["success"] = False
+            results["message"] = (
+                "No localizations in range. Filtering aborted."
+                if n_in == 0
+                else "All localizations in range. Filtering aborted."
+            )
+            return parameters, results
+
+        base_info = {
+            "Parameter": parameter,
+            "Minval": minval,
+            "Maxval": maxval,
+            "Wrapped by": "picasso-workflow : picasso_clusterfilter",
+        }
+        all_locs = self.locs
+        for tag, sel in (("in", selector), ("out", ~selector)):
+            groups = clusters["group"].to_numpy()[sel.to_numpy()]
+            part = all_locs[all_locs["group"].isin(groups)].sort_values(
+                kind="quicksort", by="frame"
+            )
+            part_info = dict(base_info)
+            part_info["Generated by"] = (
+                f"Picasso v{picassoversion} Clusterfilter - {tag}"
+            )
+            fp = os.path.join(results["folder"], f"locs_filter_{tag}.hdf5")
+            io.save_locs(fp, part, self.info + [part_info])
+            results[f"filepath_locs_filter_{tag}"] = fp
+            results[f"nlocs_{tag}"] = len(part)
+            if tag == "in":
+                in_locs, in_info = part, part_info
+        self.locs = in_locs
+        self.info.append(in_info)
+        return parameters, results
+
+    # picasso_cluster_combine / picasso_cluster_combine_dist were removed:
+    # picasso 1.0 dropped postprocess.cluster_combine / cluster_combine_dist
+    # (and the CLI commands), so there is no upstream to wrap. Their ModuleSpecs
+    # and params/summaries were removed too (see modulespec.py / params.py).
+
+    # ------------------------------------------------------------------
+    # molecular mapping (CLI: g5m)
+    # ------------------------------------------------------------------
+
+    @module_decorator
+    def picasso_g5m(self, i, parameters, results):
+        """Gaussian Mixture Modeling with Modifications for Molecular
+        Mapping (native CLI: g5m).
+
+        Wraps ``picasso.g5m.g5m`` on the current (clustered)
+        localizations; the resulting molecule map becomes the workflow's
+        current dataset and is saved (the CLI's ``_molmap.hdf5``).
+
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters : dict
+            Optional keys (CLI defaults):
+
+            ``min_locs`` : int, default 10
+                Min. number of locs per molecule.
+            ``loc_prec_handle`` : str, default "local"
+                Localization precision handle, "local" or "abs".
+            ``min_sigma`` : float, default 0.8
+                Minimum sigma factor/value.
+            ``max_sigma`` : float, default 1.5
+                Maximum sigma factor/value.
+            ``max_rounds`` : int, default 3
+                Max. rounds without BIC improvement to terminate.
+            ``bootstrap_sem`` : bool, default False
+                Bootstrap to estimate SEM of molecule positions.
+            ``calibration`` : str
+                Astigmatism calibration file; used and required only for
+                astigmatism 3D data.
+            ``mode`` : str, default "astigmatism"
+                3D fitting mode of the input locs: "astigmatism" or
+                "spline"; ignored for 2D data.
+            ``covariance_type`` : str, default "auto"
+                One of auto, spherical, diagonal, rotated.
+            ``postprocess`` : bool, default True
+                Postprocess results to remove sticking events and
+                low-quality fits.
+            ``max_locs`` : int, default 100000
+                Maximum number of localizations per cluster.
+            ``asynch`` : bool, default True
+                Fit asynchronously (multiprocessing).
+            ``group_column`` : str, default "group"
+                Column used to group localizations into clusters
+                ("group" or "group_input").
+        results : dict
+            Module results (see
+            :class:`~picasso_workflow.util.AbstractModuleCollection`).
+        """
+        import yaml
+
+        min_locs = parameters.get("min_locs", 10)
+        loc_prec_handle = parameters.get("loc_prec_handle", "local")
+        min_sigma = parameters.get("min_sigma", 0.8)
+        max_sigma = parameters.get("max_sigma", 1.5)
+        max_rounds = parameters.get("max_rounds", 3)
+        bootstrap_sem = parameters.get("bootstrap_sem", False)
+        calibration = parameters.get("calibration", "")
+        mode = parameters.get("mode", "astigmatism")
+        covariance_type = parameters.get("covariance_type", "auto")
+        postprocess_results = parameters.get("postprocess", True)
+        max_locs = parameters.get("max_locs", 100000)
+        asynch = parameters.get("asynch", True)
+        group_column = parameters.get("group_column", "group")
+
+        def _run_g5m(locs, info, calibration_dict):
+            return g5m.g5m(
+                locs,
+                info,
+                min_locs=min_locs,
+                loc_prec_handle=loc_prec_handle,
+                sigma_bounds=(min_sigma, max_sigma),
+                max_rounds_without_best_bic=max_rounds,
+                bootstrap_check=bootstrap_sem,
+                calibration=calibration_dict,
+                mode=mode,
+                covariance_type=covariance_type,
+                postprocess=postprocess_results,
+                max_locs_per_cluster=max_locs,
+                parallel=asynch,
+                group_column=group_column,
+            )
+
+        # The calibration file is the same for every channel; parse it at
+        # most once (per-channel re-reads are wasteful on networked storage).
+        _calib_cache = {}
+
+        def _load_calib(locs, tag=None):
+            # astigmatism 3D data needs a calibration; spline 3D data
+            # recovers z directly and needs none (mirrors the CLI).
+            if "z" in locs.columns and mode == "astigmatism":
+                if calibration == "":
+                    where = f" (channel {tag})" if tag is not None else ""
+                    raise ValueError(
+                        "A calibration file ('calibration') is required for "
+                        f"astigmatism 3D data{where}."
+                    )
+                if "calib" not in _calib_cache:
+                    with open(calibration, "r") as f:
+                        _calib_cache["calib"] = yaml.full_load(f)
+                return _calib_cache["calib"]
+            return None
+
+        if self.locs is None:  # aggregation: map each channel independently
+
+            def _cluster(tag, locs, info):
+                mols, g5m_info, _ = _run_g5m(
+                    locs, info, _load_calib(locs, tag)
+                )
+                if mols is None or len(mols) == 0:
+                    raise ValueError(
+                        "picasso_g5m: no molecules passed the filters for "
+                        f"channel {tag}; check the input clustering and "
+                        "'min_locs'."
+                    )
+                g5m_info[-1]["Wrapped by"] = "picasso-workflow : picasso_g5m"
+                fp_molmap = os.path.join(
+                    results["folder"], f"{tag}_locs_molmap.hdf5"
+                )
+                io.save_locs(fp_molmap, mols, g5m_info)
+                results[f"filepath_locs_molmap_{tag}"] = fp_molmap
+                return mols, g5m_info, {"n_molecules": len(mols)}
+
+            self._cluster_each_channel(results, _cluster)
+            return parameters, results
+
+        # picasso 1.0 returns (centers, info, clustered_locs) -- info and the
+        # clustered locs swapped relative to 0.11 -- and renamed asynch ->
+        # parallel.
+        mols, g5m_info, _ = _run_g5m(
+            self.locs, self.info, _load_calib(self.locs)
+        )
+        # picasso 1.0 g5m returns (None, info, None) when no molecules pass its
+        # filters; fail with an actionable message rather than len(None).
+        if mols is None or len(mols) == 0:
+            results["success"] = False
+            results["message"] = (
+                "Gaussian mixture mapping found no molecules passing its "
+                "filters; check the input clustering and 'min_locs'."
+            )
+            return parameters, results
+        g5m_info[-1]["Wrapped by"] = "picasso-workflow : picasso_g5m"
+        self.locs = mols
+        self.info = g5m_info
+        self._picasso_set_save_locs(results, "locs_molmap.hdf5")
+        results["n_molecules"] = len(mols)
+        return parameters, results
+
+    # ------------------------------------------------------------------
+    # rendering (CLI: render)
+    # ------------------------------------------------------------------
+
+    @module_decorator
+    def picasso_render(self, i, parameters, results):
+        """Render a localization-based image (native CLI: render).
+
+        Wraps ``picasso.render.render`` and saves the image as PNG with
+        the CLI's colormap scaling. The CLI's colormap default comes from
+        the user settings; here it defaults to ``viridis``.
+
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters : dict
+            Optional keys:
+
+            ``disp_px_size`` : float, default 10.0
+                The size of the rendered pixel in nm.
+            ``blur_method`` : str, default "convolve"
+                One of "none", "convolve", "gaussian".
+            ``min_blur_width`` : float, default 0.0
+                Minimum blur width if blur is applied.
+            ``vmin`` : float, default 0.0
+                Minimum colormap level in range 0-100 or absolute value.
+            ``vmax`` : float, default 20.0
+                Maximum colormap level in range 0-100 or absolute value.
+            ``scaling`` : str, default "yes"
+                If "yes", vmin/vmax are relative in the range 0-100.
+            ``cmap`` : str, default "viridis"
+                One of viridis, inferno, plasma, magma, hot, gray.
+        results : dict
+            Module results (see
+            :class:`~picasso_workflow.util.AbstractModuleCollection`).
+        """
+        disp_px_size = parameters.get("disp_px_size", 10.0)
+        blur_method = parameters.get("blur_method", "convolve")
+        min_blur_width = parameters.get("min_blur_width", 0.0)
+        vmin = parameters.get("vmin", 0.0)
+        vmax = parameters.get("vmax", 20.0)
+        scaling = parameters.get("scaling", "yes")
+        cmap = parameters.get("cmap") or "viridis"
+
+        if blur_method == "none":
+            blur_method = None
+        # picasso 1.0 takes min_blur_width in nm (0.11 took camera pixels);
+        # disp_px_size was already nm.
+        pixelsize = self._require_pixelsize_nm()
+        n_rendered, image = render.render(
+            self.locs,
+            self.info,
+            disp_px_size=disp_px_size,
+            blur_method=blur_method,
+            min_blur_width=min_blur_width * pixelsize,
+        )
+        fp = os.path.join(results["folder"], "render.png")
+        im_max = image.max() / 100
+        if scaling == "yes":
+            plt.imsave(
+                fp, image, vmin=vmin * im_max, vmax=vmax * im_max, cmap=cmap
+            )
+        else:
+            plt.imsave(fp, image, vmin=vmin, vmax=vmax, cmap=cmap)
+        results["fp_fig_render"] = fp
+        results["n_rendered"] = int(n_rendered)
+        return parameters, results
+
+    # ------------------------------------------------------------------
+    # multi-file operations (CLI: align / join)
+    # ------------------------------------------------------------------
+
+    @module_decorator
+    def picasso_align(self, i, parameters, results):
+        """Align localization files to each other (native CLI: align).
+
+        Wraps ``picasso.postprocess.align`` (RCC-based). Operates on
+        explicit files (like the CLI), not the in-memory localizations;
+        the aligned copies are saved into the module folder (the CLI's
+        ``_align.hdf5`` suffix).
+
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters : dict
+            Required keys:
+
+            ``files`` : list of str
+                The hdf5 localization files to align.
+        results : dict
+            Module results (see
+            :class:`~picasso_workflow.util.AbstractModuleCollection`).
+        """
+        files = list(parameters["files"])
+        locs_infos = [io.load_locs(fp) for fp in files]
+        locs = [li[0] for li in locs_infos]
+        infos = [li[1] for li in locs_infos]
+        # picasso 1.0 align returns (locs, infos) rather than just the locs.
+        aligned_locs, _aligned_infos = postprocess.align(
+            locs, infos, display=False
+        )
+        align_info = {
+            "Generated by": f"Picasso v{picassoversion} Align",
+            "Files": files,
+            "Wrapped by": "picasso-workflow : picasso_align",
+        }
+        filepaths = []
+        for file, locs_, info in zip(files, aligned_locs, infos):
+            info.append(align_info)
+            base = os.path.splitext(os.path.basename(file))[0]
+            fp = os.path.join(results["folder"], base + "_align.hdf5")
+            io.save_locs(fp, locs_, info)
+            filepaths.append(fp)
+        results["filepaths_aligned"] = filepaths
+        return parameters, results
+
+    @module_decorator
+    def picasso_join(self, i, parameters, results):
+        """Join hdf5 localization lists (native CLI: join).
+
+        Wraps ``picasso.lib.merge_locs``; frame numbers of consecutive
+        files are reindexed unless ``keepindex`` is set. The joined
+        localizations become the workflow's current dataset.
+
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters : dict
+            Required keys:
+
+            ``files`` : list of str
+                The hdf5 localization files to be joined.
+
+            Optional keys:
+
+            ``keepindex`` : bool, default False
+                Do not change frame numbers.
+        results : dict
+            Module results (see
+            :class:`~picasso_workflow.util.AbstractModuleCollection`).
+        """
+        files = list(parameters["files"])
+        keepindex = parameters.get("keepindex", False)
+        locs_infos = [io.load_locs(file) for file in files]
+        all_locs = lib.merge_locs(
+            [li[0] for li in locs_infos],
+            increment_frames=(not keepindex),
+            increment_groups=False,
+        )
+        join_info = {
+            "Generated by": f"Picasso v{picassoversion} Join",
+            "Files": files,
+            "Wrapped by": "picasso-workflow : picasso_join",
+        }
+        info = locs_infos[0][1]
+        info.append(join_info)
+        if not keepindex:
+            info[0]["Frames"] = int(all_locs["frame"].max()) + 1
+        self.locs = all_locs
+        self.info = info
+        self._picasso_set_save_locs(results, "locs_join.hdf5")
+        results["nlocs"] = len(self.locs)
+        return parameters, results

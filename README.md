@@ -36,6 +36,117 @@ via picassosr.
 	- Aggregation workflow: multiple datasets undergo a single-dataset
 	workflow and are then aggregated.
 
+## The picasso-set modules
+
+Besides the classic picasso-workflow modules, there is a second module set
+that recapitulates **native picasso 1:1**: every `picasso_*` module mirrors
+one picasso CLI command (or Render-GUI/library operation where no CLI
+exists) with the **exact picasso parameter names and defaults**, so anyone
+who knows `picasso localize ...` can build the same pipeline as a workflow
+with zero learning curve. The set covers four tiers:
+
+- **Core pipeline** — `picasso_localize` (all CLI fit methods incl.
+  spline/GPU/3D and the calibration files), `picasso_undrift_rcc` /
+  `picasso_undrift_aim` / `picasso_undrift_fiducials`, `picasso_link`,
+  `picasso_dark`, `picasso_groupprops`, `picasso_density`,
+  `picasso_pair_correlation`, `picasso_dbscan` / `picasso_hdbscan` /
+  `picasso_smlm_cluster`, `picasso_nneighbor`, `picasso_clusterfilter`,
+  `picasso_cluster_combine`(`_dist`), `picasso_g5m`, `picasso_render`,
+  `picasso_align`, `picasso_join`.
+- **Pick-based postprocessing** — `picasso_picked_locs`,
+  `picasso_pick_similar`, `picasso_remove_locs_in_picks`,
+  `picasso_pick_properties`, `picasso_pick_kinetics`, `picasso_fret`,
+  `picasso_mask_locs`, `picasso_nena`, `picasso_frc`. Picks travel as
+  pick-region `.yaml` file paths (`picks_file` parameter, the
+  `io.load_picks` format), so they can come from GUI-exported files or
+  from `picasso_pick_similar` via `$get_prior_result`.
+- **Calibration & 3D** — `picasso_zfit`, `picasso_calibrate_z`,
+  `picasso_camera_calibrate` / `picasso_camera_validate`,
+  `picasso_spline_calibrate`, `picasso_lateral_calibrate`; their
+  calibration files feed `picasso_localize` / `picasso_zfit` via result
+  references.
+- **Format converters** — `picasso_csv2hdf`, `picasso_smap2hdf` (load the
+  imported file as the current dataset) and `picasso_hdf2csv`/`ts`/
+  `imagej`/`nis`/`chimera`/`visp`/`smap` (export the current locs, or an
+  explicit file, with the CLI-identical output suffixes).
+
+Documented deviations from the CLI are called out per module docstring; the
+notable ones: `picasso_localize` defaults `drift=0` (the CLI's default 1000
+would also undrift — the workflow has dedicated undrift modules) and its
+camera parameters default to "from the loaded movie metadata / camera
+config" instead of the CLI literals; interactive displays become saved
+figures in the module's result folder.
+
+In the GUI, a checkbox in the *Current Module* box toggles the palette
+between the classic modules and the picasso-set (shown together with the
+data loaders); both sets mix freely in one workflow — module names are
+globally unique. Reporting (Confluence/HTML) is automatic via a generic
+spec-driven reporter; the predefined recipe
+`standard_singledataset_workflows.picasso_native()` shows a minimal
+native-picasso pipeline. The implementation lives in
+`picasso_workflow/picasso_set/` with its GUI parameter schemas in
+`picasso_set/params.py` and registry entries (`module_set="picasso"`) in
+`modulespec.py`.
+
+## Picasso plugins
+
+Recent picasso versions (≥ 0.11) ship a **plugin system**: single `.py` files
+in `~/.picasso/plugins/`, enabled opt-in, that extend picasso through three
+entry points — a **GUI** action (`class Plugin`), a **CLI** subcommand
+(`register_cli`), and a **Python API** (`PICASSO_API = {"name": callable}`),
+all documented in picasso's `plugin_template.py`.
+
+The generic `plugin` workflow module bridges to **the Python-API entry point
+only** — it calls a name exported in some enabled plugin's `PICASSO_API`
+mapping via `picasso.plugins.load_api_plugins()`. The GUI and CLI entry points
+are not usable from a headless workflow (the GUI needs an interactive Qt window;
+the CLI adds `picasso` subcommands), so this module cannot call them.
+
+> **Compatibility note.** This targets plugins that expose a `PICASSO_API`
+> export — e.g. plugins you (or your lab) write for scripting, following
+> picasso's `plugin_template.py`. The plugins currently published in the
+> official registry ([`jungmannlab/picasso_plugins`](https://github.com/jungmannlab/picasso_plugins))
+> are **GUI plugins** (`class Plugin`, organized under the `render/`,
+> `average/`, … app folders); they do **not** define `PICASSO_API`, so this
+> module cannot run them as-is. To make a GUI plugin workflow-usable, its author
+> would add a `PICASSO_API` export (a thin callable wrapping the plugin's
+> non-interactive logic).
+
+It is a single-dataset module and only sees plugins already enabled in picasso
+(it never enables one itself — enable it once via the picasso GUI plugin store or
+by editing `~/.picasso/plugins/.installed.json`).
+
+A step looks like:
+
+```python
+("plugin", {
+    "api_name": "my_export",      # key in some plugin's PICASSO_API
+    "kwargs": {"threshold": 5},   # passed verbatim to the callable
+    "inject": ["locs", "info"],   # opt-in: pass self.locs / self.info / self.movie
+})
+```
+
+Calling convention:
+
+- `api_name` (required) — the `PICASSO_API` export to call. If it is not among
+  the enabled plugins' exports, the module fails with the list of available
+  names.
+- `kwargs` (optional) — keyword arguments forwarded verbatim.
+- `inject` (optional, default none) — which current workflow state to pass as
+  extra keyword arguments (`locs`, `info`, `movie`). Opt-in so a callable that
+  does not accept those keywords is not forced to.
+
+Return handling: a plain `PICASSO_API` callable just returns a value (picasso's
+template example returns a number), which is recorded under `plugin_result` — so
+any such plugin runs, it simply does not feed the pipeline. To additionally
+update the pipeline, a callable can follow this module's **convention** and
+return a `dict`: the reserved keys `locs` / `info` update the pipeline state,
+`report` and `files` are documented in the report, and any remaining keys are
+recorded as the plugin result. This dict convention is specific to
+picasso-workflow, not part of picasso's plugin contract; rich, plugin-specific
+reporting is the plugin author's responsibility via the `report` key, otherwise
+the module documents the call and a best-effort summary of the return.
+
 ## Per-channel parameters
 
 In an aggregation (or investigation) workflow, every channel is analyzed by
@@ -98,6 +209,126 @@ is saved into the generated `start_workflow.py` and restored when that script
 is reloaded into the GUI, so a workflow round-trips exactly. Per-channel values
 are keyed by channel name: renaming a channel in the GUI carries its values
 across, while a channel whose name no longer matches falls back to the default.
+
+### Running a module only on some channels
+
+Sometimes a module should run on *some* channels and not others — e.g. cluster
+only the RESI channels that have single-molecule resolution, while the
+diffraction-limited channels skip clustering but still share the same
+aggregation (alignment) workflow.
+
+Declare a per-channel **boolean** column (one `True`/`False` per channel) and
+add the reserved `#run_on_channels` key to the module, naming that column:
+
+```python
+workflow_modules_multi = {
+	"single_dataset_tileparameters": {
+		"#tags":    ["RESI_1", "RESI_2", "DL_1"],
+		"filepath": [fp0, fp1, fp2],
+		"is_resi":  [True,   True,    False],   # per-channel boolean column
+	},
+	"single_dataset_modules": [
+		# ... load / localize / undrift ...
+		("smlm_clusterer", {"radius": 4, "#run_on_channels": "is_resi"}),
+	],
+	"aggregation_modules": [ ... ],   # runs on every channel as usual
+}
+```
+
+At run time the module is compiled into a `conditional_branch` whose condition
+reads `is_resi` per channel (`("$$map", "is_resi", False) == True`): channels
+where the column is truthy run the module (`if_true`), the rest take an empty
+`if_false` — a clean no-op. `#run_on_channels` is a definition-level directive
+only; it never reaches the module itself.
+
+**In the GUI**, select a single-dataset module in an aggregation/investigation
+workflow and tick **"Run only on channels where column:"**, then pick (or
+auto-create) the boolean column; set which channels are `True` under
+**Per-Channel Params…**.
+
+**Use it for transform modules and mind these limits:**
+
+- The column must hold real booleans (`True`/`False`, or `0`/`1`) — a column
+  that is absent or holds strings like `"true"` resolves to the `False`
+  default, silently skipping the module on every channel (the runner logs a
+  warning for an undeclared column).
+- Best suited to modules that transform the shared state (`self.locs`) —
+  clustering, filtering — so a later `save_single_dataset` simply saves
+  whatever state the channel ended in and the aggregation loads that. **Do not
+  restrict a module whose per-dataset *result* is referenced by name/index
+  elsewhere** (via `$get_prior_result` / `$get_previous_module_result`, or from
+  an aggregation module): wrapping moves its result under the
+  `conditional_branch` key, so such a reference would no longer find it.
+- A restricted module does not expose a resume checkpoint of its own, so a
+  resumed run may re-run from an earlier point on the channels it ran.
+- Any later single-dataset module and the aggregation modules must tolerate the
+  channels that skipped this one (e.g. do not assume every channel was
+  clustered).
+
+## Manual → Workflow wizard
+
+If an analysis was performed by hand in the picasso GUI, the *Tools → Manual →
+Workflow…* wizard reconstructs the equivalent automated workflow so it can be
+re-run and documented. Browse straight to the **manual-analysis folder** — the
+one holding the saved `.hdf5` step files (e.g. `analysis_manual`). That folder
+alone determines the module list and parameters.
+
+How it works:
+
+- **Reads the cumulative info yamls.** Every manual picasso step appends a dict
+  to the `.yaml` info sidecar and a suffix to the filename, so the deepest file
+  of each channel's chain records the whole ordered history. The info list is
+  the authoritative source; filename suffixes corroborate it.
+- **Locates the raw movies for re-localization.** The reconstructed workflow
+  re-runs from the raw `.ome.tif` movies, which live in the dataset root's
+  acquisition subfolders (`01_…`, `02_…`) — possibly several levels *above* the
+  manual folder. The wizard auto-detects that root by walking upward and
+  resolving the movies via the MicroManager naming convention (a direct lookup,
+  not a recursive tree walk); the detected **raw-data folder** is shown and
+  editable, and if none is found the workflow falls back to loading the manual
+  localization files (flagged in the review).
+- **Maps steps to modules** with a data-driven table keyed on the exact picasso
+  info `"Generated by"` strings (verified against the installed picassosr). The
+  single-stage localize/undrift/zfit/pick steps map to the **`picasso_*`
+  picasso-set** modules (1:1 recapitulations of native picasso, for maximal
+  fidelity to the manual GUI operations); clustering/density/link/filter map to
+  the native both-scope modules, which are themselves 1:1 picasso wrappers and
+  so remain valid in the aggregation stage. Anything it can't confidently map
+  becomes a flagged `manual` placeholder — nothing is silently dropped.
+- **Splits single vs. aggregation** at the first cross-channel step
+  (`align_channels` / `combine_channels` / `register_channels`): everything
+  before runs per channel as single-dataset modules; that step and everything
+  after run in the aggregation stage.
+- **Recovers per-channel parameters.** Parameters that differ across channels
+  are lifted to `("$$map", …)` tile columns (see *Per-channel parameters*
+  above). `find_similar` (pick-similar) thresholds that picasso does not save
+  are retro-calculated from the saved picks and localizations.
+- **Checks and reviews.** The reconstruction is validated with
+  `validate_workflow`, and an **editable** review table shows each step as a row:
+  *stage · source · file · confidence · module · parameters · notes*. The
+  **file** column names the manual `.hdf5` the step first appears in (to map
+  back to what you did by hand); the **module** cell is a dropdown you can change;
+  **right-click a row to remove** a step; and a **channel selector** shows that
+  channel's resolved parameters. Edits re-validate live, and *Apply* enables once
+  nothing is unresolved. *Apply* writes the Files tree and module lists into the
+  GUI; review them in the Workflow Config tab and launch from the Run tab.
+
+**Start mode.** Manual analyses begin from a localized file (picasso Localize is
+a separate GUI), so the wizard **starts downstream from the localized files** by
+default — loading each channel's manual file directly and running only the steps
+applied after it. Tick *Also re-localize from the raw movies* to prepend the
+load-movie + localize steps (parameters recovered from the hdf5 info); that mode
+needs the raw data. Non-pipeline steps (picasso's *Convert units*, *Render :
+NeNA*) are skipped, and picasso's *Combine* maps to `combine_channels`.
+
+**Progress & abort.** Reconstruction runs off the UI thread with a progress bar,
+a per-channel status line and a rough ETA; the slow part is loading each
+channel's localization file for the pick retro-calculation. A **Stop** button
+(and the wizard's Cancel) aborts the scan between channels.
+
+The reconstruction engine (`picasso_workflow/manual_to_workflow.py`) is Qt-free
+and importable on its own; the wizard (`wizard_manual_to_workflow.py`) is the
+PyQt6 front-end.
 
 ## Installation
 
@@ -186,10 +417,220 @@ defaults (no `module load`, no path exports) when it is absent — but GPU fitti
 needs the `Modules` entry, so define it for any host you run GPU fits on. See
 the bundled `picasso_workflow/config.yaml` for a worked `hpcl8XXX` example.
 
+### Apptainer image (GUI ↔ cluster version match)
+
+The Run tab's **Start Workflow on Cluster** path runs the workflow **inside an
+Apptainer image** on a shared mount, so the cluster runs the *same*
+picasso-workflow version you are driving the GUI with — not whatever host conda
+env happens to be loaded. The generated `run_workflow_slurm.sh` therefore
+`module load`s Apptainer and `apptainer exec`s the image instead of calling the
+host `python`. Configure the shared folder in `config.yaml`:
+
+```yaml
+ClusterApptainer:
+  image_dir: "/sw/picasso-workflow"   # shared mount holding the .sif images
+  module: "apptainer/1.4.1"           # apptainer env module to `module load`
+  bind_paths:                         # host roots bound into the container
+    - "/scratch/paint"
+```
+
+The Run tab's **Apptainer image** dropdown defaults to
+`picasso-workflow-<this GUI's version>.sif` and the **List** button fills it with
+the `.sif` files actually present in `image_dir` (listed over the existing SSH
+connection). The field is editable, so an unlisted image or an absolute path can
+be typed by hand. The images are the CI build from `deploy/apptainer/paint.def`,
+named by version (`.github/workflows/build-apptainer.yml`).
+
+For heterogeneous node groups (e.g. different mounts or Apptainer versions per
+cluster), add a per-cluster sub-dict keyed as in `SlurmLoginNodes`; the keys you
+set there override the globals for that host, the rest fall back.
+
+Two things to know:
+
+- **Bind mounts.** The container only sees the host paths listed in
+  `bind_paths`, so include every root the job reads (the scratch/data root,
+  template dirs). A path that is not bound in is invisible to the run. The run's
+  **results folder is bound automatically** (it holds the generated script, is
+  the job's CWD, and receives outputs), so it need not be listed.
+- **Version auto-match caveat.** The default filename can only be formed from a
+  released/tagged GUI version. A development install (where `__version__` is
+  `"unknown"` or a setuptools-scm dev string) leaves the default blank — pick the
+  image from the dropdown in that case. GPU runs add `apptainer exec --nv`
+  automatically when GPUs are requested, exposing the host NVIDIA driver (the
+  CUDA toolkit lives in the image, so the `ClusterEnvironment.<host>.Modules`
+  CUDA entry is not loaded in container mode).
+
+### Cluster admin console
+
+A separate admin GUI inspects the cluster without hand-rolled SSH — the
+shared-mount Apptainer image inventory (filename, baked version, size, mtime,
+and which image matches this GUI's version), the SLURM queue + recent jobs, and
+image-folder disk usage. It is **cluster-admin tooling, so the main GUI hides it
+by default** — launch it standalone, or enable the menu entry (below):
+
+```bash
+picasso-workflow-admin-gui          # PyQt6 window (needs the [gui] extra)
+picasso-workflow-admin-cli --host clusterXXX images   # headless equivalent
+picasso-workflow-admin-cli --host clusterXXX jobs
+```
+
+To also expose it from the main GUI's **Tools → Admin console…** menu, opt in
+via `config.yaml`:
+
+```yaml
+AdminConsole:
+  enabled: true     # default false -> the Tools menu is hidden
+```
+
+The console reads the connection + image settings from `config.yaml`
+(`SlurmLoginNodes`, `ClusterApptainer`) and authenticates with the same SSH key
+discovery as the Run tab, so no extra configuration is needed. (The standalone
+command works regardless of the `AdminConsole.enabled` flag.)
+
+The console's **Test runs** tab submits the tiered cluster test chain (tiers 1-3
+→ tier 4 → per-template workflows → summary) **inside an Apptainer image** —
+`pytest --pyargs picasso_workflow` from the image, with no cloned repo or conda
+env on the login node. Point `ClusterApptainer.test_results_dir` at a cluster
+scratch directory for the per-run artefacts, set the *Test data dir*
+(`PW_TEST_DATA_DIR`) for tier 4 / template runs, and read `SUMMARY.txt` back
+with *Fetch SUMMARY* when the summary job finishes. This needs a **test image
+that carries pytest** — `picasso-workflow-test-<version>.sif` (built with the
+`[dev]` extra); the tab defaults to it.
+
 ## Usage
 
 - see examples in the folder "examples".
 - if you have access, see examples in "/Volumes/pool-miblab/users/grabmayr/picasso-workflow_testdata"
+
+### Resuming a failed or interrupted run
+
+When a workflow fails (typically because of a wrongly set module argument),
+fix the argument and re-run with resume instead of starting from scratch:
+
+- **GUI**: tick *Continue previous run (resume)* next to the *always save*
+  option before generating/launching the script.
+- **API**: pass `continue_previous_runner=True` to
+  `WorkflowRunner.config_from_dicts` /
+  `AggregationWorkflowRunner.config_from_dicts` (the coordinators in
+  `metaworkflow.py` expose it as `continue_previous_runners`).
+
+On resume, the runner loads the previous run's `WorkflowRunner.yaml` and
+decides where to restart:
+
+1. The **frontier** is the first module that must re-run: the first one
+   that did not previously succeed, *or* the first one whose parameters you
+   changed since the previous run (so fixing an argument of an
+   already-succeeded module re-runs it too). Parameter changes are detected
+   against a pristine snapshot of the previous run's configuration
+   (recorded in `WorkflowRunner.yaml`), so `$`-command resolution and
+   values modules write back into their own parameters do not read as
+   edits. Runs recorded before this snapshot existed are compared
+   best-effort against the persisted (mutated) parameters: edits are
+   detected, known module write-backs (estimated `min_gradient`, resolved
+   output paths, defaults) are ignored, but *removing* a parameter is not
+   noticed.
+2. Walking back from the frontier, the latest module that saved
+   localizations to disk becomes the **checkpoint**: its locs are loaded
+   back into memory, everything up to it is skipped, and the modules after
+   it re-run. Checkpoints are created by `save_single_dataset`,
+   `load_dataset_localizations`, `load_datasets_to_aggregate`,
+   `save_datasets_aggregated`, and by any module run with
+   `save_locs: True` (or the *always save* option / `always_save` config).
+   Checkpoint paths are translated across machines via the `Drivepaths`
+   config, so a run can be resumed on a different machine.
+3. Without any checkpoint before the frontier, the workflow still
+   continues at the frontier if none of the remaining modules needs
+   in-memory state from before it (file-mediated workflows, e.g.
+   continuing after a `manual` step); otherwise it re-runs from scratch —
+   so consider adding `save_locs: True` to expensive modules (localize,
+   undrift, clustering) to keep resumes cheap.
+
+Some state only lives in memory and cannot be restored from saved locs:
+the raw movie, spot identifications, the drift trace and a loaded picasso
+config. A checkpoint that would strand such a dependency (e.g. resuming
+directly at `localize`, which needs the movie and identifications) is
+rejected automatically and the run falls back to an earlier checkpoint or
+to scratch.
+
+### Running locally
+
+Besides the SLURM cluster, a workflow can run directly on the local
+machine: the *Run locally* tab in the GUI's Run section starts the same
+generated `start_workflow.py` with the GUI's Python environment, logging
+to `local_run.log` in the results folder. The live progress monitor and
+the run information display (below the run sub-tabs) serve both run
+modes. *Stop after current module* requests a graceful stop at the next
+module boundary — the run stays resumable — while *Kill local run*
+terminates the process immediately. When a module fails, its traceback
+appears in the *Error details* pane next to the run information (for
+local and cluster runs; local runs also fall back to the traceback
+recorded in `WorkflowRunner.yaml` and to the `local_run.log` tail).
+
+### Exploring results in the Render tab
+
+The *Render* tab (right of *Results*) embeds the picasso Render canvas to
+explore the localizations a run produced. Pick a run, and the left panel
+lists its saved localization files (every `*.hdf5` under the run's module
+folders); select one — or several, to overlay them as channels — and
+*Render selected* shows them on the right. The embedded canvas offers
+picasso Render's exploration and adjustment features: zoom (the *Zoom in* /
+*Zoom out* / *Fit in view* buttons, dragging a box in the canvas, or
+Ctrl+scroll), pan (right-drag), and contrast, colormap, blur method, scale
+bar and per-channel display via the *Display settings* and *Channels*
+buttons. Its processing features (undrift, pick, cluster, …) are
+intentionally not exposed.
+
+### Stepwise (module-by-module) development runs
+
+When developing a new workflow, parameters are usually dialed in one
+module at a time. Instead of running the whole pipeline (and failing
+somewhere in the middle), run it only **up to a chosen module**, inspect
+the results, adjust parameters, and step on:
+
+1. Build the workflow in the GUI as usual.
+2. Tick **Run only up to module** and pick the target module — or simply
+   right-click a module in the workflow list and choose *Run up to this
+   module locally* / *on cluster*.
+3. Start the workflow (locally or on the cluster). It runs up to the
+   chosen module and stops cleanly; the progress monitor shows the run as
+   **paused** and the remaining modules as pending.
+4. Inspect the module's result folder / report, adjust parameters, pick
+   the next target module and start again.
+
+Each step is a **resumed** run (the resume checkbox is forced on while
+stepping), so the usual resume rules apply: previously succeeded modules
+are skipped, modules whose parameters you changed re-run automatically,
+and the boundary module of every step saves its localizations as a
+checkpoint — the next step continues from there instead of recomputing.
+Because checkpoints are plain `locs.hdf5` files (translated across
+machines via the `Drivepaths` config), steps can alternate freely between
+local and cluster execution — e.g. run the GPU-heavy `localize` step on
+the cluster and iterate on clustering parameters locally.
+
+For aggregation workflows the target module can sit in either phase: a
+boundary in the *single-dataset* phase runs every dataset up to it and
+skips the aggregation; a boundary in the *aggregation* phase runs the
+single-dataset phase fully first. Stepwise runs are not available for
+Investigation workflows.
+
+In scripts, pass `stop_after` directly:
+
+```python
+# single-dataset workflow: stop after module index 2
+coordinator.run_analysis(
+    workflow_modules_sgl,
+    continue_previous_runners=True,
+    stop_after=2,
+)
+
+# aggregation workflow: phase is "single" or "aggregation"
+coordinator.run_analysis(
+    workflow_modules_sgl,
+    workflow_modules_agg,
+    continue_previous_runners=True,
+    stop_after=("single", 2),
+)
+```
 
 ### One-click installers
 
@@ -384,6 +825,14 @@ pytest suite, CI, and GUI-launched workflows):
   EOF
   chmod 600 ~/.picasso_secrets
   ```
+
+  **From the GUI (no terminal needed):** the **Doctor** tab's *Cluster secrets
+  (SLURM)* panel can both *check* whether the cluster already has
+  `~/.picasso_secrets` and `~/.config/picasso_workflow/.env` (and holds the
+  expected keys) and *write* both files over SSH with `chmod 600` — using the
+  token already configured locally, or ones you type into its masked fields. It
+  targets the cluster selected in the Run tab, and never puts a token value on a
+  command line or in a log.
 
   Both job paths source this file unconditionally
   (`[ -f ~/.picasso_secrets ] && source ~/.picasso_secrets`): the test

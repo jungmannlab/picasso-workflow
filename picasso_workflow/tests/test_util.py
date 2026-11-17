@@ -292,6 +292,90 @@ class TestUtil(unittest.TestCase):
         assert cluster0["radius"] == 4
         assert cluster1["radius"] == 4
 
+    def test_05_compile_channel_restrictions(self):
+        """A module carrying ``#run_on_channels`` is wrapped in a
+        conditional_branch keyed on that per-channel column; modules without
+        it (and empty directives) pass through, and the input is not mutated.
+        """
+        key = util.RUN_ON_CHANNELS_KEY
+        modules = [
+            ("load", {"filename": "a.tiff"}),
+            ("cluster", {"radius": 5, key: "is_resi"}),
+            ("render", {"oversampling": 5, key: ""}),  # empty -> stripped
+        ]
+        out = util.compile_channel_restrictions(modules)
+
+        # unchanged module passes through
+        assert out[0] == ("load", {"filename": "a.tiff"})
+        # restricted module -> conditional_branch
+        assert out[1][0] == "conditional_branch"
+        cb = out[1][1]
+        assert cb["condition"] == {
+            "left": ("$$map", "is_resi", False),
+            "operator": "==",
+            "right": True,
+        }
+        assert cb["if_true"] == [("cluster", {"radius": 5})]
+        assert cb["if_false"] == []
+        # empty directive -> stripped, left unrestricted
+        assert out[2] == ("render", {"oversampling": 5})
+        # input not mutated
+        assert modules[1][1] == {"radius": 5, key: "is_resi"}
+
+    def test_05_compile_channel_restrictions_tiled(self):
+        """Compiled restriction + tiling resolves the condition per channel:
+        the ``$$map`` column becomes a concrete bool per tile, so channel A
+        runs if_true and channel B takes the empty (no-op) if_false.
+        """
+        key = util.RUN_ON_CHANNELS_KEY
+        modules = [("cluster", {"radius": 5, key: "run_cluster"})]
+        compiled = util.compile_channel_restrictions(modules)
+
+        tile_entries = {
+            "#tags": ["chA", "chB"],
+            "run_cluster": [True, False],
+        }
+        tiler = util.ParameterTiler(self, tile_entries)
+        res_out, tags = tiler.run(compiled)
+        assert tags == ["chA", "chB"]
+        # per-tile conditional_branch condition left-hand value
+        condA = res_out[0][0][1]["condition"]
+        condB = res_out[1][0][1]["condition"]
+        assert condA["left"] is True
+        assert condB["left"] is False
+        # evaluated: channel A runs the module, channel B is a no-op
+        assert util.ConditionEvaluator(None).evaluate(condA) is True
+        assert util.ConditionEvaluator(None).evaluate(condB) is False
+
+    def test_05_compile_channel_restrictions_nested(self):
+        """A ``#run_on_channels`` directive on a module nested inside a branch
+        is honored (compiled in place), and the transform is idempotent."""
+        key = util.RUN_ON_CHANNELS_KEY
+        modules = [
+            (
+                "branch",
+                {
+                    "branch_modules": [("cluster", {"r": 5, key: "is_resi"})],
+                    "join_modules": [("summarize_branches", {})],
+                },
+            ),
+        ]
+        out = util.compile_channel_restrictions(modules)
+        bmods = out[0][1]["branch_modules"]
+        assert bmods[0][0] == "conditional_branch"
+        assert bmods[0][1]["if_true"] == [("cluster", {"r": 5})]
+        assert bmods[0][1]["if_false"] == []
+        # join section untouched
+        assert out[0][1]["join_modules"] == [("summarize_branches", {})]
+        # input not mutated; idempotent
+        assert modules[0][1]["branch_modules"][0][1] == {
+            "r": 5,
+            key: "is_resi",
+        }
+        assert util.compile_channel_restrictions(out) == out
+        # referenced columns are collected across nesting
+        assert util.channel_restriction_columns(modules) == {"is_resi"}
+
     def test_05_ParameterTiler_tags_only(self):
         """With only a '#tags' entry (no mapped files), the tiler must
         produce exactly one workflow set - this is what the single
@@ -391,6 +475,149 @@ class TestUtil(unittest.TestCase):
         assert result == "/dst/pool/users/honsa/data/sub/file.hdf5"
         assert "\\" not in result
 
+    @patch("picasso_workflow.metaworkflow.platform.node")
+    @patch(
+        "picasso_workflow.metaworkflow.CONFIG",
+        {
+            "Drivepaths": {
+                "srcXXX": ["/src/pool", "/src/pool1"],
+                "dstXXX": ["/dst/pool", "/dst/pool1"],
+            }
+        },
+    )
+    def test_10_convert_path_sibling_root_not_matched(self, mock_node):
+        """A dir BESIDE a root (prefix of the name, not a path-prefix) must
+        NOT be converted and must NOT crash -- the old substring match did
+        both (``/src/pool`` matched ``/src/pool-extra`` -> TypeError)."""
+        from picasso_workflow.metaworkflow import PathParser
+
+        mock_node.return_value = "dst001"
+        pp = PathParser()
+        # "/src/pool-extra" is a sibling of root "/src/pool", not under it
+        assert (
+            pp.convert_path("/src/pool-extra/x/data.hdf5", None)
+            == "/src/pool-extra/x/data.hdf5"
+        )
+        # the genuine child still converts, and the deeper root wins
+        assert (
+            pp.convert_path("/src/pool/x/data.hdf5", None)
+            == "/dst/pool/x/data.hdf5"
+        )
+        assert (
+            pp.convert_path("/src/pool1/x/data.hdf5", None)
+            == "/dst/pool1/x/data.hdf5"
+        )
+
+    @patch("picasso_workflow.metaworkflow.platform.node")
+    @patch(
+        "picasso_workflow.metaworkflow.CONFIG",
+        {
+            "Drivepaths": {
+                "emptyXXX": None,
+                "srcXXX": ["/src/pool"],
+                "dstXXX": ["/dst/pool"],
+            }
+        },
+    )
+    def test_11_convert_path_tolerates_none_drivepaths(self, mock_node):
+        """A machine key with no roots (None) must be skipped in source
+        detection, not iterated (which raised ``TypeError: NoneType is not
+        iterable``)."""
+        from picasso_workflow.metaworkflow import PathParser
+
+        mock_node.return_value = "dst001"
+        assert (
+            PathParser().convert_path("/src/pool/x/data.hdf5", None)
+            == "/dst/pool/x/data.hdf5"
+        )
+
+    @patch("picasso_workflow.metaworkflow.platform.node")
+    @patch(
+        "picasso_workflow.metaworkflow.CONFIG",
+        {
+            "Drivepaths": {
+                "srcXXX": ["/src/a", "/src/b", "/src/c"],
+                "dstXXX": ["/dst/a"],
+            }
+        },
+    )
+    def test_12_convert_path_shorter_dest_root_list_no_crash(self, mock_node):
+        """When the destination has fewer roots than the source, a source
+        root with no mapped counterpart degrades to unchanged, never a
+        KeyError/IndexError."""
+        from picasso_workflow.metaworkflow import PathParser
+
+        mock_node.return_value = "dst001"
+        pp = PathParser()
+        # mapped root still converts
+        assert (
+            pp.convert_path("/src/a/x/data.hdf5", None) == "/dst/a/x/data.hdf5"
+        )
+        # unmapped (zip-truncated) root -> unchanged, no exception
+        assert (
+            pp.convert_path("/src/c/x/data.hdf5", None) == "/src/c/x/data.hdf5"
+        )
+
+    @patch("picasso_workflow.metaworkflow.CONFIG", {"Drivepaths": {}})
+    def test_13_is_under_root_prefix_and_drive(self):
+        """``is_under_root`` matches by path-component prefix / drive, never by
+        substring, and a malformed bare-name root (no drive) matches nothing.
+        """
+        from picasso_workflow.metaworkflow import PathParser
+
+        pp = PathParser()
+        # posix: true child yes, sibling-with-shared-prefix no
+        assert pp.is_under_root("/a/pool/x", "/a/pool") is True
+        assert pp.is_under_root("/a/pool", "/a/pool") is True
+        assert pp.is_under_root("/a/pool-extra/x", "/a/pool") is False
+        # Windows drive-letter root matches on the drive
+        assert pp.is_under_root("U:/x/y", "U:") is True
+        assert pp.is_under_root("W:/x/y", "U:") is False
+        # a bare-name root has no Windows drive -> must NOT match every path
+        assert pp.is_under_root("/other/place/x", "pool") is False
+
+    @patch("picasso_workflow.metaworkflow.platform.node")
+    @patch(
+        "picasso_workflow.metaworkflow.CONFIG",
+        {
+            "Drivepaths": {
+                "srcXXX": [None, "/src/pool"],
+                "dstXXX": [None, "/dst/pool"],
+            }
+        },
+    )
+    def test_14_convert_path_tolerates_none_drive_root(self, mock_node):
+        """A ``None`` entry in a machine's root list (YAML ``~``) becomes a
+        ``None`` drive_map key; sorting/matching must not crash on it."""
+        from picasso_workflow.metaworkflow import PathParser
+
+        mock_node.return_value = "dst001"
+        assert (
+            PathParser().convert_path("/src/pool/x/data.hdf5", None)
+            == "/dst/pool/x/data.hdf5"
+        )
+
+    @patch("picasso_workflow.metaworkflow.platform.node")
+    @patch(
+        "picasso_workflow.metaworkflow.CONFIG",
+        {
+            "Drivepaths": {
+                "srcXXX": ["/src/pool"],
+                "dstXXX": [None],
+            }
+        },
+    )
+    def test_15_convert_path_tolerates_none_dest_value(self, mock_node):
+        """A matched root mapping to a ``None`` destination (a null dest entry)
+        must leave the path unchanged, not crash on ``":" in None``."""
+        from picasso_workflow.metaworkflow import PathParser
+
+        mock_node.return_value = "dst001"
+        assert (
+            PathParser().convert_path("/src/pool/x/data.hdf5", None)
+            == "/src/pool/x/data.hdf5"
+        )
+
     def test_07_get_movie_groups(self):
         from picasso_workflow.util import get_movie_groups
 
@@ -426,3 +653,28 @@ class TestUtil(unittest.TestCase):
             assert "pos2" in keys
             assert "pos10" in keys
             assert keys.index("pos2") < keys.index("pos10")
+
+
+# ---------------------------------------------------------------------------
+# tests.temp_folder -- read-only-filesystem-safe result dir resolution
+# ---------------------------------------------------------------------------
+def test_temp_folder_honors_env(tmp_path, monkeypatch):
+    from picasso_workflow.tests import temp_folder
+
+    target = tmp_path / "pwtemp"
+    monkeypatch.setenv("PW_TEST_TEMP_DIR", str(target))
+    assert temp_folder() == str(target)
+    assert target.is_dir()
+
+
+def test_temp_folder_falls_back_when_parent_readonly(tmp_path, monkeypatch):
+    # No env override, and the repo-root temp's parent is "read-only" -> fall
+    # back to <cwd>/temp (the behaviour inside a read-only Apptainer install).
+    import picasso_workflow.tests as pwtests
+
+    monkeypatch.delenv("PW_TEST_TEMP_DIR", raising=False)
+    monkeypatch.setattr(pwtests.os, "access", lambda *a, **k: False)
+    monkeypatch.setattr(pwtests.os, "getcwd", lambda: str(tmp_path))
+    expected = str(tmp_path / "temp")
+    assert pwtests.temp_folder() == expected
+    assert (tmp_path / "temp").is_dir()

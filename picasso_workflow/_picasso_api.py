@@ -1,0 +1,275 @@
+#!/usr/bin/env python
+"""Single declared boundary between picasso-workflow and picasso.
+
+picasso-workflow builds on the ``picassosr`` library, but only touches it at a
+small number of stable seams (``io``, ``localize``, ``registration`` ...).  This
+module is the one place that records *which* parts of picasso we rely on, so the
+coupling is visible and testable instead of scattered across the package.
+
+Two things live here:
+
+* **The contract manifest** (:data:`PUBLIC_SUBMODULES`, :data:`TOP_LEVEL_ATTRS`,
+  :data:`SUBMODULE_ATTRS`) -- the public picasso surface picasso-workflow uses.
+  ``tests/test_picasso_contract.py`` asserts every entry still exists in the
+  installed picassosr, so an upstream rename or removal fails loudly in CI
+  instead of silently at runtime on the cluster.
+* **Guarded accessors** for the handful of *private* picasso symbols we are
+  currently forced to reach into (leading underscore, no public alternative
+  yet).  Each raises a clear, actionable error naming the upstream symbol if it
+  disappears, and is the single call site to update when picasso exposes a
+  public API.  :data:`INTERNAL_SYMBOLS` tracks them so the set can shrink as
+  they are upstreamed.
+
+New picasso usage should be recorded here (and in the contract test) rather than
+imported ad hoc elsewhere, so the boundary stays a single reviewable surface.
+"""
+
+from __future__ import annotations
+
+import importlib
+
+# --- Contract manifest: the public picasso surface we depend on -------------
+
+#: picasso submodules imported (as whole modules) somewhere in
+#: picasso-workflow.  The contract test imports each one; a missing or renamed
+#: submodule fails there.
+PUBLIC_SUBMODULES = (
+    "io",
+    "localize",
+    "render",
+    "lib",
+    "postprocess",
+    "imageprocess",
+    "spinna",
+    "aim",
+    "clusterer",
+    "g5m",
+    "zfit",
+    "registration",
+    "scmos",
+    "spline",
+    "masking",
+    "plugins",
+)
+
+#: Attributes picasso-workflow reads off the top-level ``picasso`` package.
+TOP_LEVEL_ATTRS = ("CONFIG", "__version__")
+
+#: Attributes picasso-workflow reads off a specific submodule, beyond the
+#: module merely being importable. Reached via the re-exported submodule
+#: (e.g. ``registration.tform``), not re-exported flat by ``__getattr__``.
+SUBMODULE_ATTRS = {
+    "registration": ("tform",),
+    # picasso 1.0 identification is built around these (NetGradient method +
+    # the IdentificationParameters bundle), passed to identify / localize /
+    # the calibrations.
+    "localize": ("NetGradient", "IdentificationParameters"),
+}
+
+#: Picasso functions whose *parameter names* picasso-workflow passes (by
+#: keyword or position).  A silent upstream rename of one of these would break
+#: the call at runtime; the contract test asserts each listed parameter still
+#: exists in the installed picassosr.  Keys are ``<submodule>.<function>``.
+#: (This pins parameter *names*, not return shapes; the picasso-1.0 return-shape
+#: dependencies are covered by tests/test_picasso_integration.py instead.)
+SIGNATURE_CONTRACT = {
+    "io.save_locs": ("path", "locs", "info"),
+    "io.load_locs": ("path", "pixelsize"),
+    "io.load_movie": ("path",),
+    "io.load_picks": ("path", "pixelsize"),
+    "io.picks_dict": ("picks", "shape", "size"),
+    # picasso 1.0 identification / fitting surface.
+    "localize.identify": ("movie", "parameters", "parallel"),
+    "localize.fit": (
+        "movie",
+        "camera_info",
+        "identifications",
+        "box",
+        "fitting_method",
+        "parallel",
+    ),
+    "localize.localize": (
+        "movie",
+        "camera_info",
+        "identification_parameters",
+        "fitting_method",
+        "parallel",
+    ),
+    "localize.fit_lateral_transform": (
+        "movie_ref",
+        "movie_target",
+        "calibration",
+        "box",
+        "identification_method",
+        "pixelsize",
+    ),
+    # picasso 1.0 nm-unit / new-signature postprocess + clusterer calls.
+    "postprocess.undrift": ("locs", "info", "segmentation"),
+    "postprocess.link": ("locs", "info", "r_max", "max_dark_time"),
+    "postprocess.compute_local_density": ("locs", "info", "radius"),
+    "postprocess.compute_dark_times": ("locs", "info"),
+    "postprocess.pair_correlation": ("locs", "info", "bin_size", "r_max"),
+    "postprocess.picked_locs": (
+        "locs",
+        "info",
+        "picks",
+        "pick_shape",
+        "pick_size",
+    ),
+    "postprocess.align": (
+        "locs",
+        "infos",
+        "method",
+        "max_shift",
+        "return_shifts",
+    ),
+    "postprocess.plot_drift": ("drift", "fig"),
+    # picasso 1.0 public pick-similar APIs (replace the former private
+    # ``_pick_similar`` / ``_n_block_locs_at`` reach-ins).
+    "postprocess.pick_similar": (
+        "locs",
+        "info",
+        "picks",
+        "pick_shape",
+        "pick_size",
+        "std_range",
+        "n_locs_range",
+        "rmsd_range",
+    ),
+    "postprocess.pick_similar_candidates": (
+        "locs",
+        "info",
+        "pick_size",
+        "min_n_locs",
+    ),
+    "postprocess.signal_to_background": ("locs", "info"),
+    "postprocess.localization_rate_drop": ("locs", "info", "fraction"),
+    "postprocess.docking_site_damage": (
+        "picked_locs",
+        "info",
+        "max_dark_time",
+        "cutoff",
+    ),
+    "clusterer.dbscan": ("locs", "info", "radius", "min_samples"),
+    "clusterer.hdbscan": (
+        "locs",
+        "info",
+        "min_cluster_size",
+        "min_samples",
+    ),
+    "clusterer.cluster": (
+        "locs",
+        "info",
+        "radius_xy",
+        "min_locs",
+        "frame_analysis",
+    ),
+    "clusterer.find_cluster_centers": ("locs", "info"),
+    "aim.aim": ("locs", "info", "segmentation", "intersect_d", "roi_r"),
+    "g5m.g5m": ("locs", "info", "min_locs", "parallel", "group_column"),
+    "masking.mask_locs": ("locs", "info", "mask"),
+    "masking.generate_image": ("locs", "info", "disp_px_size", "blur"),
+    "masking.label_components": ("mask",),
+    "masking.fill_holes": ("mask",),
+    "masking.erode": ("mask", "distance", "pixel_size"),
+    "masking.dilate": ("mask", "distance", "pixel_size"),
+    "registration.calibrate_channel_registration_from_beads": (
+        "movies",
+        "box",
+        "identification_method",
+    ),
+    "registration.register_to_template": (
+        "points",
+        "template",
+        "mirror",
+        "gate",
+        "angle_step",
+        "n_seeds",
+        "max_iter",
+    ),
+    "spline.calibrate_spline": (
+        "movie",
+        "info",
+        "camera_info",
+        "box",
+        "identification_method",
+        "d",
+    ),
+    # picasso 1.0 public replacements for formerly-private reach-ins
+    # (_FIT_METHOD_MAP, _to_photons, _spinna_batch_analysis,
+    # _targets_from_structures).
+    "localize.resolve_fit_method": ("name",),
+    "localize.to_photons": ("spots", "camera_info"),
+    "spinna.batch_analysis": ("parameters_filename",),
+    "spinna.targets_from_structures": ("structures",),
+}
+
+#: Private picasso symbols picasso-workflow currently depends on, mapped to
+#: their upstream location.  These are the fragile seams -- leading underscore,
+#: no public API yet.  Each is reached only through an accessor below; track
+#: upstreaming so this set can shrink.  Empty since the picasso-1.0 migration
+#: moved the pick-similar reach-ins (``_pick_similar``, ``_n_block_locs_at``)
+#: onto the public ``postprocess.pick_similar`` / ``pick_similar_candidates``;
+#: ``get_internal`` stays as the single accessor for any future reach-in.
+INTERNAL_SYMBOLS: dict[str, str] = {}
+
+
+def _missing(symbol: str) -> RuntimeError:
+    """Build the error raised when a required private symbol is absent."""
+    return RuntimeError(
+        f"picasso-workflow requires {symbol}, which is not present in the "
+        "installed picassosr. This is a private picasso symbol the workflow "
+        "reaches into, so a picasso upgrade may have moved or renamed it. Pin "
+        "picassosr to a compatible version (see pyproject.toml) or update the "
+        "accessor in picasso_workflow/_picasso_api.py."
+    )
+
+
+def get_internal(name: str):
+    """Return a guarded private picasso symbol registered in INTERNAL_SYMBOLS.
+
+    Private picasso symbols (leading underscore) carry no stability guarantee,
+    so this is the single place picasso-workflow reaches into them: a rename or
+    removal upstream raises here with a clear, actionable message (and the
+    contract test catches it). Add new ones to :data:`INTERNAL_SYMBOLS` rather
+    than touching picasso internals ad hoc elsewhere.
+    """
+    dotted = INTERNAL_SYMBOLS[name]
+    modpath, attr = dotted.rsplit(".", 1)
+    try:
+        module = importlib.import_module(modpath)
+        return getattr(module, attr)
+    except (ImportError, AttributeError) as exc:
+        raise _missing(dotted) from exc
+
+
+def set_config(config) -> None:
+    """Replace picasso's global ``CONFIG`` (``picasso.CONFIG``).
+
+    picasso-workflow's camera-config handling mutates the picasso-level global
+    so subsequent picasso calls observe it. Routed through the boundary so the
+    assignment stays here rather than via a bare ``import picasso`` elsewhere.
+    """
+    import picasso
+
+    picasso.CONFIG = config
+
+
+def __getattr__(name: str):
+    """Lazily re-export the picasso surface (PEP 562).
+
+    Lets the rest of picasso-workflow reach picasso *through* this boundary --
+    ``from picasso_workflow._picasso_api import io`` -- while preserving the
+    exact (often deferred) import timing of the original ``from picasso import
+    io``: the picasso submodule is imported only when the name is first
+    accessed, and the returned object *is* the real picasso submodule.
+    """
+    if name in PUBLIC_SUBMODULES:
+        return importlib.import_module(f"picasso.{name}")
+    if name in TOP_LEVEL_ATTRS:
+        return getattr(importlib.import_module("picasso"), name)
+    raise AttributeError(
+        f"module {__name__!r} has no attribute {name!r}. If picasso-workflow "
+        "needs it, add it to PUBLIC_SUBMODULES / TOP_LEVEL_ATTRS (and the "
+        "contract test) so the boundary stays a single declared surface."
+    )

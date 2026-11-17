@@ -31,11 +31,54 @@ dummy_reporter_config(report_name) → dict
     them directly without going through pytest's fixture injection.
 """
 
+import importlib.util
 import os
+import shutil
+import time
 from pathlib import Path
 
 import numpy as np
 import pytest
+
+# The Qt GUI is a `[gui]` extra (PyQt6 is lazy-imported, ~530 MB of binaries kept
+# out of base). On a lean/headless install (cluster, Apptainer) PyQt6 is absent,
+# so skip the GUI tests at collection rather than erroring on `import PyQt6`.
+# CI installs `.[dev,gui]`, so they still run there.
+if importlib.util.find_spec("PyQt6") is None:
+    collect_ignore_glob = ["test_gui_*.py"]
+
+
+@pytest.fixture(autouse=True)
+def _resilient_rmtree(monkeypatch):
+    """Retry ``shutil.rmtree`` on a spurious "symbolic link" ``OSError``.
+
+    Tests clean up their result folders (under the shared ``temp/`` dir) with
+    ``shutil.rmtree`` in a ``finally``/teardown. On the container's (and CI's)
+    overlay filesystem, shutil's fd-based ``_rmtree_safe_fd`` intermittently
+    raises ``OSError("Cannot call rmtree on a symbolic link")`` for a plain
+    directory -- a TOCTOU race in its ``scandir`` -> ``is_symlink`` recheck. It
+    is purely environmental (no symlink exists -- verified via
+    ``os.path.islink``) and surfaces under cold-``numba``-cache timing, so it
+    showed up as a flaky teardown failure (the tests' own assertions pass).
+
+    Retrying the operation clears the transient. A persistent failure still
+    raises, so this does not mask a real cleanup bug.
+    """
+    real_rmtree = shutil.rmtree
+
+    def _rmtree(path, *args, **kwargs):
+        for attempt in range(4):
+            try:
+                return real_rmtree(path, *args, **kwargs)
+            except OSError as exc:
+                if "symbolic link" in str(exc) and attempt < 3:
+                    time.sleep(0.05)
+                    continue
+                raise
+
+    monkeypatch.setattr(shutil, "rmtree", _rmtree)
+    yield
+
 
 # ---------------------------------------------------------------------------
 # Test-data directory helpers (used both as fixtures and at collection time)

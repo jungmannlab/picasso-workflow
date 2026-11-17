@@ -18,9 +18,8 @@ This is `picasso-workflow`, a Python package for automated DNA-PAINT analysis wo
 - **`util.py`**: Contains `AbstractModuleCollection` and other utility classes for parameter management
 
 ### Specialized Modules
-- **`dbscan_molint/`**: DBSCAN clustering with molecular interactions analysis
+- **`outpost/clustering/dbscan_molint/`**: DBSCAN clustering with molecular interactions analysis
 - **`outpost_modules/`**: Extended analysis modules including binding event analysis, rendering, and Ripley's K analysis
-- **`ripleys_analysis/`**: Dedicated Ripley's K spatial analysis functionality
 - **`spinna*.py`**: SPINNA (Spatial Point Pattern Analysis) related modules for MLE fitting
 
 ### Standard Workflows
@@ -96,7 +95,9 @@ Tests are located in `picasso_workflow/tests/` with test data in `TestData/`:
 
 ## Key Dependencies
 
-- **picassosr**: Core analysis engine (>=0.7.3)
+- **picassosr**: Core analysis engine (>=1.0.0rc1,<2 — see pyproject.toml;
+  picasso 1.0 is the first release with a stability promise, and the workflow
+  migrated to its public APIs. Requires Python >=3.11)
 - **atlassian-python-api**: Confluence integration
 - **mpi4py**: Cluster computing support (optional)
 - **scipy**, **numpy**, **pandas**: Scientific computing

@@ -14,18 +14,22 @@ Initial date: March 7, 2024
 from __future__ import annotations
 
 import html
+import re
 
 # import logging
 from loguru import logger
 import os
 import time
 import traceback
+from concurrent.futures import ThreadPoolExecutor
+from functools import partial
 
 import numpy as np
 import yaml
 from atlassian import Confluence as con
 from requests.exceptions import ConnectionError, HTTPError
 
+from picasso_workflow.modulespec import MODULE_REGISTRY
 from picasso_workflow.util import AbstractModuleCollection
 
 # logger = logging.getLogger(__name__)
@@ -56,8 +60,13 @@ def _yaml_safe(value):
 
 
 # Parameter keys that must never be rendered or serialized: the workflow
-# runner injects a live ParameterCommandExecutor under this name.
-_PARAM_BLACKLIST = ("parameter_command_executor",)
+# runner injects a live ParameterCommandExecutor under this name, and
+# ``#run_on_channels`` is a GUI/definition-level directive compiled into a
+# conditional_branch before execution (it never reaches a real module).
+_PARAM_BLACKLIST = ("parameter_command_executor", "#run_on_channels")
+
+# File suffixes the generic picasso-set reporter embeds as images.
+_IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg", ".svg")
 
 
 def _format_val(v):
@@ -103,6 +112,60 @@ def _expand_macro(title, mapping, skip_keys=()):
         )
     text += "</ul></ac:rich-text-body></ac:structured-macro>"
     return text
+
+
+def _pattern_cluster_lines(summary, method):
+    """One human-readable line per pattern / defect cluster for the report.
+
+    ``method`` is ``"lattice"`` (defect classes: occupancy / fit residual /
+    recovered spacing) or ``"pairwise"`` (generic descriptor: site count /
+    spacing / rmsd). Returns an ordered ``{name: description}`` mapping.
+    """
+    lines = {}
+    for c in summary:
+        off = c.get("is_offlattice") or c.get("is_noise")
+        nlpf = c.get("median_nlocs_per_frame")
+        nlocs_txt = (
+            f"{nlpf:.4f} locs/frame"
+            if nlpf is not None and np.isfinite(nlpf)
+            else None
+        )
+        if method == "lattice":
+            n_nodes = len(c.get("occupancy", []))
+            if off:
+                name = "off-lattice / sparse"
+            else:
+                name = f"{c.get('n_sites_occupied', '?')}/{n_nodes}-site"
+            parts = [f"{c['n_structures']} structures"]
+            if not off:
+                parts.append(f"{c.get('n_defects', '?')} defects")
+                rmse = c.get("median_rmse_nm")
+                if rmse is not None and np.isfinite(rmse):
+                    parts.append(f"fit rmse {rmse:.1f} nm")
+                sp = c.get("median_fitted_spacing_nm")
+                if sp is not None and np.isfinite(sp):
+                    parts.append(f"spacing {sp:.1f} nm")
+                ncv = c.get("median_nlocs_cv")
+                scv = c.get("median_spread_cv")
+                if ncv is not None and np.isfinite(ncv):
+                    parts.append(f"nlocs CV {ncv:.2f}")
+                if scv is not None and np.isfinite(scv):
+                    parts.append(f"spread CV {scv:.2f}")
+            if nlocs_txt:
+                parts.append(nlocs_txt)
+        else:
+            name = "unclustered" if off else f"pattern {c['label']}"
+            parts = [
+                f"{c['n_structures']} structures",
+                f"median {c.get('median_n_sites', 0):.0f} sites",
+                nlocs_txt or f"{c.get('median_n_locs', 0):.0f} locs",
+            ]
+            rmsd = c.get("median_rmsd_px")
+            if rmsd is not None and np.isfinite(rmsd):
+                parts.append(f"rmsd {rmsd:.3f} px")
+            parts.append(f"spacing {c.get('median_nn_nm', 0):.1f} nm")
+        lines[name] = ", ".join(parts)
+    return lines
 
 
 def _code_macro(text, language=None):
@@ -440,6 +503,13 @@ class ConfluenceReporter(AbstractModuleCollection):
     module's parameters and results on the report's Confluence page.
     """
 
+    # Whether the branch module may stream each sub-module to a live child
+    # page via open_branch_page / report_branch_submodule. True here; the
+    # single-file HTMLReporter (a subclass, so it *inherits* those methods)
+    # sets this False so it is not mistaken for a live reporter and does not
+    # both stream into and batch-render the one report file.
+    supports_live_branch_pages = True
+
     def __init__(
         self,
         base_url: str,
@@ -496,6 +566,148 @@ class ConfluenceReporter(AbstractModuleCollection):
             )
             logger.debug(f"""Failed to create page {self.report_page_name}.
                 Continuing on the pre-existing page""")
+
+    @property
+    def report_page_url(self):
+        """Browser URL of this report's Confluence page (or None)."""
+        return self.ci.page_url(getattr(self, "report_page_id", None))
+
+    def _emit(self, text, postpone_report):
+        """Post ``text`` to the report page, or return it when deferred.
+
+        The single choke point every module reporter routes its final output
+        through, so ``postpone_report`` is honoured identically everywhere:
+        returning the text (to be embedded by a caller, e.g. a branch
+        sub-report) instead of posting must never diverge per reporter. When
+        not deferred the text is posted to the current report page and
+        ``None`` is returned.
+
+        Parameters
+        ----------
+        text : str
+            The Confluence storage-format section to post or return.
+        postpone_report : bool
+            If True, return ``text`` unposted; otherwise post it.
+
+        Returns
+        -------
+        str or None
+            ``text`` when deferred, else ``None``.
+        """
+        if postpone_report:
+            return text
+        self.ci.update_page_content(
+            self.report_page_name, self.report_page_id, text
+        )
+        return None
+
+    def __getattr__(self, name):
+        """Resolve picasso-set module names to the generic reporter.
+
+        The picasso-set modules have no hand-written reporter methods; any
+        registry-listed ``picasso_*`` module name resolves to
+        :meth:`_report_picasso_set_module` bound to that name, so the
+        name-based reporter dispatch (``getattr(reporter, module_name)``)
+        works unchanged. Everything else -- in particular underscore names
+        probed by copy/pickle/abc machinery -- raises ``AttributeError`` as
+        usual (``__getattr__`` is only consulted after normal lookup fails).
+        """
+        if not name.startswith("_"):
+            spec = MODULE_REGISTRY.get(name)
+            if spec is not None and spec.module_set == "picasso":
+                return partial(self._report_picasso_set_module, name)
+        raise AttributeError(
+            f"{type(self).__name__!r} object has no attribute {name!r}"
+        )
+
+    def _report_picasso_set_module(
+        self, module_name, i, parameters, results, postpone_report=False
+    ):
+        """Generic report for a picasso-set module.
+
+        Documents the module's summary, wrapped picasso symbol, parameters
+        and results, embeds every image found in the results (paths in the
+        ``results`` dict plus images inside the module's result folder), and
+        lists the other output files by name.
+
+        Parameters
+        ----------
+        module_name : str
+            The picasso-set module name (bound via :meth:`__getattr__`).
+        i : int
+            Index of the module in the workflow.
+        parameters, results : dict
+            The module's parameters and results.
+        postpone_report : bool, optional
+            If True, return the report text instead of posting it. Default is
+            False.
+        """
+        logger.debug(f"Reporting {module_name} (generic picasso-set report).")
+        spec = MODULE_REGISTRY[module_name]
+        parameter_text = _expand_macro(
+            "Parameters", parameters, skip_keys=_PARAM_BLACKLIST
+        )
+        result_text = _expand_macro("Results", results)
+        duration = results.get("duration") or 0
+        text = f"""
+        <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
+        <p><strong>Module {i:02d}: {html.escape(module_name)}</strong></p>
+        <p>{html.escape(spec.summary)}</p>
+        <ul>
+        <li>Native picasso: {html.escape(str(spec.picasso_symbol))}</li>
+        <li>Duration: {duration // 60:.0f} min {(duration % 60):.2f} s</li>
+        </ul>
+        {parameter_text}
+        {result_text}
+        """
+
+        # collect figures: image paths in the results dict, then any images
+        # in the result folder not already referenced there. The stored
+        # (possibly stale) paths are handed to upload_attachment unchecked,
+        # like the hand-written reporters do: the HTML interface re-resolves
+        # moved result folders by basename (see HTMLInterface._resolve_source),
+        # which an os.path.isfile pre-check here would defeat.
+        figures = [
+            v
+            for v in results.values()
+            if isinstance(v, str) and v.lower().endswith(_IMAGE_SUFFIXES)
+        ]
+        figure_names = {os.path.basename(fp) for fp in figures}
+        folder = results.get("folder")
+        other_files = []
+        if folder and os.path.isdir(folder):
+            for fn in sorted(os.listdir(folder)):
+                fp = os.path.join(folder, fn)
+                if not os.path.isfile(fp):
+                    continue
+                if fn.lower().endswith(_IMAGE_SUFFIXES):
+                    if fn not in figure_names:
+                        figures.append(fp)
+                        figure_names.add(fn)
+                else:
+                    other_files.append(fn)
+        for fp in figures:
+            try:
+                self.ci.upload_attachment(self.report_page_id, fp)
+            except (ConfluenceInterfaceError, OSError):
+                pass
+            _, fn = os.path.split(fp)
+            text += (
+                "<ul><ac:image><ri:attachment "
+                + f'ri:filename="{fn}" />'
+                + "</ac:image></ul>"
+            )
+        if other_files:
+            text += (
+                "<p>Output files:</p><ul>"
+                + "".join(f"<li>{html.escape(fn)}</li>" for fn in other_files)
+                + "</ul>"
+            )
+
+        text += """
+        </ac:layout-cell></ac:layout-section></ac:layout>
+        """
+        return self._emit(text, postpone_report)
 
     def report_error(
         self,
@@ -647,12 +859,77 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        if postpone_report:
-            return text
-        else:
-            self.ci.update_page_content(
-                self.report_page_name, self.report_page_id, text
+        return self._emit(text, postpone_report)
+
+    def plugin(self, i, parameters, results, postpone_report=False):
+        """Report the generic ``plugin`` module to Confluence.
+
+        Documents which picasso API plugin export was called, the state
+        injected into it, and a best-effort summary of what it returned
+        (``plugin_report`` / ``plugin_result``); uploads any files the plugin
+        reported under ``plugin_files``.
+
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters : dict
+            The module's parameters (see
+            :class:`~picasso_workflow.util.AbstractModuleCollection`).
+        results : dict
+            The module's results (see
+            :class:`~picasso_workflow.util.AbstractModuleCollection`).
+        postpone_report : bool, optional
+            If True, build the report text but defer posting it. Default is
+            False.
+        """
+        logger.debug(f"Reporting plugin module {i:02d}")
+        injected = results.get("injected", [])
+        text = f"""
+        <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
+        <p><strong>Module {i:02d}: Plugin</strong></p>
+        <ul>
+        <li>API export: {html.escape(str(results.get('plugin_api_name', '')))}
+        </li>
+        <li>Callable: {html.escape(str(results.get('plugin_callable', '')))}
+        </li>
+        <li>Injected state: {html.escape(str(injected) if injected else '-')}
+        </li>
+        <li>Start Time: {results['start time']}</li>
+        <li>Duration: {results["duration"] // 60:.0f} min
+        {(results["duration"] % 60):.02f} s</li>
+        </ul>"""
+
+        if (report := results.get("plugin_report")) is not None:
+            text += (
+                "<p><strong>Plugin report</strong></p>"
+                f"<pre>{html.escape(str(report))}</pre>"
             )
+        if (result := results.get("plugin_result")) is not None:
+            text += (
+                "<p><strong>Plugin result</strong></p>"
+                f"<pre>{html.escape(str(result))}</pre>"
+            )
+
+        files = results.get("plugin_files", [])
+        if files:
+            text += "<p><strong>Plugin files</strong></p><ul>"
+            for fp in files:
+                try:
+                    self.ci.upload_attachment(self.report_page_id, fp)
+                except Exception as e:  # noqa: BLE001
+                    logger.error(f"Could not upload plugin file {fp}: {e}")
+                fn = os.path.split(fp)[1]
+                text += (
+                    "<li><ac:link><ri:attachment "
+                    f'ri:filename="{html.escape(fn)}" /></ac:link></li>'
+                )
+            text += "</ul>"
+
+        text += """
+        </ac:layout-cell></ac:layout-section></ac:layout>
+        """
+        return self._emit(text, postpone_report)
 
     @module_decorator
     def conditional_branch(
@@ -847,6 +1124,421 @@ class ConfluenceReporter(AbstractModuleCollection):
             self.report_page_name, self.report_page_id, text
         )
 
+    @staticmethod
+    def _branch_topology_text(results):
+        """Render the executed module-path topology as an indented tree.
+
+        Kept legible for nested branches by drawing a plain-text tree in a
+        ``<pre>`` block (storage-format-safe).
+        """
+        topology = results.get("topology", {})
+        branch_type = topology.get("type", results.get("branch_type", "?"))
+        prefix_index = topology.get("prefix_index")
+        join_modules = topology.get("join_modules", [])
+        branches = topology.get("branches", [])
+
+        lines = []
+        if prefix_index is not None:
+            lines.append(
+                f"prefix (modules 00..{max(prefix_index - 1, 0):02d})"
+            )
+        lines.append(f"└─ branch [{branch_type}] → {len(branches)} branch(es)")
+        for b_idx, branch in enumerate(branches):
+            last_branch = b_idx == len(branches) - 1 and not join_modules
+            connector = "└─" if last_branch else "├─"
+            path = " → ".join(
+                m.split("_", 1)[-1] for m in branch.get("modules", [])
+            )
+            label = branch.get("label", f"branch{b_idx}")
+            lines.append(f"   {connector} {label}: {path or '(no modules)'}")
+        if join_modules:
+            join_path = " → ".join(join_modules)
+            lines.append(f"   └─ join: {join_path}")
+        tree = html.escape("\n".join(lines))
+        return (
+            "<p><strong>Executed module-path topology</strong></p>"
+            f'<pre style="line-height:1.4;">{tree}</pre>'
+        )
+
+    @module_decorator
+    def branch(
+        self,
+        i,
+        parameters,
+        results,
+        parameter_text,
+        result_text,
+        postpone_report=False,
+    ):
+        """Report the ``branch`` module: topology, per-branch and join results.
+
+        Renders a compact summary (branch type, labels, executed-path
+        topology tree) followed by a collapsible full sub-report for each
+        branch and for the join modules.
+
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters, results : dict
+            The module's parameters and results (see the matching
+            :class:`~picasso_workflow.util.AbstractModuleCollection` method).
+        parameter_text, result_text : str
+            Pre-rendered parameter/result macros from the decorator.
+        postpone_report : bool, optional
+            If True, build the report text but defer posting it. Default False.
+        """
+        logger.debug(f"Reporting branch module {i:02d}")
+
+        branch_type = results.get("branch_type", "?")
+        labels = results.get("labels", [])
+        branch_results = results.get("branches", [])
+        join_results = results.get("join", {})
+        branch_modules = parameters.get("branch_modules", [])
+        join_modules = parameters.get("join_modules", []) or []
+        skipped = results.get("skipped", []) or []
+        skipped_text = (
+            "<li><strong>Skipped branches:</strong> "
+            + html.escape(
+                ", ".join(
+                    f"{s.get('label', '?')} ({s.get('reason', '')})"
+                    for s in skipped
+                )
+            )
+            + "</li>"
+            if skipped
+            else ""
+        )
+
+        text = f"""
+        <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
+        <p><strong>Module {i:02d}: Branch ({html.escape(str(branch_type))})</strong></p>
+        <ul>
+        <li><strong>Branches:</strong> {len(labels)} ({html.escape(', '.join(map(str, labels)) or 'none')})</li>
+        {skipped_text}
+        <li><strong>Join modules:</strong> {html.escape(', '.join(m for m, _ in join_modules) if join_modules else 'None')}</li>
+        <li><strong>Start Time:</strong> {html.escape(str(results.get('start time', 'N/A')))}</li>
+        <li><strong>Total Duration:</strong> {results.get("duration", 0) // 60:.0f} min {(results.get("duration", 0) % 60):.02f} s</li>
+        </ul>
+        {self._branch_topology_text(results)}
+        {parameter_text}
+        """
+
+        # Per-branch full sub-reports. On Confluence each branch becomes its
+        # own child page under the run page (keeping the main page compact);
+        # the local HTML reporter keeps them as inline collapsibles. Both
+        # return the markup to splice into the main page here. ``i`` (this
+        # branch module's index) disambiguates child-page titles and must
+        # match what streaming passed to open_branch_page.
+        text += self._render_branch_details(branch_results, branch_modules, i)
+
+        # Join / fan-in sub-reports (collapsible).
+        if join_results:
+            text += """
+            <ac:structured-macro ac:name="expand" ac:schema-version="1">
+            <ac:parameter ac:name="title">Join (fan-in)</ac:parameter>
+            <ac:rich-text-body>
+            """
+            join_branch = {"label": "join", **join_results}
+            text += self._report_branch_submodules(join_branch, join_modules)
+            text += """
+            </ac:rich-text-body>
+            </ac:structured-macro>
+            """
+
+        text += """
+        </ac:layout-cell></ac:layout-section></ac:layout>
+        """
+
+        return self._emit(text, postpone_report)
+
+    # ``<ac:layout>`` (and its section/cell children) may only appear at the
+    # top level of a Confluence page; nesting one inside an expand macro's
+    # rich-text-body makes Confluence hoist it back out to the top level. The
+    # per-module reporters each wrap their output in a full layout, so those
+    # wrappers are stripped before the output is embedded in the branch
+    # module's collapsible sections (the inner content nests fine).
+    _LAYOUT_TAG_RE = re.compile(r"</?ac:layout(?:-section|-cell)?\b[^>]*>")
+
+    @classmethod
+    def _strip_layout_wrappers(cls, text):
+        """Remove ``ac:layout*`` structural tags so text can nest in a macro."""
+        return cls._LAYOUT_TAG_RE.sub("", text)
+
+    def _report_branch_submodules(self, branch, module_defs):
+        """Render the sub-module reports of one branch (or the join step).
+
+        Reuses each sub-module's own reporter (like
+        :meth:`conditional_branch`), falling back to a plain result list when
+        no specific reporter exists. The per-module reporters' ``<ac:layout>``
+        wrappers are stripped so their content nests inside the branch's
+        collapsible expand macro instead of being hoisted to the top level.
+        """
+        text = ""
+        for sub_key in sorted(k for k in branch if k != "label"):
+            sub_results = branch[sub_key]
+            if not isinstance(sub_results, dict):
+                continue
+            module_name = sub_key.split("_", 1)[-1]
+            text += (
+                '<div style="margin-left: 20px; border-left: 3px solid '
+                '#4a90e2; padding-left: 10px; margin-bottom: 15px;">'
+                f"<h5>{html.escape(sub_key)}</h5>"
+            )
+            if not sub_results.get("success", True):
+                text += "<p>(sub-module did not succeed)</p></div>"
+                continue
+            reporter_method = getattr(self, module_name, None)
+            if reporter_method is not None:
+                try:
+                    sub_idx = int(sub_key.split("_")[0])
+                    sub_params = {}
+                    for idx, (mod_name, mod_params) in enumerate(module_defs):
+                        if idx == sub_idx and mod_name == module_name:
+                            sub_params = mod_params
+                            break
+                    text += self._strip_layout_wrappers(
+                        reporter_method(
+                            sub_idx,
+                            sub_params,
+                            sub_results,
+                            postpone_report=True,
+                        )
+                    )
+                except Exception as e:
+                    logger.error(f"Error reporting sub-module {sub_key}: {e}")
+                    text += (
+                        '<p style="color:#f0ad4e;">Could not render report: '
+                        f"{html.escape(str(e))}</p>"
+                    )
+            else:
+                text += "<ul>"
+                for k, v in sub_results.items():
+                    if k not in ("folder", "start time", "end time"):
+                        text += f"<li>{html.escape(str(k))}: {html.escape(str(v))}</li>"
+                text += "</ul>"
+            text += "</div>"
+        return text
+
+    def _branch_child_page_title(self, label, module_index=None):
+        """Title of the child page holding one branch's full sub-report.
+
+        Confluence page titles must be unique within a space, so the branch
+        module's index is included: a workflow with two ``branch`` modules
+        that happen to reuse a label (e.g. both produce ``cell0``) would
+        otherwise collide on one page and merge their content. ``None`` keeps
+        the bare ``"<run> - <label>"`` form (used only where no index is
+        available, e.g. direct unit-test calls).
+        """
+        if module_index is None:
+            return f"{self.report_page_name} - {label}"
+        return f"{self.report_page_name} - {module_index:02d} {label}"
+
+    @property
+    def _branch_pages(self):
+        """Titles of branch child pages populated live (title -> page id).
+
+        Filled by :meth:`open_branch_page` during a run so the final
+        ``branch`` report links to each child page instead of re-posting its
+        sub-modules. Lazily created so instances built via ``__new__`` (e.g.
+        in tests) work without ``__init__`` having run.
+        """
+        pages = self.__dict__.get("_streamed_branch_pages")
+        if pages is None:
+            pages = self.__dict__["_streamed_branch_pages"] = {}
+        return pages
+
+    def _render_branch_details(
+        self, branch_results, branch_modules, module_index=None
+    ):
+        """Render each branch as its own child page; link them on the run page.
+
+        For Confluence, a branch's full per-sub-module report lives on a
+        dedicated child page nested under the run page, so the main report
+        stays compact. When the run streamed a branch live (see
+        :meth:`open_branch_page`) its child page is already populated and is
+        only linked here; otherwise the page is created and populated now.
+        ``module_index`` (the branch module's index) disambiguates child-page
+        titles across branch modules and must match the value passed to
+        :meth:`open_branch_page` during streaming. Returns a bullet list of
+        links to the child pages, to be spliced into the branch module's
+        section on the main page.
+        (:class:`~picasso_workflow.html_reporter.HTMLReporter` overrides this
+        to keep the single-file inline-collapsible layout.)
+        """
+        if not branch_results:
+            return ""
+        items = []
+        for branch in branch_results:
+            label = str(branch.get("label", "branch"))
+            title = self._branch_child_page_title(label, module_index)
+            if title not in self._branch_pages:
+                # not streamed live -> create the child page and populate it
+                _, child_id = self._create_branch_child_page(
+                    label, module_index
+                )
+                self._post_branch_submodules_to_page(
+                    branch, branch_modules, title, child_id
+                )
+            items.append((label, title))
+        links = "".join(
+            f"<li>{self._page_link(title, label)}</li>"
+            for label, title in items
+        )
+        return (
+            "<p><strong>Per-branch reports</strong> "
+            "(each branch on its own child page):</p>"
+            f"<ul>{links}</ul>"
+        )
+
+    @staticmethod
+    def _page_link(page_title, link_text):
+        """A Confluence storage-format link to another page by title."""
+        return (
+            "<ac:link>"
+            f'<ri:page ri:content-title="{html.escape(page_title)}" />'
+            "<ac:plain-text-link-body>"
+            f"<![CDATA[{link_text}]]>"
+            "</ac:plain-text-link-body></ac:link>"
+        )
+
+    def _create_branch_child_page(self, label, module_index=None):
+        """Create (or reuse) a branch's child page with its header.
+
+        Returns ``(title, page_id)``. The page nests under the run page and
+        opens with a heading linking back to it. The header is passed as the
+        create body so no extra round-trip is needed; on a resumed run the
+        page already exists and is reused as-is. ``module_index`` disambiguates
+        the title across branch modules (see :meth:`_branch_child_page_title`).
+        """
+        title = self._branch_child_page_title(label, module_index)
+        header = (
+            '<ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>'
+            f"<p><strong>Branch: {html.escape(str(label))}</strong> &mdash; "
+            "part of "
+            f"{self._page_link(self.report_page_name, self.report_page_name)}"
+            "</p></ac:layout-cell></ac:layout-section></ac:layout>"
+        )
+        try:
+            page_id = self.ci.create_page(
+                title, body_text=header, parent_id=self.report_page_id
+            )
+        except ConfluenceInterfaceError:
+            # a resumed run reuses the existing child page
+            page_id, _ = self.ci.get_page_properties(title)
+        return title, page_id
+
+    def open_branch_page(self, label, module_index=None):
+        """Create a branch's child page for live (streamed) reporting.
+
+        Returns a ``(title, page_id)`` handle to pass to
+        :meth:`report_branch_submodule`. The page is remembered so the final
+        ``branch`` report links to it instead of re-posting its sub-modules.
+        ``module_index`` must match the value the final report passes to
+        :meth:`_render_branch_details`, so the streamed page and its link
+        resolve to the same title.
+        """
+        title, page_id = self._create_branch_child_page(label, module_index)
+        self._branch_pages[title] = page_id
+        return title, page_id
+
+    def report_branch_submodule(
+        self, handle, sub_idx, module_name, sub_params, sub_results
+    ):
+        """Post one finished sub-module to its branch child page (live).
+
+        Called by the ``branch`` module as each sub-module completes, so the
+        child page fills in during execution rather than only at the end.
+        """
+        title, page_id = handle
+        self._post_one_submodule_to_page(
+            title, page_id, sub_idx, module_name, sub_params, sub_results
+        )
+
+    def _post_branch_submodules_to_page(
+        self, branch, module_defs, page_title, page_id
+    ):
+        """Post one branch's full sub-module reports to its child page (batch).
+
+        Used when a branch was not streamed live; posts each stored
+        sub-module in order.
+        """
+        for sub_key in sorted(k for k in branch if k != "label"):
+            sub_results = branch[sub_key]
+            if not isinstance(sub_results, dict):
+                continue
+            module_name = sub_key.split("_", 1)[-1]
+            sub_idx = int(sub_key.split("_")[0])
+            sub_params = {}
+            for idx, (mod_name, mod_params) in enumerate(module_defs):
+                if idx == sub_idx and mod_name == module_name:
+                    sub_params = mod_params
+                    break
+            self._post_one_submodule_to_page(
+                page_title,
+                page_id,
+                sub_idx,
+                module_name,
+                sub_params,
+                sub_results,
+            )
+
+    def _post_one_submodule_to_page(
+        self,
+        page_title,
+        page_id,
+        sub_idx,
+        module_name,
+        sub_params,
+        sub_results,
+    ):
+        """Post a single sub-module's report onto a branch child page.
+
+        Temporarily retargets the reporter at the child page so the
+        sub-module's own reporter posts its normal section (and uploads its
+        attachments) there, exactly as on a top-level report.
+        """
+        key = f"{sub_idx:02d}_{module_name}"
+        saved_name, saved_id = self.report_page_name, self.report_page_id
+        self.report_page_name, self.report_page_id = page_title, page_id
+        try:
+            if not isinstance(sub_results, dict):
+                return
+            if not sub_results.get("success", True):
+                self.ci.update_page_content(
+                    page_title,
+                    page_id,
+                    f"<p><strong>{html.escape(key)}</strong>: "
+                    "sub-module did not succeed</p>",
+                )
+                return
+            reporter_method = getattr(self, module_name, None)
+            if reporter_method is None:
+                rows = "".join(
+                    f"<li>{html.escape(str(k))}: {html.escape(str(v))}</li>"
+                    for k, v in sub_results.items()
+                    if k not in ("folder", "start time", "end time")
+                )
+                self.ci.update_page_content(
+                    page_title,
+                    page_id,
+                    f"<p><strong>{html.escape(key)}</strong></p>"
+                    f"<ul>{rows}</ul>",
+                )
+                return
+            try:
+                reporter_method(sub_idx, sub_params, sub_results)
+            except Exception as e:
+                logger.error(f"Error reporting sub-module {key}: {e}")
+                self.ci.update_page_content(
+                    page_title,
+                    page_id,
+                    '<p style="color:#f0ad4e;">Could not render '
+                    f"report: {html.escape(str(e))}</p>",
+                )
+        finally:
+            self.report_page_name, self.report_page_id = saved_name, saved_id
+
     def analysis_documentation(
         self, i, parameters, results, postpone_report=False
     ):
@@ -882,9 +1574,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         </ac:structured-macro>
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        self.ci.update_page_content(
-            self.report_page_name, self.report_page_id, text
-        )
+        return self._emit(text, postpone_report)
 
     ##########################################################################
     # Single dataset modules
@@ -915,12 +1605,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         {(results["duration"] % 60):.02f} s.</p>
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        if postpone_report:
-            return text
-        else:
-            self.ci.update_page_content(
-                self.report_page_name, self.report_page_id, text
-            )
+        return self._emit(text, postpone_report)
 
     def load_dataset_movie(
         self, i, pars_load, results_load, postpone_report=False
@@ -986,12 +1671,7 @@ class ConfluenceReporter(AbstractModuleCollection):
             </ac:layout-cell></ac:layout-section></ac:layout>
             """
 
-        if postpone_report:
-            return text
-        else:
-            self.ci.update_page_content(
-                self.report_page_name, self.report_page_id, text
-            )
+        return self._emit(text, postpone_report)
 
     def load_dataset_localizations(
         self, i, parameters, results, postpone_report=False
@@ -1023,9 +1703,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         </ul>
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        self.ci.update_page_content(
-            self.report_page_name, self.report_page_id, text
-        )
+        return self._emit(text, postpone_report)
 
     @module_decorator
     def identify(
@@ -1130,12 +1808,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
 
-        if postpone_report:
-            return text
-        else:
-            self.ci.update_page_content(
-                self.report_page_name, self.report_page_id, text
-            )
+        return self._emit(text, postpone_report)
 
     def localize(self, i, parameters, results, postpone_report=False):
         """Report the ``localize`` module to Confluence.
@@ -1180,6 +1853,66 @@ class ConfluenceReporter(AbstractModuleCollection):
                 self.report_page_id,
                 os.path.split(res["filename"])[1],
             )
+
+    @module_decorator
+    def summarize_branches(
+        self,
+        i,
+        parameters,
+        results,
+        parameter_text,
+        result_text,
+        postpone_report=False,
+    ):
+        """Report the ``summarize_branches`` module: stats + summary figure.
+
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters, results : dict
+            The module's parameters and results (see the matching
+            :class:`~picasso_workflow.util.AbstractModuleCollection` method).
+        parameter_text, result_text : str
+            Pre-rendered parameter/result macros from the decorator.
+        postpone_report : bool, optional
+            If True, return the report text instead of posting it. Default
+            False.
+        """
+        logger.debug(f"Reporting summarize_branches module {i:02d}")
+        stats = results.get("stats", {})
+        rows = ""
+        for name, stat in stats.items():
+            if stat.get("n"):
+                rows += (
+                    f"<li><strong>{html.escape(str(name))}</strong>: "
+                    f"n={stat['n']}, mean={stat['mean']:.4g}, "
+                    f"std={stat['std']:.4g}, min={stat['min']:.4g}, "
+                    f"max={stat['max']:.4g}</li>"
+                )
+            else:
+                rows += (
+                    f"<li><strong>{html.escape(str(name))}</strong>: "
+                    "no data</li>"
+                )
+        text = f"""
+        <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
+        <p><strong>Module {i:02d}: Branch summary ({html.escape(str(results.get('mode', '')))})</strong></p>
+        <ul>{rows}</ul>
+        {parameter_text}
+        {result_text}
+        """
+        # Embed the summary figure inline and upload it here, so it renders
+        # both as a top-level module and when this reporter is deferred
+        # (postpone_report=True) as a branch/join sub-report nested in the
+        # branch's collapsible -- the earlier "append image after posting"
+        # path was skipped on the deferred branch, dropping the graph.
+        if fp := results.get("fp_fig"):
+            text += self.insert_image(fp, height=400)
+        text += """
+        </ac:layout-cell></ac:layout-section></ac:layout>
+        """
+        return self._emit(text, postpone_report)
 
     @module_decorator
     def zfit(
@@ -1262,12 +1995,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
 
-        if postpone_report:
-            return text
-        else:
-            self.ci.update_page_content(
-                self.report_page_name, self.report_page_id, text
-            )
+        return self._emit(text, postpone_report)
 
     @module_decorator
     def load_picassoconfig(
@@ -1305,12 +2033,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         <li>saved config for documentation: {results['fp_config']}</li></ul>
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        if postpone_report:
-            return text
-        else:
-            self.ci.update_page_content(
-                self.report_page_name, self.report_page_id, text
-            )
+        return self._emit(text, postpone_report)
 
     def export_brightfield(
         self, i, parameters, results, postpone_report=False
@@ -1360,12 +2083,7 @@ class ConfluenceReporter(AbstractModuleCollection):
             </ac:layout-cell></ac:layout-section></ac:layout>
             """
 
-        if postpone_report:
-            return text
-        else:
-            self.ci.update_page_content(
-                self.report_page_name, self.report_page_id, text
-            )
+        return self._emit(text, postpone_report)
 
     @module_decorator
     def render(
@@ -1496,12 +2214,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        if postpone_report:
-            return text
-        else:
-            self.ci.update_page_content(
-                self.report_page_name, self.report_page_id, text
-            )
+        return self._emit(text, postpone_report)
 
     def undrift_rcc(self, i, parameters, results, postpone_report=False):
         """Report the ``undrift_rcc`` module to Confluence.
@@ -1534,6 +2247,8 @@ class ConfluenceReporter(AbstractModuleCollection):
         {(results["duration"] % 60):.02f} s</li></ul>
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
+        if postpone_report:
+            return text
         self.ci.update_page_content(
             self.report_page_name, self.report_page_id, text
         )
@@ -1545,165 +2260,6 @@ class ConfluenceReporter(AbstractModuleCollection):
                 self.report_page_id,
                 os.path.split(driftimg_fn)[1],
             )
-
-    @module_decorator
-    def undrift_rsso(
-        self,
-        i,
-        parameters,
-        results,
-        parameter_text,
-        result_text,
-        postpone_report=False,
-    ):
-        """Report the ``undrift_rsso`` module to Confluence.
-
-        Documents the iterative RSSO drift correction (magnitudes, confidence
-        intervals, iterations) and uploads the drift plots.
-
-        Parameters
-        ----------
-        i : int
-            Index of the module in the workflow.
-        parameters, results : dict
-            The module's parameters and results (see the matching
-            :class:`~picasso_workflow.util.AbstractModuleCollection` method).
-        parameter_text, result_text : str
-            Pre-rendered parameter/result macros from the decorator.
-        postpone_report : bool, optional
-            If True, return the report text instead of posting it. Default is
-            False.
-        """
-        logger.debug("Reporting undrift_rsso.")
-
-        drift_mag_x = results.get("drift_magnitude_x", np.nan)
-        drift_mag_y = results.get("drift_magnitude_y", np.nan)
-        total_drift = results.get("total_drift", np.nan)
-        drift_quality = results.get("mean_drift_quality", np.nan)
-
-        # Confidence interval metrics
-        mean_uncertainty_x = results.get("mean_uncertainty_x", np.nan)
-        mean_uncertainty_y = results.get("mean_uncertainty_y", np.nan)
-
-        # Get iterative RSSO specific metrics
-        n_iterations = results.get("n_iterations", 1)
-        converged = results.get("converged", False)
-        convergence_rms = results.get("convergence_rms", np.nan)
-        subsampling_fraction = results.get("subsampling_fraction", 1.0)
-        mean_uncertainty_x_new = results.get(
-            "uncertainty_x-mean", mean_uncertainty_x
-        )
-        mean_uncertainty_y_new = results.get(
-            "uncertainty_y-mean", mean_uncertainty_y
-        )
-
-        text = f"""
-        <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
-        <p><strong>Module {i:02d}: Undrifting via Iterative RSSO</strong></p>
-        Summary:
-        <ul>
-        <li>t<sub>on</sub>: {parameters.get('ton')} frames</li>
-        <li>t<sub>off</sub>: {parameters.get('toff')} frames</li>
-        <li>Max shift per frame: {parameters.get('max_shift')} pixels</li>
-        <li>Processing chunk size: {parameters.get('chunk_size', 100)} frames</li>
-        <li>Min locs per frame: {parameters.get('min_locs_per_frame', 10)}</li>
-        <li>Max iterations: {parameters.get('max_iterations', 5)}</li>
-        <li>Subsampling fraction: {subsampling_fraction:.1%}</li>
-        <li>Numba optimization: {parameters.get('enable_numba_optimization', True)}</li>
-        </ul>
-
-        <p><strong>Convergence Results:</strong></p>
-        <ul>
-        <li><strong>Iterations performed:</strong> {n_iterations}</li>
-        <li><strong>Converged:</strong> {'Yes' if converged else 'No'}</li>
-        <li><strong>Final RMS change:</strong> {convergence_rms:.3f} nm</li>
-        </ul>
-
-        <p><strong>Drift Results:</strong></p>
-        <ul>
-        <li><strong>Total drift X:</strong> {drift_mag_x:.2f} nm</li>
-        <li><strong>Total drift Y:</strong> {drift_mag_y:.2f} nm</li>
-        <li><strong>Total drift magnitude:</strong> {total_drift:.2f} nm</li>
-        <li>Mean drift quality: {drift_quality:.1f} measurements/frame</li>
-        </ul>
-
-        <p><strong>Uncertainty Analysis:</strong></p>
-        <ul>
-        <li><strong>Mean uncertainty X:</strong> {mean_uncertainty_x_new:.3f} nm</li>
-        <li><strong>Mean uncertainty Y:</strong> {mean_uncertainty_y_new:.3f} nm</li>
-        </ul>
-
-        <ul>
-        <li>Duration: {results["duration"] // 60:.0f} min
-        {(results["duration"] % 60):.2f} s</li>
-        </ul>
-        {parameter_text}
-        {result_text}
-        """
-
-        # Add drift plot if available
-        # Try new key first, fall back to legacy key for compatibility
-        drift_plot = results.get("drift_plot") or results.get("fp_fig")
-        if drift_plot:
-            try:
-                self.ci.upload_attachment(self.report_page_id, drift_plot)
-            except ConfluenceInterfaceError:
-                pass
-            _, drift_plot_name = os.path.split(drift_plot)
-            text += f"""
-            <p><strong>Drift Trajectory:</strong></p>
-            <ac:image ac:align="center" ac:layout="center">
-            <ri:attachment ri:filename="{drift_plot_name}" />
-            </ac:image>
-            """
-
-        # Add convergence plot if available (for iterative RSSO)
-        if convergence_plot := results.get("convergence_plot"):
-            try:
-                self.ci.upload_attachment(
-                    self.report_page_id, convergence_plot
-                )
-            except ConfluenceInterfaceError:
-                pass
-            _, convergence_plot_name = os.path.split(convergence_plot)
-            text += f"""
-            <p><strong>Convergence Analysis:</strong></p>
-            <ac:image ac:align="center" ac:layout="center">
-            <ri:attachment ri:filename="{convergence_plot_name}" />
-            </ac:image>
-            """
-
-        # Add robustness plot if available (for iterative RSSO)
-        if robustness_plot := results.get("robustness_plot"):
-            try:
-                self.ci.upload_attachment(self.report_page_id, robustness_plot)
-            except ConfluenceInterfaceError:
-                pass
-            _, robustness_plot_name = os.path.split(robustness_plot)
-            text += f"""
-            <p><strong>Robustness Assessment:</strong></p>
-            <ac:image ac:align="center" ac:layout="center">
-            <ri:attachment ri:filename="{robustness_plot_name}" />
-            </ac:image>
-            """
-
-        text += """
-        </ac:layout-cell></ac:layout-section></ac:layout>
-        """
-
-        if postpone_report:
-            return text
-        else:
-            try:
-                self.ci.update_page_content(
-                    self.report_page_name, self.report_page_id, text
-                )
-            except Exception as e:
-                logger.error(
-                    f"Error updating Confluence page {self.report_page_name}, {self.report_page_id}"
-                )
-                logger.debug(text)
-                raise e
 
     @module_decorator
     def undrift_aim(
@@ -1763,12 +2319,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        if postpone_report:
-            return text
-        else:
-            self.ci.update_page_content(
-                self.report_page_name, self.report_page_id, text
-            )
+        return self._emit(text, postpone_report)
 
     def manual(self, i, parameters, results, postpone_report=False):
         """ """
@@ -1786,9 +2337,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        self.ci.update_page_content(
-            self.report_page_name, self.report_page_id, text
-        )
+        return self._emit(text, postpone_report)
 
     @module_decorator
     def summarize_dataset(
@@ -1850,12 +2399,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        if postpone_report:
-            return text
-        else:
-            self.ci.update_page_content(
-                self.report_page_name, self.report_page_id, text
-            )
+        return self._emit(text, postpone_report)
 
     # def aggregate_cluster(self, i, parameters, results):
     #     logger.debug("Reporting aggregate_cluster.")
@@ -1903,12 +2447,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         <b>TODO: generate plot for reporting</b>
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        if postpone_report:
-            return text
-        else:
-            self.ci.update_page_content(
-                self.report_page_name, self.report_page_id, text
-            )
+        return self._emit(text, postpone_report)
 
     @module_decorator
     def dbscan(
@@ -1966,12 +2505,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        if postpone_report:
-            return text
-        else:
-            self.ci.update_page_content(
-                self.report_page_name, self.report_page_id, text
-            )
+        return self._emit(text, postpone_report)
 
     def hdbscan(self, i, parameters, results, postpone_report=False):
         """Report the ``hdbscan`` module to Confluence.
@@ -2002,12 +2536,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         <b>TODO: generate plot for reporting</b>
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        if postpone_report:
-            return text
-        else:
-            self.ci.update_page_content(
-                self.report_page_name, self.report_page_id, text
-            )
+        return self._emit(text, postpone_report)
 
     @module_decorator
     def binding_event_analysis(
@@ -2040,7 +2569,13 @@ class ConfluenceReporter(AbstractModuleCollection):
         <ul><li>Start Time: {results['start time']}</li>
         <li>Duration: {results["duration"] // 60:.0f} min
         {(results["duration"] % 60):.02f} s</li>
-        </ul>
+        <li>Localization-rate drop: """
+        text += (
+            f"{results.get('loc_rate_drop', float('nan')):.3f}</li>\n"
+            "        <li>Destroyed docking sites: "
+            f"{results.get('destroyed_fraction', float('nan')):.3f}</li>\n"
+        )
+        text += f"""        </ul>
         {parameter_text}
         {result_text}
         """
@@ -2049,9 +2584,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         <b>TODO: show plots for reporting</b>
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        self.ci.update_page_content(
-            self.report_page_name, self.report_page_id, text
-        )
+        return self._emit(text, postpone_report)
 
     @module_decorator
     def resolution_analysis(
@@ -2120,9 +2653,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
 
-        self.ci.update_page_content(
-            self.report_page_name, self.report_page_id, text
-        )
+        return self._emit(text, postpone_report)
 
     @module_decorator
     def resolution_frc_spatial(
@@ -2196,9 +2727,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
 
-        self.ci.update_page_content(
-            self.report_page_name, self.report_page_id, text
-        )
+        return self._emit(text, postpone_report)
 
     @module_decorator
     def smlm_clusterer(
@@ -2270,12 +2799,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        if postpone_report:
-            return text
-        else:
-            self.ci.update_page_content(
-                self.report_page_name, self.report_page_id, text
-            )
+        return self._emit(text, postpone_report)
 
     @module_decorator
     def gaussian_mixture_cluster(
@@ -2347,9 +2871,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        self.ci.update_page_content(
-            self.report_page_name, self.report_page_id, text
-        )
+        return self._emit(text, postpone_report)
 
     @module_decorator
     def nneighbor(
@@ -2452,12 +2974,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        if postpone_report:
-            return text
-        else:
-            self.ci.update_page_content(
-                self.report_page_name, self.report_page_id, text
-            )
+        return self._emit(text, postpone_report)
 
     @module_decorator
     def fit_csr(
@@ -2498,7 +3015,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         <ul><li>Start Time: {results['start time']}</li>
         <li>Duration: {results["duration"] // 60:.0f} min
         {(results["duration"] % 60):.02f} s</li>"""
-        d = parameters["dimensionality"]
+        d = parameters.get("dimensionality", 2)
         if isinstance(results["density"], list):
             text += "<li>Density fitted:"
             for density in results["density"]:
@@ -2635,12 +3152,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        if postpone_report:
-            return text
-        else:
-            self.ci.update_page_content(
-                self.report_page_name, self.report_page_id, text
-            )
+        return self._emit(text, postpone_report)
 
     def save_single_dataset(
         self, i, parameters, results, postpone_report=False
@@ -2659,12 +3171,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        if postpone_report:
-            return text
-        else:
-            self.ci.update_page_content(
-                self.report_page_name, self.report_page_id, text
-            )
+        return self._emit(text, postpone_report)
 
     ##########################################################################
     # Aggregation workflow modules
@@ -2687,12 +3194,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        if postpone_report:
-            return text
-        else:
-            self.ci.update_page_content(
-                self.report_page_name, self.report_page_id, text
-            )
+        return self._emit(text, postpone_report)
 
     @module_decorator
     def align_channels(
@@ -2723,13 +3225,21 @@ class ConfluenceReporter(AbstractModuleCollection):
             False.
         """
         logger.debug("Reporting align_channels.")
+        # Shift units: RSSO (picasso points-align) and by-picked shifts are in
+        # nm (picasso 1.0 localization coordinates are nm); RCC shifts are in
+        # rendered-image pixels.
+        if results.get("alignment_algorithm") == "RCC":
+            shift_unit = "px"
+        else:
+            shift_unit = "nm"
         shifttxt = f"""
-        <li>Shifts in x [px]: {results.get('shifts')[0, :]}</li>
-        <li>Shifts in y [px]: {results.get('shifts')[1, :]}</li>
+        <li>Shifts in x [{shift_unit}]: {results.get('shifts')[0, :]}</li>
+        <li>Shifts in y [{shift_unit}]: {results.get('shifts')[1, :]}</li>
         """
         try:
             shifttxt += f"""
-                <li>Shifts in z [px]: {results.get('shifts')[2, :]}</li>"""
+                <li>Shifts in z [{shift_unit}]: """
+            shifttxt += f"""{results.get('shifts')[2, :]}</li>"""
         except TypeError:
             pass
         except IndexError:
@@ -2759,13 +3269,13 @@ class ConfluenceReporter(AbstractModuleCollection):
                 confidence_txt = f"""
                 <li><strong>Confidence Analysis (RSSO method):</strong></li>
                 <ul>
-                <li>Mean X shift uncertainty: {mean_x_uncertainty:.3f} px</li>
-                <li>Mean Y shift uncertainty: {mean_y_uncertainty:.3f} px</li>
-                <li>Max X shift uncertainty: {max_x_uncertainty:.3f} px</li>
-                <li>Max Y shift uncertainty: {max_y_uncertainty:.3f} px</li>
+                <li>Mean X shift uncertainty: {mean_x_uncertainty:.3f} nm</li>
+                <li>Mean Y shift uncertainty: {mean_y_uncertainty:.3f} nm</li>
+                <li>Max X shift uncertainty: {max_x_uncertainty:.3f} nm</li>
+                <li>Max Y shift uncertainty: {max_y_uncertainty:.3f} nm</li>
                 <li>95% confidence intervals:
                 ±{1.96*np.mean([mean_x_uncertainty, mean_y_uncertainty]):.3f}
-                px</li>
+                nm</li>
                 </ul>
                 """
         text = f"""
@@ -2800,9 +3310,6 @@ class ConfluenceReporter(AbstractModuleCollection):
         if fp_figs := results.get("fp_figs"):
             fig_fps += fp_figs
             titles += [f"Shift plot {i}" for i in range(len(fp_figs))]
-        if fp_fig := results.get("fig_confidence_filepath"):
-            fig_fps.append(fp_fig)
-            titles.append("Channel shifts with confidence intervals")
 
         if len(fig_fps) > 1:
             fn_figs = []
@@ -2830,9 +3337,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        self.ci.update_page_content(
-            self.report_page_name, self.report_page_id, text
-        )
+        return self._emit(text, postpone_report)
 
     def combine_channels(self, i, parameters, results, postpone_report=False):
         """Report the ``combine_channels`` module to Confluence.
@@ -2860,12 +3365,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        if postpone_report:
-            return text
-        else:
-            self.ci.update_page_content(
-                self.report_page_name, self.report_page_id, text
-            )
+        return self._emit(text, postpone_report)
 
     def register_channels(self, i, parameters, results, postpone_report=False):
         """Report the ``register_channels`` module to Confluence.
@@ -2896,12 +3396,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         </ul>
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        if postpone_report:
-            return text
-        else:
-            self.ci.update_page_content(
-                self.report_page_name, self.report_page_id, text
-            )
+        return self._emit(text, postpone_report)
 
     def save_datasets_aggregated(
         self, i, parameters, results, postpone_report=False
@@ -2933,12 +3428,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        if postpone_report:
-            return text
-        else:
-            self.ci.update_page_content(
-                self.report_page_name, self.report_page_id, text
-            )
+        return self._emit(text, postpone_report)
 
     # def spinna_manual(self, i, parameters, results, postpone_report=False):
     #     """ """
@@ -3036,12 +3526,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        if postpone_report:
-            return text
-        else:
-            self.ci.update_page_content(
-                self.report_page_name, self.report_page_id, text
-            )
+        return self._emit(text, postpone_report)
 
     @module_decorator
     def spinna_batch(
@@ -3100,204 +3585,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        if postpone_report:
-            return text
-        else:
-            self.ci.update_page_content(
-                self.report_page_name, self.report_page_id, text
-            )
-
-    def ripleysk(self, i, parameters, results, postpone_report=False):
-        logger.debug("Reporting ripleysk.")
-        text = f"""
-        <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
-        <p><strong>Module {i:02d}: Ripley's K Analysis</strong></p>
-        <ul>
-        <p>Ripley's K analyis investigates pair-wise clustering or dispersing
-        organization between different channels. It is currently implemented
-        in two different modes: "Ripleys"-mode is the analysis based on
-        Ripley's K curves. To correct for finite-size and border effects,
-        Ripley's K curves are normalized to mean and variance of
-        completely spatially random simulations. "RDF"-mode is inspired by
-        the above but calculates the radial distribution function (i.e.
-        density at annulus of radius r instead of whole circle of radius r),
-        and normalizes to a randomized version of the original data: for the
-        evaluation of each radius r, each spot in the original data is moved by
-        a random vector in a circle around it with radius r, to level out
-        density fluctuations during normalization, in addition to the border
-        effects. RDF is not Ripleys, it just uses the same infrastructure for
-        testing.</p>
-        <li>Start Time: {results['start time']}</li>
-        <li>Duration: {results["duration"] // 60:.0f} min
-        {(results["duration"] % 60):.02f} s</li>
-        <li>Type of analysis:
-        {str(parameters["atype"])}</li>
-        <li>Integral significance threshold:
-        {parameters["ripleys_threshold"]}</li>
-        <li>Ripleys Integrals location: {results["fp_ripleys_meanval"]}</li>
-        <li>Significantly interacting pairs:
-        {str(results["ripleys_significant"])}</li>
-        </ul>"""
-
-        if fp_fig := results.get("fp_fig_normalized"):
-            text += "<ul><table>"
-            text += "<tr><td><b>Normalized Curves</b></td>"
-            text += "<td><b>Un-normalized Curves</b></td></tr>"
-            text += "<tr><td>"
-            try:
-                self.ci.upload_attachment(self.report_page_id, fp_fig)
-            except ConfluenceInterfaceError:
-                pass
-            _, fp_fig = os.path.split(fp_fig)
-            text += f"""
-                <ac:image ac:width="750"><ri:attachment
-                ri:filename="{fp_fig}" />
-                </ac:image>"""
-            text += "</td><td>"
-            fp_fig = results.get("fp_fig_unnormalized")
-            try:
-                self.ci.upload_attachment(self.report_page_id, fp_fig)
-            except ConfluenceInterfaceError:
-                pass
-            _, fp_fig = os.path.split(fp_fig)
-            text += f"""
-                <ac:image ac:width="750"><ri:attachment
-                ri:filename="{fp_fig}" />
-                </ac:image>"""
-            text += "</td></tr></table></ul>"
-        if fp_fig := results.get("fp_fig_ripleys_meanval"):
-            try:
-                self.ci.upload_attachment(self.report_page_id, fp_fig)
-            except ConfluenceInterfaceError:
-                pass
-            _, fp_fig = os.path.split(fp_fig)
-            text += (
-                "<ul><ac:image><ri:attachment "
-                + f'ri:filename="{fp_fig}" />'
-                + "</ac:image></ul>"
-            )
-            text += (
-                "The Ripley's mean value is the Ripley's K integral"
-                + ", divided by the maximum integration distance."
-            )
-
-        text += """
-        </ac:layout-cell></ac:layout-section></ac:layout>
-        """
-        if postpone_report:
-            return text
-        else:
-            self.ci.update_page_content(
-                self.report_page_name, self.report_page_id, text
-            )
-
-    # @module_decorator
-    # def ripleysk_rafal(
-    #     self, i, parameters, results, parameter_text, result_text
-    # ):
-    #     logger.debug("Reporting ripleysk_rafal.")
-    #     text = f"""
-    #     <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
-    #     <p><strong>Module {i:02d}: Rafal's Ripley's K Analysis</strong></p>
-    #     Summary:
-    #     <ul>
-    #     <li>Duration: {results["duration"] // 60:.0f} min
-    #     {(results["duration"] % 60):.02f} s</li>
-    #     </ul>
-    #     {parameter_text}
-    #     {result_text}
-    #     """
-
-    #     fig_fps = []
-    #     titles = []
-    #     if fp_fig := results.get("fp_fig_raw_binary"):
-    #         fig_fps.append(fp_fig)
-    #         titles.append("Raw Matrix_binary")
-    #     if fp_fig := results.get("fp_fig_postprocessed_binary"):
-    #         fig_fps.append(fp_fig)
-    #         titles.append("Postprocessed Matrix_binary")
-    #     if fp_fig := results.get("fp_fig_unnormalized_binary"):
-    #         fig_fps.append(fp_fig)
-    #         titles.append("raw Ripley's K curves_binary")
-    #     if fp_fig := results.get("fp_fig_mask_binary"):
-    #         fig_fps.append(fp_fig)
-    #         titles.append("mask used_binary")
-    #     if fp_fig := results.get("fp_fig_normalized_binary"):
-    #         fig_fps.append(fp_fig)
-    #         titles.append("normalized Ripley's K curves_binary")
-
-    #     if len(fig_fps) > 1:
-    #         fn_figs = []
-    #         for fp in fig_fps:
-    #             try:
-    #                 self.ci.upload_attachment(self.report_page_id, fp)
-    #             except ConfluenceInterfaceError:
-    #                 pass
-    #             fn_figs.append(os.path.split(fp)[1])
-
-    #         text += "<table><tr>"
-    #         for tit in titles:
-    #             text += f"<td><b>{tit}</b></td>"
-    #         text += "</tr>"
-    #         text += "<tr>"
-    #         for fn in fn_figs:
-    #             text += f"""
-    #                 <td>
-    #                       <ac:image ac:height="350">
-    #                       <ri:attachment ri:filename="{fn}" />
-    #                       </ac:image>
-    #                 </td>"""
-    #         text += "</tr>"
-    #         text += "</table>"
-
-    #     fig_fps = []
-    #     titles = []
-    #     if fp_fig := results.get("fp_fig_raw_density"):
-    #         fig_fps.append(fp_fig)
-    #         titles.append("Raw Matrix_density")
-    #     if fp_fig := results.get("fp_fig_postprocessed_density"):
-    #         fig_fps.append(fp_fig)
-    #         titles.append("Postprocessed Matrix_density")
-    #     if fp_fig := results.get("fp_fig_unnormalized_density"):
-    #         fig_fps.append(fp_fig)
-    #         titles.append("raw Ripley's K curves_density")
-    #     if fp_fig := results.get("fp_fig_mask_density"):
-    #         fig_fps.append(fp_fig)
-    #         titles.append("mask used_density")
-    #     if fp_fig := results.get("fp_fig_normalized_density"):
-    #         fig_fps.append(fp_fig)
-    #         titles.append("normalized Ripley's K curves_density")
-
-    #     if len(fig_fps) > 1:
-    #         fn_figs = []
-    #         for fp in fig_fps:
-    #             try:
-    #                 self.ci.upload_attachment(self.report_page_id, fp)
-    #             except ConfluenceInterfaceError:
-    #                 pass
-    #             fn_figs.append(os.path.split(fp)[1])
-
-    #         text += "<table><tr>"
-    #         for tit in titles:
-    #             text += f"<td><b>{tit}</b></td>"
-    #         text += "</tr>"
-    #         text += "<tr>"
-    #         for fn in fn_figs:
-    #             text += f"""
-    #                 <td>
-    #                       <ac:image ac:height="350">
-    #                       <ri:attachment ri:filename="{fn}" />
-    #                       </ac:image>
-    #                 </td>"""
-    #         text += "</tr>"
-    #         text += "</table>"
-
-    #     text += """
-    #     </ac:layout-cell></ac:layout-section></ac:layout>
-    #     """
-    #     self.ci.update_page_content(
-    #         self.report_page_name, self.report_page_id, text
-    #     )
+        return self._emit(text, postpone_report)
 
     @module_decorator
     def ripleysk2(
@@ -3380,57 +3668,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        if postpone_report:
-            return text
-        else:
-            self.ci.update_page_content(
-                self.report_page_name, self.report_page_id, text
-            )
-
-    def ripleysk_average(self, i, parameters, results, postpone_report=False):
-        logger.debug("Reporting ripleysk_average.")
-        text = f"""
-        <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
-        <p><strong>Module {i:02d}: Averaging of Repley's K Integrals</strong></p>
-        <ul>
-        <li>Start Time: {results['start time']}</li>
-        <li>Duration: {results["duration"] // 60:.0f} min
-        {(results["duration"] % 60):.02f} s</li>
-        <li>Integral significance threshold:
-        {parameters["ripleys_threshold"]}</li>
-        <li>Loaded from workflows:
-        {parameters["report_names"]}</li>
-        <li>in folders:
-        {parameters["fp_workflows"]}</li>
-        <li>Folders to save significant pairs:
-        {results["output_folders"]}</li>
-        <li>Ripleys Integrals location:
-        {results["fp_ripleys_significant"]}</li>
-        <li>Significantly interacting pairs:
-        {str(results["ripleys_significant"])}</li>
-        </ul>"""
-
-        if fp_fig := results.get("fp_figmeanvals"):
-            try:
-                self.ci.upload_attachment(self.report_page_id, fp_fig)
-            except ConfluenceInterfaceError:
-                pass
-            _, fp_fig = os.path.split(fp_fig)
-            text += (
-                "<ul><ac:image><ri:attachment "
-                + f'ri:filename="{fp_fig}" />'
-                + "</ac:image></ul>"
-            )
-
-        text += """
-        </ac:layout-cell></ac:layout-section></ac:layout>
-        """
-        if postpone_report:
-            return text
-        else:
-            self.ci.update_page_content(
-                self.report_page_name, self.report_page_id, text
-            )
+        return self._emit(text, postpone_report)
 
     @module_decorator
     def ripleysk_average2(
@@ -3507,9 +3745,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        self.ci.update_page_content(
-            self.report_page_name, self.report_page_id, text
-        )
+        return self._emit(text, postpone_report)
 
     def protein_interactions(
         self, i, parameters, results, postpone_report=False
@@ -3590,12 +3826,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        if postpone_report:
-            return text
-        else:
-            self.ci.update_page_content(
-                self.report_page_name, self.report_page_id, text
-            )
+        return self._emit(text, postpone_report)
 
     def protein_interactions_average(
         self, i, parameters, results, postpone_report=False
@@ -3636,12 +3867,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        if postpone_report:
-            return text
-        else:
-            self.ci.update_page_content(
-                self.report_page_name, self.report_page_id, text
-            )
+        return self._emit(text, postpone_report)
 
     def create_mask(self, i, parameters, results, postpone_report=False):
         """Report the ``create_mask`` module to Confluence.
@@ -3702,12 +3928,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        if postpone_report:
-            return text
-        else:
-            self.ci.update_page_content(
-                self.report_page_name, self.report_page_id, text
-            )
+        return self._emit(text, postpone_report)
 
     @module_decorator
     def create_mask2(
@@ -3791,9 +4012,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        self.ci.update_page_content(
-            self.report_page_name, self.report_page_id, text
-        )
+        return self._emit(text, postpone_report)
 
     @module_decorator
     def refine_mask_by_density(
@@ -3883,9 +4102,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        self.ci.update_page_content(
-            self.report_page_name, self.report_page_id, text
-        )
+        return self._emit(text, postpone_report)
 
     def dbscan_molint(self, i, parameters, results, postpone_report=False):
         """Report the ``dbscan_molint`` module to Confluence.
@@ -3926,12 +4143,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        if postpone_report:
-            return text
-        else:
-            self.ci.update_page_content(
-                self.report_page_name, self.report_page_id, text
-            )
+        return self._emit(text, postpone_report)
 
     def CSR_sim_in_mask(self, i, parameters, results, postpone_report=False):
         """Report the ``CSR_sim_in_mask`` module to Confluence.
@@ -3960,12 +4172,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        if postpone_report:
-            return text
-        else:
-            self.ci.update_page_content(
-                self.report_page_name, self.report_page_id, text
-            )
+        return self._emit(text, postpone_report)
 
     def dbscan_merge_cells(
         self, i, parameters, results, postpone_report=False
@@ -3984,12 +4191,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        if postpone_report:
-            return text
-        else:
-            self.ci.update_page_content(
-                self.report_page_name, self.report_page_id, text
-            )
+        return self._emit(text, postpone_report)
 
     def dbscan_merge_stimulations(
         self, i, parameters, results, postpone_report=False
@@ -4008,12 +4210,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        if postpone_report:
-            return text
-        else:
-            self.ci.update_page_content(
-                self.report_page_name, self.report_page_id, text
-            )
+        return self._emit(text, postpone_report)
 
     def binary_barcodes(self, i, parameters, results, postpone_report=False):
         logger.debug("binary_barcodes.")
@@ -4040,12 +4237,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        if postpone_report:
-            return text
-        else:
-            self.ci.update_page_content(
-                self.report_page_name, self.report_page_id, text
-            )
+        return self._emit(text, postpone_report)
 
     def plot_densities(self, i, parameters, results, postpone_report=False):
         logger.debug("plot_densities.")
@@ -4083,12 +4275,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        if postpone_report:
-            return text
-        else:
-            self.ci.update_page_content(
-                self.report_page_name, self.report_page_id, text
-            )
+        return self._emit(text, postpone_report)
 
     def find_cluster_motifs(
         self, i, parameters, results, postpone_report=False
@@ -4169,12 +4356,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        if postpone_report:
-            return text
-        else:
-            self.ci.update_page_content(
-                self.report_page_name, self.report_page_id, text
-            )
+        return self._emit(text, postpone_report)
 
     def interaction_graph(self, i, parameters, results, postpone_report=False):
         """Report the ``interaction_graph`` module to Confluence.
@@ -4216,12 +4398,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        if postpone_report:
-            return text
-        else:
-            self.ci.update_page_content(
-                self.report_page_name, self.report_page_id, text
-            )
+        return self._emit(text, postpone_report)
 
     @module_decorator
     def find_gold(
@@ -4266,9 +4443,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        self.ci.update_page_content(
-            self.report_page_name, self.report_page_id, text
-        )
+        return self._emit(text, postpone_report)
 
     @module_decorator
     def find_similar(
@@ -4394,9 +4569,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        self.ci.update_page_content(
-            self.report_page_name, self.report_page_id, text
-        )
+        return self._emit(text, postpone_report)
 
     @module_decorator
     def find_structures(
@@ -4517,9 +4690,265 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        self.ci.update_page_content(
-            self.report_page_name, self.report_page_id, text
+        return self._emit(text, postpone_report)
+
+    @module_decorator
+    def pick_origami(
+        self,
+        i,
+        parameters,
+        results,
+        parameter_text,
+        result_text,
+        postpone_report=False,
+    ):
+        """Report the ``pick_origami`` module to Confluence.
+
+        Summarizes the design-aware picking (candidates, accepted
+        structures, expected/missing sites), renders the per-structure
+        geometry table, and uploads the phase-space + example-structure
+        figures.
+
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters, results : dict
+            The module's parameters and results (see the matching
+            :class:`~picasso_workflow.util.AbstractModuleCollection` method).
+        parameter_text, result_text : str
+            Pre-rendered parameter/result macros from the decorator.
+        postpone_report : bool, optional
+            If True, return the report text instead of posting it. Default
+            is False.
+        """
+        logger.debug("Reporting pick_origami.")
+        n_expected = results.get("n_sites_expected", "?")
+        method = results.get("pattern_method")
+        n_pat = results.get("n_pattern_clusters")
+        pattern_summary = results.get("pattern_summary")
+
+        # Compact header: the key numbers only. The verbose blocks (accepted
+        # overview, rejection funnel, parameters, results) are collapsed into
+        # expand macros at the bottom so the report leads with the figures.
+        text = f"""
+        <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
+        <p><strong>Module {i:02d}: Pick Origami</strong></p>
+        <ul>
+        <li>{results.get("n_candidates", "?")} candidates &rarr;
+        <strong>{results.get("n_accepted", "?")}</strong> accepted
+        structures</li>
+        <li>{n_expected} sites per origami @
+        {results.get("grid_spacing_nm", "?")} nm design spacing</li>
+        """
+        if pattern_summary and method == "lattice":
+            n_on = sum(
+                c["n_structures"]
+                for c in pattern_summary
+                if not (c.get("is_offlattice") or c.get("is_noise"))
+            )
+            text += (
+                f"        <li><strong>{n_on}</strong> on-lattice origami in "
+                f"{n_pat} defect classes</li>\n"
+            )
+        elif pattern_summary:
+            text += f"        <li>{n_pat} geometry pattern clusters</li>\n"
+        text += f"""        <li>Duration: {results["duration"] // 60:.0f} min
+        {(results["duration"] % 60):.2f} s</li>
+        </ul>
+        """
+
+        # Upload every figure this module references in one concurrent batch.
+        # Uploads are network round-trips; doing them sequentially per file
+        # was the dominant reporting cost (and the wedge risk for pattern
+        # reports with many renders). After this the sections below just
+        # reference the attachments by filename.
+        _fp_all = []
+        if results.get("fp_phasespace"):
+            _fp_all.append(results["fp_phasespace"])
+        for _row in results.get("fp_renderings") or []:
+            _fp_all.extend([fp for fp in (_row or []) if fp])
+        for _k in (
+            "fp_pattern_phasespace",
+            "fp_pattern_fit_space",
+            "fp_pattern_pairscore_space",
+            "fp_pattern_gate_panels",
+            "fp_pattern_site_nlocs_hist",
+            "fp_pattern_feature_space",
+            "fp_pattern_pairdist",
+        ):
+            if results.get(_k):
+                _fp_all.append(results[_k])
+        for _fps in (results.get("fp_pattern_renderings") or {}).values():
+            _fp_all.extend([fp for fp in (_fps or []) if fp])
+        self.ci.upload_attachments(self.report_page_id, _fp_all)
+
+        # ---- figure helpers: one image / a two-up row of images ----------
+        def _img(fp, height):
+            fn = os.path.split(fp)[1]
+            return (
+                f'<ac:image ac:height="{height}">'
+                f'<ri:attachment ri:filename="{fn}" /></ac:image>'
+            )
+
+        def _fig_row(fps, height=320):
+            """Lay figures out two-per-row (skipping any that are absent), so
+            the report stays compact instead of one tall vertical stack."""
+            fps = [f for f in fps if f]
+            if not fps:
+                return ""
+            s = "<table>"
+            for j in range(0, len(fps), 2):
+                s += "<tr>"
+                for fp in fps[j : j + 2]:
+                    s += f"<td>{_img(fp, height)}</td>"
+                s += "</tr>"
+            s += "</table>"
+            return s
+
+        def _heading(t):
+            return f"<p><strong>{t}</strong></p>"
+
+        # per-cluster summary (collapsed) + the exported single-site note
+        if pattern_summary:
+            pattern_lines = _pattern_cluster_lines(
+                pattern_summary, method or "pairwise"
+            )
+            title = (
+                f"Defect classes ({n_pat} on-lattice clusters)"
+                if method == "lattice"
+                else f"Geometry patterns ({n_pat} clusters)"
+            )
+            text += _expand_macro(
+                f"{title} - picks in pattern_<label>_picks.yaml",
+                pattern_lines,
+            )
+            if results.get("fp_pattern_site_picks"):
+                n_sites = results.get("n_pattern_sites", "?")
+                text += (
+                    f"<p>{n_sites} resolved single docking sites exported as "
+                    "picks (<code>pattern_site_picks.yaml</code>).</p>"
+                )
+
+        # ---- figures, grouped by purpose and laid out two-up -------------
+        # 1) phase space: the pick window (candidates vs accepted picks)
+        grp = _fig_row([results.get("fp_phasespace")])
+        if grp:
+            text += _heading("Phase space") + grp
+
+        # 2) lattice filter: the on-lattice gate-transparency panels
+        if results.get("fp_pattern_gate_panels"):
+            text += _heading("Lattice filter")
+            text += _img(results["fp_pattern_gate_panels"], 360)
+
+        # 3) lattice identification: how the accepted picks split by geometry
+        grp = _fig_row(
+            [
+                results.get("fp_pattern_pairscore_space"),
+                results.get("fp_pattern_fit_space"),
+                results.get("fp_pattern_phasespace"),
+                results.get("fp_pattern_site_nlocs_hist"),
+                results.get("fp_pattern_feature_space"),
+                results.get("fp_pattern_pairdist"),
+            ]
         )
+        if grp:
+            text += _heading("Lattice identification") + grp
+
+        # ---- example structures ------------------------------------------
+        # per-pattern examples supersede the generic accepted grid, so drop
+        # the grid whenever per-pattern renders are present.
+        fig_fps = results.get("fp_renderings")  # list (row) of list of fps
+        pat_renders = results.get("fp_pattern_renderings") or {}
+        show_grid = bool(fig_fps and any(fig_fps)) and not pat_renders
+        if show_grid or pat_renders:
+            text += _heading("Example structures")
+        if show_grid:
+            text += "<table>"
+            for row_fps in fig_fps:
+                if not row_fps:
+                    continue
+                text += "<tr>"
+                for fp in row_fps:
+                    text += f"<td>{_img(fp, 180)}</td>"
+                text += "</tr>"
+            text += "</table>"
+        if pattern_summary and pat_renders:
+            text += "<table>"
+            for c in pattern_summary:
+                if c.get("is_noise"):
+                    continue
+                lbl = c["label"]
+                fps = pat_renders.get(lbl, pat_renders.get(str(lbl)))
+                if not fps:
+                    continue
+                text += (
+                    f"<tr><td><p><strong>pattern {lbl}</strong><br/>"
+                    f"~{c['median_n_sites']:.0f} sites, "
+                    f"{c['n_structures']} structures</p></td>"
+                )
+                for fp in fps:
+                    text += f"<td>{_img(fp, 150)}</td>"
+                text += "</tr>"
+            text += "</table>"
+
+        # ---- collapsed details at the bottom -----------------------------
+        overview = results.get("accepted_overview")
+        if overview and overview.get("n_accepted"):
+
+            def _stat(key):
+                s = overview.get(key)
+                if not s:
+                    return "n/a"
+                return (
+                    f"{s['mean']:.2f} +/- {s['std']:.2f} "
+                    f"(min {s['min']:.2f}, max {s['max']:.2f})"
+                )
+
+            n_acc = overview["n_accepted"]
+            text += _expand_macro(
+                f"Accepted structures overview ({n_acc}; full per-structure "
+                "table in geometry_table.csv)",
+                {
+                    "Resolved sites": _stat("n_resolved_sites"),
+                    "Spacing (nm)": _stat("mean_spacing_nm"),
+                    "RMSE-vs-design (nm)": _stat("rmse_nm"),
+                    "Orientation (deg)": _stat("orientation_deg"),
+                    "Mirrored": f"{overview.get('n_mirrored', 0)} / {n_acc}",
+                },
+            )
+
+        funnel = results.get("funnel")
+        if funnel:
+            text += _expand_macro(
+                "Rejection funnel",
+                {
+                    "Candidates": funnel.get("n_candidates", "?"),
+                    "Rejected: no localizations": funnel.get("no_locs", "?"),
+                    "Rejected: too few sites": funnel.get(
+                        "too_few_sites", "?"
+                    ),
+                    "Rejected: missing sites": funnel.get(
+                        "rejected_missing_sites", "?"
+                    ),
+                    "Rejected: RMSE too high": funnel.get(
+                        "rejected_rmse", "?"
+                    ),
+                    "Rejected: spacing off design": funnel.get(
+                        "rejected_spacing", "?"
+                    ),
+                    "Accepted": funnel.get("accepted", "?"),
+                },
+            )
+
+        text += f"""
+        {parameter_text}
+        {result_text}
+        """
+        text += """
+        </ac:layout-cell></ac:layout-section></ac:layout>
+        """
+        return self._emit(text, postpone_report)
 
     @module_decorator
     def undrift_from_picked(
@@ -4575,12 +5004,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        if postpone_report:
-            return text
-        else:
-            self.ci.update_page_content(
-                self.report_page_name, self.report_page_id, text
-            )
+        return self._emit(text, postpone_report)
 
     @module_decorator
     def filter_locs(
@@ -4671,12 +5095,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        if postpone_report:
-            return text
-        else:
-            self.ci.update_page_content(
-                self.report_page_name, self.report_page_id, text
-            )
+        return self._emit(text, postpone_report)
 
     @module_decorator
     def filter_transient_binding(
@@ -4762,9 +5181,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        self.ci.update_page_content(
-            self.report_page_name, self.report_page_id, text
-        )
+        return self._emit(text, postpone_report)
 
     def link_locs(self, i, parameters, results, postpone_report=False):
         """Report the ``link_locs`` module to Confluence.
@@ -4794,21 +5211,17 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        if postpone_report:
-            return text
-        else:
-            self.ci.update_page_content(
-                self.report_page_name, self.report_page_id, text
-            )
+        return self._emit(text, postpone_report)
 
-    def insert_image(self, fp_fig, postpone_report=False):
+    def insert_image(self, fp_fig, postpone_report=False, height=None):
         try:
             self.ci.upload_attachment(self.report_page_id, fp_fig)
         except ConfluenceInterfaceError:
             pass
         _, fn_fig = os.path.split(fp_fig)
+        size = f'ac:height="{height}"' if height else 'ac:width="500"'
         text = f"""
-            <ac:image ac:width="500"><ri:attachment
+            <ac:image {size}><ri:attachment
             ri:filename="{fn_fig}" />
             </ac:image>"""
         return text
@@ -4883,12 +5296,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        if postpone_report:
-            return text
-        else:
-            self.ci.update_page_content(
-                self.report_page_name, self.report_page_id, text
-            )
+        return self._emit(text, postpone_report)
 
     @module_decorator
     def random_val(
@@ -5004,12 +5412,7 @@ class ConfluenceReporter(AbstractModuleCollection):
         text += """
         </ac:layout-cell></ac:layout-section></ac:layout>
         """
-        if postpone_report:
-            return text
-        else:
-            self.ci.update_page_content(
-                self.report_page_name, self.report_page_id, text
-            )
+        return self._emit(text, postpone_report)
 
 
 class UndriftError(Exception):
@@ -5243,6 +5646,28 @@ class ConfluenceInterface:
                 parent_page_title
             )
 
+    def page_url(self, page_id):
+        """Return a browser URL for a page id.
+
+        Uses the ``pages/viewpage.action?pageId=`` form, which both
+        Confluence Cloud (``.../wiki/...``) and Server/Data Center resolve
+        (Cloud redirects it to the modern page URL). Built from ``base_url``
+        + ``page_id`` alone, so no extra API round-trip is needed.
+
+        Parameters
+        ----------
+        page_id : str
+            The page id.
+
+        Returns
+        -------
+        str or None
+            The page URL, or None if ``page_id`` is falsy.
+        """
+        if not page_id:
+            return None
+        return f"{self.base_url.rstrip('/')}/pages/viewpage.action?pageId={page_id}"
+
     def connect(self):
         """Connect to confluence (cloud or server) by authentification depending
         on the settings stored at initialization.
@@ -5414,7 +5839,7 @@ class ConfluenceInterface:
         # implement logger
 
     @confluence_call
-    def upload_attachment(self, page_id, filename):
+    def upload_attachment(self, page_id, filename, return_id=False):
         """Upload an attachment to a page.
 
         Parameters
@@ -5423,15 +5848,23 @@ class ConfluenceInterface:
             The page id to attach the file to.
         filename : str
             The local filename of the file to attach.
+        return_id : bool, optional
+            Look the freshly uploaded attachment up and return its id. This
+            costs a second API round-trip (a full attachment listing whose
+            cost grows with the page's attachment count), so it is off by
+            default: report code references attachments by filename, not id.
+            Use :meth:`get_attachment_id` when the id is genuinely needed.
 
         Returns
         -------
-        attachment_id : str
-            The id of the attachment.
+        str or None
+            The attachment id if ``return_id`` is set, else ``None``.
         """
         self.confluence.attach_file(
             filename=filename, page_id=page_id, space=self.space_key
         )
+        if not return_id:
+            return None
 
         target_name = os.path.basename(str(filename))
         attachments_container = self.confluence.get_attachments_from_content(
@@ -5450,6 +5883,49 @@ class ConfluenceInterface:
             )
 
         return attachment_id
+
+    def upload_attachments(self, page_id, filenames, max_workers=4):
+        """Upload several attachments to a page concurrently.
+
+        Uploads are I/O-bound network round-trips, so a small thread pool
+        turns N sequential uploads into roughly N / ``max_workers`` wall
+        time. Each file is uploaded independently and tolerant of failure -
+        a file that raises is logged and skipped (mirroring the per-file
+        ``try/except`` at the call sites) so one bad upload does not abort
+        the batch.
+
+        Parameters
+        ----------
+        page_id : str
+            The page id to attach the files to.
+        filenames : iterable of str
+            Local filepaths to attach.
+        max_workers : int, optional
+            Thread-pool size. Kept modest (default 4) to avoid tripping
+            Confluence rate limits.
+
+        Returns
+        -------
+        list of str
+            Basenames of the files that uploaded successfully (the names to
+            reference in ``<ri:attachment>`` macros).
+        """
+        filenames = [f for f in filenames if f]
+        if not filenames:
+            return []
+
+        def _one(fp):
+            try:
+                self.upload_attachment(page_id, fp)
+                return os.path.basename(str(fp))
+            except Exception as e:  # noqa: BLE001 - keep the batch going
+                logger.warning(f"Failed to upload attachment '{fp}': {e}")
+                return None
+
+        workers = max(1, min(max_workers, len(filenames)))
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            uploaded = list(pool.map(_one, filenames))
+        return [name for name in uploaded if name]
 
     @confluence_call
     def get_attachment_id(self, page_id, filename):

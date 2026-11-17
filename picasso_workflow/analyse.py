@@ -12,8 +12,7 @@ Initial date: March 7, 2024
 from __future__ import annotations
 
 # from picasso_workflow.outpost_modules import g5m
-from picasso import g5m
-import picasso
+from picasso_workflow._picasso_api import g5m
 import copy
 import gc
 
@@ -28,8 +27,8 @@ import re
 import string
 import subprocess
 import sys
+import threading
 import time
-from datetime import datetime
 from functools import wraps
 
 import matplotlib.pyplot as plt
@@ -40,10 +39,9 @@ import pandas as pd
 import psutil
 import yaml
 from matplotlib import colormaps
-from memory_profiler import memory_usage
-from picasso import CONFIG as pCONFIG
-from picasso import __version__ as picassoversion
-from picasso import (
+from picasso_workflow._picasso_api import CONFIG as pCONFIG
+from picasso_workflow._picasso_api import __version__ as picassoversion
+from picasso_workflow._picasso_api import (
     aim,
     clusterer,
     # g5m,
@@ -57,59 +55,29 @@ from picasso import (
 # from picasso_workflow.outpost_modules import g5m
 from scipy.ndimage import label
 from scipy.spatial import KDTree, distance
-from scipy.stats import kstest, norm, poisson
-
-try:
-    from scipy.stats import wasserstein_distance
-except ImportError:
-    # Fallback implementation if scipy version issues
-    def wasserstein_distance(u_values, v_values):
-        """Compute the 1D Wasserstein distance (manual fallback).
-
-        Parameters
-        ----------
-        u_values, v_values : array-like
-            The two 1D distributions to compare.
-
-        Returns
-        -------
-        float
-            The 1D Wasserstein distance between the distributions.
-        """
-        u_sorted = np.sort(u_values)
-        v_sorted = np.sort(v_values)
-        n = len(u_sorted)
-        m = len(v_sorted)
-
-        # Create cumulative distributions (not used in this implementation)
-        # u_cdf = np.arange(1, n + 1) / n
-        # v_cdf = np.arange(1, m + 1) / m
-
-        # Merge and compute distance
-        all_values = np.concatenate([u_sorted, v_sorted])
-        all_values = np.sort(all_values)
-
-        distance = 0
-        for i in range(len(all_values) - 1):
-            u_cum = np.searchsorted(u_sorted, all_values[i], side="right") / n
-            v_cum = np.searchsorted(v_sorted, all_values[i], side="right") / m
-            distance += abs(u_cum - v_cum) * (
-                all_values[i + 1] - all_values[i]
-            )
-
-        return distance
+from scipy.stats import norm, poisson, wasserstein_distance
 
 
 from picasso_workflow import (
-    outpost_modules,
-    picasso_outpost,
     process_brightfield,
     util,
 )
 from picasso_workflow import __version__ as picassoworkflowversion
-from picasso_workflow.outpost_modules import render
+from picasso_workflow.module_runtime import module_decorator  # noqa: F401
+from picasso_workflow.outpost.clustering import molint as clustering_molint
+from picasso_workflow.outpost.masking.mask import CellMask
+from picasso_workflow.outpost.render import render
+from picasso_workflow.outpost.reporting import histograms as reporting_hist
+from picasso_workflow.outpost.origami import origami as origami_mod
+from picasso_workflow.outpost.picks import picks as picks_mod
+from picasso_workflow.outpost.spinna import wrappers as spinna_wrappers
+from picasso_workflow.picasso_set.analyse_calibration import (
+    PicassoSetCalibrationMixin,
+)
+from picasso_workflow.picasso_set.analyse_core import PicassoSetCoreMixin
+from picasso_workflow.picasso_set.analyse_io import PicassoSetIOMixin
+from picasso_workflow.picasso_set.analyse_picks import PicassoSetPicksMixin
 from picasso_workflow.progress import PicassoProgressProxy
-from picasso_workflow.ripleys_analysis import run_ripleysAnalysis
 
 # logger = logging.getLogger(__name__)
 
@@ -130,6 +98,760 @@ def generate_random_code(length):
     letters = string.ascii_letters
     random_code = "".join(random.choices(letters, k=length))
     return random_code
+
+
+def _safe_filename_component(name):
+    """Make a per-channel tag safe to use as a single filename component.
+
+    A dataset's ``#tags`` value feeds the saved locs filename (e.g. the
+    ``("$$map", "#tags", None)`` default of ``save_single_dataset`` and the
+    ``tag + ".hdf5"`` of the aggregated saver). Replace path separators so
+    a tag such as ``"cell/A"`` cannot write into a missing subdirectory, and
+    a leading ``"/"`` cannot discard the target folder into an absolute path.
+
+    Parameters
+    ----------
+    name : str
+        The raw filename component (typically a channel tag).
+
+    Returns
+    -------
+    str
+        ``name`` with ``/`` and ``\\`` replaced by ``_``.
+    """
+    for sep in ("/", "\\"):
+        name = name.replace(sep, "_")
+    return name
+
+
+def _summarize_accepted_structures(geometry_table):
+    """Aggregate per-structure geometry over the accepted structures.
+
+    Reduces the (potentially large) per-candidate geometry table to a small,
+    serialisable overview for the report; the full table is kept only on disk
+    (``geometry_table.csv``).
+
+    Parameters
+    ----------
+    geometry_table : list of dict
+        Per-structure geometry rows (see ``origami_mod.pick_origami``).
+
+    Returns
+    -------
+    dict
+        ``n_accepted``, ``n_mirrored``, and ``mean``/``std``/``min``/``max``
+        for ``n_resolved_sites``, ``mean_spacing_nm``, ``rmse_nm`` and
+        ``orientation_deg`` over the accepted structures.
+    """
+    accepted = [row for row in (geometry_table or []) if row.get("accepted")]
+    overview = {
+        "n_accepted": len(accepted),
+        "n_mirrored": sum(1 for row in accepted if row.get("mirror")),
+    }
+    for key in (
+        "n_resolved_sites",
+        "mean_spacing_nm",
+        "rmse_nm",
+        "orientation_deg",
+    ):
+        vals = np.asarray(
+            [row.get(key, np.nan) for row in accepted], dtype=float
+        )
+        vals = vals[np.isfinite(vals)]
+        if len(vals):
+            overview[key] = {
+                "mean": float(np.mean(vals)),
+                "std": float(np.std(vals)),
+                "min": float(np.min(vals)),
+                "max": float(np.max(vals)),
+            }
+        else:
+            overview[key] = None
+    return overview
+
+
+def _finite_xy(x, y):
+    """Return the finite, equal-length ``(x, y)`` subset as float arrays."""
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+    if len(x) != len(y):
+        return np.empty(0), np.empty(0)
+    ok = np.isfinite(x) & np.isfinite(y)
+    return x[ok], y[ok]
+
+
+def _scatter_or_contour(
+    ax, x, y, color, cmap, contour_threshold, hist_range=None
+):
+    """Plot ``(x, y)`` as points, or a filled density contour if there are
+    more than ``contour_threshold`` points (scatter gets unreadable).
+
+    ``hist_range`` (``[[x0, x1], [y0, y1]]``) bounds the contour histogram to
+    the visible region so its resolution is not wasted on far outliers.
+
+    Returns the number of finite points plotted.
+    """
+    x, y = _finite_xy(x, y)
+    if len(x) == 0:
+        return 0
+    if len(x) <= contour_threshold or np.ptp(x) == 0 or np.ptp(y) == 0:
+        ax.scatter(x, y, s=10, color=color, alpha=0.4)
+    else:
+        hist, xedges, yedges = np.histogram2d(x, y, bins=60, range=hist_range)
+        xc = 0.5 * (xedges[:-1] + xedges[1:])
+        yc = 0.5 * (yedges[:-1] + yedges[1:])
+        xg, yg = np.meshgrid(xc, yc)
+        ax.contourf(xg, yg, hist.T, levels=8, cmap=cmap)
+    return len(x)
+
+
+def _draw_pick_window(ax, pick_window):
+    """Outline the pick_similar active range (nlocs/rmsd rectangle) on ``ax``.
+
+    Open edges (unset/infinite bounds) extend to the current axis limits.
+    """
+    if not pick_window:
+        return
+    x0 = pick_window.get("min_nlocs_pf", np.nan)
+    x1 = pick_window.get("max_nlocs_pf", np.nan)
+    y0 = pick_window.get("min_rmsd", np.nan)
+    y1 = pick_window.get("max_rmsd", np.nan)
+    xlim = ax.get_xlim()
+    ylim = ax.get_ylim()
+    x0 = xlim[0] if not np.isfinite(x0) else x0
+    x1 = xlim[1] if not np.isfinite(x1) else x1
+    y0 = ylim[0] if not np.isfinite(y0) else y0
+    y1 = ylim[1] if not np.isfinite(y1) else y1
+    if x1 <= x0 or y1 <= y0:
+        return
+    from matplotlib.patches import Rectangle
+
+    ax.add_patch(
+        Rectangle(
+            (x0, y0),
+            x1 - x0,
+            y1 - y0,
+            fill=False,
+            edgecolor="g",
+            linestyle="--",
+            linewidth=1.5,
+            label="pick range",
+            zorder=4,
+        )
+    )
+
+
+def _recenter_on_com(picked_locs, centers):
+    """Relocate each pick centre to the centre of mass of its localizations.
+
+    ``picked_locs`` is grouped by ``group`` (the group id is the index into
+    ``centers``, as :func:`picks_mod.picked_locs` assigns them). Returns
+    a new list of ``[x, y]`` centres; a group with no localizations keeps its
+    original centre. ``pick_similar`` returns grid positions offset from the
+    structure by up to half a grid step, so re-centring on the COM (and
+    re-picking once around the new centre) makes the exported picks and every
+    downstream footprint consistent with the actual structure.
+    """
+    centers = [[float(c[0]), float(c[1])] for c in centers]
+    if len(picked_locs) == 0:
+        return centers
+    g = np.asarray(picked_locs["group"])
+    x = np.asarray(picked_locs["x"], dtype=float)
+    y = np.asarray(picked_locs["y"], dtype=float)
+    for gid in np.unique(g):
+        m = g == gid
+        if 0 <= gid < len(centers) and np.any(m):
+            centers[int(gid)] = [float(x[m].mean()), float(y[m].mean())]
+    return centers
+
+
+def _footprint_viewport(x, y, cx, cy, footprint_diameter):
+    """A square viewport of side ``footprint_diameter`` centred on the
+    localizations' centre of mass.
+
+    Returned in picasso ``[(y_min, x_min), (y_max, x_max)]`` order. The
+    pick_similar centre ``(cx, cy)`` is a grid position, offset from the
+    structure by up to half a grid step, so a viewport centred on it renders
+    the origami off-centre; centring on the COM of the picked localizations
+    puts it in the middle. Falls back to ``(cx, cy)`` when there are no locs.
+    """
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+    if len(x):
+        cx = float(np.mean(x))
+        cy = float(np.mean(y))
+    h = footprint_diameter / 2
+    return [(cy - h, cx - h), (cy + h, cx + h)]
+
+
+def _plot_origami_phasespace(
+    fp,
+    nlocs,
+    rmsds,
+    acc_nlocs,
+    acc_rmsds,
+    title,
+    contour_threshold=2000,
+    pick_window=None,
+):
+    """Render the origami nlocs-per-frame / rmsd phase-space diagnostic.
+
+    Two panels sharing axes - all candidates and the accepted picks - each
+    drawn as points, or a density contour when there are more than
+    ``contour_threshold`` points. The pick_similar active range
+    (``pick_window``) is outlined on each panel.
+
+    Returns
+    -------
+    str
+        The path the figure was saved to (``fp``).
+    """
+    fig, axes = plt.subplots(1, 2, figsize=(12, 6), sharex=True, sharey=True)
+
+    # Robust shared limits that include both clouds AND the pick window,
+    # so the plot is a diagnostic even when nothing is accepted (you can see
+    # whether the window overlaps the candidates). The candidate cloud is
+    # bounded by a Tukey fence (Q3 + 1.5 IQR) so its long high-nlocs tail
+    # (dense/aggregated regions) cannot stretch the axis; the accepted cloud
+    # and the pick-window edges are always fully included.
+    xlos, xhis, ylos, yhis = [], [], [], []
+    cand_x, cand_y = _finite_xy(nlocs, rmsds)
+    if len(cand_x):
+        qx1, qx3 = np.quantile(cand_x, [0.25, 0.75])
+        qy1, qy3 = np.quantile(cand_y, [0.25, 0.75])
+        xlos.append(float(np.quantile(cand_x, 0.01)))
+        xhis.append(float(min(cand_x.max(), qx3 + 1.5 * (qx3 - qx1))))
+        ylos.append(float(np.quantile(cand_y, 0.01)))
+        yhis.append(float(min(cand_y.max(), qy3 + 1.5 * (qy3 - qy1))))
+    for xv, yv in ((acc_nlocs, acc_rmsds),):
+        fx, fy = _finite_xy(xv, yv)
+        if len(fx):
+            xlos.append(float(fx.min()))
+            xhis.append(float(fx.max()))
+            ylos.append(float(fy.min()))
+            yhis.append(float(fy.max()))
+    if pick_window:
+        for key, los, his in (
+            ("min_nlocs_pf", xlos, xhis),
+            ("max_nlocs_pf", xlos, xhis),
+            ("min_rmsd", ylos, yhis),
+            ("max_rmsd", ylos, yhis),
+        ):
+            val = pick_window.get(key)
+            if val is not None and np.isfinite(val):
+                los.append(float(val))
+                his.append(float(val))
+
+    hist_range = None
+    if xhis and yhis:
+        x_lo, x_hi = min(xlos), max(xhis)
+        y_lo, y_hi = min(ylos), max(yhis)
+        rx = (x_hi - x_lo) or 1.0
+        ry = (y_hi - y_lo) or 1.0
+        x0, x1 = x_lo - 0.05 * rx, x_hi + 0.05 * rx
+        y0, y1 = y_lo - 0.05 * ry, y_hi + 0.05 * ry
+        hist_range = [[x0, x1], [y0, y1]]
+        axes[0].set_xlim(x0, x1)
+        axes[0].set_ylim(y0, y1)
+
+    n_cand = _scatter_or_contour(
+        axes[0], nlocs, rmsds, "0.3", "Greys", contour_threshold, hist_range
+    )
+    axes[0].set_title(f"All candidates (n={n_cand})")
+    n_acc = _scatter_or_contour(
+        axes[1],
+        acc_nlocs,
+        acc_rmsds,
+        "r",
+        "Reds",
+        contour_threshold,
+        hist_range,
+    )
+    axes[1].set_title(f"Accepted picks (n={n_acc})")
+
+    # outline the pick_similar active range on each panel (after the axis
+    # limits are set, so open edges extend to the visible range)
+    for ax in axes:
+        _draw_pick_window(ax, pick_window)
+        ax.set_xlabel("# localizations per frame in footprint")
+        handles, _ = ax.get_legend_handles_labels()
+        if handles:
+            ax.legend(fontsize="small")
+    axes[0].set_ylabel("root mean square distance in footprint")
+    fig.suptitle(title)
+    fig.tight_layout()
+    fig.savefig(fp)
+    return fp
+
+
+def _pattern_color_map(summary, labels):
+    """A stable label -> colour mapping shared across the pattern figures.
+
+    Returns ``(order, color)`` where ``order`` is the label order (from the
+    summary) and ``color(label)`` gives that cluster's colour (grey for the
+    ``-1`` noise group), so a cluster keeps the same colour in every plot.
+    """
+    order = [c["label"] for c in summary] or sorted(
+        set(np.asarray(labels).tolist())
+    )
+    cmap = plt.get_cmap("tab10")
+
+    def color(lbl):
+        if lbl == -1:
+            return "0.6"
+        return cmap(order.index(lbl) % 10) if lbl in order else "0.4"
+
+    return order, color
+
+
+# distinct scatter markers cycled per cluster, so groups stay legible where
+# their colours overlap in a busy plot
+_PATTERN_MARKERS = ("o", "s", "^", "D", "v", "P", "X", "*", ">", "<", "h", "p")
+
+
+def _labelled_2d_axes(
+    ax, x, y, labels, summary, min_contour=60, xlim=None, ylim=None
+):
+    """Draw per-cluster points on ``ax``: a smoothed density contour when a
+    cluster has enough points (clearer than an overplotted scatter), else a
+    scatter with a distinct marker + colour per cluster.
+
+    Axes are bounded by a Tukey fence on the pooled cloud so a few outliers
+    cannot stretch them; pass ``xlim`` / ``ylim`` to override an axis when
+    the pooled cloud is bimodal (e.g. a large low-scoring background mode
+    that would otherwise clip the clusters of interest out of view). Colours
+    follow :func:`_pattern_color_map`.
+    """
+    from scipy.ndimage import gaussian_filter
+
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+    labels = np.asarray(labels)
+    fin = np.isfinite(x) & np.isfinite(y)
+    if not np.any(fin):
+        return
+    px, py = x[fin], y[fin]
+
+    def _fence(v):
+        q1, q3 = np.quantile(v, [0.25, 0.75])
+        iqr = q3 - q1
+        lo = max(float(v.min()), float(q1 - 1.5 * iqr))
+        hi = min(float(v.max()), float(q3 + 1.5 * iqr))
+        if hi <= lo:
+            lo, hi = float(v.min()), float(v.max())
+        if hi <= lo:
+            hi = lo + 1.0
+        return lo, hi
+
+    x0, x1 = xlim if xlim is not None else _fence(px)
+    y0, y1 = ylim if ylim is not None else _fence(py)
+    hrange = [[x0, x1], [y0, y1]]
+    order, color = _pattern_color_map(summary, labels)
+    for i, lbl in enumerate(order):
+        m = labels == lbl
+        cx, cy = x[m], y[m]
+        f = np.isfinite(cx) & np.isfinite(cy)
+        cx, cy = cx[f], cy[f]
+        if len(cx) == 0:
+            continue
+        col = color(lbl)
+        mk = "." if lbl == -1 else _PATTERN_MARKERS[i % len(_PATTERN_MARKERS)]
+        name = "unclustered" if lbl == -1 else str(lbl)
+        lab = f"{name} (n={len(cx)})"
+        if len(cx) < min_contour or np.ptp(cx) == 0 or np.ptp(cy) == 0:
+            ax.scatter(
+                cx,
+                cy,
+                s=30,
+                marker=mk,
+                facecolor=[col],
+                edgecolor="k",
+                linewidths=0.4,
+                alpha=0.75,
+                label=lab,
+            )
+            continue
+        hist, xe, ye = np.histogram2d(cx, cy, bins=40, range=hrange)
+        hist = gaussian_filter(hist, 1.0)
+        if hist.max() <= 0:
+            continue
+        xc = 0.5 * (xe[:-1] + xe[1:])
+        yc = 0.5 * (ye[:-1] + ye[1:])
+        levels = np.linspace(hist.max() * 0.25, hist.max() * 0.9, 3)
+        ax.contour(xc, yc, hist.T, levels=levels, colors=[col], linewidths=1.3)
+        ax.plot([], [], color=col, marker=mk, linestyle="none", label=lab)
+    ax.set_xlim(x0, x1)
+    ax.set_ylim(y0, y1)
+    handles, _ = ax.get_legend_handles_labels()
+    if handles:
+        ax.legend(fontsize="small", title="cluster")
+
+
+def _plot_pattern_phasespace(fp, nlocs, rmsds, labels, summary):
+    """Accepted structures in (nlocs-per-frame, rmsd), as per-cluster density
+    contours (clearer than a scatter of thousands of points)."""
+    fig, ax = plt.subplots(figsize=(7, 6))
+    _labelled_2d_axes(ax, nlocs, rmsds, labels, summary)
+    ax.set_xlabel("# localizations per frame in footprint")
+    ax.set_ylabel("root mean square distance in footprint")
+    ax.set_title("Accepted structures by geometry pattern")
+    fig.tight_layout()
+    fig.savefig(fp)
+    plt.close(fig)
+    return fp
+
+
+def _plot_lattice_fit_space(fp, n_matched, rmse_nm, labels, summary):
+    """Lattice method: accepted structures in (matched-site count, template
+    fit RMSE), per-cluster density contours.
+
+    Unlike the pick-window phase space (nlocs-per-frame, rmsd), these are the
+    registration observables the on-lattice gate actually decides on, so the
+    clean-origami island separates from the off-lattice cloud much more
+    sharply - the targeted view of where the candidates sit.
+    """
+    n_matched = np.asarray(n_matched, dtype=float)
+    rmse_nm = np.asarray(rmse_nm, dtype=float)
+    if not np.any(np.isfinite(n_matched) & np.isfinite(rmse_nm)):
+        return None
+    fig, ax = plt.subplots(figsize=(7, 6))
+    _labelled_2d_axes(ax, n_matched, rmse_nm, labels, summary)
+    ax.set_xlabel("# docking sites matched to template")
+    ax.set_ylabel("template fit RMSE (nm)")
+    ax.set_title("Accepted structures by lattice fit quality")
+    fig.tight_layout()
+    fig.savefig(fp)
+    plt.close(fig)
+    return fp
+
+
+def _plot_lattice_pairscore_space(
+    fp, nlocs, pair_score, labels, summary, gate=None
+):
+    """Registration-free view: structures in (nlocs-per-frame, lattice
+    pair-score).
+
+    The pair-score is the cheap first-layer origami discriminator (windowed
+    pair-correlation at the design spacing, computed on every pick before the
+    expensive registration). The origami island sits at high pair-score, well
+    separated from the junk cloud that brightness (nlocs) alone cannot
+    resolve.
+
+    The pooled cloud is strongly bimodal - the large off-lattice mode sits
+    near zero while the accepted structures score ~1-3 - so the y-axis is
+    framed explicitly (0 .. just above the accepted range) rather than by the
+    default Tukey fence, which the background mode would otherwise collapse.
+    ``gate`` (the pre-screen ``min_pair_score``) is drawn as a reference line.
+    """
+    ps = np.asarray(pair_score, dtype=float)
+    nl = np.asarray(nlocs, dtype=float)
+    lab = np.asarray(labels)
+    # frame both axes on the accepted (on-lattice) cloud: the off-lattice
+    # background mode dominates a pooled fence and would clip the accepted
+    # structures off both axes. Fall back to all finite points if too few.
+    keep = (lab != -1) & np.isfinite(ps) & np.isfinite(nl)
+    if keep.sum() < 2:
+        keep = np.isfinite(ps) & np.isfinite(nl)
+    if keep.sum() < 2:
+        return None
+
+    def _fence(v):
+        q1, q3 = np.quantile(v, [0.25, 0.75])
+        iqr = q3 - q1
+        lo = max(float(v.min()), float(q1 - 1.5 * iqr))
+        hi = min(float(v.max()), float(q3 + 1.5 * iqr))
+        if hi <= lo:
+            lo, hi = float(v.min()), float(v.max())
+        if hi <= lo:
+            hi = lo + 1.0
+        return lo, hi
+
+    x0, x1 = _fence(nl[keep])
+    _, ytop = _fence(ps[keep])
+    if gate is not None and np.isfinite(gate):
+        ytop = max(ytop, float(gate))
+    ytop = ytop * 1.05 if ytop > 0 else 1.0
+    fig, ax = plt.subplots(figsize=(7, 6))
+    _labelled_2d_axes(
+        ax, nl, ps, labels, summary, xlim=(x0, x1), ylim=(0.0, ytop)
+    )
+    if gate is not None and np.isfinite(gate):
+        ax.axhline(
+            float(gate),
+            color="0.4",
+            linestyle="--",
+            linewidth=1.0,
+            label=f"pre-screen gate ({float(gate):.2f})",
+        )
+        ax.legend(fontsize="small", title="cluster")
+    ax.set_xlabel("# localizations per frame in footprint")
+    ax.set_ylabel("lattice pair-score at design spacing")
+    ax.set_title("Accepted structures by lattice pair-score")
+    fig.tight_layout()
+    fig.savefig(fp)
+    plt.close(fig)
+    return fp
+
+
+def _plot_lattice_gate_panels(fp, aux, labels, gates):
+    """One histogram per on-lattice gate, with its threshold(s), showing where
+    the accepted (on-lattice) structures sit relative to each cut.
+
+    Makes the acceptance decision fully transparent: a structure is
+    on-lattice only if it clears *every* gate, so any single gate can be the
+    limiting one. The pre-screen ``pair_score`` panel covers all picks; the
+    remaining panels cover only the registered picks (those that passed the
+    pre-screen). Each title reports how many of that panel's structures fail
+    that gate alone.
+    """
+    if not aux or not gates:
+        return None
+    labels = np.asarray(labels)
+    n = len(aux)
+
+    def _get(key):
+        return np.array([a.get(key, np.nan) for a in aux], dtype=float)
+
+    rmse = _get("rmse_nm")
+    registered = np.isfinite(rmse)  # passed the pre-screen -> got registered
+    onl = labels != -1
+    if not registered.any():
+        return None
+    nn = gates.get("design_nn_nm", 0.0)
+    tol = gates.get("spacing_tol", 0.3)
+    allmask = np.ones(n, dtype=bool)
+    # (title, values, subset, [(op, threshold), ...])
+    panels = [
+        (
+            "pair-score (pre-screen)",
+            _get("pair_score"),
+            allmask,
+            [(">=", gates.get("min_pair_score"))],
+        ),
+        (
+            "# matched sites",
+            _get("n_matched"),
+            registered,
+            [(">=", gates.get("min_sites"))],
+        ),
+        (
+            "fit RMSE (nm)",
+            rmse,
+            registered,
+            [("<=", gates.get("rmse_gate_nm"))],
+        ),
+        (
+            "frac on-lattice",
+            _get("frac_on_lattice"),
+            registered,
+            [(">=", gates.get("frac_on_lattice_gate"))],
+        ),
+        (
+            "fitted spacing (nm)",
+            _get("fitted_spacing_nm"),
+            registered,
+            [(">=", nn * (1.0 - tol)), ("<=", nn * (1.0 + tol))],
+        ),
+        (
+            "per-site nlocs CV",
+            _get("nlocs_cv"),
+            registered,
+            [("<=", gates.get("max_nlocs_cv"))],
+        ),
+        (
+            "per-site spread CV",
+            _get("spread_cv"),
+            registered,
+            [("<=", gates.get("max_spread_cv"))],
+        ),
+    ]
+    ncol = 4
+    nrow = int(np.ceil(len(panels) / ncol))
+    fig, axes = plt.subplots(nrow, ncol, figsize=(4 * ncol, 3.2 * nrow))
+    axes = np.atleast_1d(axes).ravel()
+    for ax, (title, vals, subset, thr) in zip(axes, panels):
+        m = subset & np.isfinite(vals)
+        if not m.any():
+            ax.set_visible(False)
+            continue
+        v = vals[m]
+        lo, hi = np.percentile(v, [1, 99])
+        if hi <= lo:
+            lo, hi = float(v.min()), float(v.max()) + 1.0
+        bins = np.linspace(lo, hi, 30)
+        rej = m & ~onl
+        acc = m & onl
+        if rej.any():
+            ax.hist(
+                np.clip(vals[rej], lo, hi),
+                bins=bins,
+                color="0.7",
+                label="rejected",
+            )
+        if acc.any():
+            ax.hist(
+                np.clip(vals[acc], lo, hi),
+                bins=bins,
+                color="tab:green",
+                alpha=0.85,
+                label="on-lattice",
+            )
+        passmask = np.ones(int(m.sum()), dtype=bool)
+        for op, t in thr:
+            if t is None or not np.isfinite(t):
+                continue
+            ax.axvline(t, color="firebrick", linestyle="--", linewidth=1.2)
+            passmask &= (v >= t) if op == ">=" else (v <= t)
+        nfail = int((~passmask).sum())
+        ax.set_title(f"{title}\n{nfail}/{int(m.sum())} fail", fontsize=9)
+        ax.tick_params(labelsize=8)
+    for ax in axes[len(panels) :]:
+        ax.set_visible(False)
+    axes[0].legend(fontsize=8)
+    fig.suptitle(
+        "On-lattice gate transparency (per-gate metric distributions; "
+        "green = accepted)",
+        fontsize=12,
+    )
+    fig.tight_layout()
+    fig.savefig(fp)
+    plt.close(fig)
+    return fp
+
+
+def _plot_pattern_feature_space(fp, features, labels, summary):
+    """PCA(2) of the standardized descriptor features, per-cluster density -
+    shows how well the clustering separates in the full descriptor space."""
+    from sklearn.decomposition import PCA
+    from sklearn.preprocessing import StandardScaler
+
+    feats = np.asarray(features, dtype=float)
+    if feats.ndim != 2 or len(feats) < 2:
+        return None
+    scaled = StandardScaler().fit_transform(feats)
+    if scaled.shape[1] > 2:
+        emb = PCA(n_components=2, random_state=0).fit_transform(scaled)
+    elif scaled.shape[1] == 2:
+        emb = scaled
+    else:
+        emb = np.column_stack([scaled[:, 0], np.zeros(len(scaled))])
+    fig, ax = plt.subplots(figsize=(7, 6))
+    _labelled_2d_axes(ax, emb[:, 0], emb[:, 1], labels, summary)
+    ax.set_xlabel("descriptor PC 1")
+    ax.set_ylabel("descriptor PC 2")
+    ax.set_title("Pattern clusters in descriptor space (PCA)")
+    fig.tight_layout()
+    fig.savefig(fp)
+    plt.close(fig)
+    return fp
+
+
+def _plot_pattern_pairdist(
+    fp, features, feature_names, labels, summary, max_pair_nm
+):
+    """Per-cluster mean pairwise site-distance histogram - the lattice
+    'signature' of each pattern (one line per cluster)."""
+    idx = [
+        i for i, n in enumerate(feature_names) if str(n).startswith("pdist_")
+    ]
+    if not idx:
+        return None
+    hist = np.asarray(features, dtype=float)[:, idx]
+    edges = np.linspace(0.0, float(max_pair_nm), len(idx) + 1)
+    centers = 0.5 * (edges[:-1] + edges[1:])
+    labels = np.asarray(labels)
+    _, color = _pattern_color_map(summary, labels)
+    fig, ax = plt.subplots(figsize=(7, 5))
+    for c in summary:
+        lbl = c["label"]
+        if c.get("is_noise"):
+            continue
+        m = labels == lbl
+        if not np.any(m):
+            continue
+        ax.plot(
+            centers,
+            hist[m].mean(axis=0),
+            color=color(lbl),
+            label=f"pattern {lbl} (~{c.get('median_n_sites', 0):.0f} sites)",
+        )
+    ax.set_xlabel("pairwise site distance (nm)")
+    ax.set_ylabel("mean normalized count")
+    ax.set_title("Pairwise site-distance signature per pattern")
+    handles, _ = ax.get_legend_handles_labels()
+    if handles:
+        ax.legend(fontsize="small")
+    fig.tight_layout()
+    fig.savefig(fp)
+    plt.close(fig)
+    return fp
+
+
+def _plot_site_nlocs_hist(fp, labels, aux, summary):
+    """Per-cluster histogram of localizations-per-(matched)-site.
+
+    Helps judge site resolution and tune ``pattern_min_samples`` /
+    ``pattern_eps_frac``: spurious over-counted sites show up as a spike of
+    low-count sites near the ``min_samples`` floor, while a clean, well
+    populated peak means the sites are real.
+    """
+    if aux is None:
+        return None
+    labels = np.asarray(labels)
+    clusters = [c for c in summary if not c.get("is_offlattice")]
+    per = {}
+    pooled = []
+    for c in clusters:
+        lbl = c["label"]
+        idx = np.where(labels == lbl)[0]
+        cnts = (
+            np.concatenate(
+                [np.asarray(aux[i].get("site_nlocs_matched", [])) for i in idx]
+            )
+            if len(idx)
+            else np.empty(0)
+        )
+        per[lbl] = cnts
+        pooled.append(cnts)
+    pooled = np.concatenate(pooled) if pooled else np.empty(0)
+    if len(pooled) == 0:
+        return None
+    hi = float(np.percentile(pooled, 99))
+    bins = np.linspace(0, max(hi, 5.0), 30)
+    order, color = _pattern_color_map(summary, labels)
+    fig, ax = plt.subplots(figsize=(7, 5))
+    for lbl in order:
+        cnts = per.get(lbl)
+        if cnts is None or len(cnts) == 0:
+            continue
+        ax.hist(
+            cnts,
+            bins=bins,
+            histtype="step",
+            density=True,
+            linewidth=1.6,
+            color=color(lbl),
+            label=f"{lbl}-site ({len(cnts)} sites)",
+        )
+    ax.set_xlabel("localizations per site")
+    ax.set_ylabel("density")
+    ax.set_title("Localizations per docking site, by cluster")
+    handles, _ = ax.get_legend_handles_labels()
+    if handles:
+        ax.legend(fontsize="small", title="cluster")
+    fig.tight_layout()
+    fig.savefig(fp)
+    plt.close(fig)
+    return fp
+
+
+# Hard ceiling on how many per-structure example images pick_origami renders
+# (and therefore uploads to the report). Rendering + uploading thousands of
+# structure PNGs one-by-one is the dominant cost and has wedged runs in the
+# Confluence reporter for tens of minutes; cap it and log when the cap bites.
+# Applies to the base representative renders and, in total, to the per-pattern
+# example renders.
+_MAX_STRUCTURE_RENDERS = 200
 
 
 # picasso 0.11 fitting methods whose base name has a plain ``-gpu`` variant.
@@ -187,6 +909,21 @@ def _positive_or_none(value, cast):
     except (TypeError, ValueError):
         return None
     return value if value > 0 else None
+
+
+def _net_gradient_method(min_gradient):
+    """Wrap a net-gradient threshold as a picasso 1.0 identification method.
+
+    picasso 1.0 replaced the bare ``minimum_ng`` number with an
+    :class:`~picasso.localize.IdentificationMethod` (here
+    :class:`~picasso.localize.NetGradient`). A per-channel/per-ROI list of
+    thresholds becomes a list of methods, which both
+    :class:`~picasso.localize.IdentificationParameters` and the channel-
+    registration calibration accept.
+    """
+    if isinstance(min_gradient, (list, tuple, np.ndarray)):
+        return [localize.NetGradient(float(g)) for g in min_gradient]
+    return localize.NetGradient(float(min_gradient))
 
 
 def _load_calibration(calibration, loader):
@@ -298,62 +1035,61 @@ def profile_resource_usage(method):
     def wrapper(self, i, parameters, calling_module_dir=None, suffix=""):
         profiling_results = {"peak_memory_gb": 0.0, "peak_cpu_cores": 0.0}
 
-        # Memory profiling function
-        def memory_measure(self, i, parameters, calling_module_dir, suffix):
-            start_cpu = time.process_time()
-            start_real = time.time()
-            _ = psutil.cpu_percent()
-            # Call the actual function
-            results = method(self, i, parameters, calling_module_dir, suffix)
-            cpu_time = time.process_time() - start_cpu
-            real_time = time.time() - start_real
-            cpu_percent_end = psutil.cpu_percent()
-            # Store CPU usage for access in wrapper
-            wrapper.cpu_usage = cpu_time / max(real_time, 0.001)
-            wrapper.mean_cpu_percent = cpu_percent_end
-            return results
+        # Run the module body EXACTLY ONCE and sample this process's RSS in a
+        # background thread for the peak. We do NOT hand the callable to
+        # memory_profiler.memory_usage: with a (func, args) proc it re-runs the
+        # function several times to collect samples (7x for a fast module in
+        # memory_profiler 0.61), which silently corrupts any *stateful* module
+        # that mutates self.locs -- e.g. g5m replaces the 'group' column with
+        # 'group_input', so the second run fails "Localizations must be
+        # grouped". Sampling ourselves keeps the single run that modules assume.
+        proc = psutil.Process()
+        peak_mib = proc.memory_info().rss / (1024.0**2)
+        stop = threading.Event()
 
+        def _sample_memory():
+            nonlocal peak_mib
+            while not stop.is_set():
+                try:
+                    rss_mib = proc.memory_info().rss / (1024.0**2)
+                    if rss_mib > peak_mib:
+                        peak_mib = rss_mib
+                except Exception:
+                    pass
+                stop.wait(0.5)
+
+        sampler = threading.Thread(target=_sample_memory, daemon=True)
+        sampler.start()
+        start_cpu = time.process_time()
+        start_real = time.time()
+        _ = psutil.cpu_percent()
         try:
-            # Measure memory usage
-            mem_usage = memory_usage(
-                proc=(
-                    memory_measure,
-                    [self, i, parameters, calling_module_dir, suffix],
-                ),
-                interval=0.5,
-                timeout=None,
-                max_usage=True,
-                retval=True,
+            parameters, results = method(
+                self, i, parameters, calling_module_dir, suffix
             )
+        finally:
+            stop.set()
+            sampler.join(timeout=2.0)
+        cpu_time = time.process_time() - start_cpu
+        real_time = time.time() - start_real
+        cpu_usage = cpu_time / max(real_time, 0.001)
+        wrapper.cpu_usage = cpu_usage
+        wrapper.mean_cpu_percent = psutil.cpu_percent()
 
-            # Extract memory results
-            peak_memory = mem_usage[0]  # First element is peak memory
-            # Convert MiB to GiB
-            profiling_results["peak_memory_gb"] = peak_memory / 1024.0
-
-            # Calculate peak CPU usage in terms of cores
-            total_cores = psutil.cpu_count(logical=True)  # total logical cores
-            profiling_results["peak_cpu_cores"] = min(
-                wrapper.cpu_usage * total_cores, total_cores
-            )
-            profiling_results["peak_cpu_usage"] = wrapper.cpu_usage
-            profiling_results["mean_cpu_usage"] = wrapper.mean_cpu_percent
-            pcpuc = profiling_results["peak_cpu_cores"]
-            logger.debug(
-                f"profiled cpu usage: {wrapper.cpu_usage}, "
-                + f"total cores: {total_cores}, "
-                + f"peak_cpu_cores: {pcpuc}"
-            )
-
-            # Get the results from the memory_measure function
-            # Second element is the actual results
-            parameters, results = mem_usage[1]
-
-        except Exception as e:
-            raise e
-            # print(f"Profiling error: {e}")
-            # return None, profiling_results  # Return None for results on
-            # error
+        # Convert MiB to GiB.
+        profiling_results["peak_memory_gb"] = peak_mib / 1024.0
+        total_cores = psutil.cpu_count(logical=True)  # total logical cores
+        profiling_results["peak_cpu_cores"] = min(
+            cpu_usage * total_cores, total_cores
+        )
+        profiling_results["peak_cpu_usage"] = cpu_usage
+        profiling_results["mean_cpu_usage"] = wrapper.mean_cpu_percent
+        pcpuc = profiling_results["peak_cpu_cores"]
+        logger.debug(
+            f"profiled cpu usage: {cpu_usage}, "
+            + f"total cores: {total_cores}, "
+            + f"peak_cpu_cores: {pcpuc}"
+        )
 
         results["peak_memory_gb"] = profiling_results["peak_memory_gb"]
         try:
@@ -386,99 +1122,25 @@ def profile_resource_usage(method):
     return wrapper
 
 
-def module_decorator(method):
-    """Wrap a module to manage its result folder and timing.
-
-    Creates the module's result directory, seeds the ``results`` dict with
-    ``folder`` and ``start time``, runs the module, then fills in ``success``
-    (saving locs if requested), ``end time`` and ``duration``, and closes open
-    figures.
-
-    Parameters
-    ----------
-    method : callable
-        The module method to wrap.
-
-    Returns
-    -------
-    callable
-        The wrapped method.
-    """
-
-    def module_wrapper(
-        self, i, parameters, calling_module_dir=None, suffix=""
-    ):
-        # create the results direcotry
-        # method_name = get_caller_name(2)
-        method_name = method.__name__
-
-        if calling_module_dir is None:
-            module_result_dir = os.path.join(
-                self.results_folder, f"{i:02d}_" + method_name + suffix
-            )
-        else:
-            module_result_dir = os.path.join(
-                calling_module_dir, f"{i:02d}_" + method_name + suffix
-            )
-        os.makedirs(module_result_dir, exist_ok=True)
-
-        results = {
-            "folder": os.path.normpath(module_result_dir),
-            "start time": datetime.now().strftime("%y-%m-%d %H:%M:%S"),
-        }
-
-        # call the module. On failure, hand the partial results (folder and
-        # start time) to the error reporter: they are built here and would
-        # otherwise die with the stack frame, and the folder cannot be
-        # reconstructed by the caller, which does not see suffix /
-        # calling_module_dir.
-        try:
-            parameters, results = method(self, i, parameters, results)
-        except BaseException as exc:
-            exc._pwf_partial_results = results
-            # Persist whatever locs the module held when it failed, so the
-            # last data state can be inspected while debugging without
-            # re-running the workflow. Best-effort: never mask the real error.
-            self._save_state_on_error(results["folder"])
-            raise
-
-        # post-actions
-        # modules only need to specifically set an error.
-        if results.get("success") is None:
-            results["success"] = True
-            # save locs if desired
-            if parameters.get("save_locs") is True or self.analysis_config.get(
-                "always_save"
-            ):
-                if hasattr(self, "locs") and self.locs is not None:
-                    self._save_locs(
-                        os.path.join(results["folder"], "locs.hdf5")
-                    )
-                if (
-                    hasattr(self, "channel_locs")
-                    and self.channel_locs is not None
-                ):
-                    self._save_datasets_agg(results["folder"])
-        results["end time"] = datetime.now().strftime("%y-%m-%d %H:%M:%S")
-        td = datetime.strptime(
-            results["end time"], "%y-%m-%d %H:%M:%S"
-        ) - datetime.strptime(results["start time"], "%y-%m-%d %H:%M:%S")
-        results["duration"] = td.total_seconds()
-        # logger.debug(f"RESULTS: {results}")
-
-        # close all figures potentially still open
-        plt.close("all")
-        return parameters, results
-
-    return module_wrapper
+# module_decorator moved to picasso_workflow.module_runtime so the
+# picasso-set mixins can use it without importing this module; re-exported
+# here to keep `analyse.module_decorator` importable.
 
 
-class AutoPicasso(util.AbstractModuleCollection):
+class AutoPicasso(
+    PicassoSetCoreMixin,
+    PicassoSetPicksMixin,
+    PicassoSetCalibrationMixin,
+    PicassoSetIOMixin,
+    util.AbstractModuleCollection,
+):
     """Automatically evaluate datasets via the picasso pipeline.
 
     Implements every module of the
-    :class:`~picasso_workflow.util.AbstractModuleCollection` contract. Each
-    module that runs saves its results into a separate folder.
+    :class:`~picasso_workflow.util.AbstractModuleCollection` contract, plus
+    the picasso-set modules (``picasso_*``) contributed by the mixins from
+    :mod:`picasso_workflow.picasso_set`. Each module that runs saves its
+    results into a separate folder.
     """
 
     # for single-dataset analysis
@@ -740,6 +1402,94 @@ class AutoPicasso(util.AbstractModuleCollection):
         """
         return parameters, results
 
+    @module_decorator
+    def plugin(self, i, parameters, results):
+        """Call an installed, enabled picasso API plugin export.
+
+        Generic bridge to the picasso plugin system: looks up ``api_name`` in
+        the merged ``PICASSO_API`` exports of the enabled plugins and calls it.
+        Workflow state named in ``inject`` is passed as keyword arguments, and
+        a dict return value may update ``self.locs`` / ``self.info`` and
+        contribute report content.
+
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters : dict
+            See :meth:`picasso_workflow.util.AbstractModuleCollection.plugin`.
+        results : dict
+            Module results (decorator-provided keys only).
+
+        Returns
+        -------
+        parameters : dict
+            Input parameters, unchanged.
+        results : dict
+            Results updated as documented on the contract method.
+        """
+        try:
+            from picasso_workflow._picasso_api import (
+                plugins as picasso_plugins,
+            )
+        except ImportError as exc:
+            raise AutoPicassoError(
+                "The installed picasso has no plugin system (needs picasso "
+                ">= 0.11). Cannot run the 'plugin' module."
+            ) from exc
+
+        api_name = parameters["api_name"]
+        exports = picasso_plugins.load_api_plugins()
+        if api_name not in exports:
+            raise AutoPicassoError(
+                f"picasso API plugin export {api_name!r} not found. Available "
+                f"(enabled) exports: {sorted(exports)}. Enable the plugin in "
+                "~/.picasso/plugins/ first."
+            )
+        fn = exports[api_name]
+
+        call_kwargs = dict(parameters.get("kwargs", {}))
+        inject = parameters.get("inject", [])
+        state = {"locs": self.locs, "info": self.info, "movie": self.movie}
+        for key in inject:
+            if key not in state:
+                raise AutoPicassoError(
+                    f"Cannot inject unknown workflow state {key!r}; allowed: "
+                    f"{sorted(state)}."
+                )
+            call_kwargs[key] = state[key]
+
+        ret = fn(**call_kwargs)
+
+        results["picasso version"] = picassoversion
+        results["plugin_api_name"] = api_name
+        results["plugin_callable"] = (
+            f"{getattr(fn, '__module__', '?')}."
+            f"{getattr(fn, '__name__', '?')}"
+        )
+        results["injected"] = list(inject)
+
+        if isinstance(ret, dict):
+            if "locs" in ret:
+                self.locs = ret["locs"]
+            if "info" in ret:
+                self.info = ret["info"]
+            if "report" in ret:
+                results["plugin_report"] = ret["report"]
+            if "files" in ret:
+                results["plugin_files"] = ret["files"]
+            extra = {
+                k: v
+                for k, v in ret.items()
+                if k not in ("locs", "info", "report", "files")
+            }
+            if extra:
+                results["plugin_result"] = extra
+        elif ret is not None:
+            results["plugin_result"] = ret
+
+        return parameters, results
+
     #    @profile_resource_usage
     @module_decorator
     def conditional_branch(self, i, parameters, results):
@@ -897,6 +1647,824 @@ class AutoPicasso(util.AbstractModuleCollection):
         )
 
         return parameters, results
+
+    #    @profile_resource_usage
+    @module_decorator
+    def branch(self, i, parameters, results):
+        """Fan out into per-branch sub-workflows, then optionally re-join.
+
+        See :meth:`picasso_workflow.util.AbstractModuleCollection.branch` for
+        the full parameter contract. Two ``branch_type``s: ``"explicit"`` (a
+        fixed ``n_branches`` with per-branch ``("$branch", [...])`` overrides)
+        and ``"runtime"`` (the branch count *and* per-branch item come from a
+        ``branch_over`` value/command that resolves to a list at run time; each
+        branch's sub-modules read their item via the ``("$branch_item", ...)``
+        token). A branch whose sub-module raises :class:`SkipBranch` (e.g. the
+        requested cell does not exist) is dropped: the join and the overall
+        pipeline proceed with the remaining branches.
+        """
+        pce = parameters.get("parameter_command_executor", None)
+        branch_type = parameters["branch_type"]
+        branch_modules = parameters["branch_modules"]
+        join_modules = parameters.get("join_modules") or []
+
+        # 1. Determine the branches: a list of (label, branch_item). The item
+        #    is None for an explicit branch (per-branch differences come from
+        #    ("$branch", [...]) overrides) and this branch's element of the
+        #    resolved branch_over list for a runtime branch.
+        if branch_type == "explicit":
+            splits = self._make_explicit_branches(parameters)
+        elif branch_type == "runtime":
+            splits = self._make_runtime_branches(i, parameters, pce)
+        else:
+            raise ValueError(
+                f"Unknown branch_type '{branch_type}'. "
+                "Expected 'explicit' or 'runtime'."
+            )
+
+        results["branch_type"] = branch_type
+        if not splits:
+            logger.warning(
+                f"branch (module {i:02d}): no branches produced "
+                f"(branch_type={branch_type}). Nothing to run."
+            )
+
+        # 2. Snapshot the shared-prefix state once, then run each branch on a
+        #    fresh restore of it.
+        prefix_snapshot = util.BranchStateManager.snapshot(self)
+
+        # Progress: the branch runs many sub-modules, so (a) advance the
+        # module's overall bar with a "<branch>: <module>" message instead of
+        # sitting at 0%, and (b) drive a nested progress tree (one group per
+        # branch + a join group, each with its sub-module rows) that the
+        # monitor expands under the branch module.
+        overall_cb = getattr(self, "_progress_callback", None)
+        progress_mgr = getattr(self, "_progress_manager", None)
+        module_index = getattr(self, "_module_index", None)
+        nested = progress_mgr is not None and module_index is not None
+        total_units = len(splits) * len(branch_modules) + len(join_modules)
+        done_units = [0]
+
+        if nested:
+            groups = [
+                (label, "branch", [name for name, _ in branch_modules])
+                for label, _ in splits
+            ]
+            if join_modules:
+                groups.append(
+                    ("join", "join", [name for name, _ in join_modules])
+                )
+            progress_mgr.branch_init(module_index, groups)
+
+        def _branch_step(g, s, label, name):
+            """Start sub-module (g, s) and wire its intra-progress."""
+            if nested:
+                progress_mgr.branch_submodule_start(module_index, g, s)
+            if overall_cb is None and not nested:
+                return
+            base = done_units[0] / total_units if total_units else 0.0
+            span = (1.0 / total_units) if total_units else 0.0
+            default_msg = f"{label}: {name}"
+
+            def wrapped(
+                fraction=None,
+                msg=None,
+                _b=base,
+                _s=span,
+                _m=default_msg,
+                _g=g,
+                _sub=s,
+            ):
+                try:
+                    frac = float(fraction) if fraction is not None else 0.0
+                except (TypeError, ValueError):
+                    frac = 0.0
+                frac = max(0.0, min(1.0, frac))
+                if overall_cb is not None:
+                    overall_cb(_b + _s * frac, msg or _m)
+                if nested:
+                    progress_mgr.branch_submodule_progress(
+                        module_index, _g, _sub, frac, msg
+                    )
+
+            self._progress_callback = wrapped
+            if overall_cb is not None:
+                overall_cb(base, default_msg)
+
+        def _branch_step_end(g, s, status):
+            """Mark sub-module (g, s) finished and advance the overall count."""
+            if nested:
+                progress_mgr.branch_submodule_end(module_index, g, s, status)
+            done_units[0] += 1
+
+        # Live reporting: a reporter that supports per-branch child pages (the
+        # ConfluenceReporter) can be handed each sub-module as it finishes, so
+        # a branch's child page populates during execution instead of only
+        # after the whole branch step completes. Reporters that opt out (the
+        # single-file HTML reporter, which *inherits* the hook methods but
+        # cannot host child pages) report the branch in one batch afterwards.
+        live_reporters = [
+            rep
+            for rep in (getattr(self, "_branch_live_reporters", None) or [])
+            if getattr(rep, "supports_live_branch_pages", False)
+        ]
+
+        branch_results = []
+        topology_branches = []
+        skipped = []
+        for branch_id, (branch_label, branch_item) in enumerate(splits):
+            util.BranchStateManager.restore(self, prefix_snapshot)
+
+            branch_dir = os.path.join(results["folder"], branch_label)
+            os.makedirs(branch_dir, exist_ok=True)
+
+            # Open this branch's live child page(s) up front. Pass this branch
+            # module's index (i) so the streamed page title matches the one
+            # the final branch report links to (and stays unique across branch
+            # modules that reuse a label).
+            live_handles = []
+            for rep in live_reporters:
+                try:
+                    live_handles.append(
+                        (rep, rep.open_branch_page(branch_label, i))
+                    )
+                except Exception as e:  # reporting must never abort analysis
+                    logger.warning(
+                        f"live branch report: could not open page for "
+                        f"'{branch_label}': {e}"
+                    )
+
+            one_branch = {"label": branch_label}
+            # branch-local results, keyed "NN_name", so a sub-module can
+            # reference an earlier sub-module of the same branch via
+            # $get_previous_module_result / $get_prior_result.
+            branch_local = {}
+            executed = []
+            skip_reason = None
+            for sub_idx, (module_name, module_parameters) in enumerate(
+                branch_modules
+            ):
+                _branch_step(branch_id, sub_idx, branch_label, module_name)
+                sub_params = self._resolve_branch_submodule_params(
+                    module_parameters,
+                    pce,
+                    sub_idx,
+                    branch_item,
+                    branch_local,
+                    branch_id,
+                )
+                try:
+                    sub_results = self._run_branch_submodule(
+                        module_name, sub_idx, sub_params, branch_dir
+                    )
+                except SkipBranch as e:
+                    # This branch has no data to analyse (e.g. the requested
+                    # cell does not exist). Drop it and let the join / overall
+                    # pipeline continue with the remaining branches. Advance
+                    # the remaining sub-module units so progress still finishes.
+                    skip_reason = str(e) or module_name
+                    _branch_step_end(branch_id, sub_idx, "skipped")
+                    for rem in range(sub_idx + 1, len(branch_modules)):
+                        if nested:
+                            progress_mgr.branch_submodule_end(
+                                module_index, branch_id, rem, "skipped"
+                            )
+                        done_units[0] += 1
+                    break
+                except BaseException:
+                    _branch_step_end(branch_id, sub_idx, "failed")
+                    raise
+                key = f"{sub_idx:02d}_{module_name}"
+                one_branch[key] = sub_results
+                branch_local[key] = sub_results
+                executed.append(key)
+                # Stream this finished sub-module to its live child page.
+                for rep, handle in live_handles:
+                    try:
+                        rep.report_branch_submodule(
+                            handle,
+                            sub_idx,
+                            module_name,
+                            sub_params,
+                            sub_results,
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            f"live branch report: {key} failed: {e}"
+                        )
+                _branch_step_end(branch_id, sub_idx, "done")
+            if skip_reason is not None:
+                skipped.append({"label": branch_label, "reason": skip_reason})
+                logger.info(
+                    f"branch (module {i:02d}): skipped branch "
+                    f"'{branch_label}' ({skip_reason})."
+                )
+                continue
+            branch_results.append(one_branch)
+            topology_branches.append(
+                {"label": branch_label, "modules": executed}
+            )
+
+        results["branches"] = branch_results
+        # labels / skipped reflect only the branches that actually produced
+        # results, so the join's ("$all") pooling never sees a dropped branch.
+        results["labels"] = [b["label"] for b in branch_results]
+        results["skipped"] = skipped
+
+        # 3. Restore the prefix state, then run the join/fan-in modules with
+        #    the per-branch results pooled back together.
+        util.BranchStateManager.restore(self, prefix_snapshot)
+
+        join_results = {}
+        if join_modules:
+            # Expose the in-progress branch results under this module's key so
+            # join modules can pool them via
+            # "results, NN_branch, branches, $all, ...".
+            if pce is not None and hasattr(pce.parent_object, "results"):
+                pce.parent_object.results[f"{i:02d}_branch"] = results
+            join_dir = os.path.join(results["folder"], "join")
+            os.makedirs(join_dir, exist_ok=True)
+            join_group = len(splits)
+            for sub_idx, (module_name, module_parameters) in enumerate(
+                join_modules
+            ):
+                _branch_step(join_group, sub_idx, "join", module_name)
+                # Join modules run at trunk level (prefix state restored) and
+                # pool the per-branch results, so they resolve against the
+                # trunk runner's results (which now include this branch step).
+                jp = copy.deepcopy(module_parameters)
+                # A summarize_branches join with no explicit values defaults to
+                # auto-summarizing this branch's per-branch results: hand it the
+                # branches list (it flattens the numeric metrics) and the branch
+                # labels. This is what makes it a zero-config default join.
+                if module_name == "summarize_branches" and "values" not in jp:
+                    jp["values"] = results["branches"]
+                    jp.setdefault("labels", results["labels"])
+                if pce is not None:
+                    original_rootidx = getattr(pce, "curr_rootidx", None)
+                    pce.curr_rootidx = i
+                    jp = pce.run(jp, curr_rootidx=i)
+                    pce.curr_rootidx = original_rootidx
+                try:
+                    sub_results = self._run_branch_submodule(
+                        module_name, sub_idx, jp, join_dir
+                    )
+                except SkipBranch as e:
+                    # A join module with no data (e.g. all branches skipped)
+                    # is dropped rather than failing the run, mirroring the
+                    # per-branch skip contract.
+                    logger.info(
+                        f"branch (module {i:02d}): skipped join module "
+                        f"'{module_name}' ({e})."
+                    )
+                    _branch_step_end(join_group, sub_idx, "skipped")
+                    continue
+                except BaseException:
+                    _branch_step_end(join_group, sub_idx, "failed")
+                    raise
+                join_results[f"{sub_idx:02d}_{module_name}"] = sub_results
+                _branch_step_end(join_group, sub_idx, "done")
+        results["join"] = join_results
+
+        # Restore the plain intra-module callback for module i (the wrapped
+        # per-step callbacks captured the branch's sub-module slices).
+        if overall_cb is not None:
+            self._progress_callback = overall_cb
+
+        # 4. Record the executed module-path topology for reporting.
+        results["topology"] = {
+            "type": branch_type,
+            "prefix_index": i,
+            "labels": results["labels"],
+            "branch_modules": [name for name, _ in branch_modules],
+            "join_modules": [name for name, _ in join_modules],
+            "branches": topology_branches,
+            "skipped": [s["label"] for s in skipped],
+        }
+
+        logger.info(
+            f"branch (module {i:02d}) completed: {len(branch_results)} "
+            f"{branch_type} branches, {len(join_results)} join module(s)."
+        )
+        return parameters, results
+
+    def _make_runtime_branches(self, i, parameters, pce):
+        """Build runtime branches from a list resolved at run time.
+
+        ``branch_over`` is a value (or ``$``/``$$map`` command) that resolves
+        to a list ``L``; there is one branch per element, and each branch's
+        sub-modules read their element ``L[branch_id]`` via the
+        ``("$branch_item", ...)`` token. Labels come from ``branch_labels``,
+        else ``label_template`` (``{n}`` / ``{item}``), else ``branch{n:02d}``.
+
+        Returns a list of ``(label, item)``.
+        """
+        over = parameters.get("branch_over")
+        if over is None:
+            raise AutoPicassoError(
+                "branch_type 'runtime' needs 'branch_over' (a value or "
+                "command resolving to a list)."
+            )
+        if pce is not None:
+            over = pce.run(
+                {"branch_over": copy.deepcopy(over)}, curr_rootidx=i
+            )["branch_over"]
+        if not isinstance(over, (list, tuple)):
+            raise AutoPicassoError(
+                "branch_type 'runtime': 'branch_over' resolved to "
+                f"{type(over).__name__}, expected a list."
+            )
+
+        labels = parameters.get("branch_labels")
+        label_template = parameters.get("label_template")
+        splits = []
+        for n, item in enumerate(over):
+            if labels is not None and n < len(labels):
+                label = str(labels[n])
+            elif label_template is not None:
+                try:
+                    label = label_template.format(n=n, item=item)
+                except (KeyError, IndexError, ValueError):
+                    label = f"branch{n:02d}"
+            else:
+                label = f"branch{n:02d}"
+            splits.append((label, item))
+        return splits
+
+    def _make_explicit_branches(self, parameters):
+        """Build a fixed number of branches with per-branch parameters.
+
+        The count comes from ``n_branches`` (or the length of
+        ``branch_labels``); each branch runs the same modules and differs only
+        through ``("$branch", [v0, v1, ...])`` per-branch parameter overrides
+        (e.g. ``create_mask2`` selecting the ``branch_id``-th largest cell).
+        Returns a list of ``(label, None)`` -- each branch starts from the
+        shared-prefix state and carries no runtime item.
+        """
+        labels = parameters.get("branch_labels")
+        n = parameters.get("n_branches")
+        if n is None:
+            if labels is None:
+                raise AutoPicassoError(
+                    "branch_type 'explicit' needs 'n_branches' or "
+                    "'branch_labels'."
+                )
+            n = len(labels)
+        n = int(n)
+        splits = []
+        for j in range(n):
+            label = (
+                str(labels[j])
+                if labels is not None and j < len(labels)
+                else f"branch{j:02d}"
+            )
+            splits.append((label, None))
+        return splits
+
+    @staticmethod
+    def _resolve_branch_overrides(obj, branch_id, branch_item=None):
+        """Resolve per-branch markers to this branch's value.
+
+        Two markers are handled while walking a (possibly nested) parameter
+        structure:
+
+        - ``("$branch", [v0, v1, ...])`` -> ``values[branch_id]`` (the last
+          value is reused if ``branch_id`` is past the end); used by explicit
+          branches.
+        - ``("$branch_item",)`` -> this branch's runtime item; ``("$branch_item",
+          key)`` -> ``item[key]``; the bare string ``"$branch_item"`` is also
+          accepted. Used by runtime branches to read their element of the
+          resolved ``branch_over`` list.
+
+        Runs *before* the ``$`` command resolution so the result is a plain
+        value (or a further ``$``/``$$`` command to resolve next).
+        """
+        if isinstance(obj, str) and obj == "$branch_item":
+            return branch_item
+        if isinstance(obj, dict):
+            return {
+                k: AutoPicasso._resolve_branch_overrides(
+                    v, branch_id, branch_item
+                )
+                for k, v in obj.items()
+            }
+        if isinstance(obj, (tuple, list)):
+            if (
+                isinstance(obj, tuple)
+                and len(obj) >= 1
+                and obj[0] == "$branch_item"
+            ):
+                if len(obj) >= 2 and branch_item is not None:
+                    try:
+                        return branch_item[obj[1]]
+                    except (KeyError, IndexError, TypeError):
+                        return branch_item
+                return branch_item
+            if (
+                isinstance(obj, tuple)
+                and len(obj) >= 2
+                and obj[0] == "$branch"
+            ):
+                values = obj[1]
+                if not isinstance(values, (list, tuple)) or not values:
+                    return values
+                idx = branch_id if branch_id < len(values) else -1
+                return values[idx]
+            resolved = [
+                AutoPicasso._resolve_branch_overrides(
+                    v, branch_id, branch_item
+                )
+                for v in obj
+            ]
+            return tuple(resolved) if isinstance(obj, tuple) else resolved
+        return obj
+
+    def _resolve_branch_submodule_params(
+        self,
+        module_parameters,
+        pce,
+        sub_idx,
+        branch_item,
+        branch_local,
+        branch_id,
+    ):
+        """Resolve a branch sub-module's parameters.
+
+        Resolution happens in two passes:
+
+        1. Per-branch markers: ``("$branch", [...])`` -> this branch's value
+           and ``("$branch_item", ...)`` -> this branch's runtime item (see
+           :meth:`_resolve_branch_overrides`). Run first so the result is a
+           plain value or a further command.
+        2. Resolve ordinary ``$`` commands against a *branch-local* results
+           view: ``branch_local`` (this branch's completed sub-modules, keyed
+           ``NN_name``) shadowing the trunk runner's results. ``curr_rootidx``
+           is the sub-module index, so ``$get_previous_module_result`` refers
+           to the previous sub-module of this branch, while explicit
+           ``$get_prior_result`` keys can still reach shared-prefix modules.
+        """
+        params = copy.deepcopy(module_parameters)
+        params = self._resolve_branch_overrides(params, branch_id, branch_item)
+        if pce is not None:
+            trunk_results = getattr(pce.parent_object, "results", {})
+            proxy = util.ResultsProxy.merged(branch_local, trunk_results)
+            local_pce = util.ParameterCommandExecutor(proxy, command_sign="$")
+            params = local_pce.run(params, curr_rootidx=sub_idx)
+        return params
+
+    def _run_branch_submodule(
+        self, module_name, sub_idx, sub_params, calling_module_dir
+    ):
+        """Run one branch/join sub-module into a nested result folder."""
+        if not hasattr(self, module_name):
+            raise AttributeError(
+                f"Module '{module_name}' not found in AutoPicasso"
+            )
+        module_method = getattr(self, module_name)
+        _, sub_results = module_method(
+            sub_idx,
+            sub_params,
+            calling_module_dir=calling_module_dir,
+            suffix="",
+        )
+        return sub_results
+
+    #    @profile_resource_usage
+    @module_decorator
+    def summarize_branches(self, i, parameters, results):
+        """Summarize per-branch results as a figure.
+
+        See :meth:`picasso_workflow.util.AbstractModuleCollection\
+.summarize_branches` for the parameter contract. Draws a box/strip plot of a
+        metric across branches (``"replicates"`` mode) or the metric against a
+        per-branch argument (``"screen"`` mode), and records summary stats.
+        """
+        raw_values = parameters.get("values")
+        labels = parameters.get("labels")
+        x_values = parameters.get("x")
+        ylabel = parameters.get("ylabel", "value")
+        title = parameters.get("title", "branch summary")
+        plot_type = parameters.get("plot_type", "box")
+
+        def _num_list(seq):
+            """Coerce a sequence to floats, skipping non-numeric entries.
+
+            A summary/plot module must not crash the whole workflow because a
+            referenced result is not a plain number; non-numeric entries (e.g.
+            a dict, when a scalar result key was expected) are dropped with a
+            warning.
+            """
+            out = []
+            for v in seq or []:
+                try:
+                    out.append(float(v))
+                except (TypeError, ValueError):
+                    logger.warning(
+                        "summarize_branches: skipping non-numeric value "
+                        f"{v!r} (reference a scalar result key)."
+                    )
+            return out
+
+        # Build the series to plot: metric-name -> list of per-branch values.
+        # For the autodetected path, series_labels[metric] holds the branch
+        # label for each *kept* value, so a metric missing in some branch stays
+        # correctly labelled (see _autodetect_branch_metrics).
+        autodetected = False
+        series_labels = {}
+        if self._is_branch_result_list(raw_values):
+            # A branch module's raw per-branch results list: flatten each
+            # branch to its numeric scalar metrics and pivot into one series
+            # per metric. This is what a zero-argument summarize_branches join
+            # receives.
+            series, series_labels = self._autodetect_branch_metrics(raw_values)
+            autodetected = True
+        elif isinstance(raw_values, dict):
+            series = {
+                str(name): _num_list(vals) for name, vals in raw_values.items()
+            }
+        elif (
+            isinstance(raw_values, (list, tuple))
+            and raw_values
+            and all(isinstance(v, dict) for v in raw_values)
+        ):
+            # One flat dict per branch (e.g. labeling_efficiency is
+            # {target: .., reference: ..}) -> pivot into one series per key.
+            keys = []
+            for per_branch in raw_values:
+                for key in per_branch:
+                    if key not in keys:
+                        keys.append(key)
+            series = {
+                str(key): _num_list([pb.get(key) for pb in raw_values])
+                for key in keys
+            }
+        else:
+            series = {str(ylabel): _num_list(raw_values)}
+
+        mode = parameters.get("mode", "auto")
+        if mode == "auto":
+            mode = "screen" if x_values is not None else "replicates"
+
+        has_data = any(len(v) for v in series.values())
+        nonempty_metrics = [k for k, v in series.items() if v]
+        if not has_data:
+            fig, ax = plt.subplots()
+            ax.text(
+                0.5,
+                0.5,
+                "no branch results to summarize",
+                ha="center",
+                va="center",
+            )
+            ax.set_axis_off()
+        elif mode == "screen" and x_values is not None:
+            fig, ax = plt.subplots()
+            xv = [float(x) for x in x_values]
+            for name, vals in series.items():
+                n = min(len(xv), len(vals))
+                ax.plot(xv[:n], vals[:n], marker="o", label=name)
+            ax.set_xlabel(parameters.get("xlabel", "argument"))
+            ax.set_ylabel(ylabel)
+            if len(series) > 1:
+                ax.legend()
+            ax.set_title(title)
+        elif autodetected:
+            # Autodetected metrics can have very different scales, so give each
+            # its own subplot (small multiples) rather than mixing them on one
+            # y-axis. Each metric is drawn with its own kept-branch labels so a
+            # metric missing in some branch stays correctly labelled.
+            fig, axes = plt.subplots(
+                len(nonempty_metrics),
+                1,
+                figsize=(6.4, max(2.2, 2.0 * len(nonempty_metrics))),
+                squeeze=False,
+            )
+            for ax, name in zip(axes[:, 0], nonempty_metrics):
+                self._draw_replicates_axis(
+                    ax, series[name], series_labels.get(name), plot_type
+                )
+                ax.set_ylabel(name)
+            axes[-1, 0].set_xlabel(parameters.get("xlabel", "branch"))
+            fig.suptitle(title)
+        else:  # replicates: distribution of the metric across branches
+            fig, ax = plt.subplots()
+            names = list(series.keys())
+            data = [series[name] for name in names]
+            nonempty = [(k, d) for k, d in enumerate(data) if d]
+            positions = [k for k, _ in nonempty]
+            datasets = [d for _, d in nonempty]
+            drawn = False
+            if datasets and plot_type == "violin":
+                # gaussian_kde needs >= 2 points with non-zero spread per
+                # category; fall back to a boxplot if any category can't
+                # support a KDE (e.g. a single replicate or identical values).
+                try:
+                    parts = ax.violinplot(
+                        datasets,
+                        positions=positions,
+                        widths=0.6,
+                        showmeans=True,
+                        showextrema=True,
+                    )
+                    for body in parts["bodies"]:
+                        body.set_alpha(0.4)
+                    drawn = True
+                except (ValueError, np.linalg.LinAlgError):
+                    logger.warning(
+                        "summarize_branches: violin plot failed (too few "
+                        "points / no spread); falling back to a boxplot."
+                    )
+            if datasets and not drawn:
+                ax.boxplot(datasets, positions=positions, widths=0.5)
+            for pos, vals in enumerate(data):
+                if not vals:
+                    continue
+                jitter = (np.random.rand(len(vals)) - 0.5) * 0.15
+                ax.scatter(
+                    np.full(len(vals), pos) + jitter,
+                    vals,
+                    color="k",
+                    alpha=0.7,
+                    zorder=3,
+                )
+            ax.set_xticks(range(len(names)))
+            ax.set_xticklabels(names, rotation=30, ha="right")
+            ax.set_xlabel(parameters.get("xlabel", "branch"))
+            if len(names) == 1 and labels is not None:
+                for k, val in enumerate(data[0]):
+                    lbl = str(labels[k]) if k < len(labels) else str(k)
+                    ax.annotate(
+                        lbl,
+                        (0, val),
+                        textcoords="offset points",
+                        xytext=(6, 0),
+                        fontsize=8,
+                    )
+            ax.set_ylabel(ylabel)
+            ax.set_title(title)
+        fig.tight_layout()
+        results["fp_fig"] = os.path.join(
+            results["folder"], parameters.get("filename", "branch_summary.png")
+        )
+        fig.savefig(results["fp_fig"])
+        plt.close(fig)
+
+        results["mode"] = mode
+        stats = {}
+        for name, vals in series.items():
+            if vals:
+                arr = np.asarray(vals, dtype=float)
+                stats[name] = {
+                    "n": int(arr.size),
+                    "mean": float(np.mean(arr)),
+                    "std": float(np.std(arr)),
+                    "min": float(np.min(arr)),
+                    "max": float(np.max(arr)),
+                }
+            else:
+                stats[name] = {"n": 0}
+        results["stats"] = stats
+        return parameters, results
+
+    # bookkeeping keys present in every module's results -- never plotted as a
+    # branch metric when auto-summarizing.
+    _BRANCH_METRIC_SKIP = {
+        "duration",
+        "start time",
+        "end time",
+        "folder",
+        "label",
+        "success",
+    }
+
+    @staticmethod
+    def _is_branch_result_list(value):
+        """Whether ``value`` looks like a branch module's per-branch results.
+
+        That is, a non-empty list of dicts that each carry a ``"label"`` key
+        (which the branch module always stamps on a per-branch result). This is
+        what a zero-argument ``summarize_branches`` join is handed; it is
+        distinguished from a plain list of flat scalar dicts (e.g. one
+        ``{target, reference}`` per branch), which keeps the flat-pivot path.
+        """
+        if not (isinstance(value, (list, tuple)) and value):
+            return False
+        if not all(isinstance(v, dict) for v in value):
+            return False
+        # A branch module always stamps each per-branch dict with a "label"
+        # key; a plain list of flat metric dicts (e.g. one {target, reference}
+        # per branch) never does. Require it so explicitly-supplied values are
+        # not misrouted into the auto-summary path.
+        return all("label" in pb for pb in value)
+
+    @classmethod
+    def _autodetect_branch_metrics(cls, branches):
+        """Flatten per-branch results into one series per numeric metric.
+
+        Each branch dict is ``{"label": .., "NN_module": {..results..}, ..}``;
+        every numeric scalar leaf (skipping bookkeeping keys and booleans)
+        becomes a metric named ``"NN_module: key"`` (or ``"key"`` for a
+        top-level scalar), pivoted across branches. Metric order follows first
+        appearance.
+
+        Returns ``(series, series_labels)`` where ``series[metric]`` is the list
+        of numeric values (branches lacking the metric are omitted) and
+        ``series_labels[metric]`` is the matching branch label for each kept
+        value, so a metric present in only some branches stays correctly
+        labelled.
+        """
+
+        def flat(pb):
+            out = {}
+            for k, v in pb.items():
+                if k in cls._BRANCH_METRIC_SKIP:
+                    continue
+                if isinstance(v, dict):
+                    for kk, vv in v.items():
+                        if kk in cls._BRANCH_METRIC_SKIP:
+                            continue
+                        if isinstance(vv, bool):
+                            continue
+                        if isinstance(vv, (int, float)):
+                            out[f"{k}: {kk}"] = vv
+                elif isinstance(v, bool):
+                    continue
+                elif isinstance(v, (int, float)):
+                    out[k] = v
+            return out
+
+        flats = [flat(pb) for pb in branches]
+        branch_labels = [
+            str(pb.get("label", k)) for k, pb in enumerate(branches)
+        ]
+        metrics = []
+        for fb in flats:
+            for k in fb:
+                if k not in metrics:
+                    metrics.append(k)
+        series = {}
+        series_labels = {}
+        for m in metrics:
+            vals = []
+            labs = []
+            for fb, lab in zip(flats, branch_labels):
+                if m not in fb:
+                    continue
+                try:
+                    vals.append(float(fb[m]))
+                    labs.append(lab)
+                except (TypeError, ValueError):
+                    continue
+            series[m] = vals
+            series_labels[m] = labs
+        return series, series_labels
+
+    @staticmethod
+    def _draw_replicates_axis(ax, vals, labels, plot_type="box"):
+        """Draw one metric's per-branch values as a box/violin + labeled strip.
+
+        Used for the small-multiples layout when several metrics are
+        auto-summarized: each branch contributes one point, annotated with its
+        branch label.
+        """
+        if not vals:
+            ax.text(0.5, 0.5, "no data", ha="center", va="center")
+            ax.set_axis_off()
+            return
+        drawn = False
+        if plot_type == "violin" and len(vals) >= 2 and len(set(vals)) > 1:
+            try:
+                parts = ax.violinplot(
+                    [vals],
+                    positions=[0],
+                    widths=0.6,
+                    showmeans=True,
+                    showextrema=True,
+                )
+                for body in parts["bodies"]:
+                    body.set_alpha(0.4)
+                drawn = True
+            except (ValueError, np.linalg.LinAlgError):
+                pass
+        if not drawn:
+            ax.boxplot([vals], positions=[0], widths=0.5)
+        jitter = (np.random.rand(len(vals)) - 0.5) * 0.15
+        ax.scatter(jitter, vals, color="k", alpha=0.7, zorder=3)
+        ax.set_xticks([0])
+        ax.set_xticklabels([""])
+        for k, val in enumerate(vals):
+            lbl = (
+                str(labels[k])
+                if labels is not None and k < len(labels)
+                else str(k)
+            )
+            ax.annotate(
+                lbl,
+                (0, val),
+                textcoords="offset points",
+                xytext=(6, 0),
+                fontsize=8,
+            )
 
     ##########################################################################
     # Single dataset modules
@@ -1074,6 +2642,8 @@ class AutoPicasso(util.AbstractModuleCollection):
             Results updated with ``filepath_raw`` (full path) and
             ``filename_raw``.
         """
+        from picasso_workflow.outpost.formats import zeiss
+
         filepath_czi = parameters["filepath"]
         filename_raw = parameters.get("filename_raw")
         if filename_raw is None:
@@ -1081,7 +2651,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                 (os.path.splitext(filepath_czi)[0] + ".raw")
             )[1]
         filepath_raw = os.path.join(results["folder"], filename_raw)
-        picasso_outpost.convert_zeiss_file(
+        zeiss.convert_zeiss_file(
             filepath_czi, filepath_raw, parameters.get("info")
         )
 
@@ -1410,6 +2980,11 @@ class AutoPicasso(util.AbstractModuleCollection):
         results["picasso version"] = picassoversion
         self.locs, self.info = io.load_locs(parameters["filename"])
         results["nlocs"] = len(self.locs)
+        # the loaded file doubles as a restore point for resumed runs
+        results["filepath"] = parameters["filename"]
+        results["checkpoint"] = {
+            "single": {"filepath": parameters["filename"]}
+        }
 
         return parameters, results
 
@@ -1420,7 +2995,6 @@ class AutoPicasso(util.AbstractModuleCollection):
         filename=None,
         start_ng=-3000,
         zscore=5,
-        bins=None,
     ):
         """Calculate histograms of the net gradient at local maxima of n
         frames. For the automatic calculation of a threshold net_gradient for
@@ -1444,8 +3018,6 @@ class AutoPicasso(util.AbstractModuleCollection):
         zscore : float, optional
             Number of sigmas above the background net-gradient peak to set as
             the estimated min net-gradient threshold. Default is 5.
-        bins : None, int or array, optional
-            The histogram bins.
 
         Returns
         -------
@@ -1453,75 +3025,48 @@ class AutoPicasso(util.AbstractModuleCollection):
             With keys ``filename`` (the generated plot) and ``estd_net_grad``
             (the estimated min net gradient).
         """
-        results = {}
-        identifications = []
-
-        if isinstance(frame_numbers, int):
-            n_sample = frame_numbers
-            start_sample_pct = 0
-            if len(self.movie) < n_sample:
-                n_sample = len(self.movie)
-
-            start_idx = int(start_sample_pct / 100 * len(self.movie))
-            len_subsample = len(self.movie) - start_idx
-            dn = int(len_subsample / (n_sample - 1))
-            frame_numbers = np.arange(start_idx, len_subsample, dn)
-
-        for frame_number in frame_numbers:
-            identifications.append(
-                localize.identify_by_frame_number(
-                    self.movie, start_ng, box_size, frame_number
-                )
-            )
-        # id_list = identifications
-        # identifications = np.hstack(identifications).view(np.recarray)
-        # identifications.sort(kind="mergesort", order="frame")
-        identifications = pd.concat(identifications)
-        identifications.sort_values("frame", kind="mergesort")
-
-        # calculate histogram
-        if bins is None:
-            hi = np.quantile(identifications["net_gradient"], 0.9995)
-            bins = np.linspace(start_ng, hi, num=500)
-        hist, edges = np.histogram(
-            identifications["net_gradient"], bins=bins, density=True
+        # picasso 1.0 ships this estimator as a public API
+        # (localize.estimate_min_net_gradient), a verbatim port of the
+        # histogram / FWHM / z-score method that used to live here. Delegate
+        # the threshold + histogram to it; `box_size` and the net gradient
+        # are camera-pixel / camera-count quantities, exactly what the API
+        # expects, so no unit conversion is needed.
+        api_res = localize.estimate_min_net_gradient(
+            self.movie,
+            box=box_size,
+            frames=frame_numbers,
+            zscore=zscore,
+            start_net_gradient=start_ng,
         )
+        results = {"estd_net_grad": float(api_res["min_net_gradient"])}
 
-        # find the background peak, assume it to be Gaussian and the
-        # highest peak in the histogram: find max and FWHM
-        # FWHM as the most robust detection for peak width
-        # only use the lower half for FWHM calculation, as the higher
-        # tail is confounded by non-background spots
-        bkg_peak_height, bkg_peak_pos = np.max(hist), np.argmax(hist)
-        logger.debug(f"bkg_peak_height: {bkg_peak_height}")
-        logger.debug(f"bkg_peak_pos: {bkg_peak_pos}")
-        bkg_half_lo = np.argsort(
-            np.abs(hist[:bkg_peak_pos] - bkg_peak_height / 2)
-        )
-        logger.debug(f"bkg_half_lo: {bkg_half_lo}")
-        if len(bkg_half_lo) == 0:
-            bkg_half_lo = [bkg_peak_pos - 1]
-        bkg_fwhm = 2 * np.abs(bkg_peak_pos - bkg_half_lo[0])
-        bkg_sigma = bkg_fwhm / np.sqrt(4 * np.log(2))
-        # threshold at zscore * bkg_sigma
-        ng_est_idx = int(zscore * bkg_sigma) + bkg_peak_pos
-        if ng_est_idx >= len(edges):
-            ng_est_idx = len(edges) - 1
-        results["estd_net_grad"] = edges[ng_est_idx]
-        bkg_peak = edges[bkg_peak_pos]
-        lo_idx = int(bkg_peak_pos - bkg_sigma)
-        if lo_idx < 0:
-            lo_idx = 0
-        bkg_sigma = bkg_peak - edges[lo_idx]
-
-        # plot results
+        # plot results (the public API returns the histogram but no figure;
+        # the sample-spots montage needs the raw identifications, so re-run
+        # the identify loop over the frames the API actually used only when a
+        # plot is requested).
         if filename:
+            hist = api_res["histogram"]
+            edges = api_res["bin_edges"]
+            bkg_peak = api_res["background"]
+            bkg_sigma = api_res["background_width"]
+
+            identifications = pd.concat(
+                [
+                    # picasso 1.0 takes an identification method, not a bare
+                    # net-gradient number.
+                    localize.identify_by_frame_number(
+                        self.movie,
+                        localize.NetGradient(start_ng),
+                        box_size,
+                        int(frame_number),
+                    )
+                    for frame_number in api_res["frames"]
+                ]
+            )
+            identifications.sort_values("frame", kind="mergesort")
+
             fig, ax = plt.subplots(nrows=2)
             ax[0].plot(edges[:-1], hist, color="b", label="combined histogram")
-            # for i, frame_number in enumerate(frame_numbers):
-            #     hi, ed = np.histogram(
-            #         id_list[i]['net_gradient'], bins=bins, density=True)
-            #     ax.plot(ed[:-1], hi, color='gray')
             ylims = ax[0].get_ylim()
             ax[0].set_title("Net Gradient histogram of subsampled frames")
             ax[0].set_xlabel("net gradient")
@@ -1535,13 +3080,12 @@ class AutoPicasso(util.AbstractModuleCollection):
                 ),
             )
             ax[0].plot(
-                [edges[bkg_peak_pos], edges[bkg_peak_pos]],
+                [bkg_peak, bkg_peak],
                 ylims,
                 color="gray",
                 label=f"background: {bkg_peak:.0f}+/-{bkg_sigma:.0f}",
             )
             ax[0].legend()
-            # plt.show()
 
             sample_spots, ng_start, ng_end = self._draw_sample_spots(
                 identifications, results["estd_net_grad"], box_size
@@ -1593,6 +3137,10 @@ class AutoPicasso(util.AbstractModuleCollection):
         ng_end : float
             The highest net gradient shown (lower-right spot).
         """
+        from picasso_workflow.outpost.spots import (
+            extraction as spot_extraction,
+        )
+
         n_spots = sample_spots_cols * sample_spots_rows
         sample_idxs = np.argsort(
             np.abs(identifications["net_gradient"] - estd_net_grad)
@@ -1607,7 +3155,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         ).reset_index(drop=True)
 
         # sample_spots = localize.get_spots(
-        sample_spots = picasso_outpost.get_spots(
+        sample_spots = spot_extraction.get_spots(
             self.movie,
             sample_identifications,
             box_size,
@@ -1631,7 +3179,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             piy = iy * (box_size + border_width)
             # logger.debug(f"drawing spot {i} at ({pix}, {piy}: {str(spot)}")
             canvas[pix : pix + box_size, piy : piy + box_size] = (
-                picasso_outpost.normalize_spot(spot)
+                spot_extraction.normalize_spot(spot)
             )
         return canvas, ng_start, ng_end
 
@@ -1713,7 +3261,6 @@ class AutoPicasso(util.AbstractModuleCollection):
                 "filename",
                 "start_ng",
                 "zscore",
-                "bins",
             ]
             pars_to_pass = {
                 k: autograd_pars[k]
@@ -1734,39 +3281,50 @@ class AutoPicasso(util.AbstractModuleCollection):
         # those: an empty-string roi/frame_bounds is not None, and *any* truthy
         # temporal_median_window switches the filter on - a window of 1 is a
         # no-op median that still forces the slower filtered read path.
+        # picasso 1.0 bundles the net-gradient threshold and the optional
+        # background-suppression filters into one IdentificationParameters; the
+        # ROIs / frame bounds and the progress/abort hooks stay call-level.
+        id_param_kwargs = {}
+        # temporal-median background: a window needs >= 2 frames to do
+        # anything; the stride only matters alongside a window.
+        tmw = parameters.get("temporal_median_window")
+        if tmw is not None and int(tmw) >= 2:
+            id_param_kwargs["temporal_median_window"] = int(tmw)
+            tms = parameters.get("temporal_median_stride")
+            if tms is not None and int(tms) >= 1:
+                id_param_kwargs["temporal_median_stride"] = int(tms)
+        # spatial Gaussian pre-filter: a sigma of 0 (or less) means off.
+        gfs = parameters.get("gaussian_filter_sigma")
+        if gfs is not None and float(gfs) > 0:
+            id_param_kwargs["gaussian_filter_sigma"] = float(gfs)
+        id_parameters = localize.IdentificationParameters(
+            method=_net_gradient_method(parameters["min_gradient"]),
+            box=parameters["box_size"],
+            **id_param_kwargs,
+        )
+
         identify_kwargs = {}
         # roi / frame_bounds: a real selection is a non-empty list/tuple.
         for key in ("roi", "frame_bounds"):
             if parameters.get(key):
                 identify_kwargs[key] = parameters[key]
-        # temporal-median background: a window needs >= 2 frames to do
-        # anything; the stride only matters alongside a window.
-        tmw = parameters.get("temporal_median_window")
-        if tmw is not None and int(tmw) >= 2:
-            identify_kwargs["temporal_median_window"] = int(tmw)
-            tms = parameters.get("temporal_median_stride")
-            if tms is not None and int(tms) >= 1:
-                identify_kwargs["temporal_median_stride"] = int(tms)
-        # spatial Gaussian pre-filter: a sigma of 0 (or less) means off.
-        gfs = parameters.get("gaussian_filter_sigma")
-        if gfs is not None and float(gfs) > 0:
-            identify_kwargs["gaussian_filter_sigma"] = float(gfs)
 
-        # forward intra-module progress / abort when the runner wired them in
+        # forward intra-module progress / abort when the runner wired them in.
+        # The proxy satisfies picasso 1.0's lib.Progress interface, so it is
+        # passed as the single ``progress`` argument (0.11's progress_callback).
         proxy = self._make_progress_proxy(
             total=len(self.movie), phase="identify"
         )
         if proxy is not None:
-            identify_kwargs["progress_callback"] = proxy
+            identify_kwargs["progress"] = proxy
             if (abort := self._picasso_abort()) is not None:
                 identify_kwargs["abort_callback"] = abort
 
-        # identify returns (identifications, info); return_info defaults True.
+        # identify always returns (identifications, info) in picasso 1.0.
         _id_result = localize.identify(
             self.movie,
-            parameters["min_gradient"],
-            parameters["box_size"],
-            threaded=bool(parameters.get("identify_parallel", True)),
+            parameters=id_parameters,
+            parallel=bool(parameters.get("identify_parallel", True)),
             **identify_kwargs,
         )
         if _id_result is None:
@@ -1808,11 +3366,12 @@ class AutoPicasso(util.AbstractModuleCollection):
         # threading.Lock (via the ProgressManager) that io.save_locs ->
         # save_info -> yaml.dump cannot serialize ("cannot pickle
         # '_thread.lock' object").
+        new_info.update(id_param_kwargs)
         new_info.update(
             {
                 k: v
                 for k, v in identify_kwargs.items()
-                if k not in ("progress_callback", "abort_callback")
+                if k not in ("progress", "abort_callback")
             }
         )
         self.info = self.info + [new_info]
@@ -1959,12 +3518,10 @@ class AutoPicasso(util.AbstractModuleCollection):
         fit_progress_kw = {}
         proxy = self._make_progress_proxy(total=n_spots, phase="localize")
         if proxy is not None:
-            fit_progress_kw["progress_callback"] = proxy
-            fit_progress_kw["cut_progress_callback"] = (
-                self._make_progress_proxy(
-                    total=n_spots, phase="localize (extract spots)"
-                )
-            )
+            # picasso 1.0 reports the whole fit (spot extraction + the fit) via
+            # a single ``progress`` tracker, so the separate 0.11
+            # progress_callback / cut_progress_callback collapse into one.
+            fit_progress_kw["progress"] = proxy
             if (abort := self._picasso_abort()) is not None:
                 fit_progress_kw["abort_callback"] = abort
 
@@ -1991,7 +3548,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             fitting_method=fitting_method,
             spline_calibration=spline_calibration,
             camera_calibration=camera_calibration,
-            multiprocess=multiprocess,
+            parallel=multiprocess,
             eps=eps,
             max_it=max_it,
             **fit_progress_kw,
@@ -2116,7 +3673,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             ``fp_fig_zhist`` (z-distribution histogram).
         """
         import shutil
-        from picasso import zfit
+        from picasso_workflow._picasso_api import zfit
 
         # fp_cfg = os.path.join(results["folder"], "config.yaml")
         # with open(fp_cfg, "w") as config_file:
@@ -2185,7 +3742,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             pixelsize=pixelsize,
             fitting_method=fitting_method,
             filter=parameters.get("filter", 0),
-            multiprocess=True,
+            parallel=True,
             gpu=gpu,
         )
         if self.locs is None:
@@ -2320,7 +3877,9 @@ class AutoPicasso(util.AbstractModuleCollection):
             new_config = yaml.full_load(config_file)
 
         # if new_config is not None:
-        picasso.CONFIG = new_config
+        from picasso_workflow._picasso_api import set_config
+
+        set_config(new_config)  # mutate picasso's global CONFIG
         pCONFIG = new_config
         print(new_config)
 
@@ -2484,7 +4043,9 @@ class AutoPicasso(util.AbstractModuleCollection):
             all_x = np.concatenate([lcs["x"] for lcs in locs_list])
             all_y = np.concatenate([lcs["y"] for lcs in locs_list])
 
-            roi_size = parameters.get("ctrmass_fov_nm", 10000.0) / pixelsize
+            # picasso 1.0: locs are in nm, so the ROI size is the nm FOV
+            # directly (0.11 divided by pixelsize to get a camera-pixel span).
+            roi_size = parameters.get("ctrmass_fov_nm", 10000.0)
             if roi_size <= 0:
                 roi_size = 100.0  # fallback
 
@@ -2609,7 +4170,8 @@ class AutoPicasso(util.AbstractModuleCollection):
         x_mean_clipped = x_mean
         y_mean_clipped = y_mean
         if parameters.get("ctrmass_fov_nm"):
-            zoom_size = parameters.get("ctrmass_fov_nm") / pixelsize
+            # nm FOV directly (picasso 1.0 locs are nm).
+            zoom_size = parameters.get("ctrmass_fov_nm")
             if (x_max - x_min) >= zoom_size:
                 x_mean_clipped = np.clip(
                     x_mean, x_min + zoom_size / 2.0, x_max - zoom_size / 2.0
@@ -2631,10 +4193,11 @@ class AutoPicasso(util.AbstractModuleCollection):
             for idx, (_, _, t_xmin, t_xmax, t_ymin, t_ymax) in enumerate(
                 selected_rois
             ):
-                x_min_um = (t_xmin * pixelsize) / 1000.0
-                x_max_um = (t_xmax * pixelsize) / 1000.0
-                y_min_um = (t_ymin * pixelsize) / 1000.0
-                y_max_um = (t_ymax * pixelsize) / 1000.0
+                # coords are nm (picasso 1.0) -> µm.
+                x_min_um = t_xmin / 1000.0
+                x_max_um = t_xmax / 1000.0
+                y_min_um = t_ymin / 1000.0
+                y_max_um = t_ymax / 1000.0
 
                 width_um = x_max_um - x_min_um
                 height_um = y_max_um - y_min_um
@@ -2668,16 +4231,19 @@ class AutoPicasso(util.AbstractModuleCollection):
             # Draw standard Zoom-In outline on overview image
             import matplotlib.patches as patches
 
+            # picasso 1.0: locs (and thus x_mean_clipped) are nm, so the nm
+            # half-FOV is subtracted directly (no /pixelsize), and the nm
+            # extents convert to µm by /1000.
             fov_half = parameters.get("ctrmass_fov_nm") / 2
-            x_min_zoom = x_mean_clipped - fov_half / pixelsize
-            x_max_zoom = x_mean_clipped + fov_half / pixelsize
-            y_min_zoom = y_mean_clipped - fov_half / pixelsize
-            y_max_zoom = y_mean_clipped + fov_half / pixelsize
+            x_min_zoom = x_mean_clipped - fov_half
+            x_max_zoom = x_mean_clipped + fov_half
+            y_min_zoom = y_mean_clipped - fov_half
+            y_max_zoom = y_mean_clipped + fov_half
 
-            x_min_um = (x_min_zoom * pixelsize) / 1000.0
-            x_max_um = (x_max_zoom * pixelsize) / 1000.0
-            y_min_um = (y_min_zoom * pixelsize) / 1000.0
-            y_max_um = (y_max_zoom * pixelsize) / 1000.0
+            x_min_um = x_min_zoom / 1000.0
+            x_max_um = x_max_zoom / 1000.0
+            y_min_um = y_min_zoom / 1000.0
+            y_max_um = y_max_zoom / 1000.0
 
             width_um = x_max_um - x_min_um
             height_um = y_max_um - y_min_um
@@ -2799,12 +4365,14 @@ class AutoPicasso(util.AbstractModuleCollection):
         # info[1]["Pixelsize"]
         self.info[1]["Pixelsize"] = pixelsize
 
+        # picasso 1.0 takes intersect_d / roi_r in nm directly (0.11 took
+        # camera pixels, hence the former division by the pixel size).
         self.locs, self.info, self.drift = aim.aim(
             self.locs,
             self.info,
             segmentation=parameters["segmentation"],
-            intersect_d=parameters["intersect_d"] / pixelsize,
-            roi_r=parameters["roi_r"] / pixelsize,
+            intersect_d=parameters["intersect_d"],
+            roi_r=parameters["roi_r"],
             progress=progress,
         )
 
@@ -2873,22 +4441,20 @@ class AutoPicasso(util.AbstractModuleCollection):
         for i in range(parameters.get("max_iter_segmentations", 3)):
             # if the segmentation is too low, the process raises an error
             # adaptively increase the value.
-            # forward the runner's progress proxy if wired, else a no-op.
-            seg_cb = (
-                self._make_progress_proxy(
-                    total=parameters["segmentation"], phase="undrift (rcc)"
-                )
-                or lib.MockProgress().set_value
+            # forward the runner's progress proxy if wired (None -> picasso
+            # uses a no-op tracker). picasso 1.0 reports RCC undrift through a
+            # single ``progress`` (0.11 had segmentation_callback + rcc_callback)
+            # and returns (locs, info, drift) rather than (drift, locs).
+            progress = self._make_progress_proxy(
+                total=parameters["segmentation"], phase="undrift (rcc)"
             )
-            rcc_cb = seg_cb
             try:
-                self.drift, self.locs = postprocess.undrift(
+                self.locs, self.info, self.drift = postprocess.undrift(
                     self.locs,
                     self.info,
                     segmentation=parameters["segmentation"],
                     display=False,
-                    segmentation_callback=seg_cb,
-                    rcc_callback=rcc_cb,
+                    progress=progress,
                 )
                 results["success"] = True
                 break
@@ -2953,2294 +4519,6 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         return parameters, results
 
-    # Multiprocessing helper functions for undrift_rsso
-    @staticmethod
-    def _process_drift_block(args):
-        """Process one drift block in parallel (stateless helper).
-
-        Parameters
-        ----------
-        args : tuple
-            ``(locs_data, frames, block_start, block_end, toff_block_size,
-            max_shift, min_locs_per_block, save_all_rsso_plots, plot_dir)``.
-
-        Returns
-        -------
-        tuple or None
-            ``(block_start, block_end, shift_x, shift_y, quality,
-            uncertainty_x, uncertainty_y)``, or None for the reference block.
-        """
-        (
-            locs_data,
-            frames,
-            block_start,
-            block_end,
-            toff_block_size,
-            max_shift,
-            min_locs_per_block,
-            save_all_rsso_plots,
-            plot_dir,
-        ) = args
-
-        from picasso_workflow.picasso_outpost import _calculate_pairwise_shift
-
-        if block_start == 0:
-            return None  # Skip first block (reference)
-
-        # Get frame ranges for current and previous blocks
-        current_min_frame = frames[block_start]
-        current_max_frame = frames[block_end - 1]
-        prev_min_frame = frames[max(0, block_start - toff_block_size)]
-        prev_max_frame = (
-            frames[block_start - 1] if block_start > 0 else frames[0]
-        )
-
-        # Filter localizations efficiently
-        current_block_locs = locs_data[
-            (locs_data["frame"] >= current_min_frame)
-            & (locs_data["frame"] <= current_max_frame)
-        ]
-        prev_block_locs = locs_data[
-            (locs_data["frame"] >= prev_min_frame)
-            & (locs_data["frame"] <= prev_max_frame)
-        ]
-
-        # Estimate drift between blocks
-        if (
-            len(prev_block_locs) < min_locs_per_block
-            or len(current_block_locs) < min_locs_per_block
-        ):
-            return (block_start, block_end, None, None, 0, None, None)
-
-        shift_x, shift_y, _, uncertainty_info = _calculate_pairwise_shift(
-            prev_block_locs,
-            current_block_locs,
-            max_shift,
-            plot_histogram=save_all_rsso_plots,
-            plot_dir=plot_dir,
-        )
-        logger.debug(f"""
-            coarse undrift of block {current_min_frame} to {current_max_frame}
-            shift x: {shift_x}; shift y: {shift_y};
-            uncertainty info: {uncertainty_info}
-            """)
-
-        if shift_x is not None and shift_y is not None:
-            quality = len(prev_block_locs) + len(current_block_locs)
-            uncertainty_x = (
-                uncertainty_info["sigma_x"]
-                if uncertainty_info["fit_successful"]
-                else uncertainty_info["shift_x_error"]
-            )
-            uncertainty_y = (
-                uncertainty_info["sigma_y"]
-                if uncertainty_info["fit_successful"]
-                else uncertainty_info["shift_y_error"]
-            )
-            return (
-                block_start,
-                block_end,
-                shift_x,
-                shift_y,
-                quality,
-                uncertainty_x,
-                uncertainty_y,
-            )
-        else:
-            return (block_start, block_end, None, None, 0, None, None)
-
-    def _adaptive_drift_correction(
-        self,
-        frames,
-        max_shift,
-        min_locs_per_frame,
-        min_window_size,
-        max_window_size,
-        confidence_threshold,
-        outlier_detection_enabled,
-        outlier_z_threshold,
-        change_point_sensitivity,
-        min_signal_to_noise,
-        n_processes,
-        save_all_rsso_plots,
-        plot_dir,
-        use_spline_interpolation,
-    ):
-        """Adaptive drift correction with locally variable window sizes.
-
-        Uses time-series cross-validation principles to adaptively choose
-        window sizes -- larger in stable regions, smaller in rapidly changing
-        ones.
-
-        Parameters
-        ----------
-        frames : numpy.ndarray
-            The localization frame numbers.
-        max_shift : float
-            Maximum expected drift per step in pixels.
-        min_locs_per_frame : int
-            Minimum localizations per frame for a reliable estimate.
-        min_window_size, max_window_size : int
-            Bounds on the adaptive window size.
-        confidence_threshold : float
-            Confidence threshold for windowing.
-        outlier_detection_enabled : bool
-            Whether to detect and handle temporal outliers.
-        outlier_z_threshold : float
-            Z-score threshold for temporal outlier detection.
-        change_point_sensitivity : float
-            Sensitivity for change-point detection.
-        min_signal_to_noise : float
-            Minimum signal-to-noise ratio for drift measurements.
-        n_processes : int or None
-            Number of parallel processes.
-        save_all_rsso_plots : bool
-            Whether to save all RSSO diagnostic plots.
-        plot_dir : str
-            Directory for the plots.
-        use_spline_interpolation : bool
-            Whether to use spline (vs linear) interpolation.
-
-        Returns
-        -------
-        tuple
-            ``(drift_x_fine, drift_y_fine, uncertainty_x_fine,
-            uncertainty_y_fine, drift_quality)``.
-        """
-
-        n_frames = len(frames)
-
-        # Initialize drift arrays
-        drift_x_fine = np.zeros(n_frames)
-        drift_y_fine = np.zeros(n_frames)
-        uncertainty_x_fine = np.zeros(n_frames)
-        uncertainty_y_fine = np.zeros(n_frames)
-        drift_quality = np.zeros(n_frames)
-
-        logger.debug(
-            f"Adaptive drift correction: {n_frames} frames, "
-            f"window size range: {min_window_size}-{max_window_size}"
-        )
-
-        # Phase 1: Initial coarse estimation to detect change points
-        coarse_estimates = self._get_coarse_drift_estimates(
-            frames, max_shift, min_locs_per_frame, max_window_size
-        )
-
-        # Phase 2: Temporal outlier filtering
-        if outlier_detection_enabled:
-            coarse_estimates_filtered = self._filter_temporal_outliers(
-                coarse_estimates, outlier_z_threshold
-            )
-        else:
-            coarse_estimates_filtered = coarse_estimates
-
-        # Phase 3: Change point detection (on filtered data)
-        change_points = self._detect_change_points(
-            coarse_estimates_filtered, change_point_sensitivity
-        )
-
-        logger.debug(
-            f"Detected {len(change_points)} change points: {change_points}"
-        )
-
-        # Phase 4: Adaptive window sizing
-        optimal_windows = self._calculate_adaptive_windows(
-            frames,
-            change_points,
-            coarse_estimates_filtered,
-            min_window_size,
-            max_window_size,
-            confidence_threshold,
-        )
-
-        # Phase 5: High-precision drift estimation with optimal windows
-        (
-            drift_x_fine,
-            drift_y_fine,
-            uncertainty_x_fine,
-            uncertainty_y_fine,
-            drift_quality,
-        ) = self._estimate_drift_with_adaptive_windows(
-            frames,
-            optimal_windows,
-            max_shift,
-            min_locs_per_frame,
-            save_all_rsso_plots,
-            plot_dir,
-            outlier_detection_enabled,
-            min_signal_to_noise,
-        )
-
-        # Log performance statistics
-        avg_window_size = np.mean(optimal_windows[1:])  # Exclude first frame
-        avg_uncertainty_x = np.mean(uncertainty_x_fine[1:])
-        avg_uncertainty_y = np.mean(uncertainty_y_fine[1:])
-        avg_quality = np.mean(drift_quality[1:])
-
-        logger.info(
-            f"Adaptive drift correction completed: avg_window_size={avg_window_size:.1f}, "
-            f"avg_uncertainty=({avg_uncertainty_x:.3f}, {avg_uncertainty_y:.3f}), "
-            f"avg_quality={avg_quality:.0f}"
-        )
-
-        # Generate comprehensive drift analysis plot
-        if plot_dir:
-            self._plot_adaptive_drift_analysis(
-                frames,
-                drift_x_fine,
-                drift_y_fine,
-                uncertainty_x_fine,
-                uncertainty_y_fine,
-                drift_quality,
-                optimal_windows,
-                change_points,
-                coarse_estimates,
-                coarse_estimates_filtered,
-                plot_dir,
-                use_spline_interpolation,
-            )
-
-        return (
-            drift_x_fine,
-            drift_y_fine,
-            uncertainty_x_fine,
-            uncertainty_y_fine,
-            drift_quality,
-        )
-
-    def _get_coarse_drift_estimates(
-        self, frames, max_shift, min_locs_per_frame, window_size
-    ):
-        """Get initial coarse drift estimates for change-point detection.
-
-        Parameters
-        ----------
-        frames : numpy.ndarray
-            The localization frame numbers.
-        max_shift : float
-            Maximum expected drift per step in pixels.
-        min_locs_per_frame : int
-            Minimum localizations per window for an estimate.
-        window_size : int
-            Fixed sliding-window size for the coarse estimation.
-
-        Returns
-        -------
-        dict
-            Lists keyed by ``drift_x``, ``drift_y``, ``uncertainty_x``,
-            ``uncertainty_y``, ``quality`` and ``frame_indices``.
-        """
-        n_frames = len(frames)
-        coarse_estimates = {
-            "drift_x": [],
-            "drift_y": [],
-            "uncertainty_x": [],
-            "uncertainty_y": [],
-            "quality": [],
-            "frame_indices": [],
-        }
-
-        # Use sliding windows with fixed size for initial estimation
-        for center_idx in range(window_size // 2, n_frames - window_size // 2):
-            start_idx = max(0, center_idx - window_size // 2)
-            end_idx = min(n_frames, center_idx + window_size // 2)
-
-            # Aggregate localizations from window
-            ref_frames = frames[start_idx:center_idx]
-            target_frames = frames[center_idx:end_idx]
-
-            ref_locs = self.locs[np.isin(self.locs["frame"], ref_frames)]
-            target_locs = self.locs[np.isin(self.locs["frame"], target_frames)]
-
-            if (
-                len(ref_locs) < min_locs_per_frame
-                or len(target_locs) < min_locs_per_frame
-            ):
-                # Insufficient data, use nan
-                coarse_estimates["drift_x"].append(np.nan)
-                coarse_estimates["drift_y"].append(np.nan)
-                coarse_estimates["uncertainty_x"].append(np.nan)
-                coarse_estimates["uncertainty_y"].append(np.nan)
-                coarse_estimates["quality"].append(0)
-            else:
-                (
-                    shift_x,
-                    shift_y,
-                    quality,
-                    uncertainty_x,
-                    uncertainty_y,
-                ) = self._estimate_drift_between_frame_groups(
-                    ref_locs,
-                    target_locs,
-                    max_shift,
-                    min_locs_per_frame,
-                    outlier_detection_enabled=False,
-                    min_signal_to_noise=0.5,  # Disable for coarse estimates
-                )
-                coarse_estimates["drift_x"].append(
-                    shift_x if shift_x is not None else np.nan
-                )
-                coarse_estimates["drift_y"].append(
-                    shift_y if shift_y is not None else np.nan
-                )
-                coarse_estimates["uncertainty_x"].append(
-                    uncertainty_x if uncertainty_x is not None else np.nan
-                )
-                coarse_estimates["uncertainty_y"].append(
-                    uncertainty_y if uncertainty_y is not None else np.nan
-                )
-                coarse_estimates["quality"].append(quality)
-
-            coarse_estimates["frame_indices"].append(center_idx)
-
-        return coarse_estimates
-
-    def _filter_temporal_outliers(self, coarse_estimates, z_threshold=3.5):
-        """Filter temporal outliers from coarse drift estimates.
-
-        Identifies and removes drift measurements inconsistent with their
-        temporal neighbours (often from RSSO fit failures), using a local
-        moving-median consistency check.
-
-        Parameters
-        ----------
-        coarse_estimates : dict
-            Coarse estimates as returned by
-            :meth:`_get_coarse_drift_estimates`.
-        z_threshold : float, optional
-            Modified z-score threshold above which a point is an outlier.
-            Default is 3.5.
-
-        Returns
-        -------
-        dict
-            A copy of ``coarse_estimates`` with outliers set to NaN.
-        """
-        drift_x = np.array(coarse_estimates["drift_x"])
-        drift_y = np.array(coarse_estimates["drift_y"])
-
-        # Create filtered copy
-        filtered_estimates = {
-            key: coarse_estimates[key].copy() for key in coarse_estimates
-        }
-
-        # Find valid measurements
-        valid_mask = ~(np.isnan(drift_x) | np.isnan(drift_y))
-        if np.sum(valid_mask) < 3:  # Need at least 3 points for filtering
-            return filtered_estimates
-
-        # Method 1: Local consistency check using moving median
-        window_size = min(5, max(3, len(drift_x) // 4))
-
-        for i in range(len(drift_x)):
-            if not valid_mask[i]:
-                continue
-
-            # Define local window
-            start_idx = max(0, i - window_size // 2)
-            end_idx = min(len(drift_x), i + window_size // 2 + 1)
-
-            local_drift_x = drift_x[start_idx:end_idx]
-            local_drift_y = drift_y[start_idx:end_idx]
-            local_valid = valid_mask[start_idx:end_idx]
-
-            if np.sum(local_valid) < 2:
-                continue
-
-            # Calculate local statistics (excluding current point)
-            local_x_others = local_drift_x[
-                local_valid & (np.arange(start_idx, end_idx) != i)
-            ]
-            local_y_others = local_drift_y[
-                local_valid & (np.arange(start_idx, end_idx) != i)
-            ]
-
-            if len(local_x_others) < 2:
-                continue
-
-            # Use robust statistics (median and MAD)
-            median_x = np.median(local_x_others)
-            median_y = np.median(local_y_others)
-            mad_x = np.median(np.abs(local_x_others - median_x))
-            mad_y = np.median(np.abs(local_y_others - median_y))
-
-            # Convert MAD to approximate standard deviation
-            std_x = 1.4826 * mad_x if mad_x > 0 else np.std(local_x_others)
-            std_y = 1.4826 * mad_y if mad_y > 0 else np.std(local_y_others)
-
-            # Check if current measurement is an outlier (Modified Z-score > threshold)
-            z_score_x = abs(drift_x[i] - median_x) / (std_x + 1e-10)
-            z_score_y = abs(drift_y[i] - median_y) / (std_y + 1e-10)
-
-            is_outlier = (z_score_x > z_threshold) or (z_score_y > z_threshold)
-
-            # Additional check: inconsistent with local trend
-            if not is_outlier and len(local_x_others) >= 3:
-                # Check if measurement is inconsistent with local linear trend
-                trend_inconsistency = self._check_trend_inconsistency(
-                    i, start_idx, end_idx, drift_x, drift_y, valid_mask
-                )
-                is_outlier = is_outlier or trend_inconsistency
-
-            if is_outlier:
-                logger.debug(
-                    f"Filtering temporal outlier at frame {coarse_estimates['frame_indices'][i]}: "
-                    f"drift=({drift_x[i]:.3f}, {drift_y[i]:.3f}), "
-                    f"z_scores=({z_score_x:.2f}, {z_score_y:.2f})"
-                )
-
-                # Mark as invalid
-                filtered_estimates["drift_x"][i] = np.nan
-                filtered_estimates["drift_y"][i] = np.nan
-                filtered_estimates["uncertainty_x"][i] = np.nan
-                filtered_estimates["uncertainty_y"][i] = np.nan
-                filtered_estimates["quality"][i] = 0
-
-        return filtered_estimates
-
-    def _check_trend_inconsistency(
-        self, current_idx, start_idx, end_idx, drift_x, drift_y, valid_mask
-    ):
-        """Check whether a measurement is inconsistent with the local trend.
-
-        Parameters
-        ----------
-        current_idx : int
-            Index of the measurement being checked.
-        start_idx, end_idx : int
-            Bounds of the local window.
-        drift_x, drift_y : numpy.ndarray
-            The coarse drift estimates.
-        valid_mask : numpy.ndarray of bool
-            Which estimates are valid.
-
-        Returns
-        -------
-        bool
-            Whether the measurement deviates from the local linear trend.
-        """
-        try:
-            # Get local valid indices
-            local_indices = np.arange(start_idx, end_idx)
-            local_valid = valid_mask[start_idx:end_idx] & (
-                local_indices != current_idx
-            )
-
-            if np.sum(local_valid) < 2:
-                return False
-
-            # Extract local data (excluding current point)
-            local_x = drift_x[start_idx:end_idx][local_valid]
-            local_y = drift_y[start_idx:end_idx][local_valid]
-            local_frame_indices = local_indices[local_valid]
-
-            # Fit linear trend
-            if len(local_x) >= 2:
-                trend_x = np.polyfit(local_frame_indices, local_x, 1)
-                trend_y = np.polyfit(local_frame_indices, local_y, 1)
-
-                # Predict what current measurement should be
-                expected_x = np.polyval(trend_x, current_idx)
-                expected_y = np.polyval(trend_y, current_idx)
-
-                # Calculate residuals for trend fitting
-                residuals_x = local_x - np.polyval(
-                    trend_x, local_frame_indices
-                )
-                residuals_y = local_y - np.polyval(
-                    trend_y, local_frame_indices
-                )
-
-                # Estimate trend uncertainty
-                trend_std_x = (
-                    np.std(residuals_x) if len(residuals_x) > 1 else 0
-                )
-                trend_std_y = (
-                    np.std(residuals_y) if len(residuals_y) > 1 else 0
-                )
-
-                # Check if current measurement deviates significantly from trend
-                deviation_x = abs(drift_x[current_idx] - expected_x)
-                deviation_y = abs(drift_y[current_idx] - expected_y)
-
-                # Use 3-sigma rule for trend consistency
-                inconsistent_x = deviation_x > 3 * (trend_std_x + 1e-10)
-                inconsistent_y = deviation_y > 3 * (trend_std_y + 1e-10)
-
-                return inconsistent_x or inconsistent_y
-
-        except Exception as e:
-            logger.debug(f"Trend inconsistency check failed: {e}")
-            return False
-
-        return False
-
-    def _detect_change_points(self, coarse_estimates, sensitivity):
-        """Detect change points in the drift pattern.
-
-        Parameters
-        ----------
-        coarse_estimates : dict
-            Coarse estimates as returned by
-            :meth:`_get_coarse_drift_estimates`.
-        sensitivity : float
-            Detection sensitivity.
-
-        Returns
-        -------
-        list
-            Frame indices of the detected change points.
-        """
-        drift_x = np.array(coarse_estimates["drift_x"])
-        drift_y = np.array(coarse_estimates["drift_y"])
-        frame_indices = np.array(coarse_estimates["frame_indices"])
-
-        # Remove nan values
-        valid_mask = ~(np.isnan(drift_x) | np.isnan(drift_y))
-        if np.sum(valid_mask) < 5:  # Need at least 5 points
-            return []
-
-        drift_x_valid = drift_x[valid_mask]
-        drift_y_valid = drift_y[valid_mask]
-        frame_indices_valid = frame_indices[valid_mask]
-
-        change_points = []
-
-        # Method 1: Detect large changes in drift magnitude
-        drift_magnitude = np.sqrt(drift_x_valid**2 + drift_y_valid**2)
-        if len(drift_magnitude) > 3:
-            # Use moving average and standard deviation for change detection
-            window = min(5, len(drift_magnitude) // 3)
-            rolling_mean = np.convolve(
-                drift_magnitude, np.ones(window) / window, mode="same"
-            )
-            rolling_std = np.array(
-                [
-                    np.std(
-                        drift_magnitude[
-                            max(0, i - window // 2) : i + window // 2 + 1
-                        ]
-                    )
-                    for i in range(len(drift_magnitude))
-                ]
-            )
-
-            # Detect outliers (change points)
-            z_scores = np.abs(
-                (drift_magnitude - rolling_mean) / (rolling_std + 1e-10)
-            )
-            change_indices = np.where(z_scores > sensitivity)[0]
-
-            change_points.extend(frame_indices_valid[change_indices].tolist())
-
-        # Method 2: Confidence interval intersection analysis
-        uncertainties_x = np.array(coarse_estimates["uncertainty_x"])[
-            valid_mask
-        ]
-        uncertainties_y = np.array(coarse_estimates["uncertainty_y"])[
-            valid_mask
-        ]
-
-        if not np.any(np.isnan(uncertainties_x)) and not np.any(
-            np.isnan(uncertainties_y)
-        ):
-            for i in range(1, len(drift_x_valid)):
-                # Check if confidence intervals don't overlap (significant change)
-                prev_ci_x = [
-                    drift_x_valid[i - 1]
-                    - sensitivity * uncertainties_x[i - 1],
-                    drift_x_valid[i - 1]
-                    + sensitivity * uncertainties_x[i - 1],
-                ]
-                curr_ci_x = [
-                    drift_x_valid[i] - sensitivity * uncertainties_x[i],
-                    drift_x_valid[i] + sensitivity * uncertainties_x[i],
-                ]
-
-                prev_ci_y = [
-                    drift_y_valid[i - 1]
-                    - sensitivity * uncertainties_y[i - 1],
-                    drift_y_valid[i - 1]
-                    + sensitivity * uncertainties_y[i - 1],
-                ]
-                curr_ci_y = [
-                    drift_y_valid[i] - sensitivity * uncertainties_y[i],
-                    drift_y_valid[i] + sensitivity * uncertainties_y[i],
-                ]
-
-                # Check for non-overlapping confidence intervals
-                if (
-                    curr_ci_x[0] > prev_ci_x[1]
-                    or curr_ci_x[1] < prev_ci_x[0]
-                    or curr_ci_y[0] > prev_ci_y[1]
-                    or curr_ci_y[1] < prev_ci_y[0]
-                ):
-                    change_points.append(frame_indices_valid[i])
-
-        # Remove duplicates and sort
-        change_points = sorted(list(set(change_points)))
-
-        return change_points
-
-    def _calculate_adaptive_windows(
-        self,
-        frames,
-        change_points,
-        coarse_estimates,
-        min_window_size,
-        max_window_size,
-        confidence_threshold,
-    ):
-        """Calculate per-frame optimal window sizes from local stability.
-
-        Parameters
-        ----------
-        frames : numpy.ndarray
-            The localization frame numbers.
-        change_points : list
-            Frame indices of detected change points.
-        coarse_estimates : dict
-            Coarse estimates as returned by
-            :meth:`_get_coarse_drift_estimates`.
-        min_window_size, max_window_size : int
-            Bounds on the window size.
-        confidence_threshold : float
-            Confidence above which larger windows are used.
-
-        Returns
-        -------
-        numpy.ndarray
-            The optimal window size per frame.
-        """
-        n_frames = len(frames)
-        optimal_windows = np.full(n_frames, min_window_size)
-
-        # Convert change points to segments
-        segment_boundaries = [0] + change_points + [n_frames]
-        segments = [
-            (segment_boundaries[i], segment_boundaries[i + 1])
-            for i in range(len(segment_boundaries) - 1)
-        ]
-
-        for start, end in segments:
-            segment_length = end - start
-
-            # Analyze local noise level in this segment
-            local_uncertainties = []
-            local_qualities = []
-
-            for i, frame_idx in enumerate(coarse_estimates["frame_indices"]):
-                if start <= frame_idx < end:
-                    if not np.isnan(coarse_estimates["uncertainty_x"][i]):
-                        local_uncertainties.append(
-                            np.sqrt(
-                                coarse_estimates["uncertainty_x"][i] ** 2
-                                + coarse_estimates["uncertainty_y"][i] ** 2
-                            )
-                        )
-                    local_qualities.append(coarse_estimates["quality"][i])
-
-            if local_uncertainties:
-                # Calculate confidence metric for this segment
-                mean_uncertainty = np.mean(local_uncertainties)
-                mean_quality = (
-                    np.mean(local_qualities) if local_qualities else 0
-                )
-
-                # Normalize confidence (higher quality, lower uncertainty = higher confidence)
-                max_quality = (
-                    max(coarse_estimates["quality"])
-                    if coarse_estimates["quality"]
-                    else 1
-                )
-                confidence = (mean_quality / max_quality) / (
-                    1 + mean_uncertainty
-                )
-
-                # Determine optimal window size based on confidence
-                if confidence >= confidence_threshold:
-                    # High confidence: can use larger windows
-                    target_window_size = min(
-                        max_window_size, segment_length // 2
-                    )
-                else:
-                    # Low confidence: use smaller windows for better tracking
-                    target_window_size = max(
-                        min_window_size,
-                        min(max_window_size // 2, segment_length // 3),
-                    )
-
-                # Set window sizes for this segment
-                for frame_idx in range(start, end):
-                    optimal_windows[frame_idx] = target_window_size
-
-                logger.debug(
-                    f"Segment [{start}:{end}] - Confidence: {confidence:.3f}, "
-                    f"Window size: {target_window_size}"
-                )
-
-        return optimal_windows
-
-    def _estimate_drift_with_adaptive_windows(
-        self,
-        frames,
-        optimal_windows,
-        max_shift,
-        min_locs_per_frame,
-        save_all_rsso_plots,
-        plot_dir,
-        outlier_detection_enabled=True,
-        min_signal_to_noise=0.5,
-    ):
-        """Estimate drift per frame using the adaptive window sizes.
-
-        Parameters
-        ----------
-        frames : numpy.ndarray
-            The localization frame numbers.
-        optimal_windows : numpy.ndarray
-            Per-frame window sizes from :meth:`_calculate_adaptive_windows`.
-        max_shift : float
-            Maximum expected drift per step in pixels.
-        min_locs_per_frame : int
-            Minimum localizations per window for an estimate.
-        save_all_rsso_plots : bool
-            Whether to save all RSSO diagnostic plots.
-        plot_dir : str
-            Directory for the plots.
-        outlier_detection_enabled : bool, optional
-            Whether to detect outliers. Default is True.
-        min_signal_to_noise : float, optional
-            Minimum signal-to-noise ratio. Default is 0.5.
-
-        Returns
-        -------
-        tuple
-            ``(drift_x_fine, drift_y_fine, uncertainty_x_fine,
-            uncertainty_y_fine, drift_quality)``.
-        """
-        n_frames = len(frames)
-
-        drift_x_fine = np.zeros(n_frames)
-        drift_y_fine = np.zeros(n_frames)
-        uncertainty_x_fine = np.zeros(n_frames)
-        uncertainty_y_fine = np.zeros(n_frames)
-        drift_quality = np.zeros(n_frames)
-
-        for frame_idx in range(1, n_frames):
-            window_size = int(optimal_windows[frame_idx])
-
-            # Define reference and target windows
-            ref_start = max(0, frame_idx - window_size)
-            ref_end = frame_idx
-            target_start = frame_idx
-            target_end = min(n_frames, frame_idx + window_size)
-
-            # Get localizations for reference and target windows
-            ref_frame_range = frames[ref_start:ref_end]
-            target_frame_range = frames[target_start:target_end]
-
-            ref_locs = self.locs[np.isin(self.locs["frame"], ref_frame_range)]
-            target_locs = self.locs[
-                np.isin(self.locs["frame"], target_frame_range)
-            ]
-
-            # Estimate drift for this frame
-            (
-                shift_x,
-                shift_y,
-                quality,
-                uncertainty_x,
-                uncertainty_y,
-            ) = self._estimate_drift_between_frame_groups(
-                ref_locs,
-                target_locs,
-                max_shift,
-                min_locs_per_frame,
-                outlier_detection_enabled,
-                min_signal_to_noise,
-            )
-
-            if shift_x is not None and shift_y is not None:
-                # Scale by window overlap to get per-frame drift
-                overlap_factor = (
-                    min(window_size, target_end - target_start) / window_size
-                )
-                per_frame_shift_x = shift_x * overlap_factor / window_size
-                per_frame_shift_y = shift_y * overlap_factor / window_size
-
-                # Accumulate drift
-                drift_x_fine[frame_idx] = (
-                    drift_x_fine[frame_idx - 1] + per_frame_shift_x
-                )
-                drift_y_fine[frame_idx] = (
-                    drift_y_fine[frame_idx - 1] + per_frame_shift_y
-                )
-
-                # Scale uncertainties appropriately
-                scaled_uncertainty_x = (
-                    uncertainty_x * overlap_factor / window_size
-                    if uncertainty_x
-                    else 0
-                )
-                scaled_uncertainty_y = (
-                    uncertainty_y * overlap_factor / window_size
-                    if uncertainty_y
-                    else 0
-                )
-
-                uncertainty_x_fine[frame_idx] = np.sqrt(
-                    uncertainty_x_fine[frame_idx - 1] ** 2
-                    + scaled_uncertainty_x**2
-                )
-                uncertainty_y_fine[frame_idx] = np.sqrt(
-                    uncertainty_y_fine[frame_idx - 1] ** 2
-                    + scaled_uncertainty_y**2
-                )
-
-                drift_quality[frame_idx] = quality
-            else:
-                # Failed estimation - use previous values
-                drift_x_fine[frame_idx] = drift_x_fine[frame_idx - 1]
-                drift_y_fine[frame_idx] = drift_y_fine[frame_idx - 1]
-                uncertainty_x_fine[frame_idx] = uncertainty_x_fine[
-                    frame_idx - 1
-                ]
-                uncertainty_y_fine[frame_idx] = uncertainty_y_fine[
-                    frame_idx - 1
-                ]
-                drift_quality[frame_idx] = 0
-
-        return (
-            drift_x_fine,
-            drift_y_fine,
-            uncertainty_x_fine,
-            uncertainty_y_fine,
-            drift_quality,
-        )
-
-    def _estimate_drift_between_frame_groups(
-        self,
-        locs_ref,
-        locs_target,
-        max_shift,
-        min_locs,
-        outlier_detection_enabled=True,
-        min_signal_to_noise=0.5,
-    ):
-        """Estimate the drift between two groups of localizations via RSSO.
-
-        Enhanced with RSSO fit-failure detection and outlier filtering.
-
-        Parameters
-        ----------
-        locs_ref, locs_target : np.rec.array
-            The reference and target localizations.
-        max_shift : float
-            Maximum expected drift in pixels.
-        min_locs : int
-            Minimum localizations required in each group.
-        outlier_detection_enabled : bool, optional
-            Whether to apply failure/outlier detection. Default is True.
-        min_signal_to_noise : float, optional
-            Minimum signal-to-noise ratio. Default is 0.5.
-
-        Returns
-        -------
-        shift_x, shift_y : float or None
-            Drift measurements (None if failed or flagged as an outlier).
-        quality : int
-            Quality metric based on the number of localizations.
-        uncertainty_x, uncertainty_y : float or None
-            Estimated uncertainties in the shift measurements.
-        """
-        from picasso_workflow.picasso_outpost import _calculate_pairwise_shift
-
-        if len(locs_ref) < min_locs or len(locs_target) < min_locs:
-            return None, None, 0, None, None
-
-        shift_x, shift_y, _, uncertainty_info = _calculate_pairwise_shift(
-            locs_ref, locs_target, max_shift, plot_histogram=False
-        )
-
-        if shift_x is not None and shift_y is not None:
-            # Check for RSSO fit failure indicators
-            fit_successful = uncertainty_info.get("fit_successful", False)
-
-            # Extract uncertainty estimates
-            uncertainty_x = (
-                uncertainty_info["sigma_x"]
-                if fit_successful
-                else uncertainty_info.get("shift_x_error", np.inf)
-            )
-            uncertainty_y = (
-                uncertainty_info["sigma_y"]
-                if fit_successful
-                else uncertainty_info.get("shift_y_error", np.inf)
-            )
-
-            # Quality metrics for outlier detection
-            quality = len(locs_ref) + len(locs_target)
-            shift_magnitude = np.sqrt(shift_x**2 + shift_y**2)
-
-            # Detect RSSO failure and outliers
-            if outlier_detection_enabled:
-                is_outlier = self._detect_rsso_failure_and_outliers(
-                    shift_x,
-                    shift_y,
-                    uncertainty_x,
-                    uncertainty_y,
-                    shift_magnitude,
-                    max_shift,
-                    fit_successful,
-                    quality,
-                    min_signal_to_noise,
-                )
-            else:
-                is_outlier = False
-
-            if is_outlier:
-                logger.debug(
-                    f"Detected RSSO outlier/failure: shift=({shift_x:.3f}, {shift_y:.3f}), "
-                    f"magnitude={shift_magnitude:.3f}, fit_successful={fit_successful}, "
-                    f"uncertainty=({uncertainty_x:.3f}, {uncertainty_y:.3f})"
-                )
-                return None, None, 0, None, None
-
-            return shift_x, shift_y, quality, uncertainty_x, uncertainty_y
-        else:
-            return None, None, 0, None, None
-
-    def _detect_rsso_failure_and_outliers(
-        self,
-        shift_x,
-        shift_y,
-        uncertainty_x,
-        uncertainty_y,
-        shift_magnitude,
-        max_shift,
-        fit_successful,
-        quality,
-        min_signal_to_noise=0.5,
-    ):
-        """Detect RSSO fit failures and false drift outliers.
-
-        Parameters
-        ----------
-        shift_x, shift_y : float
-            Estimated drift values.
-        uncertainty_x, uncertainty_y : float
-            Uncertainty estimates.
-        shift_magnitude : float
-            Magnitude of the drift vector.
-        max_shift : float
-            Maximum expected drift per comparison.
-        fit_successful : bool
-            Whether the Gaussian fit succeeded.
-        quality : int
-            Quality metric (number of localizations).
-        min_signal_to_noise : float, optional
-            Minimum signal-to-noise ratio. Default is 0.5.
-
-        Returns
-        -------
-        bool
-            Whether the measurement should be treated as an outlier/failure.
-        """
-
-        # Criterion 1: Gaussian fit failure
-        if not fit_successful:
-            return True
-
-        # Criterion 2: Excessive shift magnitude (likely spurious correlation)
-        # Allow for accumulated drift but flag extreme outliers
-        if shift_magnitude > 3 * max_shift:  # 3x safety margin
-            return True
-
-        # Criterion 3: Excessive uncertainty relative to signal
-        if uncertainty_x is not None and uncertainty_y is not None:
-            # Flag if uncertainty is comparable to or larger than the shift
-            uncertainty_magnitude = np.sqrt(
-                uncertainty_x**2 + uncertainty_y**2
-            )
-            signal_to_noise = shift_magnitude / (uncertainty_magnitude + 1e-10)
-
-            if (
-                signal_to_noise < min_signal_to_noise
-            ):  # Signal less than minimum threshold
-                return True
-
-            # Flag if uncertainty is unrealistically large (fit instability)
-            if uncertainty_magnitude > 2 * max_shift:
-                return True
-
-        # Criterion 4: Very low quality (insufficient data for reliable estimation)
-        if quality < 20:  # Minimum threshold for reliable cross-correlation
-            return True
-
-        # Criterion 5: Detect common RSSO failure patterns
-        # Check for suspiciously round numbers (often artifacts)
-        if abs(shift_x) < 1e-10 and abs(shift_y) < 1e-10:  # Exactly zero drift
-            return True
-
-        # Check for extreme aspect ratios (likely spurious)
-        aspect_ratio = max(abs(shift_x), abs(shift_y)) / (
-            min(abs(shift_x), abs(shift_y)) + 1e-10
-        )
-        if aspect_ratio > 10:  # One direction dominates unrealistically
-            return True
-
-        return False
-
-    def _plot_adaptive_drift_analysis(
-        self,
-        frames,
-        drift_x_fine,
-        drift_y_fine,
-        uncertainty_x_fine,
-        uncertainty_y_fine,
-        drift_quality,
-        optimal_windows,
-        change_points,
-        coarse_estimates,
-        coarse_estimates_filtered,
-        plot_dir,
-        use_spline_interpolation,
-    ):
-        """Plot the adaptive drift analysis.
-
-        Shows the local drift trajectory, confidence intervals, adaptive window
-        sizes and detected change points across four stacked panels, and saves
-        the figure to ``plot_dir``.
-
-        Returns
-        -------
-        str
-            The filepath of the saved analysis figure.
-        """
-        import os
-
-        import matplotlib.pyplot as plt
-        from matplotlib.patches import Rectangle
-
-        fig, axes = plt.subplots(4, 1, figsize=(14, 12))
-        stage2_method = (
-            "Cubic Spline" if use_spline_interpolation else "Linear Blocks"
-        )
-        fig.suptitle(
-            f"Adaptive Drift Correction Analysis (Stage 2: {stage2_method})",
-            fontsize=16,
-            fontweight="bold",
-        )
-
-        frame_indices = np.arange(len(frames))
-
-        # Plot 1: Drift trajectory with confidence intervals
-        ax1 = axes[0]
-        ax1.plot(
-            frame_indices, drift_x_fine, "b-", label="Drift X", linewidth=1.5
-        )
-        ax1.plot(
-            frame_indices, drift_y_fine, "r-", label="Drift Y", linewidth=1.5
-        )
-
-        # Add confidence intervals
-        ax1.fill_between(
-            frame_indices,
-            drift_x_fine - uncertainty_x_fine,
-            drift_x_fine + uncertainty_x_fine,
-            alpha=0.3,
-            color="blue",
-            label="X uncertainty",
-        )
-        ax1.fill_between(
-            frame_indices,
-            drift_y_fine - uncertainty_y_fine,
-            drift_y_fine + uncertainty_y_fine,
-            alpha=0.3,
-            color="red",
-            label="Y uncertainty",
-        )
-
-        # # Mark change points
-        # for cp in change_points:
-        #     if cp < len(frames):
-        #         ax1.axvline(
-        #             x=cp,
-        #             color="orange",
-        #             linestyle="--",
-        #             alpha=0.7,
-        #             linewidth=2,
-        #         )
-
-        # Mark filtered outliers
-        coarse_frame_indices = np.array(coarse_estimates["frame_indices"])
-        original_drift_x = np.array(coarse_estimates["drift_x"])
-        original_drift_y = np.array(coarse_estimates["drift_y"])
-        filtered_drift_x = np.array(coarse_estimates_filtered["drift_x"])
-        filtered_drift_y = np.array(coarse_estimates_filtered["drift_y"])
-
-        # Find outliers (points that were valid originally but filtered out)
-        original_valid = ~(
-            np.isnan(original_drift_x) | np.isnan(original_drift_y)
-        )
-        filtered_valid = ~(
-            np.isnan(filtered_drift_x) | np.isnan(filtered_drift_y)
-        )
-        outliers = original_valid & ~filtered_valid
-
-        if np.any(outliers):
-            outlier_frames = coarse_frame_indices[outliers]
-            outlier_x = original_drift_x[outliers]
-            outlier_y = original_drift_y[outliers]
-            ax1.scatter(
-                outlier_frames,
-                outlier_x,
-                color="red",
-                marker="x",
-                s=50,
-                label=f"Filtered Outliers ({np.sum(outliers)})",
-                alpha=0.7,
-            )
-            ax1.scatter(
-                outlier_frames,
-                outlier_y,
-                color="red",
-                marker="x",
-                s=50,
-                alpha=0.7,
-            )
-
-        ax1.set_ylabel("Cumulative Drift (pixels)")
-        ax1.set_title("Drift Trajectory with Confidence Intervals")
-        ax1.legend()
-        ax1.grid(True, alpha=0.3)
-
-        # Plot 2: Local drift rate and quality
-        ax2 = axes[1]
-
-        # Calculate instantaneous drift rate
-        drift_rate_x = np.diff(drift_x_fine)
-        drift_rate_y = np.diff(drift_y_fine)
-        drift_rate_magnitude = np.sqrt(drift_rate_x**2 + drift_rate_y**2)
-
-        # Plot drift rate
-        ax2_twin = ax2.twinx()
-        ax2.plot(
-            frame_indices[1:],
-            drift_rate_magnitude,
-            "g-",
-            linewidth=1.5,
-            label="Drift Rate Magnitude",
-        )
-
-        # Plot quality as bars
-        quality_normalized = (
-            drift_quality / np.max(drift_quality)
-            if np.max(drift_quality) > 0
-            else drift_quality
-        )
-        ax2_twin.bar(
-            frame_indices,
-            quality_normalized,
-            alpha=0.4,
-            color="purple",
-            label="Normalized Quality",
-        )
-
-        ax2.set_ylabel("Drift Rate (pixels/frame)", color="g")
-        ax2_twin.set_ylabel("Normalized Quality", color="purple")
-        ax2.set_title("Local Drift Rate and Measurement Quality")
-        ax2.tick_params(axis="y", labelcolor="g")
-        ax2_twin.tick_params(axis="y", labelcolor="purple")
-        ax2.grid(True, alpha=0.3)
-
-        # Combined legend
-        lines1, labels1 = ax2.get_legend_handles_labels()
-        lines2, labels2 = ax2_twin.get_legend_handles_labels()
-        ax2.legend(lines1 + lines2, labels1 + labels2, loc="upper right")
-
-        # Plot 3: Adaptive window sizes and confidence
-        ax3 = axes[2]
-
-        # Plot window sizes as step function
-        ax3.step(
-            frame_indices,
-            optimal_windows,
-            where="mid",
-            linewidth=2,
-            color="navy",
-            label="Window Size",
-        )
-
-        # Add confidence metric overlay
-        ax3_twin = ax3.twinx()
-
-        # Calculate local confidence from coarse estimates
-        confidence_series = np.full(len(frames), np.nan)
-        coarse_frame_indices = np.array(coarse_estimates["frame_indices"])
-        coarse_uncertainties = np.array(coarse_estimates["uncertainty_x"])
-        coarse_qualities = np.array(coarse_estimates["quality"])
-
-        valid_coarse = ~np.isnan(coarse_uncertainties) & (coarse_qualities > 0)
-        if np.any(valid_coarse):
-            max_quality = np.max(coarse_qualities[valid_coarse])
-            for i, frame_idx in enumerate(coarse_frame_indices):
-                if valid_coarse[i] and frame_idx < len(frames):
-                    uncertainty_combined = (
-                        np.sqrt(
-                            coarse_estimates["uncertainty_x"][i] ** 2
-                            + coarse_estimates["uncertainty_y"][i] ** 2
-                        )
-                        if not np.isnan(coarse_estimates["uncertainty_y"][i])
-                        else coarse_uncertainties[i]
-                    )
-
-                    confidence = (coarse_qualities[i] / max_quality) / (
-                        1 + uncertainty_combined
-                    )
-                    confidence_series[frame_idx] = confidence
-
-        # Interpolate confidence for plotting
-        valid_conf_mask = ~np.isnan(confidence_series)
-        if np.any(valid_conf_mask):
-            conf_interp = np.interp(
-                frame_indices,
-                frame_indices[valid_conf_mask],
-                confidence_series[valid_conf_mask],
-            )
-            ax3_twin.plot(
-                frame_indices,
-                conf_interp,
-                "orange",
-                linewidth=1.5,
-                label="Local Confidence",
-                alpha=0.8,
-            )
-
-        # Add segments with different window sizes
-        segment_boundaries = [0] + change_points + [len(frames)]
-        colors = plt.cm.Set3(np.linspace(0, 1, len(segment_boundaries) - 1))
-
-        for i, (start, end) in enumerate(
-            zip(segment_boundaries[:-1], segment_boundaries[1:])
-        ):
-            if end > start:
-                rect = Rectangle(
-                    (start, 0),
-                    end - start,
-                    np.max(optimal_windows),
-                    alpha=0.1,
-                    color=colors[i % len(colors)],
-                )
-                ax3.add_patch(rect)
-
-        ax3.set_ylabel("Window Size (frames)", color="navy")
-        ax3_twin.set_ylabel("Confidence", color="orange")
-        ax3.set_title("Adaptive Window Sizes and Local Confidence")
-        ax3.tick_params(axis="y", labelcolor="navy")
-        ax3_twin.tick_params(axis="y", labelcolor="orange")
-        ax3.grid(True, alpha=0.3)
-
-        # Legend
-        lines3, labels3 = ax3.get_legend_handles_labels()
-        lines3_twin, labels3_twin = ax3_twin.get_legend_handles_labels()
-        ax3.legend(
-            lines3 + lines3_twin, labels3 + labels3_twin, loc="upper right"
-        )
-
-        # Plot 4: Uncertainty evolution
-        ax4 = axes[3]
-
-        total_uncertainty = np.sqrt(
-            uncertainty_x_fine**2 + uncertainty_y_fine**2
-        )
-        ax4.plot(
-            frame_indices,
-            uncertainty_x_fine,
-            "b-",
-            linewidth=1.5,
-            label="X Uncertainty",
-            alpha=0.7,
-        )
-        ax4.plot(
-            frame_indices,
-            uncertainty_y_fine,
-            "r-",
-            linewidth=1.5,
-            label="Y Uncertainty",
-            alpha=0.7,
-        )
-        ax4.plot(
-            frame_indices,
-            total_uncertainty,
-            "k-",
-            linewidth=2,
-            label="Total Uncertainty",
-        )
-
-        # # Mark change points
-        # for cp in change_points:
-        #     if cp < len(frames):
-        #         ax4.axvline(x=cp, color="orange", linestyle="--", alpha=0.7)
-
-        ax4.set_ylabel("Uncertainty (pixels)")
-        ax4.set_xlabel("Frame Index")
-        ax4.set_title("Cumulative Uncertainty Evolution")
-        ax4.legend()
-        ax4.grid(True, alpha=0.3)
-
-        # Adjust layout and save
-        plt.tight_layout(rect=[0, 0.03, 1, 0.95])
-
-        plot_path = os.path.join(plot_dir, "adaptive_drift_analysis.png")
-        plt.savefig(plot_path, dpi=300, bbox_inches="tight", facecolor="white")
-        plt.close()
-
-        logger.debug(f"Saved adaptive drift analysis plot: {plot_path}")
-
-        # Additional summary statistics plot
-        self._plot_drift_statistics_summary(
-            frames,
-            drift_x_fine,
-            drift_y_fine,
-            uncertainty_x_fine,
-            uncertainty_y_fine,
-            optimal_windows,
-            change_points,
-            plot_dir,
-        )
-
-    def _plot_drift_statistics_summary(
-        self,
-        frames,
-        drift_x,
-        drift_y,
-        uncertainty_x,
-        uncertainty_y,
-        window_sizes,
-        change_points,
-        plot_dir,
-    ):
-        """Plot summary statistics of drift-correction performance.
-
-        Saves a 2x2 panel of drift-magnitude, uncertainty and window-size
-        summaries to ``plot_dir``.
-
-        Returns
-        -------
-        str
-            The filepath of the saved summary figure.
-        """
-        import os
-
-        import matplotlib.pyplot as plt
-
-        fig, axes = plt.subplots(2, 2, figsize=(12, 10))
-        fig.suptitle(
-            "Drift Correction Performance Summary",
-            fontsize=14,
-            fontweight="bold",
-        )
-
-        # Plot 1: Drift magnitude histogram
-        ax1 = axes[0, 0]
-        drift_magnitude = np.sqrt(drift_x**2 + drift_y**2)
-        ax1.hist(
-            drift_magnitude[1:],
-            bins=30,
-            alpha=0.7,
-            color="skyblue",
-            edgecolor="black",
-        )
-        ax1.set_xlabel("Total Drift Magnitude (pixels)")
-        ax1.set_ylabel("Frequency")
-        ax1.set_title("Distribution of Cumulative Drift")
-        ax1.grid(True, alpha=0.3)
-
-        # Plot 2: Window size distribution
-        ax2 = axes[0, 1]
-        window_counts, window_bins = np.histogram(window_sizes[1:], bins=20)
-        ax2.bar(
-            window_bins[:-1],
-            window_counts,
-            width=np.diff(window_bins),
-            alpha=0.7,
-            color="lightgreen",
-            edgecolor="black",
-        )
-        ax2.set_xlabel("Window Size (frames)")
-        ax2.set_ylabel("Frequency")
-        ax2.set_title("Distribution of Adaptive Window Sizes")
-        ax2.grid(True, alpha=0.3)
-
-        # Plot 3: Uncertainty vs Window Size
-        ax3 = axes[1, 0]
-        total_uncertainty = np.sqrt(uncertainty_x**2 + uncertainty_y**2)
-        ax3.scatter(
-            window_sizes[1:],
-            total_uncertainty[1:],
-            alpha=0.6,
-            c=np.arange(1, len(window_sizes)),
-            cmap="viridis",
-        )
-        ax3.set_xlabel("Window Size (frames)")
-        ax3.set_ylabel("Total Uncertainty (pixels)")
-        ax3.set_title("Uncertainty vs Window Size")
-        ax3.grid(True, alpha=0.3)
-
-        # Plot 4: Change point analysis
-        ax4 = axes[1, 1]
-        if change_points:
-            # Calculate inter-change-point intervals
-            intervals = []
-            prev_cp = 0
-            for cp in change_points:
-                intervals.append(cp - prev_cp)
-                prev_cp = cp
-            intervals.append(len(frames) - prev_cp)
-
-            ax4.hist(
-                intervals,
-                bins=min(15, len(intervals)),
-                alpha=0.7,
-                color="orange",
-                edgecolor="black",
-            )
-            ax4.set_xlabel("Segment Length (frames)")
-            ax4.set_ylabel("Frequency")
-            ax4.set_title(
-                f"Stable Segment Lengths ({len(change_points)} change points)"
-            )
-        else:
-            ax4.text(
-                0.5,
-                0.5,
-                "No Change Points Detected",
-                transform=ax4.transAxes,
-                ha="center",
-                va="center",
-                fontsize=12,
-            )
-            ax4.set_title("Change Point Analysis")
-
-        ax4.grid(True, alpha=0.3)
-
-        plt.tight_layout(rect=[0, 0.03, 1, 0.95])
-
-        summary_path = os.path.join(plot_dir, "drift_correction_summary.png")
-        plt.savefig(
-            summary_path, dpi=300, bbox_inches="tight", facecolor="white"
-        )
-        plt.close()
-
-        logger.debug(f"Saved drift correction summary plot: {summary_path}")
-
-    def _spline_based_drift_correction(
-        self,
-        frames,
-        toff,
-        max_shift,
-        min_locs_per_block,
-        n_processes,
-        save_all_rsso_plots,
-        plot_dir,
-        smoothing_factor,
-        min_blocks_for_spline,
-    ):
-        """Cubic-spline long-timescale drift correction from block centers.
-
-        Estimates drift at the center of each ``toff``-sized time block, then
-        cubic-spline-interpolates a smooth drift trajectory over all frames.
-
-        Parameters
-        ----------
-        frames : numpy.ndarray
-            The localization frame numbers.
-        toff : float
-            Time-block size in frames (anchor spacing).
-        max_shift : float
-            Maximum expected drift per block in pixels.
-        min_locs_per_block : int
-            Minimum localizations per block for an anchor.
-        n_processes : int or None
-            Number of parallel processes.
-        save_all_rsso_plots : bool
-            Whether to save all RSSO diagnostic plots.
-        plot_dir : str
-            Directory for the plots.
-        smoothing_factor : float
-            Spline smoothing factor.
-        min_blocks_for_spline : int
-            Minimum number of anchor blocks required to fit a spline.
-
-        Returns
-        -------
-        tuple
-            ``(drift_x_coarse, drift_y_coarse, uncertainty_x_coarse,
-            uncertainty_y_coarse)``.
-        """
-        from scipy.interpolate import UnivariateSpline
-
-        n_frames = len(frames)
-        toff_block_size = int(toff)
-
-        # Initialize arrays
-        drift_x_coarse = np.zeros(n_frames)
-        drift_y_coarse = np.zeros(n_frames)
-        uncertainty_x_coarse = np.zeros(n_frames)
-        uncertainty_y_coarse = np.zeros(n_frames)
-
-        # Calculate block centers and estimate drift at each center
-        block_centers = []
-        block_center_frames = []
-        block_drifts_x = []
-        block_drifts_y = []
-        block_uncertainties_x = []
-        block_uncertainties_y = []
-        block_weights = []
-
-        logger.debug(
-            f"Processing {int(np.ceil(n_frames / toff_block_size))} time blocks for spline anchors"
-        )
-
-        # Process blocks to get anchor points
-        block_args = []
-        for block_start in range(0, n_frames, toff_block_size):
-            block_end = min(block_start + toff_block_size, n_frames)
-
-            # Calculate block center frame
-            center_frame_idx = (block_start + block_end) // 2
-            center_frame = frames[center_frame_idx]
-
-            block_args.append(
-                (
-                    self.locs,
-                    frames,
-                    block_start,
-                    block_end,
-                    toff_block_size,
-                    max_shift,
-                    min_locs_per_block,
-                    save_all_rsso_plots,
-                    plot_dir,
-                )
-            )
-            block_centers.append(center_frame_idx)
-            block_center_frames.append(center_frame)
-
-        # Process blocks in parallel to get drift estimates at centers
-        try:
-            if n_processes == 1 or len(block_args) <= 1:
-                logger.debug(
-                    "Using single-threaded processing for spline anchor points"
-                )
-                block_results = [
-                    self._process_drift_block(args) for args in block_args
-                ]
-            else:
-                logger.debug(
-                    f"Using {n_processes} processes for spline anchor points "
-                    + f"({len(block_args)} blocks)"
-                )
-                from multiprocessing import Pool
-
-                with Pool(processes=n_processes) as pool:
-                    block_results = pool.map(
-                        self._process_drift_block, block_args
-                    )
-        except Exception as e:
-            logger.warning(
-                "Multiprocessing failed for spline anchor points, falling back to "
-                + f"single-threaded: {e}"
-            )
-            block_results = [
-                self._process_drift_block(args) for args in block_args
-            ]
-
-        # Extract valid anchor points for spline fitting
-        valid_anchors = []
-        cumulative_drift_x = 0
-        cumulative_drift_y = 0
-
-        for i, result in enumerate(block_results):
-            if result is None:
-                continue  # Skip first block (no comparison possible)
-
-            (
-                block_start,
-                block_end,
-                shift_x,
-                shift_y,
-                quality,
-                uncertainty_x,
-                uncertainty_y,
-            ) = result
-
-            if shift_x is not None and shift_y is not None and quality > 0:
-                # Accumulate drift to get absolute position
-                cumulative_drift_x += shift_x
-                cumulative_drift_y += shift_y
-
-                # Store anchor point data
-                center_idx = block_centers[i]
-                block_drifts_x.append(cumulative_drift_x)
-                block_drifts_y.append(cumulative_drift_y)
-                block_uncertainties_x.append(
-                    uncertainty_x if uncertainty_x else 1.0
-                )
-                block_uncertainties_y.append(
-                    uncertainty_y if uncertainty_y else 1.0
-                )
-
-                # Weight based on quality and inverse uncertainty
-                weight_x = quality / (block_uncertainties_x[-1] ** 2 + 1e-10)
-                weight_y = quality / (block_uncertainties_y[-1] ** 2 + 1e-10)
-                block_weights.append((weight_x, weight_y))
-
-                valid_anchors.append(center_idx)
-
-                logger.debug(
-                    f"Anchor point at frame {center_idx}: drift=({cumulative_drift_x:.3f}, {cumulative_drift_y:.3f}), "
-                    f"quality={quality:.0f}"
-                )
-
-        # Check if we have enough anchor points for spline fitting
-        if len(valid_anchors) < min_blocks_for_spline:
-            logger.warning(
-                f"Only {len(valid_anchors)} valid anchor points, need at least {min_blocks_for_spline}. "
-                "Using linear interpolation instead."
-            )
-            return self._linear_interpolation_fallback(
-                valid_anchors,
-                block_drifts_x,
-                block_drifts_y,
-                block_uncertainties_x,
-                block_uncertainties_y,
-                n_frames,
-            )
-
-        # Fit cubic splines to anchor points
-        anchor_frames = np.array(valid_anchors)
-        drifts_x = np.array(block_drifts_x)
-        drifts_y = np.array(block_drifts_y)
-        weights_x = np.array([w[0] for w in block_weights])
-        weights_y = np.array([w[1] for w in block_weights])
-
-        # Determine smoothing factor if not specified
-        if smoothing_factor is None:
-            # Auto-calculate based on data quality and number of points
-            mean_uncertainty_x = np.mean(block_uncertainties_x)
-            mean_uncertainty_y = np.mean(block_uncertainties_y)
-            smoothing_factor = (
-                len(valid_anchors)
-                * (mean_uncertainty_x + mean_uncertainty_y)
-                / 2
-            )
-            logger.debug(
-                f"Auto-calculated smoothing factor: {smoothing_factor:.3f}"
-            )
-
-        try:
-            # Fit univariate splines for X and Y drift
-            spline_x = UnivariateSpline(
-                anchor_frames, drifts_x, w=weights_x, s=smoothing_factor
-            )
-            spline_y = UnivariateSpline(
-                anchor_frames, drifts_y, w=weights_y, s=smoothing_factor
-            )
-
-            # Interpolate drift for all frames
-            frame_indices = np.arange(n_frames)
-            drift_x_coarse = spline_x(frame_indices)
-            drift_y_coarse = spline_y(frame_indices)
-
-            # Estimate uncertainties from spline residuals and propagation
-            spline_residuals_x = drifts_x - spline_x(anchor_frames)
-            spline_residuals_y = drifts_y - spline_y(anchor_frames)
-
-            # Calculate uncertainty estimates
-            base_uncertainty_x = (
-                np.std(spline_residuals_x)
-                if len(spline_residuals_x) > 1
-                else np.mean(block_uncertainties_x)
-            )
-            base_uncertainty_y = (
-                np.std(spline_residuals_y)
-                if len(spline_residuals_y) > 1
-                else np.mean(block_uncertainties_y)
-            )
-
-            # Interpolate uncertainties (conservative approach)
-            uncertainty_x_coarse = np.full(n_frames, base_uncertainty_x)
-            uncertainty_y_coarse = np.full(n_frames, base_uncertainty_y)
-
-            # Adjust uncertainties based on distance from anchor points
-            for frame_idx in range(n_frames):
-                # Find closest anchor points
-                distances = np.abs(anchor_frames - frame_idx)
-                closest_idx = np.argmin(distances)
-                min_distance = distances[closest_idx]
-
-                # Increase uncertainty for frames far from anchor points
-                distance_factor = 1 + min_distance / toff_block_size
-                uncertainty_x_coarse[frame_idx] *= distance_factor
-                uncertainty_y_coarse[frame_idx] *= distance_factor
-
-            logger.info(
-                f"Spline fitting successful: {len(valid_anchors)} anchor points, "
-                f"smoothing={smoothing_factor:.3f}, "
-                f"residual_std=({base_uncertainty_x:.3f}, {base_uncertainty_y:.3f})"
-            )
-
-            # Save spline diagnostics if plotting is enabled
-            if plot_dir:
-                self._plot_spline_diagnostics(
-                    anchor_frames,
-                    drifts_x,
-                    drifts_y,
-                    spline_x,
-                    spline_y,
-                    frame_indices,
-                    drift_x_coarse,
-                    drift_y_coarse,
-                    block_uncertainties_x,
-                    block_uncertainties_y,
-                    plot_dir,
-                )
-
-            return (
-                drift_x_coarse,
-                drift_y_coarse,
-                uncertainty_x_coarse,
-                uncertainty_y_coarse,
-            )
-
-        except Exception as e:
-            logger.warning(
-                f"Spline fitting failed: {e}. Using linear interpolation fallback."
-            )
-            return self._linear_interpolation_fallback(
-                valid_anchors,
-                block_drifts_x,
-                block_drifts_y,
-                block_uncertainties_x,
-                block_uncertainties_y,
-                n_frames,
-            )
-
-    def _linear_interpolation_fallback(
-        self,
-        anchor_frames,
-        drifts_x,
-        drifts_y,
-        uncertainties_x,
-        uncertainties_y,
-        n_frames,
-    ):
-        """Interpolate drift linearly as a fallback when spline fitting fails.
-
-        Parameters
-        ----------
-        anchor_frames : numpy.ndarray
-            Frame indices of the anchor points.
-        drifts_x, drifts_y : numpy.ndarray
-            Drift values at the anchors.
-        uncertainties_x, uncertainties_y : numpy.ndarray
-            Uncertainties at the anchors.
-        n_frames : int
-            Total number of frames to interpolate over.
-
-        Returns
-        -------
-        tuple
-            ``(drift_x, drift_y, uncertainty_x, uncertainty_y)`` over all
-            frames.
-        """
-        from scipy.interpolate import interp1d
-
-        logger.debug("Using linear interpolation fallback")
-
-        if len(anchor_frames) == 0:
-            # No valid data - return zeros
-            return (
-                np.zeros(n_frames),
-                np.zeros(n_frames),
-                np.ones(n_frames),
-                np.ones(n_frames),
-            )
-
-        if len(anchor_frames) == 1:
-            # Single point - constant drift
-            drift_x = np.full(n_frames, drifts_x[0])
-            drift_y = np.full(n_frames, drifts_y[0])
-            uncertainty_x = np.full(n_frames, uncertainties_x[0])
-            uncertainty_y = np.full(n_frames, uncertainties_y[0])
-        else:
-            # Linear interpolation/extrapolation
-            frame_indices = np.arange(n_frames)
-
-            interp_x = interp1d(
-                anchor_frames,
-                drifts_x,
-                kind="linear",
-                fill_value="extrapolate",
-                bounds_error=False,
-            )
-            interp_y = interp1d(
-                anchor_frames,
-                drifts_y,
-                kind="linear",
-                fill_value="extrapolate",
-                bounds_error=False,
-            )
-            interp_unc_x = interp1d(
-                anchor_frames,
-                uncertainties_x,
-                kind="linear",
-                fill_value="extrapolate",
-                bounds_error=False,
-            )
-            interp_unc_y = interp1d(
-                anchor_frames,
-                uncertainties_y,
-                kind="linear",
-                fill_value="extrapolate",
-                bounds_error=False,
-            )
-
-            drift_x = interp_x(frame_indices)
-            drift_y = interp_y(frame_indices)
-            uncertainty_x = interp_unc_x(frame_indices)
-            uncertainty_y = interp_unc_y(frame_indices)
-
-        return drift_x, drift_y, uncertainty_x, uncertainty_y
-
-    def _plot_spline_diagnostics(
-        self,
-        anchor_frames,
-        anchor_drifts_x,
-        anchor_drifts_y,
-        spline_x,
-        spline_y,
-        frame_indices,
-        drift_x_interpolated,
-        drift_y_interpolated,
-        anchor_uncertainties_x,
-        anchor_uncertainties_y,
-        plot_dir,
-    ):
-        """Plot diagnostics for the spline-fit drift correction.
-
-        Saves a 2x2 panel comparing the spline fit to the anchor points to
-        ``plot_dir``.
-
-        Returns
-        -------
-        str
-            The filepath of the saved diagnostics figure.
-        """
-        import os
-
-        import matplotlib.pyplot as plt
-
-        fig, axes = plt.subplots(2, 2, figsize=(14, 10))
-        fig.suptitle(
-            "Cubic Spline Drift Correction Diagnostics",
-            fontsize=14,
-            fontweight="bold",
-        )
-
-        # Plot 1: X-direction spline fit
-        ax1 = axes[0, 0]
-        ax1.plot(
-            frame_indices,
-            drift_x_interpolated,
-            "b-",
-            linewidth=2,
-            label="Spline Fit",
-        )
-        ax1.errorbar(
-            anchor_frames,
-            anchor_drifts_x,
-            yerr=anchor_uncertainties_x,
-            fmt="ro",
-            markersize=6,
-            capsize=3,
-            label="Anchor Points",
-        )
-        ax1.set_xlabel("Frame Index")
-        ax1.set_ylabel("Cumulative Drift X (pixels)")
-        ax1.set_title("X-Direction Spline Interpolation")
-        ax1.legend()
-        ax1.grid(True, alpha=0.3)
-
-        # Plot 2: Y-direction spline fit
-        ax2 = axes[0, 1]
-        ax2.plot(
-            frame_indices,
-            drift_y_interpolated,
-            "r-",
-            linewidth=2,
-            label="Spline Fit",
-        )
-        ax2.errorbar(
-            anchor_frames,
-            anchor_drifts_y,
-            yerr=anchor_uncertainties_y,
-            fmt="ro",
-            markersize=6,
-            capsize=3,
-            label="Anchor Points",
-        )
-        ax2.set_xlabel("Frame Index")
-        ax2.set_ylabel("Cumulative Drift Y (pixels)")
-        ax2.set_title("Y-Direction Spline Interpolation")
-        ax2.legend()
-        ax2.grid(True, alpha=0.3)
-
-        # Plot 3: Spline residuals
-        ax3 = axes[1, 0]
-        residuals_x = anchor_drifts_x - spline_x(anchor_frames)
-        residuals_y = anchor_drifts_y - spline_y(anchor_frames)
-
-        ax3.scatter(
-            anchor_frames,
-            residuals_x,
-            c="blue",
-            alpha=0.6,
-            label="X Residuals",
-        )
-        ax3.scatter(
-            anchor_frames, residuals_y, c="red", alpha=0.6, label="Y Residuals"
-        )
-        ax3.axhline(y=0, color="black", linestyle="--", alpha=0.5)
-        ax3.set_xlabel("Frame Index")
-        ax3.set_ylabel("Spline Residual (pixels)")
-        ax3.set_title(
-            f"Fit Residuals (RMS: X={np.std(residuals_x):.3f}, Y={np.std(residuals_y):.3f})"
-        )
-        ax3.legend()
-        ax3.grid(True, alpha=0.3)
-
-        # Plot 4: Drift trajectory comparison
-        ax4 = axes[1, 1]
-        drift_magnitude = np.sqrt(
-            drift_x_interpolated**2 + drift_y_interpolated**2
-        )
-        anchor_magnitude = np.sqrt(
-            np.array(anchor_drifts_x) ** 2 + np.array(anchor_drifts_y) ** 2
-        )
-
-        ax4.plot(
-            frame_indices,
-            drift_magnitude,
-            "g-",
-            linewidth=2,
-            label="Spline Magnitude",
-        )
-        ax4.scatter(
-            anchor_frames,
-            anchor_magnitude,
-            c="orange",
-            s=50,
-            label="Anchor Magnitude",
-            zorder=5,
-        )
-        ax4.set_xlabel("Frame Index")
-        ax4.set_ylabel("Total Drift Magnitude (pixels)")
-        ax4.set_title("Drift Magnitude Trajectory")
-        ax4.legend()
-        ax4.grid(True, alpha=0.3)
-
-        plt.tight_layout(rect=[0, 0.03, 1, 0.95])
-
-        spline_path = os.path.join(plot_dir, "spline_drift_diagnostics.png")
-        plt.savefig(
-            spline_path, dpi=300, bbox_inches="tight", facecolor="white"
-        )
-        plt.close()
-
-        logger.debug(f"Saved spline diagnostics plot: {spline_path}")
-
-    def _process_linear_block_results(
-        self, block_results, n_frames, toff_block_size, drift_quality
-    ):
-        """Accumulate per-block drift results into per-frame trajectories.
-
-        Uses the original linear-distribution approach.
-
-        Parameters
-        ----------
-        block_results : list
-            Per-block results from :meth:`_process_drift_block`.
-        n_frames : int
-            Total number of frames.
-        toff_block_size : int
-            Block size in frames.
-        drift_quality : numpy.ndarray
-            Per-frame quality array to fill.
-
-        Returns
-        -------
-        tuple
-            ``(drift_x_coarse, drift_y_coarse, uncertainty_x_coarse,
-            uncertainty_y_coarse)``.
-        """
-        # Initialize arrays
-        drift_x_coarse = np.zeros(n_frames)
-        drift_y_coarse = np.zeros(n_frames)
-        uncertainty_x_coarse = np.zeros(n_frames)
-        uncertainty_y_coarse = np.zeros(n_frames)
-
-        # Process results from parallel computation (original implementation)
-        for result in block_results:
-            if result is None:
-                continue  # Skip first block
-
-            (
-                block_start,
-                block_end,
-                shift_x,
-                shift_y,
-                quality,
-                uncertainty_x,
-                uncertainty_y,
-            ) = result
-
-            if shift_x is not None and shift_y is not None:
-                # Distribute block drift across frames in the block
-                block_drift_x = shift_x / toff_block_size  # Per-frame drift
-                block_drift_y = shift_y / toff_block_size
-                # Uncertainty also scales with block size
-                block_uncertainty_x = (
-                    uncertainty_x / toff_block_size
-                    if uncertainty_x is not None
-                    else 0
-                )
-                block_uncertainty_y = (
-                    uncertainty_y / toff_block_size
-                    if uncertainty_y is not None
-                    else 0
-                )
-
-                for frame_idx in range(block_start, block_end):
-                    if frame_idx > 0:
-                        drift_x_coarse[frame_idx] = (
-                            drift_x_coarse[frame_idx - 1] + block_drift_x
-                        )
-                        drift_y_coarse[frame_idx] = (
-                            drift_y_coarse[frame_idx - 1] + block_drift_y
-                        )
-                        # Accumulate uncertainties (assuming independence)
-                        uncertainty_x_coarse[frame_idx] = np.sqrt(
-                            uncertainty_x_coarse[frame_idx - 1] ** 2
-                            + block_uncertainty_x**2
-                        )
-                        uncertainty_y_coarse[frame_idx] = np.sqrt(
-                            uncertainty_y_coarse[frame_idx - 1] ** 2
-                            + block_uncertainty_y**2
-                        )
-                    else:
-                        uncertainty_x_coarse[frame_idx] = block_uncertainty_x
-                        uncertainty_y_coarse[frame_idx] = block_uncertainty_y
-                    drift_quality[frame_idx] += quality / (
-                        block_end - block_start
-                    )
-            else:
-                # Use previous block's drift rate if estimation failed
-                for frame_idx in range(block_start, block_end):
-                    if frame_idx > 0:
-                        drift_x_coarse[frame_idx] = drift_x_coarse[
-                            frame_idx - 1
-                        ]
-                        drift_y_coarse[frame_idx] = drift_y_coarse[
-                            frame_idx - 1
-                        ]
-                        uncertainty_x_coarse[frame_idx] = uncertainty_x_coarse[
-                            frame_idx - 1
-                        ]
-                        uncertainty_y_coarse[frame_idx] = uncertainty_y_coarse[
-                            frame_idx - 1
-                        ]
-
-        return (
-            drift_x_coarse,
-            drift_y_coarse,
-            uncertainty_x_coarse,
-            uncertainty_y_coarse,
-        )
-
-    @staticmethod
-    def _process_fine_drift_chunk(args):
-        """Process a chunk of fine (per-frame) drift estimates in parallel.
-
-        Parameters
-        ----------
-        args : tuple
-            ``(locs_data, frames, chunk_frames, max_shift,
-            min_locs_per_frame, save_all_rsso_plots, plot_dir, ...)``.
-
-        Returns
-        -------
-        list
-            Per-frame fine drift estimates for the chunk.
-        """
-        (
-            locs_data,
-            frames,
-            chunk_frames,
-            max_shift,
-            min_locs_per_frame,
-            save_all_rsso_plots,
-            plot_dir,
-        ) = args
-        logger.debug(
-            f"undrifting chunk {min(chunk_frames)} to {max(chunk_frames)}"
-        )
-
-        from picasso_workflow.picasso_outpost import _calculate_pairwise_shift
-
-        results = []
-
-        for frame_idx in chunk_frames:
-            if frame_idx == 0:
-                continue  # Skip first frame
-
-            current_frame = frames[frame_idx]
-            prev_frame = frames[frame_idx - 1]
-
-            # Get localizations for current and previous frame
-            current_locs = locs_data[locs_data["frame"] == current_frame]
-            prev_locs = locs_data[locs_data["frame"] == prev_frame]
-
-            # Estimate fine drift between consecutive frames
-            if (
-                len(prev_locs) < min_locs_per_frame
-                or len(current_locs) < min_locs_per_frame
-            ):
-                results.append((frame_idx, None, None, 0, None, None))
-                continue
-
-            shift_x, shift_y, _, uncertainty_info = _calculate_pairwise_shift(
-                prev_locs,
-                current_locs,
-                max_shift,
-                plot_histogram=save_all_rsso_plots,
-                plot_dir=plot_dir,
-            )
-
-            if shift_x is not None and shift_y is not None:
-                quality = len(prev_locs) + len(current_locs)
-                uncertainty_x = (
-                    uncertainty_info["sigma_x"]
-                    if uncertainty_info["fit_successful"]
-                    else uncertainty_info["shift_x_error"]
-                )
-                uncertainty_y = (
-                    uncertainty_info["sigma_y"]
-                    if uncertainty_info["fit_successful"]
-                    else uncertainty_info["shift_y_error"]
-                )
-                results.append(
-                    (
-                        frame_idx,
-                        shift_x,
-                        shift_y,
-                        quality,
-                        uncertainty_x,
-                        uncertainty_y,
-                    )
-                )
-            else:
-                results.append((frame_idx, None, None, 0, None, None))
-
-        return results
-
-    #    @profile_resource_usage
-    @module_decorator
-    def undrift_rsso(self, i, parameters, results):
-        """Undrift localized data using iterative RSSO drift correction.
-
-        Applies an iterative RSSO (Redundant Spot Shift Overrepresentation)
-        approach in which each frame is compared against the whole dataset to
-        compute that frame's total drift, repeated on the undrifted dataset to
-        improve accuracy. Includes uncertainty analysis, confidence evaluation,
-        windowing and outlier detection.
-
-        Parameters
-        ----------
-        i : int
-            Index of the module in the workflow.
-        parameters : dict
-            Required keys:
-
-            ``ton`` : float
-                Half-life of a localization in frames.
-            ``toff`` : float
-                Frames for a spot to reappear after disappearing.
-            ``max_shift`` : float
-                Maximum expected drift per frame in pixels.
-
-            Optional keys (defaults in parentheses):
-
-            ``min_locs_per_frame`` : int
-                Min localizations per frame for a reliable estimate (10).
-            ``max_iterations`` : int
-                Max iterative refinement rounds (5).
-            ``convergence_threshold`` : float
-                RMS drift-change convergence threshold in nm (0.1).
-            ``plot_drift`` : bool
-                Whether to save drift plots (True).
-            ``save_locs`` : bool
-                Whether to save undrifted localizations (True).
-            ``n_processes`` : int or None
-                Processes for parallel computation (auto).
-            ``confidence_threshold`` : float
-                Confidence threshold for windowing analysis (0.8).
-            ``outlier_detection_enabled`` : bool
-                Enable RSSO failure and outlier detection (True).
-            ``outlier_z_threshold`` : float
-                Z-score threshold for temporal outlier detection (3.5).
-            ``min_signal_to_noise`` : float
-                Min signal-to-noise ratio for drift measurements (0.5).
-            ``windowing_enabled`` : bool
-                Enable adaptive windowing for low-confidence frames (True).
-            ``window_size_range`` : tuple
-                Min and max window sizes for adaptive windowing ((3, 20)).
-        results : dict
-            Module results (see
-            :class:`~picasso_workflow.util.AbstractModuleCollection`).
-
-        Returns
-        -------
-        parameters : dict
-            Input parameters, possibly updated for consistency.
-        results : dict
-            Results updated with ``success``, ``drift_x``/``drift_y`` (total
-            drift trajectories in nm), ``uncertainty_x``/``uncertainty_y``,
-            ``drift_quality``, ``n_iterations``, ``convergence_rms`` and
-            ``drift_plots``.
-        """
-        from picasso_workflow.outpost_modules.undrift_rsso import (
-            compute_undrift_rsso,
-        )
-
-        # Call external computation function
-        self.locs, self.drift, results_data = compute_undrift_rsso(
-            locs=self.locs,
-            pixelsize=self.pixelsize,
-            info=self.info,
-            parameters=parameters,
-            results_folder=results["folder"],
-        )
-
-        # Merge results from computation into results dict
-        results.update(results_data)
-
-        return parameters, results
-
     def _plot_drift_with_confidence(
         self,
         filename,
@@ -5281,19 +4559,17 @@ class AutoPicasso(util.AbstractModuleCollection):
         for i, dim in enumerate(dimensions):
             color = colors[i % len(colors)]
 
+            # picasso 1.0 returns the drift already in nm (0.11: camera pixels),
+            # so it is plotted as-is on the nm axis.
             if isinstance(drift, np.recarray):
-                drift_values = drift[dim] * pixelsize
+                drift_values = drift[dim]
                 uncertainty_values = (
-                    uncertainty[dim] * pixelsize
-                    if uncertainty is not None
-                    else None
+                    uncertainty[dim] if uncertainty is not None else None
                 )
             else:
-                drift_values = drift[:, i] * pixelsize
+                drift_values = drift[:, i]
                 uncertainty_values = (
-                    uncertainty[:, i] * pixelsize
-                    if uncertainty is not None
-                    else None
+                    uncertainty[:, i] if uncertainty is not None else None
                 )
 
             # Plot drift trajectory
@@ -5360,113 +4636,16 @@ class AutoPicasso(util.AbstractModuleCollection):
         frames = np.arange(drift.shape[0])
         for i, dim in enumerate(dimensions):
             factor = 1e-3 if dim == "z" else 1
+            # picasso 1.0 drift is already in nm (0.11: camera pixels).
             if isinstance(drift, pd.DataFrame):
-                ax.plot(frames, drift[dim] * pixelsize * factor, label=dim)
+                ax.plot(frames, drift[dim] * factor, label=dim)
             else:
-                ax.plot(frames, drift[:, i] * pixelsize * factor, label=dim)
+                ax.plot(frames, drift[:, i] * factor, label=dim)
         ax.set_xlabel("frame")
         ax.set_ylabel("drift [nm]")
         ax.set_title(f"undrift by {method}")
         ax.legend()
         fig.savefig(filename)
-        plt.close(fig)
-
-    def _plot_channel_alignment_with_confidence(
-        self, shifts, shift_uncertainties, filename
-    ):
-        """Plot per-channel alignment shifts with confidence intervals.
-
-        Parameters
-        ----------
-        shifts : numpy.ndarray
-            The per-channel shifts, shape ``(dims, channels)``.
-        shift_uncertainties : dict
-            Uncertainty information for the channel shifts.
-        filename : str
-            Path to save the plot to.
-        """
-        import matplotlib.pyplot as plt
-
-        n_channels = shifts.shape[1]
-        if n_channels < 2:
-            return
-
-        channel_indices = np.arange(n_channels)
-
-        # Extract uncertainties
-        shift_x_uncertainties = shift_uncertainties.get(
-            "shift_x_uncertainties", np.zeros(n_channels)
-        )
-        shift_y_uncertainties = shift_uncertainties.get(
-            "shift_y_uncertainties", np.zeros(n_channels)
-        )
-
-        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
-
-        # X shifts plot
-        shifts_x = shifts[1, :]  # X shifts are in second row
-        ax1.errorbar(
-            channel_indices,
-            shifts_x,
-            yerr=shift_x_uncertainties,
-            fmt="o-",
-            capsize=5,
-            capthick=2,
-            label="X shifts",
-        )
-        ax1.fill_between(
-            channel_indices,
-            shifts_x - 2 * shift_x_uncertainties,
-            shifts_x + 2 * shift_x_uncertainties,
-            alpha=0.2,
-            label="2σ confidence",
-        )
-        ax1.fill_between(
-            channel_indices,
-            shifts_x - shift_x_uncertainties,
-            shifts_x + shift_x_uncertainties,
-            alpha=0.3,
-            label="1σ confidence",
-        )
-        ax1.set_xlabel("Channel Index")
-        ax1.set_ylabel("X Shift [pixels]")
-        ax1.set_title("Channel X Alignment Shifts")
-        ax1.legend()
-        ax1.grid(True, alpha=0.3)
-
-        # Y shifts plot
-        shifts_y = shifts[0, :]  # Y shifts are in first row
-        ax2.errorbar(
-            channel_indices,
-            shifts_y,
-            yerr=shift_y_uncertainties,
-            fmt="o-",
-            capsize=5,
-            capthick=2,
-            label="Y shifts",
-        )
-        ax2.fill_between(
-            channel_indices,
-            shifts_y - 2 * shift_y_uncertainties,
-            shifts_y + 2 * shift_y_uncertainties,
-            alpha=0.2,
-            label="2σ confidence",
-        )
-        ax2.fill_between(
-            channel_indices,
-            shifts_y - shift_y_uncertainties,
-            shifts_y + shift_y_uncertainties,
-            alpha=0.3,
-            label="1σ confidence",
-        )
-        ax2.set_xlabel("Channel Index")
-        ax2.set_ylabel("Y Shift [pixels]")
-        ax2.set_title("Channel Y Alignment Shifts")
-        ax2.legend()
-        ax2.grid(True, alpha=0.3)
-
-        plt.tight_layout()
-        fig.savefig(filename, dpi=300, bbox_inches="tight")
         plt.close(fig)
 
     #    @profile_resource_usage
@@ -5551,9 +4730,12 @@ class AutoPicasso(util.AbstractModuleCollection):
         for meth, meth_pars in parameters["methods"].items():
             if meth.lower() == "nena":
                 try:
+                    # picasso 1.0: nena returns the precision (best_val) and
+                    # its distance axis (res["d"]) in nm; 0.11 returned camera
+                    # pixels. nm is now the native value; px is derived.
                     res, best_val = postprocess.nena(self.locs, self.info)
                     fp_plot = os.path.join(results["folder"], "nena.png")
-                    self._plot_nena(res, fp_plot, pixelsize)
+                    self._plot_nena(res, fp_plot)
                     all_best_vals = {
                         "delta_a": res["best_values"]["delta_a"],
                         "s": res["best_values"]["s"],
@@ -5565,11 +4747,11 @@ class AutoPicasso(util.AbstractModuleCollection):
                         "res": str(all_best_vals),
                         # "chisqr": res.chisqr,
                         "NeNa": (
-                            f"{best_val:.3f} px;"
-                            + f" {pixelsize*best_val:.3f} nm "
+                            f"{best_val / pixelsize:.3f} px;"
+                            + f" {best_val:.3f} nm "
                         ),
-                        "nena-px": best_val,
-                        "nena-nm": pixelsize * best_val,
+                        "nena-px": best_val / pixelsize,
+                        "nena-nm": best_val,
                         "filepath_plot": fp_plot,
                     }
                 except ValueError as e:
@@ -5588,9 +4770,11 @@ class AutoPicasso(util.AbstractModuleCollection):
                     ).mean(1)
                 )
                 median_lp = median_lp / meth_pars.get("qe_correction", 1)
+                # picasso 1.0: lpx/lpy are in nm (0.11: camera pixels), so the
+                # median is nm; derive px from the pixel size.
                 results["median-loc-precision"] = {
-                    "median_lp-px": median_lp,
-                    "median_lp-nm": median_lp * pixelsize,
+                    "median_lp-px": median_lp / pixelsize,
+                    "median_lp-nm": median_lp,
                 }
             else:
                 raise NotImplementedError(
@@ -5598,25 +4782,20 @@ class AutoPicasso(util.AbstractModuleCollection):
                 )
         return parameters, results
 
-    def _plot_nena(self, nena_result, filepath_plot, pixelsize=None):
+    def _plot_nena(self, nena_result, filepath_plot):
         """Plot the NeNa fit of the nearest-neighbour distance distribution.
 
         Parameters
         ----------
         nena_result : object
-            The NeNa fit result from ``postprocess.nena``.
+            The NeNa fit result from ``postprocess.nena``. In picasso 1.0 its
+            distance axis (``"d"``) is already in nm.
         filepath_plot : str
             Path to save the plot to.
-        pixelsize : float, optional
-            Pixel size in nm, for a secondary nm axis.
         """
         fig, ax = plt.subplots()
         d = nena_result["d"]
-        if pixelsize is None:
-            xlabel = "Distance [px]"
-        else:
-            d = d * pixelsize
-            xlabel = "Distance [nm]"
+        xlabel = "Distance [nm]"
         ax.set_title("Next frame neighbor distance histogram")
         ax.plot(d, nena_result["data"], label="Data")
         ax.plot(d, nena_result["best_fit"], label="Fit")
@@ -5672,8 +4851,13 @@ class AutoPicasso(util.AbstractModuleCollection):
             Module results (see
             :class:`~picasso_workflow.util.AbstractModuleCollection`).
         """
-        self.locs = postprocess.compute_local_density(
-            self.locs, self.info, parameters["radius"]
+        # picasso 1.0 takes the radius in nm and returns (locs, info); 0.11
+        # took camera pixels (the value was passed straight through), so
+        # multiply by the pixel size to keep the same physical radius.
+        self.locs, _ = postprocess.compute_local_density(
+            self.locs,
+            self.info,
+            radius=parameters["radius"] * self.pixelsize,
         )
         density_info = {
             "Generated by": "Picasso Density",
@@ -5726,19 +4910,21 @@ class AutoPicasso(util.AbstractModuleCollection):
             Results updated with ``fp_fig_clustersizes`` (cluster-size
             distribution figure) and ``fp_centers`` (cluster centers file).
         """
-        pixelsize = int(self.pixelsize)
-        radius = parameters["radius"] / pixelsize
         min_samples = parameters["min_samples"]
         min_locs = parameters["min_locs"]
-        # label locs according to clusters
-        self.locs, dbscan_info = clusterer.dbscan(
+        # label locs according to clusters. picasso 1.0 takes the radius in nm
+        # (0.11 took camera pixels + a pixelsize to convert), so the config
+        # value, already in nm, is passed straight through. It returns
+        # (locs, info) with the whole info list; the dbscan step is its last
+        # entry.
+        self.locs, _dbscan_info = clusterer.dbscan(
             self.locs,
-            radius,
-            min_samples,
-            min_locs,
-            pixelsize,
-            return_info=True,
+            self.info,
+            radius=parameters["radius"],
+            min_samples=min_samples,
+            min_locs=min_locs,
         )
+        dbscan_info = dict(_dbscan_info[-1])
         dbscan_info["Wrapped by"] = "picasso-workflow : dbscan"
         self.info.append(dbscan_info)
         # results["fp_locs"] = os.path.join(
@@ -5758,7 +4944,9 @@ class AutoPicasso(util.AbstractModuleCollection):
         )
         fig.savefig(results["fp_fig_clustersizes"])
 
-        cluster_centers = clusterer.find_cluster_centers(self.locs, pixelsize)
+        cluster_centers, _ = clusterer.find_cluster_centers(
+            self.locs, self.info
+        )
         results["fp_centers"] = os.path.join(
             results["folder"], "centers_dbscan.hdf5"
         )
@@ -5797,18 +4985,23 @@ class AutoPicasso(util.AbstractModuleCollection):
         """
         min_cluster = parameters["min_cluster"]
         min_samples = parameters["min_samples"]
-        pixelsize = self.pixelsize
 
-        # label locs according to clusters
-        self.locs, hdbscan_info = clusterer.hdbscan(
-            self.locs, min_cluster, min_samples, pixelsize, return_info=True
+        # label locs according to clusters. min_cluster_size / min_samples are
+        # counts (not lengths), so no unit change; picasso 1.0 drops the
+        # pixelsize argument and returns (locs, info) with the whole info list.
+        self.locs, _hdbscan_info = clusterer.hdbscan(
+            self.locs,
+            self.info,
+            min_cluster_size=min_cluster,
+            min_samples=min_samples,
         )
+        hdbscan_info = dict(_hdbscan_info[-1])
         hdbscan_info["Wrapped by"] = "picasso-workflow : hdbscan"
         self.info.append(hdbscan_info)
         filepath = os.path.join(results["folder"], "locs_hdbscan.hdf5")
         self._save_locs(filepath)
 
-        self.locs = clusterer.find_cluster_centers(self.locs, pixelsize)
+        self.locs, _ = clusterer.find_cluster_centers(self.locs, self.info)
         logger.warning("saving cluster centeras as locs. Is that intended?")
 
         return parameters, results
@@ -5832,6 +5025,15 @@ class AutoPicasso(util.AbstractModuleCollection):
         results : dict
             Module results (see
             :class:`~picasso_workflow.util.AbstractModuleCollection`).
+            In addition to the per-metric figures, this sets two aggregate
+            scalars (NaN on sparse/degenerate data):
+
+            ``loc_rate_drop`` : float
+                Relative localization-rate drop over the acquisition
+                (``picasso.postprocess.localization_rate_drop``).
+            ``destroyed_fraction`` : float
+                Fraction of destroyed docking sites
+                (``picasso.postprocess.docking_site_damage``).
 
         References
         ----------
@@ -5841,16 +5043,28 @@ class AutoPicasso(util.AbstractModuleCollection):
         """
         folder_in, file_in = os.path.split(parameters["fp_locs"])
         file_nameonly, _ = os.path.splitext(file_in)
-        Meas = outpost_modules.binding_event_analysis.Measurement(
+        # Lazy import: needs the optional ``[binding-events]`` extra (lmfit,
+        # pandarallel), so importing analyse.py stays cheap and dependency-free.
+        from picasso_workflow.outpost.binding_events.analysis import (
+            Measurement,
+        )
+        from picasso_workflow.outpost.binding_events.plotting import Plotting
+
+        Meas = Measurement(
             in_path=parameters["fp_locs"],
             save_path=results["folder"],
-            saving_path=file_nameonly,
+            saving_name=file_nameonly,
             total_n_frames=self.frames,
+            pixelsize=self.pixelsize,
         )
         Meas.Begin()
         Meas.FileSaver()
 
-        Plotter = outpost_modules.binding_event_plotting.Plotting(
+        # Aggregate picasso-1.0 metrics (NaN on sparse/degenerate data).
+        results["loc_rate_drop"] = Meas.loc_rate_drop
+        results["destroyed_fraction"] = Meas.destroyed_fraction
+
+        Plotter = Plotting(
             table_g=Meas.table_g,
             table_k=Meas.table_k,
             show=False,
@@ -5866,15 +5080,17 @@ class AutoPicasso(util.AbstractModuleCollection):
         results["fig_sbr"] = fp
         _, fp = Plotter.Plot_tb()
         results["fig_tb"] = fp
-        _, fp = Plotter.plot_td()
+        _, fp = Plotter.Plot_td()
         results["fig_td"] = fp
-        _, fp = Plotter.plot_r()
+        _, fp = Plotter.Plot_r()
         results["fig_r"] = fp
         _, fp = Plotter.Plot_locs()
         results["fig_locs"] = fp
-        config = Plotter.saveAllResults()
+        config = Plotter.SaveAllResults()
         for k, v in config.items():
             results[k] = v
+
+        return parameters, results
 
     #    @profile_resource_usage
     @module_decorator
@@ -5920,7 +5136,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             ``resolution_dblradial`` (double-Gaussian FWHM), ``fig_resolution``
             and ``fig_radial``.
         """
-        from picasso_workflow.picasso_outpost import (
+        from picasso_workflow.outpost.resolution.resolution_ppac import (
             analyse_resolution_ppac,
             resolution_ppac,
         )
@@ -6243,195 +5459,6 @@ class AutoPicasso(util.AbstractModuleCollection):
         return parameters, results
 
     @staticmethod
-    def _compute_frame_to_dataset_shift(frame_data):
-        """Compute the RSSO shift of one frame vs the whole dataset.
-
-        Multiprocessing worker.
-
-        Parameters
-        ----------
-        frame_data : tuple
-            ``(frame_idx, frame_locs, dataset_locs, max_shift,
-            min_locs_per_frame, ton, toff)``.
-
-        Returns
-        -------
-        tuple
-            ``(frame_idx, shift_x, shift_y, uncertainty_x, uncertainty_y,
-            confidence, quality)``.
-        """
-        from picasso_workflow.picasso_outpost import _calculate_pairwise_shift
-
-        (
-            frame_idx,
-            frame_locs,
-            dataset_locs,
-            max_shift,
-            min_locs_per_frame,
-            ton,
-            toff,
-        ) = frame_data
-
-        # Skip frames with insufficient localizations
-        if len(frame_locs) < min_locs_per_frame:
-            return (frame_idx, None, None, None, None, 0.0, 0.0, None)
-
-        try:
-            # Calculate RSSO shift between frame and whole dataset
-            shift_x, shift_y, _, uncertainty_info = _calculate_pairwise_shift(
-                dataset_locs, frame_locs, max_shift, plot_histogram=False
-            )
-
-            if shift_x is not None and shift_y is not None:
-                # Extract uncertainty information from _calculate_pairwise_shift
-                uncertainty_x = (
-                    uncertainty_info.get("shift_x_error", np.nan)
-                    if uncertainty_info
-                    else np.nan
-                )
-                uncertainty_y = (
-                    uncertainty_info.get("shift_y_error", np.nan)
-                    if uncertainty_info
-                    else np.nan
-                )
-
-                # Calculate confidence based on number of localizations and uncertainty
-                n_locs_frame = len(frame_locs)
-
-                # Simple confidence metric based on loc count and uncertainty
-                if not (np.isnan(uncertainty_x) or np.isnan(uncertainty_y)):
-                    confidence = min(
-                        1.0,
-                        (n_locs_frame / 50.0)
-                        * (
-                            1.0
-                            / (
-                                1.0
-                                + np.sqrt(uncertainty_x**2 + uncertainty_y**2)
-                            )
-                        ),
-                    )
-                else:
-                    confidence = min(1.0, n_locs_frame / 50.0)
-
-                quality = n_locs_frame * confidence
-
-                return (
-                    frame_idx,
-                    shift_x,
-                    shift_y,
-                    uncertainty_x,
-                    uncertainty_y,
-                    confidence,
-                    quality,
-                )
-            else:
-                return (frame_idx, None, None, None, None, 0.0, 0.0, None)
-
-        except Exception as e:
-            print(f"      Frame {frame_idx} RSSO failed: {e}")
-            return (frame_idx, None, None, None, None, 0.0, 0.0, None)
-
-    @staticmethod
-    def _compute_frame_to_dataset_shift_memory_efficient(frame_data):
-        """Compute the RSSO shift memory-efficiently via frame indices.
-
-        Avoids copying localization data into each worker.
-
-        Parameters
-        ----------
-        frame_data : tuple
-            ``(frame_idx, locs_array, target_frame, max_shift,
-            min_locs_per_frame, ton, toff)``.
-
-        Returns
-        -------
-        tuple
-            ``(frame_idx, shift_x, shift_y, uncertainty_x, uncertainty_y,
-            confidence, quality)``.
-        """
-        import numpy as np
-
-        from picasso_workflow.picasso_outpost import _calculate_pairwise_shift
-
-        (
-            frame_idx,
-            locs_array,
-            target_frame,
-            max_shift,
-            min_locs_per_frame,
-            ton,
-            toff,
-        ) = frame_data
-
-        try:
-            # Extract frame localizations on-demand (no pre-created copies)
-            frame_mask = locs_array["frame"] == target_frame
-            frame_locs = locs_array[frame_mask]
-
-            # Skip frames with insufficient localizations
-            if len(frame_locs) < min_locs_per_frame:
-                return (frame_idx, None, None, None, None, 0.0, 0.0, None)
-
-            # Extract dataset (all other frames) on-demand
-            dataset_mask = locs_array["frame"] != target_frame
-            dataset_locs = locs_array[dataset_mask]
-
-            # Calculate RSSO shift between frame and whole dataset
-            shift_x, shift_y, _, uncertainty_info = _calculate_pairwise_shift(
-                dataset_locs, frame_locs, max_shift, plot_histogram=False
-            )
-
-            if shift_x is not None and shift_y is not None:
-                # Extract uncertainty information from _calculate_pairwise_shift
-                uncertainty_x = (
-                    uncertainty_info.get("shift_x_error", np.nan)
-                    if uncertainty_info
-                    else np.nan
-                )
-                uncertainty_y = (
-                    uncertainty_info.get("shift_y_error", np.nan)
-                    if uncertainty_info
-                    else np.nan
-                )
-
-                # Calculate confidence based on number of localizations and uncertainty
-                n_locs_frame = len(frame_locs)
-                n_locs_dataset = len(dataset_locs)
-
-                # Simple confidence metric based on localization count and uncertainty
-                if not (np.isnan(uncertainty_x) or np.isnan(uncertainty_y)):
-                    uncertainty_magnitude = np.sqrt(
-                        uncertainty_x**2 + uncertainty_y**2
-                    )
-                    confidence = min(
-                        1.0,
-                        (n_locs_frame / 100.0) / (1.0 + uncertainty_magnitude),
-                    )
-                else:
-                    confidence = min(1.0, n_locs_frame / 100.0)
-
-                quality = (
-                    n_locs_frame + n_locs_dataset
-                )  # Simple quality metric
-
-                return (
-                    frame_idx,
-                    shift_x,
-                    shift_y,
-                    uncertainty_x,
-                    uncertainty_y,
-                    confidence,
-                    quality,
-                )
-            else:
-                return (frame_idx, None, None, None, None, 0.0, 0.0, None)
-
-        except Exception as e:
-            print(f"Error processing frame {frame_idx}: {e}")
-            return (frame_idx, None, None, None, None, 0.0, 0.0, None)
-
-    @staticmethod
     def _process_autocorr_chunk(chunk_data):
         """Process one spatial chunk for autocorrelation analysis.
 
@@ -6597,8 +5624,9 @@ class AutoPicasso(util.AbstractModuleCollection):
         logger.debug(f"  Memory limit: {max_memory_gb} GB per chunk")
 
         # Extract coordinates
-        x_coords = self.locs["x"] * self.pixelsize  # Convert to nm
-        y_coords = self.locs["y"] * self.pixelsize
+        # picasso 1.0 localizations are already in nm (0.11: camera pixels).
+        x_coords = self.locs["x"]
+        y_coords = self.locs["y"]
 
         logger.debug(f"  Processing {len(x_coords)} localizations")
         x_range = x_coords.max() - x_coords.min()
@@ -7126,7 +6154,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             ``threshold``, ``fig_frc`` and ``fig_images`` (if ``n_splits`` ==
             1).
         """
-        from picasso_workflow.outpost_modules.resolution_frc import (
+        from picasso_workflow.outpost.resolution.resolution_frc import (
             compute_frc_averaged,
             compute_frc_resolution,
         )
@@ -7366,7 +6394,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             ``cutoff_frequency`` (1/nm), ``frc_curve_mean``, ``frc_curve_std``,
             ``spatial_frequencies``, ``threshold`` and ``fig_frc``.
         """
-        from picasso_workflow.outpost_modules.resolution_frc import (
+        from picasso_workflow.outpost.resolution.resolution_frc import (
             compute_frc_spatial,
         )
 
@@ -7411,7 +6439,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         ]
 
         # Create plot using external function
-        from picasso_workflow.outpost_modules.resolution_frc import (
+        from picasso_workflow.outpost.resolution.resolution_frc import (
             create_frc_plot,
         )
 
@@ -7425,9 +6453,14 @@ class AutoPicasso(util.AbstractModuleCollection):
     def resolution_decorr_spatial(self, i, parameters, results):
         """Estimate resolution using spatial image decorrelation.
 
-        Implements the image-decorrelation analysis of Descloux et al.
-        (Nat Methods 2019), dividing the FOV into spatial regions and
-        computing a decorrelation-based resolution for each.
+        Uses picasso 1.0's ``postprocess.decorrelation`` (true Descloux
+        et al., Nat Methods 2019 / Commun Biol 2021), dividing the FOV
+        into spatial regions and computing a decorrelation-based
+        resolution per region. ``postprocess.decorrelation`` renders the
+        localizations internally (bilinear histogram) and auto-sweeps a
+        set of pixel sizes, reporting the smallest resolution for each
+        region's viewport -- so no rendering/apodization/filter geometry
+        is tuned here (see the dropped parameters below).
 
         Parameters
         ----------
@@ -7436,24 +6469,24 @@ class AutoPicasso(util.AbstractModuleCollection):
         parameters : dict
             Optional keys:
 
-            ``pixelsize_render`` : float
-                Pixel size for rendered images in nm (default 5).
-            ``smoothing_sigma`` : float or None
-                Gaussian smoothing sigma in pixels (default None).
             ``region_size`` : float
-                Size of each spatial region in micrometers (default 10.0 µm).
+                Size of each spatial region in micrometers (default 10.0
+                µm). Regions tile the localization x/y extent (nm).
             ``min_locs_per_region`` : int
                 Minimum localizations per region to process (default 500).
-            ``n_processes`` : int
-                Number of parallel processes (default 4).
-            ``r_min``, ``r_max`` : float
-                Min/max normalized frequency (defaults 0.0 and 1.0).
-            ``n_r`` : int
-                Number of radial sampling points (default 50).
-            ``n_gauss`` : int
-                Number of Gaussian filter strengths (default 10).
-            ``apod_edge_width`` : int
-                Edge apodization width in pixels (default 20).
+            ``n_radii`` : int
+                Number of decorrelation radii, passed to
+                ``postprocess.decorrelation`` (default 50). Maps from the
+                old ``n_r``.
+            ``n_filters`` : int
+                Number of high-pass filters, passed to
+                ``postprocess.decorrelation`` (default 10). Maps from the
+                old ``n_gauss``.
+
+            Dropped relative to the former home-grown implementation
+            (they no longer apply, as picasso renders internally):
+            ``pixelsize_render``, ``smoothing_sigma``, ``n_processes``,
+            ``r_min``, ``r_max`` and ``apod_edge_width``.
         results : dict
             Module results (see
             :class:`~picasso_workflow.util.AbstractModuleCollection`).
@@ -7464,120 +6497,147 @@ class AutoPicasso(util.AbstractModuleCollection):
             Input parameters, possibly updated for consistency.
         results : dict
             Results updated with ``resolution_decorr_spatial`` (mean
-            resolution, nm), ``resolution_std``, ``n_regions``,
-            ``decorr_curve_mean``, ``decorr_curve_std``, ``r_values`` and
-            ``fig_decorr``.
+            resolution over valid regions, nm, ignoring NaN),
+            ``resolution_std``, ``n_regions``, ``n_regions_total``,
+            ``resolutions_per_region`` and ``fig_decorr`` (a per-region
+            resolution histogram).
         """
-        from picasso_workflow.outpost_modules.resolution_decorrelation import (
-            compute_decorr_spatial,
-        )
-
-        # Get parameters with defaults
-        pixelsize_render = parameters.get("pixelsize_render", 5.0)
-        smoothing_sigma = parameters.get("smoothing_sigma", None)
+        # Parameters with defaults. picasso 1.0 renders internally and
+        # auto-sweeps pixel sizes, so the old render/apodization/filter
+        # geometry (pixelsize_render, smoothing_sigma, r_min, r_max,
+        # apod_edge_width) and the multiprocessing fan-out (n_processes)
+        # are dropped. n_r -> n_radii and n_gauss -> n_filters carry over.
         region_size = parameters.get("region_size", 10.0)
         min_locs_per_region = parameters.get("min_locs_per_region", 500)
-        n_processes = parameters.get("n_processes", 4)
-        r_min = parameters.get("r_min", 0.0)
-        r_max = parameters.get("r_max", 1.0)
-        n_r = parameters.get("n_r", 50)
-        n_gauss = parameters.get("n_gauss", 10)
-        apod_edge_width = parameters.get("apod_edge_width", 20)
+        n_radii = parameters.get("n_radii", 50)
+        n_filters = parameters.get("n_filters", 10)
+        # Validate up front so a misconfigured value surfaces a clear error
+        # rather than being swallowed by the per-region ValueError catch
+        # (which would silently report NaN for every region). picasso
+        # requires n_radii >= 10 and n_filters >= 2.
+        if n_radii < 10:
+            raise ValueError("n_radii must be at least 10 for decorrelation.")
+        if n_filters < 2:
+            raise ValueError("n_filters must be at least 2 for decorrelation.")
 
-        # Compute spatial decorrelation
-        logger.debug("Using spatial image decorrelation approach")
-        decorr_results = compute_decorr_spatial(
-            self.locs,
-            self.pixelsize,
-            pixelsize_render=pixelsize_render,
-            smoothing_sigma=smoothing_sigma,
-            region_size=region_size,
-            min_locs_per_region=min_locs_per_region,
-            n_processes=n_processes,
-            r_min=r_min,
-            r_max=r_max,
-            n_r=n_r,
-            n_gauss=n_gauss,
-            apod_edge_width=apod_edge_width,
+        logger.debug("Using picasso postprocess.decorrelation (Descloux).")
+
+        # In picasso 1.0 locs["x"]/["y"] are already in nm, and the
+        # decorrelation viewport is ((y_min, x_min), (y_max, x_max)) in
+        # nm (see picasso.postprocess.decorrelation). Tile the loc extent.
+        x_nm = np.asarray(self.locs["x"], dtype=np.float64)
+        y_nm = np.asarray(self.locs["y"], dtype=np.float64)
+        # Empty locs: skip the min/max reduction (which would raise) and let
+        # the zero-extent tiling fall through to the no-valid-regions path.
+        if x_nm.size == 0:
+            x_min = x_max = y_min = y_max = 0.0
+        else:
+            x_min, x_max = float(x_nm.min()), float(x_nm.max())
+            y_min, y_max = float(y_nm.min()), float(y_nm.max())
+        x_range = x_max - x_min
+        y_range = y_max - y_min
+
+        region_size_nm = region_size * 1000.0
+        n_regions_x = max(1, int(np.ceil(x_range / region_size_nm)))
+        n_regions_y = max(1, int(np.ceil(y_range / region_size_nm)))
+        region_width = x_range / n_regions_x
+        region_height = y_range / n_regions_y
+        n_total = n_regions_x * n_regions_y
+
+        logger.debug(
+            f"  FOV: {x_range:.1f} x {y_range:.1f} nm, "
+            f"{n_regions_x}x{n_regions_y} regions "
+            f"(target {region_size:.1f} um)"
         )
 
-        # Store results
-        results["resolution_decorr_spatial"] = decorr_results["resolution"]
-        results["resolution_std"] = decorr_results["resolution_std"]
-        results["n_regions"] = decorr_results["n_regions"]
-        results["n_regions_total"] = decorr_results["n_regions_total"]
-        results["decorr_curve_mean"] = decorr_results["decorr_curve_mean"]
-        results["decorr_curve_std"] = decorr_results["decorr_curve_std"]
-        results["r_values"] = decorr_results["r_values"]
-        results["resolutions_per_region"] = decorr_results[
-            "resolutions_per_region"
-        ]
+        resolutions_per_region = []
+        for ix in range(n_regions_x):
+            rx_min = x_min + ix * region_width
+            rx_max = rx_min + region_width
+            for iy in range(n_regions_y):
+                ry_min = y_min + iy * region_height
+                ry_max = ry_min + region_height
 
-        # Create decorrelation curve plot
-        fig, ax = plt.subplots(figsize=(8, 6))
-
-        # Plot mean decorrelation curve with error band
-        decorr_curve_mean = decorr_results["decorr_curve_mean"]
-        decorr_curve_std = decorr_results["decorr_curve_std"]
-        r_values = decorr_results["r_values"]
-
-        ax.plot(
-            r_values,
-            decorr_curve_mean,
-            "b-",
-            linewidth=2,
-            label="Mean Decorrelation",
-        )
-        ax.fill_between(
-            r_values,
-            decorr_curve_mean - decorr_curve_std,
-            decorr_curve_mean + decorr_curve_std,
-            alpha=0.3,
-            color="blue",
-            label=f'±1 SD ({decorr_results["n_regions"]} regions)',
-        )
-
-        # Plot threshold line
-        ax.axhline(
-            y=0.5,
-            color="r",
-            linestyle="--",
-            linewidth=2,
-            label="Threshold (0.5)",
-        )
-
-        # Mark resolution
-        resolution = decorr_results["resolution"]
-        if not np.isnan(resolution):
-            # Convert resolution to normalized frequency
-            # resolution = 2 * pixelsize / kc_max
-            # kc_max = 2 * pixelsize / resolution (in 1/nm)
-            # normalized kc = kc_max * pixelsize * 2 (since r=1 corresponds to Nyquist = 0.5/pixel)
-            r_cutoff = resolution / (4 * pixelsize_render)
-            if np.any(r_cutoff < r_values):
-                ax.axvline(
-                    x=r_cutoff,
-                    color="g",
-                    linestyle=":",
-                    linewidth=2,
-                    label=f"Resolution: {resolution:.1f} nm",
+                in_region = (
+                    (x_nm >= rx_min)
+                    & (x_nm < rx_max)
+                    & (y_nm >= ry_min)
+                    & (y_nm < ry_max)
                 )
+                n_locs_region = int(np.count_nonzero(in_region))
+                if n_locs_region < min_locs_per_region:
+                    continue
 
-        ax.set_xlabel("Normalized Frequency", fontsize=12)
-        ax.set_ylabel("Decorrelation", fontsize=12)
-        n_regions_x = decorr_results["n_regions_x"]
-        n_regions_y = decorr_results["n_regions_y"]
+                viewport = ((ry_min, rx_min), (ry_max, rx_max))
+                try:
+                    dec = postprocess.decorrelation(
+                        self.locs,
+                        self.info,
+                        viewport=viewport,
+                        n_radii=n_radii,
+                        n_filters=n_filters,
+                    )
+                    resolutions_per_region.append(float(dec["resolution"]))
+                except ValueError as exc:
+                    # e.g. a region too small to render at any allowed
+                    # pixel size; skip it rather than abort the module.
+                    logger.debug(f"  Region ({ix},{iy}) skipped: {exc}")
+
+        resolutions = np.asarray(resolutions_per_region, dtype=np.float64)
+        valid = resolutions[~np.isnan(resolutions)]
+        n_regions = int(resolutions.size)
+        if valid.size > 0:
+            resolution_mean = float(np.mean(valid))
+            resolution_std = float(np.std(valid)) if valid.size > 1 else 0.0
+        else:
+            resolution_mean = np.nan
+            resolution_std = np.nan
+
+        logger.debug(
+            f"  Mean resolution: {resolution_mean:.2f} +/- "
+            f"{resolution_std:.2f} nm over {valid.size}/{n_total} regions"
+        )
+
+        results["resolution_decorr_spatial"] = resolution_mean
+        results["resolution_std"] = resolution_std
+        results["n_regions"] = n_regions
+        results["n_regions_total"] = n_total
+        results["resolutions_per_region"] = resolutions.tolist()
+
+        # Per-region resolution histogram (replaces the former averaged
+        # decorrelation-curve figure: picasso's per-pixel-size results
+        # do not expose a single averaged curve).
+        fig, ax = plt.subplots(figsize=(8, 6))
+        if valid.size > 0:
+            ax.hist(valid, bins=min(20, max(3, valid.size)), color="blue")
+            ax.axvline(
+                resolution_mean,
+                color="g",
+                linestyle=":",
+                linewidth=2,
+                label=f"Mean: {resolution_mean:.1f} nm",
+            )
+            ax.legend(fontsize=10)
+        else:
+            ax.text(
+                0.5,
+                0.5,
+                "No valid regions",
+                ha="center",
+                va="center",
+                transform=ax.transAxes,
+            )
+        ax.set_xlabel("Resolution (nm)", fontsize=12)
+        ax.set_ylabel("Number of regions", fontsize=12)
         ax.set_title(
-            f"Image Decorrelation Analysis ({n_regions_x}×{n_regions_y} regions)",
+            f"Decorrelation Resolution per Region "
+            f"({n_regions_x}x{n_regions_y} grid, "
+            f"{valid.size} valid)",
             fontsize=14,
         )
-        ax.legend(fontsize=10)
         ax.grid(True, alpha=0.3)
-        ax.set_ylim([-0.1, 1.1])
-
         plt.tight_layout()
 
-        # Save plot
         plot_path = os.path.join(
             results["folder"], "resolution_decorr_spatial.png"
         )
@@ -7673,27 +6733,25 @@ class AutoPicasso(util.AbstractModuleCollection):
             locs-per-cluster histogram). In the multi-channel case a
             ``per_channel`` list carries the same counts per channel.
         """
-        pixelsize = self.pixelsize
-        radius = parameters["radius"] / pixelsize
+        # picasso 1.0 takes radius_xy / radius_z in nm and drops the pixelsize
+        # argument (0.11 took camera pixels + a pixelsize). The config radii
+        # are already in nm, so they are passed straight through.
+        radius = parameters["radius"]
         min_locs = parameters["min_locs"]
         basic_fa = parameters.get("basic_fa", False)
         parameters["basic_fa"] = basic_fa
         radius_z = parameters.get("radius_z", None)
-        # make sure pxsiz is ok here
-        if radius_z is not None:
-            radius_z = radius_z / pixelsize
         parameters["radius_z"] = radius_z
-        pixelsize = self.pixelsize
 
         # cluster locs or channel_locs,
         # depending on whether this is a single target workflow
         if self.locs is not None:
             kwargs = {
                 "locs": self.locs,
+                "info": self.info,
                 "radius_xy": radius,
                 "min_locs": min_locs,
                 "frame_analysis": basic_fa,
-                "pixelsize": pixelsize,
             }
             if radius_z is not None:  # 3D
                 kwargs["radius_z"] = radius_z
@@ -7715,9 +6773,8 @@ class AutoPicasso(util.AbstractModuleCollection):
             # logger.debug(
             #     f"starting clusterer on self.locs with kwargs {kwargs}"
             # )
-            self.locs, smlm_cluster_info = clusterer.cluster(
-                **kwargs, return_info=True
-            )
+            self.locs, _smlm_cluster_info = clusterer.cluster(**kwargs)
+            smlm_cluster_info = dict(_smlm_cluster_info[-1])
             smlm_cluster_info["Wrapped by"] = (
                 "picasso-workflow : smlm_clusterer"
             )
@@ -7733,7 +6790,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                 1
             ]
 
-            self.locs = clusterer.find_cluster_centers(self.locs, pixelsize)
+            self.locs, _ = clusterer.find_cluster_centers(self.locs, self.info)
             logger.warning(
                 "saving cluster centeras as locs. Is that intended?"
             )
@@ -7763,10 +6820,10 @@ class AutoPicasso(util.AbstractModuleCollection):
             ):
                 kwargs = {
                     "locs": locs,
+                    "info": info,
                     "radius_xy": radius,
                     "min_locs": min_locs,
                     "frame_analysis": basic_fa,
-                    "pixelsize": pixelsize,
                 }
                 if radius_z is not None:  # 3D
                     kwargs["radius_z"] = radius_z
@@ -7781,9 +6838,10 @@ class AutoPicasso(util.AbstractModuleCollection):
                 n_locs_in = len(locs)
 
                 # label locs according to clusters
-                clustered_locs, smlm_cluster_info = clusterer.cluster(
-                    **kwargs, return_info=True
+                clustered_locs, _smlm_cluster_info = clusterer.cluster(
+                    **kwargs
                 )
+                smlm_cluster_info = dict(_smlm_cluster_info[-1])
                 smlm_cluster_info["Wrapped by"] = (
                     "picasso-workflow : smlm_clusterer"
                 )
@@ -7797,8 +6855,8 @@ class AutoPicasso(util.AbstractModuleCollection):
                     clustered_locs["group"], return_counts=True
                 )[1]
 
-                cc_locs = clusterer.find_cluster_centers(
-                    clustered_locs, pixelsize
+                cc_locs, _ = clusterer.find_cluster_centers(
+                    clustered_locs, info
                 )
 
                 filepath = os.path.join(
@@ -7907,10 +6965,10 @@ class AutoPicasso(util.AbstractModuleCollection):
             ``asynch`` : bool
                 If True, run the GMM search in parallel via multiprocessing
                 (default True).
-            ``callback_parent`` : function
-                Parent object for the progress-bar callback. If None, the bar
-                is shown on the console; if ``'silent'``, nothing is shown
-                (default ``'silent'``).
+            ``progress`` : picasso progress tracker
+                picasso 1.0 ``progress`` (``lib.Progress`` object or
+                ``"console"``). ``'silent'``/``'None'`` (and None) mean no
+                progress output (default silent).
             ``sigma_bounds`` : tuple of float
                 Lower and upper bounds on the Gaussian-component standard
                 deviation, as (min, max). With ``loc_prec_handle="local"``
@@ -7932,8 +6990,9 @@ class AutoPicasso(util.AbstractModuleCollection):
             ("bootstrap_check", False),
             ("calibration", None),
             ("mode", "auto"),
-            ("asynch", True),
-            ("callback_parent", None),  # "silent"),
+            # picasso 1.0: asynch -> parallel, callback_parent -> progress.
+            ("parallel", True),
+            ("progress", None),  # "silent"),
             ("sigma_bounds", (g5m.MIN_SIGMA_FACTOR, g5m.MAX_SIGMA_FACTOR)),
             ("loc_prec_handle", "local"),
         ]
@@ -7952,9 +7011,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                 with open(fp_calib, "r") as f:
                     z_calibration = yaml.full_load(f)
                 setval = z_calibration
-            elif oa == "callback_parent" and (
-                setval == "silent" or setval == "None"
-            ):
+            elif oa == "progress" and (setval == "silent" or setval == "None"):
                 setval = None
             elif oa == "mode" and setval in (None, "", "auto"):
                 # g5m's z model: 'spline' reads lpz straight from the locs
@@ -7969,11 +7026,13 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         results["g5m_args"] = str(kwargs)
 
-        center_locs, clustered_locs, gmm_info = g5m.g5m(
+        # picasso 1.0 returns (centers, info, clustered_locs) -- the info and
+        # the clustered locs swapped order relative to 0.11.
+        center_locs, gmm_info, clustered_locs = g5m.g5m(
             self.locs, self.info, **kwargs
         )
 
-        # picasso.g5m returns (None, None, info) when no molecules are found,
+        # picasso.g5m returns (None, info, None) when no molecules are found,
         # and an empty centers table when its postprocess filters remove them
         # all. Either way there is nothing to keep as new localizations, so
         # the downstream plotting/statistics (center_locs["n_events"],
@@ -8123,12 +7182,9 @@ class AutoPicasso(util.AbstractModuleCollection):
             # points = np.array(
             #     locs[parameters["dims"]].tolist()
             # )  # c-locs[0] only for now, before sgl/agg workflow refactoring!!
+            # picasso 1.0 localizations are already in nm (x, y and z), so no
+            # per-dimension conversion is needed.
             points = locs[list(parameters["dims"])].to_numpy()
-            # convert all dimensions to nanometers
-            pixelsize = self.pixelsize
-            for i, dim in enumerate(parameters["dims"]):
-                if dim in ["x", "y"]:
-                    points[:, i] = points[:, i] * pixelsize
 
             # logger.debug(points)
             # logger.debug(points.shape)
@@ -8396,52 +7452,58 @@ class AutoPicasso(util.AbstractModuleCollection):
     #    @profile_resource_usage
     @module_decorator
     def fit_csr(self, i, parameters, results):
-        """Fit a complete-spatial-randomness model to nearest neighbours.
+        """Fit a complete-spatial-randomness model to the localizations.
 
-        Fits a CSR model to nearest-neighbour distance distributions and
-        evaluates goodness-of-fit with statistical measures and visualization.
+        For each channel, the molecule density is estimated by
+        maximum likelihood from the distances to the k nearest
+        neighbours using picasso's edge-corrected
+        :func:`picasso.postprocess.knn_density`, which also tests for
+        complete spatial randomness (CSR) by simulation and returns
+        per-order Kolmogorov-Smirnov p-values. The fit is visualised by
+        overlaying the analytic CSR k-NN distribution
+        (:func:`picasso.postprocess.knn_csr_pdf`) on the measured
+        histograms.
+
+        .. note::
+            As of the picasso 1.0 migration this module consumes the
+            loaded localizations directly (``self.locs`` /
+            ``self.channel_locs``), not precomputed nearest-neighbour
+            distances. The legacy ``nneighbors``, ``fit_bkg`` and
+            ``bkg_fraction`` parameters are no longer used.
 
         Parameters
         ----------
         i : int
             Index of the module in the workflow.
         parameters : dict
-            Required keys:
-
-            ``nneighbors`` : str or numpy.ndarray or list
-                A filepath to a nearest-neighbour data file, a 2D ``(N, k)``
-                array of kth nearest-neighbour distances, or a list of
-                multiple datasets / file paths.
-            ``dimensionality`` : int
-                Spatial dimensionality (2 or 3) for the CSR model.
-
             Optional keys:
 
+            ``dimensionality`` : int
+                Spatial dimensionality (2 or 3) for the CSR model. In 3D
+                (``3``) the ``z`` column is used and densities are per
+                volume. Default 2.
             ``kmin`` : int
-                Minimum kth nearest-neighbour order to fit (default 1).
+                Lowest neighbour order of the pooled fit, from 1 to
+                ``kmax`` (maps to ``knn_density``'s ``k_min``). Default 1.
+            ``kmax`` : int
+                Highest neighbour order considered (maps to ``k_max``).
+                Default 5.
             ``min_dist`` : float
-                Minimum observable distance in nm due to technical limits.
+                Shortest neighbour distance in nm used in the fit (maps
+                to ``r_min``). Default 0.
             ``max_dist`` : float
-                Maximum distance for filtering analysis. Bounds the fit
-                only, not the plotting range (see ``plot_max_dist``).
-            ``bkg_fraction`` : float
-                Background fraction for fitting.
-            ``fit_bkg`` : bool
-                Whether to fit the background (default False).
-            ``plot_max_dist`` : float
-                Maximum distance shown on the plot's distance axis, in nm.
-                Only affects display, not the fit. Defaults to the 95th
-                percentile of the largest-k neighbour distances.
-            ``gof_window_coverage_warn`` : float
-                Warn if more than this fraction of the ``kmin``-th
-                nearest-neighbour distances fall outside the fit window
-                ``[min_dist, max_dist]`` (the window is then too narrow and
-                the density is biased). Default 0.5.
+                Upper end in nm of the plotted distance histograms (maps
+                to ``r_max``); does not affect the fit. If unset,
+                ``knn_density`` picks the 99th percentile of the largest-k
+                distances.
+            ``n_simulations`` : int
+                Number of CSR simulations for the p-values and standard
+                errors (maps to ``n_simulations``). Default 99.
             ``gof_wasserstein_warn`` : float
-                Warn if the mean Wasserstein distance between observed and
-                CSR-model neighbour distributions exceeds this fraction of
-                the median 1st-NN spacing (poor goodness of fit).
-                Default 0.3.
+                Warn if the mean Wasserstein distance between the measured
+                and analytic CSR neighbour distributions exceeds this
+                fraction of the median 1st-NN spacing (poor goodness of
+                fit). Default 0.3.
         results : dict
             Module results (see
             :class:`~picasso_workflow.util.AbstractModuleCollection`).
@@ -8452,359 +7514,179 @@ class AutoPicasso(util.AbstractModuleCollection):
             Input parameters, unchanged.
         results : dict
             Results updated with ``density`` (fitted spatial density in
-            units^(-d)), ``bkg_fraction``, ``fp_fig`` (CSR fit figure(s)),
-            ``wasserstein_distances_per_k``, ``mean_wasserstein_distance`` and
-            ``ks_pvalues_per_k``.
+            nm^(-d), from ``knn_density``'s pooled ``"density"``),
+            ``fp_fig`` (CSR fit figure(s)),
+            ``wasserstein_distances_per_k``, ``mean_wasserstein_distance``
+            and ``ks_pvalues_per_k`` (the simulation p-values of
+            ``knn_density``).
         """
-        if isinstance(parameters["nneighbors"], str):
-            nneighbor_list = [np.loadtxt(parameters["nneighbors"])]
+        if self.locs is not None:
+            locs_list = [self.locs]
+            info_list = [self.info]
             tags = ["locs"]
             sgl_stage = True
-        elif isinstance(parameters["nneighbors"], list):
-            if isinstance(parameters["nneighbors"][0], str):
-                nneighbor_list = [
-                    np.loadtxt(fp) for fp in parameters["nneighbors"]
-                ]
-            else:
-                nneighbor_list = [parameters["nneighbors"]]
+        elif self.channel_locs is not None:
+            locs_list = self.channel_locs
+            info_list = self.channel_info
             tags = self.channel_tags
             sgl_stage = False
         else:
-            nneighbor_list = [parameters["nneighbors"]]
-            tags = ["locs"]
-            sgl_stage = True
-        nneighbors = nneighbor_list[0]
-        # print(nneighbors.shape)
-        # return
-        kmin = int(parameters.get("kmin", 1))
-        k_max = nneighbors.shape[1]
-        # nspots = nneighbors.shape[0]
+            raise KeyError("No locs loaded")
+
         d = int(parameters.get("dimensionality", 2))
-        kwargs = {
-            "kmin": kmin,
-        }
-        # "is not None", not truthiness: a value of 0 is meaningful here
-        # and used to be silently replaced by the function default.
-        if (min_dist := parameters.get("min_dist")) is not None:
-            kwargs["min_dist"] = float(min_dist)
-        if (max_dist := parameters.get("max_dist")) is not None:
-            kwargs["max_dist"] = float(max_dist)
-        if (bkg_fraction := parameters.get("bkg_fraction")) is not None:
-            kwargs["bkg_fraction"] = float(bkg_fraction)
-        kwargs["fit_bkg"] = bool(parameters.get("fit_bkg", False))
-        kwargs["d"] = d
+        use_z = d == 3
+        # molecules/nm^d -> molecules/um^d for human-readable logs/labels.
+        um_factor = 1e3**d
+        kmin = int(parameters.get("kmin", 1))
+        kmax = int(parameters.get("kmax", 5))
+        n_simulations = int(parameters.get("n_simulations", 99))
+        # "is not None", not truthiness: a value of 0 is meaningful here.
+        r_min = float(parameters.get("min_dist") or 0.0)
+        max_dist = parameters.get("max_dist")
+        r_max = None if max_dist is None else float(max_dist)
+        gof_warn = float(parameters.get("gof_wasserstein_warn", 0.3))
 
         densities = []
-        bkgs = []
         wasserstein_distances = []
         mean_wasserstein_distances = []
         ks_pvalues = []
         results["fp_fig"] = []
-        for tag, nneighbors in zip(tags, nneighbor_list):
-            kwargs["nn_dists"] = nneighbors.T[kmin - 1 :, :]
-            # rho_init must come from THIS dataset's 1st-NN distances: it
-            # seeds the fit and sets the hard density bounds
-            # [rho_init / f, rho_init * f] inside
-            # estimate_density_from_neighbordists. Computing it once from
-            # the first dataset (as before) made every channel of an
-            # aggregation inherit the first channel's density scale,
-            # silently clamping sparser/denser channels to a wrong bound.
-            rho_init = 2 / (2 * d * np.pi * np.median(nneighbors[:, 0]) ** d)
-            kwargs["rho_init"] = rho_init
-
-            # Fit; if the MLE rails against a density bound, the true
-            # density lies outside the search window and the result is a
-            # clamped, confidently-wrong value (e.g. a too-small max_dist
-            # only sees close neighbours and overestimates the density).
-            # Widen rho_bound_factor and refit instead, and warn if the
-            # fit still cannot escape the bound.
-            bound_factor = 10.0
-            max_bound_factor = 1e4
-            while True:
-                kwargs["rho_bound_factor"] = bound_factor
-                (
-                    rho_mle,
-                    fitresult,
-                ) = picasso_outpost.estimate_density_from_neighbordists(
-                    **kwargs
+        for tag, locs, info in zip(tags, locs_list, info_list):
+            # Edge-corrected MLE density + CSR test over the whole field
+            # of view. knn_density derives the region from ``info``
+            # (Width x Height), so no picks are needed.
+            try:
+                result = postprocess.knn_density(
+                    locs,
+                    info,
+                    k_max=kmax,
+                    k_min=kmin,
+                    r_min=r_min,
+                    edge_correction=True,
+                    n_simulations=n_simulations,
+                    use_z=use_z,
+                    r_max=r_max,
                 )
-                lo = rho_init / bound_factor
-                hi = rho_init * bound_factor
-                at_bound = rho_mle <= lo * (1 + 1e-3) or rho_mle >= hi * (
-                    1 - 1e-3
-                )
-                if not at_bound or bound_factor >= max_bound_factor:
-                    break
+            except ValueError as exc:
+                # A too-sparse channel (no region molecules, or none with a
+                # neighbour beyond r_min) has no CSR fit; record NaN rather
+                # than aborting the whole (aggregation) module.
                 logger.warning(
-                    f"fit_csr[{tag}]: density {1e6 * rho_mle:.3g} "
-                    f"um^-2 hit the [{1e6 * lo:.3g}, {1e6 * hi:.3g}] "
-                    f"um^-2 bound (rho_bound_factor={bound_factor:g}); "
-                    f"widening and refitting."
+                    f"fit_csr[{tag}]: knn_density could not fit ({exc}); "
+                    "recording NaN density for this channel."
                 )
-                bound_factor *= 10
-            if at_bound:
-                logger.warning(
-                    f"fit_csr[{tag}]: density {1e6 * rho_mle:.3g} um^-2 "
-                    f"stays at a bound even with "
-                    f"rho_bound_factor={bound_factor:g}; the CSR fit is "
-                    f"unreliable -- check min_dist/max_dist/kmin and that "
-                    f"the neighbour distances span the true density scale."
-                )
-            # print(fitresult)
-            logger.debug(str(fitresult))
-            densities.append(rho_mle)
-            if len(fitresult.x) > 1:
-                bkgs.append(fitresult.x[1])
-            else:
-                bkgs.append(float(parameters.get("bkg_fraction", 0)))
-
-            # Calculate goodness-of-fit using Wasserstein distance and KS tests
-            k_wasserstein_distances = []
-            k_ks_pvalues = []
-            for k_idx in range(nneighbors.shape[1]):
-                k = k_idx + 1
-                if k >= kmin:  # Only calculate for fitted k values
-                    observed_distances = nneighbors[:, k_idx]
-                    # Filter distances within bounds
-                    observed_filtered = observed_distances[
-                        (observed_distances >= kwargs.get("min_dist", 0))
-                        & (
-                            observed_distances
-                            <= float(kwargs.get("max_dist", np.inf))
-                        )
-                    ]
-
-                    if len(observed_filtered) > 0:
-                        # Generate theoretical CSR samples with same size
-                        n_samples = len(observed_filtered)
-                        max_dist_theory = (
-                            np.max(observed_filtered) * 1.2
-                        )  # Extend range slightly
-                        r_theory = np.linspace(
-                            float(kwargs.get("min_dist", 0)),
-                            max_dist_theory,
-                            n_samples,
-                        )
-
-                        # Get theoretical CSR probability distribution
-                        csr_pdf = picasso_outpost.nndistribution_from_csr(
-                            r_theory,
-                            k,
-                            rho_mle,
-                            d=d,
-                            min_dist=float(kwargs.get("min_dist", 0)),
-                            max_dist=float(kwargs.get("max_dist", np.inf)),
-                            bkg_fraction=float(bkgs[-1]),
-                            renormalize=True,
-                        )
-
-                        # Convert PDF to samples by inverse transform sampling
-                        # Set seed for reproducibility
-                        np.random.seed(42 + k)
-                        cdf = np.cumsum(csr_pdf)
-                        if cdf[-1] > 0:
-                            cdf = cdf / cdf[-1]  # Normalize to [0,1]
-                        else:
-                            # Handle edge case where all probabilities are zero
-                            cdf = np.linspace(0, 1, len(cdf))
-                        uniform_samples = np.random.uniform(0, 1, n_samples)
-                        theoretical_samples = np.interp(
-                            uniform_samples, cdf, r_theory
-                        )
-
-                        # Calculate Wasserstein distance
-                        w_dist = wasserstein_distance(
-                            observed_filtered, theoretical_samples
-                        )
-                        k_wasserstein_distances.append(w_dist)
-
-                        # Calculate Kolmogorov-Smirnov test
-                        # Use CDF function from picasso_outpost
-                        def csr_cdf(x):
-                            return picasso_outpost.csr_cdf_for_ks_test(
-                                x,
-                                k,
-                                rho_mle,
-                                d=d,
-                                min_dist=kwargs.get("min_dist", 0),
-                                max_dist=kwargs.get("max_dist", np.inf),
-                                bkg_fraction=bkgs[-1],
-                            )
-
-                        # Perform KS test
-                        ks_stat, ks_pvalue = kstest(observed_filtered, csr_cdf)
-                        k_ks_pvalues.append(ks_pvalue)
-
-                        logger.debug(
-                            f"k={k}, Wasserstein distance: {w_dist:.3f}, "
-                            f"KS p-value: {ks_pvalue:.3f}"
-                        )
-
-            wasserstein_distances.append(k_wasserstein_distances)
+                densities.append(np.nan)
+                ks_pvalues.append([])
+                wasserstein_distances.append([])
+                mean_wasserstein_distances.append(np.nan)
+                continue
+            density = float(result["density"])
+            densities.append(density)
+            # p_values is None when n_simulations == 0; expose [] then.
+            p_values = result["p_values"]
+            k_ks_pvalues = (
+                [] if p_values is None else [float(p) for p in p_values]
+            )
             ks_pvalues.append(k_ks_pvalues)
+            logger.debug(
+                f"fit_csr[{tag}]: density {um_factor * density:.3g} "
+                f"um^-{d}, KS p-values {k_ks_pvalues}"
+            )
+
+            # Goodness of fit per order: Wasserstein distance between the
+            # measured neighbour histogram and the analytic CSR k-NN
+            # distribution at the fitted density. Both are densities over
+            # the same bin centres, so they are compared as weighted
+            # samples on that shared support (preserves the reporter's
+            # ``mean_wasserstein_distance``).
+            edges = result["edges"]
+            centres = 0.5 * (edges[:-1] + edges[1:])
+            histograms = result["histograms"]
+            k_wasserstein_distances = []
+            for k_idx in range(kmax):
+                k = k_idx + 1
+                if k < kmin:
+                    continue
+                measured = np.asarray(histograms[k_idx], dtype=np.float64)
+                analytic = postprocess.knn_csr_pdf(
+                    centres, density, k=k, dim=d
+                )
+                if measured.sum() <= 0 or analytic.sum() <= 0:
+                    continue
+                w_dist = wasserstein_distance(
+                    centres, centres, measured, analytic
+                )
+                k_wasserstein_distances.append(float(w_dist))
+            wasserstein_distances.append(k_wasserstein_distances)
             if k_wasserstein_distances:
                 mean_wasserstein_distances.append(
-                    np.mean(k_wasserstein_distances)
+                    float(np.mean(k_wasserstein_distances))
                 )
             else:
                 mean_wasserstein_distances.append(np.nan)
 
-            # Fit-quality warnings: both failure modes below yield a
-            # plausible density with no error, so flag them loudly.
-            #  (1) window too narrow -- if most neighbour distances lie
-            #      outside [min_dist, max_dist], the density is estimated
-            #      from a biased near-tail and comes out far too high (the
-            #      fitted curves land left of the histogram). This is the
-            #      classic "completely off" sparse-channel symptom, and it
-            #      is invisible to the in-window GoF metrics below because
-            #      those only see the retained near-tail.
-            #  (2) poor goodness of fit -- the CSR model does not match the
-            #      observed neighbour distributions even within the window
-            #      (Wasserstein distance large relative to the neighbour
-            #      spacing): an unreliable fit or genuine non-CSR structure
-            #      (clustering). KS p-values are deliberately not used here
-            #      -- with thousands of points KS rejects on any trivial
-            #      deviation, so it would warn on essentially every run.
-            min_d = float(kwargs.get("min_dist", 0))
-            max_d = float(kwargs.get("max_dist", np.inf))
-            kmin_dists = nneighbors[:, kmin - 1]
-            frac_outside = (
-                float(np.mean((kmin_dists < min_d) | (kmin_dists > max_d)))
-                if len(kmin_dists)
-                else 0.0
-            )
-            coverage_warn = float(
-                parameters.get("gof_window_coverage_warn", 0.5)
-            )
-            if frac_outside > coverage_warn:
-                logger.warning(
-                    f"fit_csr[{tag}]: {100 * frac_outside:.0f}% of the "
-                    f"k={kmin} nearest-neighbour distances fall outside "
-                    f"the fit window [{min_d:g}, {max_d:g}] nm; the fitted "
-                    f"density ({1e6 * rho_mle:.3g} um^-2) is biased "
-                    f"(likely too high). Widen max_dist / lower min_dist "
-                    f"for this dataset."
-                )
-            median_1stnn = float(np.median(nneighbors[:, 0]))
-            rel_wasserstein = (
-                mean_wasserstein_distances[-1] / median_1stnn
-                if median_1stnn > 0
+            # Poor goodness of fit: the CSR model does not match the
+            # measured neighbour distributions (mean Wasserstein distance
+            # large relative to the 1st-NN spacing) -- an unreliable fit
+            # or genuine non-CSR structure (clustering).
+            # Peak (mode) of the k=1 histogram as a cheap proxy for the
+            # typical 1st-NN spacing (knn_density returns only histograms,
+            # not the raw distances a true median would need).
+            mode_1stnn = (
+                float(centres[np.argmax(histograms[0])])
+                if np.asarray(histograms[0]).sum() > 0
                 else np.nan
             )
-            gof_warn = float(parameters.get("gof_wasserstein_warn", 0.3))
+            rel_wasserstein = (
+                mean_wasserstein_distances[-1] / mode_1stnn
+                if mode_1stnn and mode_1stnn > 0
+                else np.nan
+            )
             if np.isfinite(rel_wasserstein) and rel_wasserstein > gof_warn:
                 logger.warning(
                     f"fit_csr[{tag}]: poor CSR goodness of fit (mean "
                     f"Wasserstein distance "
                     f"{mean_wasserstein_distances[-1]:.3g} nm = "
-                    f"{rel_wasserstein:.2f}x the median 1st-NN spacing). "
-                    f"The density ({1e6 * rho_mle:.3g} um^-2) may be "
+                    f"{rel_wasserstein:.2f}x the 1st-NN spacing). The "
+                    f"density ({um_factor * density:.3g} um^-{d}) may be "
                     f"unreliable, or the data may deviate from CSR "
                     f"(clustering)."
                 )
 
-            # plot results
+            # plot results: measured histograms overlaid with the analytic
+            # CSR curve at the fitted density.
             fig, ax = plt.subplots()
-            colors = colormaps["viridis"].resampled(k_max).colors
-            # Plotting range on the distance axis. Independent of ``max_dist``
-            # (which only bounds the fit): ``plot_max_dist`` sets how far the
-            # histograms/curves are displayed. Defaults to the 95th percentile
-            # of the largest-k neighbour distances.
-            if (plot_max_dist := parameters.get("plot_max_dist")) is not None:
-                bin_max = float(plot_max_dist)
-            else:
-                bin_max = np.quantile(nneighbors[:, -1], 0.95)
-            median_1stNN = np.median(nneighbors[:, 0])
-            # sample bins such that there are 5 bins from 0 to middle of 1stNN
-            nbins = int(5 * bin_max / median_1stNN)
-            bins = np.linspace(0, bin_max, num=nbins)
-            rvals = np.linspace(0, bin_max, num=3 * nbins)
-            nnhist_obs = np.zeros((len(bins), k_max))
-            nnhist_an = np.zeros_like(nnhist_obs)
-            # The CSR model is only defined on the fit window
-            # [min_dist, max_dist]; the histograms below are drawn with
-            # density=True, i.e. normalised over ALL of a neighbour's
-            # distances, including those outside the window.
-            fit_min_dist = float(kwargs.get("min_dist", 0))
-            fit_max_dist = float(kwargs.get("max_dist", np.inf))
-            for i in range(nnhist_an.shape[1]):
-                k = i + 1
-                # nnhist_obs, edges = np.histogram(nneighbors[:, i], bins=bins)
-                # Model curve to overlay the density=True histogram, in two
-                # steps:
-                #  - renormalize=True makes the CSR model a proper density
-                #    over [min_dist, max_dist] (it integrates to 1 there);
-                #  - scaling by the empirical fraction of this neighbour's
-                #    distances inside the window matches the histogram, which
-                #    (being density=True over all distances) integrates to
-                #    exactly that fraction over the window.
-                # Without the scaling the curve is the in-window *conditional*
-                # density, which sits too high whenever the data has mass
-                # outside the window (e.g. sub-min_dist localisations) -- the
-                # observed y-exaggeration at otherwise-correct x positions.
-                in_window = (nneighbors[:, i] >= fit_min_dist) & (
-                    nneighbors[:, i] <= fit_max_dist
-                )
-                frac_in_window = (
-                    float(np.mean(in_window)) if in_window.size else 0.0
-                )
-                nnhist_an = (
-                    frac_in_window
-                    * picasso_outpost.nndistribution_from_csr(
-                        rvals,
-                        k,
-                        rho_mle,
-                        d=d,
-                        min_dist=fit_min_dist,
-                        max_dist=fit_max_dist,
-                        renormalize=True,
-                    )
-                )
-                if i == 0:
-                    lbl = f"rho_init {1E6*rho_init:.1f} um^-2"
-                else:
-                    lbl = f"observed k={k}"
-                _ = ax.hist(
-                    nneighbors[:, i],
-                    bins=bins,
-                    density=True,
-                    color=colors[i],
+            colors = colormaps["viridis"].resampled(kmax).colors
+            widths = np.diff(edges)
+            rvals = np.linspace(0, float(edges[-1]), num=3 * len(centres))
+            for k_idx in range(kmax):
+                k = k_idx + 1
+                measured = np.asarray(histograms[k_idx], dtype=np.float64)
+                ax.bar(
+                    centres,
+                    measured,
+                    width=widths,
+                    color=colors[k_idx],
                     alpha=0.2,
-                    label=lbl,
+                    label=f"observed k={k}",
                 )
+                analytic = postprocess.knn_csr_pdf(rvals, density, k=k, dim=d)
                 if k < kmin:
                     linestyle = ":"
                     lblf = f"k={k} not fitted"
                 elif k == kmin:
                     linestyle = "--"
-                    lblf = f"fit {1E6*rho_mle:.1f} µm^-2"
+                    lblf = f"fit {um_factor * density:.1f} µm^-{d}"
                 else:
                     linestyle = "--"
                     lblf = f"fit k={k}"
-                # do not draw the model outside the fit window (it is
-                # identically zero there); blank it so the curve is not drawn
-                # down to zero at the window edges.
-                if fit_min_dist > 0:
-                    nnhist_an[rvals <= fit_min_dist] = np.nan
-                if np.isfinite(fit_max_dist):
-                    nnhist_an[rvals >= fit_max_dist] = np.nan
                 ax.plot(
-                    rvals,  # + (bins[1] - bins[0]) / 2,
-                    nnhist_an,
-                    color=colors[i],
+                    rvals,
+                    analytic,
+                    color=colors[k_idx],
                     linestyle=linestyle,
                     label=lblf,
                 )
-                # now, plot the histogram below cutoff in white for shading
-                if (fit_min_dist > 0) and (i == 0):
-                    xlim = ax.get_xlim()
-                    x_fill = [xlim[0], fit_min_dist]
-                    y_fill1 = [ax.get_ylim()[0]] * 2
-                    y_fill2 = [ax.get_ylim()[1]] * 2
-                    ax.fill_between(
-                        x_fill, y_fill1, y_fill2, color="grey", alpha=0.2
-                    )
-                    ax.set_xlim(xlim)
             ax.legend(loc="upper right")
             ax.set_xlabel("Distance [nm]")
             ax.set_ylabel("probability density")
@@ -8813,14 +7695,16 @@ class AutoPicasso(util.AbstractModuleCollection):
             fig.savefig(fp_fig)
             results["fp_fig"].append(fp_fig)
         results["density"] = densities
-        results["bkg_fraction"] = bkgs
         results["wasserstein_distances_per_k"] = wasserstein_distances
         results["mean_wasserstein_distance"] = mean_wasserstein_distances
         results["ks_pvalues_per_k"] = ks_pvalues
 
         if sgl_stage:
             results["density"] = results["density"][0]
-            results["fp_fig"] = results["fp_fig"][0]
+            # a failed knn_density fit skips the plot, so fp_fig may be empty
+            results["fp_fig"] = (
+                results["fp_fig"][0] if results["fp_fig"] else None
+            )
             results["wasserstein_distances_per_k"] = results[
                 "wasserstein_distances_per_k"
             ][0]
@@ -8917,14 +7801,18 @@ class AutoPicasso(util.AbstractModuleCollection):
             Required keys:
 
             ``filename`` : str
-                The name of the dataset.
+                The name of the dataset. Optional; defaults to
+                ``locs.hdf5`` (e.g. when the per-channel
+                ``("$$map", "#tags", None)`` default resolves to None in
+                a tag-less run).
         results : dict
             Module results (see
             :class:`~picasso_workflow.util.AbstractModuleCollection`).
         """
-        results["filepath"] = os.path.join(
-            results["folder"], parameters["filename"]
+        filename = _safe_filename_component(
+            parameters.get("filename") or "locs"
         )
+        results["filepath"] = os.path.join(results["folder"], filename)
         root, ext = os.path.splitext(results["filepath"])
         if ext != ".hdf5":
             results["filepath"] = root + ".hdf5"
@@ -8933,10 +7821,21 @@ class AutoPicasso(util.AbstractModuleCollection):
         res = self._save_locs(results["filepath"])
         for k, v in res.items():
             results[k] = v
+        results["checkpoint"] = {"single": {"filepath": results["filepath"]}}
         return parameters, results
 
     def _save_locs(self, filename):
         """Save ``self.locs``/``self.info`` to an HDF5 file.
+
+        ``io.save_locs`` writes the *sanitized* table
+        (``lib.ensure_sanity`` drops rows with NaN/inf, e.g. failed GPU
+        fits with NaN localization precision). Adopt that sanitized table
+        as the current dataset, so in-memory and on-disk data stay
+        identical -- like picasso's own save/load boundaries. Otherwise
+        downstream modules see rows the saved file does not have (a NaN
+        ``lpx`` makes render's median blur NaN and crash), and a resumed
+        run (which loads the file) behaves differently from a
+        straight-through one.
 
         Parameters
         ----------
@@ -8950,6 +7849,15 @@ class AutoPicasso(util.AbstractModuleCollection):
         """
         t00 = time.time()
 
+        n_before = len(self.locs)
+        self.locs = lib.ensure_sanity(self.locs, self.info)
+        n_dropped = n_before - len(self.locs)
+        if n_dropped:
+            logger.info(
+                f"Sanitized localizations before saving: dropped "
+                f"{n_dropped} of {n_before} rows with NaN/inf or "
+                "out-of-bounds values (picasso lib.ensure_sanity)."
+            )
         io.save_locs(filename, self.locs, self.info)
         # # when the paths get long, the hdf5 library throws an error, so chdir
         # # but apparently, the issue is the length of the filename itself
@@ -8962,6 +7870,41 @@ class AutoPicasso(util.AbstractModuleCollection):
         dt = np.round(time.time() - t00, 2)
         results_save = {"duration": dt}
         return results_save
+
+    def save_locs_checkpoint(self, results):
+        """Save the current locs into ``results["folder"]`` as a checkpoint.
+
+        Writes ``self.locs`` (and/or ``self.channel_locs``) to the module's
+        result folder and records a restore point under
+        ``results["checkpoint"]`` for resumed runs. Idempotent: a module
+        that already recorded a ``single`` checkpoint (e.g. the picasso-set
+        modules, ``save_single_dataset``) is not saved again.
+
+        Shared by :func:`~picasso_workflow.module_runtime.module_decorator`
+        (the ``save_locs``/``always_save`` path) and by the stepwise-boundary
+        checkpoint in :meth:`WorkflowRunner.run`, so both record checkpoints
+        identically without going through a module-specific ``save_locs``
+        parameter (whose meaning differs per module -- e.g. ``localize``
+        reads it as a dict).
+
+        Parameters
+        ----------
+        results : dict
+            The module's results dict; must contain ``folder``.
+        """
+        if (
+            getattr(self, "locs", None) is not None
+            and results.get("checkpoint", {}).get("single") is None
+        ):
+            fp = os.path.join(results["folder"], "locs.hdf5")
+            self._save_locs(fp)
+            results.setdefault("checkpoint", {})["single"] = {"filepath": fp}
+        if getattr(self, "channel_locs", None) is not None:
+            allfps = self._save_datasets_agg(results["folder"])
+            results.setdefault("checkpoint", {})["channels"] = {
+                "filepaths": allfps,
+                "tags": list(self.channel_tags),
+            }
 
     def _save_state_on_error(self, folder):
         """Best-effort dump of the current locs when a module fails.
@@ -8998,6 +7941,58 @@ class AutoPicasso(util.AbstractModuleCollection):
                 "Could not save the current localizations to "
                 f"{error_dir} after a module error: {save_exc}"
             )
+
+    def load_checkpoint(self, checkpoint):
+        """Restore locs state from a checkpoint descriptor on resume.
+
+        Counterpart to the ``checkpoint`` entries the modules record in
+        their results: re-populates the in-memory localization state that a
+        resumed run (fresh :class:`AutoPicasso`) has lost, so the modules
+        after the checkpoint can re-run.
+
+        Parameters
+        ----------
+        checkpoint : dict
+            Descriptor with one or both of:
+
+            ``single`` : dict
+                With key ``filepath`` (hdf5 file); loaded into ``self.locs``
+                and ``self.info``.
+            ``channels`` : dict
+                With keys ``filepaths`` and optionally ``tags``; loaded into
+                ``self.channel_locs``, ``self.channel_info`` and
+                ``self.channel_tags``.
+
+        Raises
+        ------
+        Exception
+            Whatever ``picasso.io.load_locs`` raises on unreadable files;
+            the caller falls back to running from scratch.
+        """
+        restored = []
+        if checkpoint.get("single"):
+            fp = checkpoint["single"]["filepath"]
+            self.locs, self.info = io.load_locs(fp)
+            restored.append(f"{len(self.locs)} locs from {fp}")
+        if checkpoint.get("channels"):
+            part = checkpoint["channels"]
+            self._load_channels_from_filepaths(
+                part["filepaths"], tags=part.get("tags")
+            )
+            for i, locs in enumerate(self.channel_locs):
+                # stamp the channel column as load_datasets_to_aggregate
+                # does; files saved by _save_datasets_agg already carry it,
+                # making this an idempotent overwrite. Best-effort: files
+                # from other sources may lack the column.
+                try:
+                    locs["channel"] = i * np.ones(len(locs), dtype=np.int8)
+                except (KeyError, ValueError):
+                    pass
+            nlocs = [len(locs) for locs in self.channel_locs]
+            restored.append(
+                f"{len(self.channel_locs)} channels with {nlocs} locs"
+            )
+        logger.info(f"Restored checkpoint: {'; '.join(restored)}")
 
     ##########################################################################
     # Aggregation workflow modules
@@ -9044,29 +8039,50 @@ class AutoPicasso(util.AbstractModuleCollection):
         print(self.channel_info)
         results["filepaths"] = parameters["filepaths"]
         results["tags"] = parameters["tags"]
+        results["checkpoint"] = {
+            "channels": {
+                "filepaths": list(parameters["filepaths"]),
+                "tags": list(parameters["tags"]),
+            }
+        }
         return parameters, results
 
-    def _load_channels_from_filepaths(self, filepaths):
+    def _load_channels_from_filepaths(self, filepaths, tags=None):
         """Load per-channel localizations from hdf5 files into channel state.
 
         Populates ``self.channel_locs``, ``self.channel_info`` and
         ``self.channel_tags`` from the given files, one entry per channel.
         Shared by the channel aggregation modules (``align_channels``,
-        ``register_channels``).
+        ``register_channels``) and by :meth:`load_checkpoint`.
 
         Parameters
         ----------
         filepaths : list of str
             hdf5 localization files, one per channel, in channel order.
+        tags : list of str, optional
+            The tags naming the channels. If None, the filenames are used.
+
+        Raises
+        ------
+        ValueError
+            If ``tags`` is given but does not match ``filepaths`` in length
+            (zip would silently drop channels).
         """
+        if tags is None:
+            tags = [os.path.split(fp)[1] for fp in filepaths]
+        elif len(tags) != len(filepaths):
+            raise ValueError(
+                f"Got {len(filepaths)} channel filepaths but {len(tags)} "
+                "tags."
+            )
         self.channel_locs = []
         self.channel_info = []
         self.channel_tags = []
-        for fp in filepaths:
+        for fp, tag in zip(filepaths, tags):
             locs, info = io.load_locs(fp)
             self.channel_locs.append(locs)
             self.channel_info.append(info)
-            self.channel_tags.append(os.path.split(fp)[1])
+            self.channel_tags.append(tag)
 
     #    @profile_resource_usage
     @module_decorator
@@ -9084,7 +8100,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                 Previously saved hdf5 files to load and align. If omitted, the
                 last processed data is used.
             ``align_pars`` : dict
-                Kwargs of ``picasso_outpost.align_channels``
+                Kwargs of ``outpost.alignment.channels.align_channels``
                 (``max_iterations``, ``convergence``).
             ``fp_fiducials`` : list of str
                 Previously saved hdf5 files of fiducial markers to load and
@@ -9102,6 +8118,8 @@ class AutoPicasso(util.AbstractModuleCollection):
             Module results (see
             :class:`~picasso_workflow.util.AbstractModuleCollection`).
         """
+        from picasso_workflow.outpost.alignment import channels
+
         pixelsize = self.pixelsize
         rcode = generate_random_code(6)
         if parameters.get("filepaths"):
@@ -9150,7 +8168,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             algo_used,
             fp_figs,
             shift_uncertainties,
-        ) = picasso_outpost.align_channels(
+        ) = channels.align_channels(
             self.channel_locs,
             self.channel_info,
             self.channel_tags,
@@ -9196,21 +8214,8 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         if fn := parameters.get("fig_filename", "fig_align.png"):
             fig_filepath = os.path.join(results["folder"], fn)
-            picasso_outpost.plot_shift(shifts, cum_shifts, fig_filepath)
+            channels.plot_shift(shifts, cum_shifts, fig_filepath)
             results["fig_filepath"] = fig_filepath
-
-            # Add confidence interval plotting for RSSO method
-            if algo_used == "RSSO" and shift_uncertainties:
-                fn_confidence = fn.replace(".png", "_with_confidence.png")
-                fig_confidence_filepath = os.path.join(
-                    results["folder"], fn_confidence
-                )
-                self._plot_channel_alignment_with_confidence(
-                    results["shifts"],
-                    shift_uncertainties,
-                    fig_confidence_filepath,
-                )
-                results["fig_confidence_filepath"] = fig_confidence_filepath
 
         if parameters.get("crop_boundaries"):
             max_xmin, min_xmax = -np.inf, np.inf
@@ -9222,10 +8227,10 @@ class AutoPicasso(util.AbstractModuleCollection):
                 min_ymax = min(min_ymax, locs["y"].max())
             for i, locs in enumerate(self.channel_locs):
                 self.channel_locs[i] = locs[
-                    (locs["x"] > max_xmin) & (locs["x"] < min_xmax)
-                ]
-                self.channel_locs[i] = locs[
-                    (locs["y"] > max_ymin) & (locs["y"] < min_ymax)
+                    (locs["x"] > max_xmin)
+                    & (locs["x"] < min_xmax)
+                    & (locs["y"] > max_ymin)
+                    & (locs["y"] < min_ymax)
                 ]
 
         results["fp_scene_locs_after"] = os.path.join(
@@ -9319,8 +8324,9 @@ class AutoPicasso(util.AbstractModuleCollection):
             non-reference channel), and ``fp_calibration`` (the saved
             calibration file).
         """
-        from picasso import registration
-        from picasso.registration import tform
+        from picasso_workflow._picasso_api import registration
+
+        tform = registration.tform
 
         if parameters.get("filepaths"):
             self._load_channels_from_filepaths(parameters["filepaths"])
@@ -9348,8 +8354,10 @@ class AutoPicasso(util.AbstractModuleCollection):
         reference = int(parameters.get("reference", 0))
         calibration = registration.calibrate_channel_registration_from_beads(
             bead_movies,
-            parameters["box_size"],
-            parameters["min_gradient"],
+            box=parameters["box_size"],
+            identification_method=_net_gradient_method(
+                parameters["min_gradient"]
+            ),
             model=model,
             reference=reference,
         )
@@ -9399,39 +8407,82 @@ class AutoPicasso(util.AbstractModuleCollection):
 
             ``tag`` : str
                 The tag / name of the combined dataset.
+            ``channels`` : list of str
+                The tags of the channels to combine. Combines only this subset
+                into ``tag`` and keeps the other channels as-is (so a RESI
+                dataset can combine, e.g., the GFP rounds into "GFP" and the
+                ALFA rounds into "ALFA" with separate ``combine_channels``
+                modules, leaving non-RESI channels untouched). If omitted, all
+                channels are combined (the previous behaviour).
             ``combine_col`` : str
                 The column name for the IDs of the different datasets.
         results : dict
             Module results (see
             :class:`~picasso_workflow.util.AbstractModuleCollection`).
         """
-        combine_map = {tag: i for i, tag in enumerate(self.channel_tags)}
+        combine_col = parameters.get("combine_col", "combine_id")
+        tag = parameters.get("tag", "combined-channels")
+        subset = parameters.get("channels")
+
+        if subset:
+            missing = [t for t in subset if t not in self.channel_tags]
+            if missing:
+                logger.warning(
+                    "combine_channels: channel tags not found, ignored: "
+                    f"{missing}"
+                )
+            combine_idx = [
+                j for j, t in enumerate(self.channel_tags) if t in set(subset)
+            ]
+        else:
+            combine_idx = list(range(len(self.channel_tags)))
+        if not combine_idx:
+            logger.warning(
+                "combine_channels: no channels matched; nothing combined"
+            )
+            # Populate combine_map so the reporter (which reads it
+            # unconditionally) does not KeyError on this no-op path.
+            results["combine_map"] = {}
+            return parameters, results
+
+        combine_map = {
+            self.channel_tags[j]: k for k, j in enumerate(combine_idx)
+        }
         results["combine_map"] = combine_map
         fp_combinemap = os.path.join(results["folder"], "combine_map.yaml")
         with open(fp_combinemap, "w") as f:
             yaml.dump(combine_map, f)
         results["fp_combinemap"] = fp_combinemap
-        combine_col = parameters.get("combine_col", "combine_id")
-        for i in range(len(self.channel_locs)):
-            locs = self.channel_locs[i]
+
+        to_combine = []
+        for k, j in enumerate(combine_idx):
+            locs = self.channel_locs[j]
             # Add combine_id column using DataFrame column assignment
-            locs[combine_col] = i * np.ones(len(locs))
-            self.channel_locs[i] = locs
-        # Concatenate all DataFrames
-        combined_locs = pd.concat(self.channel_locs, ignore_index=True)
+            locs[combine_col] = k * np.ones(len(locs))
+            to_combine.append(locs)
+        # Concatenate the selected DataFrames
+        combined_locs = pd.concat(to_combine, ignore_index=True)
         # sort like all Picasso localization lists
         combined_locs.sort_values("frame", kind="mergesort", inplace=True)
+        combined_info = self.channel_info[combine_idx[0]] + [
+            {
+                "Generated by": "picasso-workflow : combine_channels",
+                "files combined": [self.channel_tags[j] for j in combine_idx],
+            }
+        ]
 
-        # replace the channel_locs with the one combined dataset
-        self.channel_locs = [combined_locs]
-        new_info = {
-            "Generated by": "picasso-workflow : combine_channels",
-            "files combined": self.channel_tags,
-        }
-        info = self.channel_info[0] + [new_info]
-        self.channel_info = [info]
-        tag = parameters.get("tag", "combined-channels")
-        self.channel_tags = [tag]
+        # Keep the channels that were not combined, append the combined one.
+        combined_set = set(combine_idx)
+        keep = [
+            j for j in range(len(self.channel_tags)) if j not in combined_set
+        ]
+        self.channel_locs = [self.channel_locs[j] for j in keep] + [
+            combined_locs
+        ]
+        self.channel_info = [self.channel_info[j] for j in keep] + [
+            combined_info
+        ]
+        self.channel_tags = [self.channel_tags[j] for j in keep] + [tag]
 
         return parameters, results
 
@@ -9458,10 +8509,18 @@ class AutoPicasso(util.AbstractModuleCollection):
         parameters : dict
             Input parameters, unchanged.
         results : dict
-            Results updated with ``filepaths`` (all saved file paths).
+            Results updated with ``filepaths`` (all saved file paths),
+            ``tags`` and a ``checkpoint`` descriptor.
         """
         allfps = self._save_datasets_agg(results["folder"])
         results["filepaths"] = allfps
+        results["tags"] = list(self.channel_tags)
+        results["checkpoint"] = {
+            "channels": {
+                "filepaths": allfps,
+                "tags": list(self.channel_tags),
+            }
+        }
 
         return parameters, results
 
@@ -9485,7 +8544,9 @@ class AutoPicasso(util.AbstractModuleCollection):
         for locs, info, tag in zip(
             self.channel_locs, self.channel_info, self.channel_tags
         ):
-            filepath = os.path.join(folder, tag + ".hdf5")
+            filepath = os.path.join(
+                folder, _safe_filename_component(tag) + ".hdf5"
+            )
             io.save_locs(filepath, locs, info)
             allfps.append(filepath)
         return allfps
@@ -9600,7 +8661,6 @@ class AutoPicasso(util.AbstractModuleCollection):
                 density[i] = density[i] / le
 
         # locs, but as np.ndarray
-        pixelsize = self.pixelsize
         exp_data = {}
         exp_n_targets = np.zeros(len(self.channel_tags))
         for i, target in enumerate(self.channel_tags):
@@ -9608,13 +8668,11 @@ class AutoPicasso(util.AbstractModuleCollection):
             exp_n_targets[i] = len(locs)
             if "z" in locs.columns:
                 exp_data[target] = np.stack(
-                    (locs["x"] * pixelsize, locs["y"] * pixelsize, locs["z"])
+                    (locs["x"], locs["y"], locs["z"])
                 ).T
                 # dim = 3
             else:
-                exp_data[target] = np.stack(
-                    (locs["x"] * pixelsize, locs["y"] * pixelsize)
-                ).T
+                exp_data[target] = np.stack((locs["x"], locs["y"])).T
 
         data_2d = "z" not in self.channel_locs[0].columns
         if not data_2d:
@@ -9645,7 +8703,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             depth = z_range
             # d = 3
 
-        structures, targets = picasso_outpost.load_structures_from_dict(
+        structures, targets = spinna_wrappers.load_structures_from_dict(
             structures
         )
 
@@ -9684,7 +8742,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                 fitted_label_unc,
                 best_distance,
                 best_score,
-            ) = picasso_outpost.single_spinna_fit_le_run(
+            ) = spinna_wrappers.single_spinna_fit_le_run(
                 target_a=target_a,
                 target_b=target_b,
                 exp_data=exp_data,
@@ -9714,7 +8772,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             return parameters, results
 
         # N_structures = spinna.generate_N_structures(
-        N_structures = picasso_outpost.generate_N_structures(
+        N_structures = spinna.generate_N_structures(
             structures, n_sim_targets, parameters["granularity"]
         )
 
@@ -9726,7 +8784,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                 labeling_uncertainty,
                 labeling_uncertainty_scan,
                 labelunc_scan_figs,
-            ) = picasso_outpost.screen_label_uncertainty(
+            ) = spinna_wrappers.screen_label_uncertainty(
                 structures=structures,
                 label_unc=labeling_uncertainty,
                 le=parameters["labeling_efficiency"],
@@ -9770,7 +8828,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             "n_simulated": n_sim_targets,
         }
 
-        spinna_results, fp_figs = picasso_outpost.single_spinna_run(
+        spinna_results, fp_figs = spinna_wrappers.single_spinna_run(
             **spinna_pars
         )
         plt.close("all")
@@ -9920,7 +8978,7 @@ class AutoPicasso(util.AbstractModuleCollection):
     #     else:
     #         # kick off SPINNA analysis
     #         print("starting spinna batch analysis")
-    #         result_dir, fp_summary, fp_fig = picasso_outpost.spinna_batch(
+    #         result_dir, fp_summary, fp_fig = spinna_wrappers.spinna_batch(
     #             cfg_fp
     #         )
 
@@ -10024,7 +9082,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         # directory lands inside the module folder.
         cfg_fp_used = os.path.join(results["folder"], os.path.basename(cfg_fp))
         spinna_config.to_csv(cfg_fp_used, index=False)
-        result_dir, fp_summary, fp_figs = picasso_outpost.spinna_batch(
+        result_dir, fp_summary, fp_figs = spinna_wrappers.spinna_batch(
             cfg_fp_used
         )
 
@@ -10067,10 +9125,11 @@ class AutoPicasso(util.AbstractModuleCollection):
                 uz = np.array([0, 0, 1])
                 edgelength = int(np.ceil(n ** (1 / dimensionality)))
                 for i in range(n):
-                    iz = i // (edgelength**2)
-                    iy = i % (edgelength**2)
                     ix = i % edgelength
-                    positions[:, i] = ix * ux + iy * uy + iz * uz
+                    iy = (i // edgelength) % edgelength
+                    iz = i // (edgelength**2)
+                    # scale lattice indices to physical spacing (nm)
+                    positions[:, i] = (ix * ux + iy * uy + iz * uz) * distance
                 positions[0, :] -= np.mean(positions[0, :])
                 positions[1, :] -= np.mean(positions[1, :])
                 positions[2, :] -= np.mean(positions[2, :])
@@ -10085,311 +9144,6 @@ class AutoPicasso(util.AbstractModuleCollection):
                 }
                 spinna_structs.append(struct)
         return spinna_structs
-
-    #    @profile_resource_usage
-    @module_decorator
-    def ripleysk(self, i, parameters, results):
-        """Perform a Ripley's K analysis between the channels.
-
-        Parameters
-        ----------
-        i : int
-            Index of the module in the workflow.
-        parameters : dict
-            Keys:
-
-            ``ripleys_n_random_controls`` : int
-                Number of random controls (default 100).
-            ``ripleys_rmax`` : int
-                The maximum radius (default 200).
-            ``ripleys_dr`` : float
-                The radius interval (default 5).
-            ``radii`` : 1D np.ndarray
-                The radius values; if given, ``ripleys_rmax`` and
-                ``ripleys_dr`` are ignored.
-            ``ripleys_threshold`` : float
-                Threshold on the Ripley's integrals above which the
-                interaction is deemed significant.
-            ``fp_combined_locs`` : str
-                Filepath to the combined locs of all ``channel_locs``.
-            ``atype`` : str
-                Analysis type: ``'Ripleys'`` for standard Ripley's K, or
-                ``'RDF'`` to compute the radial distribution function instead
-                and generate controls by relocating each point within a
-                circle of the current radius (preserving density
-                fluctuations rather than simulating CSR).
-        results : dict
-            Module results (see
-            :class:`~picasso_workflow.util.AbstractModuleCollection`).
-        """
-        nRandomControls = parameters.get("ripleys_n_random_controls", 100)
-        # radii = np.concatenate(
-        #     (
-        #         np.arange(0, 100, 2),
-        #         np.arange(100, parameters.get("ripleys_rmax", 200), 12),
-        #     )
-        # )
-        if (radii := parameters.get("radii")) is not None:
-            radii = np.array(radii)
-        else:
-            radii = np.concatenate(
-                (
-                    np.arange(
-                        0,
-                        parameters.get("ripleys_rmax", 200),
-                        parameters.get("ripleys_dr", 5),
-                    ),
-                )
-            )
-
-        if isinstance(parameters["fp_combined_locs"], list):
-            fp_combined_locs = parameters["fp_combined_locs"][0]
-        else:
-            fp_combined_locs = parameters["fp_combined_locs"]
-        combined_locs, _ = io.load_locs(fp_combined_locs)
-
-        (
-            ripleysResults,
-            ripleysIntegrals,
-            ripleysMeanVal,
-        ) = run_ripleysAnalysis.performRipleysMultiAnalysis(
-            path=results["folder"],
-            filename="",
-            fileIDs=self.channel_tags,
-            radii=radii,
-            nRandomControls=nRandomControls,
-            channel_locs=self.channel_locs,
-            combined_locs=combined_locs,
-            pixelsize=self.pixelsize,
-            atype=parameters["atype"],
-        )
-
-        results["fp_ripleys_meanval"] = os.path.join(
-            results["folder"], "Ripleys_IntegralsMean.txt"
-        )
-        np.savetxt(results["fp_ripleys_meanval"], ripleysMeanVal)
-
-        results["fp_fig_ripleys_meanval"] = self._plot_ripleys_integrals(
-            ripleysMeanVal,
-            results["folder"],
-            self.channel_tags,
-            parameters["atype"],
-        )
-        results["fp_fig_unnormalized"] = os.path.join(
-            results["folder"], f"{parameters['atype']}_unnormalized.png"
-        )
-        results["fp_fig_normalized"] = os.path.join(
-            results["folder"], f"{parameters['atype']}_normalized.png"
-        )
-
-        results["ripleys_significant"] = self._find_ripleys_significant(
-            ripleysMeanVal,
-            parameters["ripleys_threshold"],
-            self.channel_tags,
-        )
-
-        return parameters, results
-
-    # @module_decorator
-    # def ripleysk_rafal(self, i, parameters, results):
-    #     """Exactly along Rafal's code"""
-    #     from picasso_workflow.outpost_modules.ripley_dcatlas_analysis \
-    #         import analyze as analyze_whole_cell
-    #     from picasso_workflow.outpost_modules.ripley_dcatlas_analysis \
-    #         import postprocess_ripley_matrix
-
-    #     rcode = generate_random_code(6)
-
-    #     R_MAX = 200  # nm, maximum radius for Ripley's K analysis
-    #     RADII = np.concatenate(
-    #         (np.arange(4, 80, 2), np.arange(80, R_MAX + 1, 12))
-    #     )
-    #     # boundaries for plotting final ripley matrices (as described in
-    #     # methods)
-    #     VMIN, VMAX = [
-    #         -2000,
-    #         2000,
-    #     ]
-
-    #     # first: binary
-    #     ripley_matrix, mask, area, fig_u, fig_n = analyze_whole_cell(
-    #         self.channel_locs, RADII, binary=True
-    #     )
-    #     postprocessed = postprocess_ripley_matrix(ripley_matrix, RADII)
-    #     path_save_integral_raw = os.path.join(
-    #         results["folder"],
-    #         f"raw_ripley_integral_binary-{rcode}.npy",
-    #     )
-    #     path_save_integral_postprocessed = os.path.join(
-    #         results["folder"],
-    #         f"postprocessed_ripley_integral_binary-{rcode}.npy",
-    #     )
-    #     np.save(path_save_integral_raw, ripley_matrix)
-    #     # save in excel format
-    #     df_raw = pd.DataFrame(
-    #         ripley_matrix, index=self.channel_tags, columns=self.channel_tags
-    #     )
-    #     df_raw.to_excel(path_save_integral_raw.replace(".npy", ".xlsx"))
-    #     df_pp = pd.DataFrame(
-    #         postprocessed,
-    #         index=self.channel_tags,
-    #         columns=self.channel_tags,
-    #     )
-    #     df_pp.to_excel(
-    #         path_save_integral_postprocessed.replace(".npy", ".xlsx")
-    #     )
-
-    #     def plot_and_save(matrix, savepath, vmin, vmax):
-    #         plt.figure()
-    #         plt.imshow(matrix, cmap="bwr_r", vmin=vmin, vmax=vmax)
-    #         plt.xticks(range(6), self.channel_tags)
-    #         plt.yticks(range(6), self.channel_tags)
-    #         plt.colorbar()
-    #         plt.savefig(savepath, dpi=150)
-    #         plt.close()
-
-    #     results["ripley_matrix_raw_binary"] = ripley_matrix
-    #     results["mask area_binary"] = area
-    #     results["fp_fig_mask_binary"] = os.path.join(
-    #         results["folder"], f"mask_binary-{rcode}.png"
-    #     )
-    #     fig, ax = plt.subplots()
-    #     ax.set_box_aspect(1)
-    #     ax.set_title("mask")
-    #     cmap = "hot"
-    #     ax.imshow(
-    #         mask,
-    #         extent=[
-    #             0,
-    #             mask.shape[0] * 10 / 1000,  # 10 nm mask pixel size
-    #             0,
-    #             mask.shape[1] * 10 / 1000,
-    #         ],
-    #         cmap=cmap,
-    #         origin="lower",
-    #     )
-    #     ax.set_xlabel("x [µm]")
-    #     ax.set_ylabel("y [µm]")
-    #     fig.savefig(results["fp_fig_mask_binary"])
-
-    #     results["fp_fig_unnormalized_binary"] = os.path.join(
-    #         results["folder"], f"unnormalized_binary-{rcode}.png"
-    #     )
-    #     fig_u.savefig(results["fp_fig_unnormalized_binary"])
-    #     results["fp_fig_normalized_binary"] = os.path.join(
-    #         results["folder"], f"normalized_binary-{rcode}.png"
-    #     )
-    #     fig_n.savefig(results["fp_fig_normalized_binary"])
-
-    #     results["fp_fig_raw_binary"] = path_save_integral_raw.replace(
-    #         ".npy", ".png"
-    #     )
-    #     plot_and_save(
-    #         matrix=ripley_matrix,
-    #         savepath=results["fp_fig_raw_binary"],
-    #         vmin=-np.max(np.abs(ripley_matrix)),
-    #         vmax=np.max(np.abs(ripley_matrix)),
-    #     )
-    #     results["fp_fig_postprocessed_binary"] = (
-    #         path_save_integral_postprocessed.replace(".npy", ".png")
-    #     )
-    #     plot_and_save(
-    #         matrix=postprocessed,
-    #         savepath=results["fp_fig_postprocessed_binary"],
-    #         vmin=VMIN,
-    #         vmax=VMAX,
-    #     )
-
-    #     # second: density
-    #     ripley_matrix, mask, area, fig_u, fig_n = analyze_whole_cell(
-    #         self.channel_locs, RADII, binary=False
-    #     )
-    #     postprocessed = postprocess_ripley_matrix(ripley_matrix, RADII)
-    #     path_save_integral_raw = os.path.join(
-    #         results["folder"],
-    #         f"raw_ripley_integral_density-{rcode}.npy",
-    #     )
-    #     path_save_integral_postprocessed = os.path.join(
-    #         results["folder"],
-    #         f"postprocessed_ripley_integral_density-{rcode}.npy",
-    #     )
-    #     np.save(path_save_integral_raw, ripley_matrix)
-    #     # save in excel format
-    #     df_raw = pd.DataFrame(
-    #         ripley_matrix, index=self.channel_tags, columns=self.channel_tags
-    #     )
-    #     df_raw.to_excel(path_save_integral_raw.replace(".npy", ".xlsx"))
-    #     df_pp = pd.DataFrame(
-    #         postprocessed,
-    #         index=self.channel_tags,
-    #         columns=self.channel_tags,
-    #     )
-    #     df_pp.to_excel(
-    #         path_save_integral_postprocessed.replace(".npy", ".xlsx")
-    #     )
-
-    #     def plot_and_save(matrix, savepath, vmin, vmax):
-    #         plt.figure()
-    #         plt.imshow(matrix, cmap="bwr_r", vmin=vmin, vmax=vmax)
-    #         plt.xticks(range(6), self.channel_tags)
-    #         plt.yticks(range(6), self.channel_tags)
-    #         plt.colorbar()
-    #         plt.savefig(savepath, dpi=150)
-    #         plt.close()
-
-    #     results["ripley_matrix_raw_density"] = ripley_matrix
-    #     results["mask area_density"] = area
-    #     results["fp_fig_mask_density"] = os.path.join(
-    #         results["folder"], f"mask_density-{rcode}.png"
-    #     )
-    #     fig, ax = plt.subplots()
-    #     ax.set_box_aspect(1)
-    #     ax.set_title("mask")
-    #     cmap = "hot"
-    #     ax.imshow(
-    #         mask,
-    #         extent=[
-    #             0,
-    #             mask.shape[0] / 1000,
-    #             0,
-    #             mask.shape[1] / 1000,
-    #         ],
-    #         cmap=cmap,
-    #         origin="lower",
-    #     )
-    #     ax.set_xlabel("x [µm]")
-    #     ax.set_ylabel("y [µm]")
-    #     fig.savefig(results["fp_fig_mask_density"])
-
-    #     results["fp_fig_unnormalized_density"] = os.path.join(
-    #         results["folder"], f"unnormalized_density-{rcode}.png"
-    #     )
-    #     fig_u.savefig(results["fp_fig_unnormalized_density"])
-    #     results["fp_fig_normalized_density"] = os.path.join(
-    #         results["folder"], f"normalized_density-{rcode}.png"
-    #     )
-    #     fig_n.savefig(results["fp_fig_normalized_density"])
-
-    #     results["fp_fig_raw_density"] = path_save_integral_raw.replace(
-    #         ".npy", ".png"
-    #     )
-    #     plot_and_save(
-    #         matrix=ripley_matrix,
-    #         savepath=results["fp_fig_raw_density"],
-    #         vmin=-np.max(np.abs(ripley_matrix)),
-    #         vmax=np.max(np.abs(ripley_matrix)),
-    #     )
-    #     results["fp_fig_postprocessed_density"] = (
-    #         path_save_integral_postprocessed.replace(".npy", ".png")
-    #     )
-    #     plot_and_save(
-    #         matrix=postprocessed,
-    #         savepath=results["fp_fig_postprocessed_density"],
-    #         vmin=VMIN,
-    #         vmax=VMAX,
-    #     )
-
-    #     return parameters, results
 
     #    @profile_resource_usage
     @module_decorator
@@ -10470,6 +9224,8 @@ class AutoPicasso(util.AbstractModuleCollection):
                 )
             )
 
+        from picasso_workflow.outpost.spatial_stats import ripleys
+
         # if isinstance(parameters["fp_combined_locs"], list):
         #     fp_combined_locs = parameters["fp_combined_locs"][0]
         # else:
@@ -10479,7 +9235,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         if fp_mask := parameters.get("fp_mask"):
             # mask = np.load(fp_mask)
             # mask = mask / np.sum(mask)
-            mask = outpost_modules.mask.CellMask.load(fp_mask)
+            mask = CellMask.load(fp_mask)
             area = mask.area * 1e6  # in nm^2
             mask_pixel_size = mask._upsample
         else:
@@ -10491,10 +9247,13 @@ class AutoPicasso(util.AbstractModuleCollection):
         pixelsize = self.pixelsize
 
         if parameters.get("edge_correction"):
-            # make the mask smaller by the maximum radius, and apply
+            # make the mask smaller by the maximum radius, and apply.
+            # border_is_edge=True so the field-of-view border counts as a mask
+            # edge: locs within max_r of the image border are excluded too
+            # (picasso's erode otherwise leaves the FOV border untouched).
             max_r = np.max(radii)
             ec_mask = copy.copy(mask)
-            ec_mask.erode(max_r)
+            ec_mask.erode(max_r, border_is_edge=True)
             area = ec_mask.area * 1e6  # in nm^2
             locs_used = [
                 ec_mask.apply_to_locs(locs) for locs in self.channel_locs
@@ -10503,7 +9262,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             locs_used = self.channel_locs
 
         mol_coords = [
-            outpost_modules.ripleys.convert_picasso_to_coords(mol, pixelsize)
+            ripleys.convert_picasso_to_coords(mol, pixelsize)
             for mol in locs_used
         ]
 
@@ -10514,7 +9273,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                 fig_n,
                 curves,
                 curves_norm,
-            ) = outpost_modules.ripleys.typefraction_all_channels(
+            ) = ripleys.typefraction_all_channels(
                 mol_coords,
                 radii,
                 nRandomControls,
@@ -10538,7 +9297,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                 fig_n,
                 curves,
                 curves_norm,
-            ) = outpost_modules.ripleys.analyze_all_channels(
+            ) = ripleys.analyze_all_channels(
                 mol_coords,
                 mask,
                 mask_pixel_size,
@@ -10563,7 +9322,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         )
         np.save(results["fp_curves_norm"], curves_norm)
 
-        # ripley_matrix = outpost_modules.ripleys.postprocess_ripley_matrix(
+        # ripley_matrix = ripleys.postprocess_ripley_matrix(
         #     ripley_matrix, radii
         # )
 
@@ -10727,165 +9486,6 @@ class AutoPicasso(util.AbstractModuleCollection):
 
     #    @profile_resource_usage
     @module_decorator
-    def ripleysk_average(self, i, parameters, results):
-        """Average multiple Ripley's K analyses and find significant pairs.
-
-        Averages the integrals across analyses, finds the significant pairs
-        and (optionally) saves them into the separate workflows' manual
-        folders for further analysis there.
-
-        Parameters
-        ----------
-        i : int
-            Index of the module in the workflow.
-        parameters : dict
-            Required keys:
-
-            ``fp_workflows`` : list of str
-                Paths to the folders of the separate workflows where the
-                individual Ripley's analyses were done.
-            ``report_names`` : list of str
-                The report names of those workflows.
-            ``ripleys_threshold`` : float
-                Threshold above which an interaction is significant.
-            ``atype`` : str
-                ``"Ripleys"`` or ``"RDF"``.
-
-            Optional keys:
-
-            ``swkfl_ripleysk_key`` : str
-                Results key of the ripleysk module (e.g. ``'05_ripleysk'``).
-            ``swkfl_manual_key`` : str
-                Results key of the manual module to save the integrals to.
-                If these two are absent, saving is not performed.
-        results : dict
-            Module results (see
-            :class:`~picasso_workflow.util.AbstractModuleCollection`).
-        """
-        # from picasso_workflow.workflow import WorkflowRunner
-
-        # all_integrals = np.concat(
-        #     [np.loadtxt(fp) for fp in parameters["fp_ripleys_integrals"]])
-        # averaged_integrals = np.mean(all_integrals, axis=0)
-
-        # check single intregals based on workflow file
-        fp_ripleys_meanvals = []  # [""] * len(parameters["fp_workflows"])
-        output_folders = []  # [""] * len(parameters["fp_workflows"])
-
-        channel_tags = None
-        search_dict = {
-            (
-                parameters["swkfl_ripleysk_key"],
-                "fp_ripleys_meanval",
-            ): fp_ripleys_meanvals,
-            (parameters["swkfl_manual_key"], "folder"): output_folders,
-        }
-        for folder, name in zip(
-            parameters["fp_workflows"], parameters["report_names"]
-        ):
-            loaded_data, wf_channel_tags = self._load_other_workflow_data(
-                folder, name, search_dict.keys()
-            )
-            for key, res in loaded_data.items():
-                search_dict[key].append(res)
-
-            # make sure all channel tags (e.g. protein names)
-            # are the same across workflows to be merged
-            if channel_tags is None:
-                channel_tags = wf_channel_tags
-            else:
-                if channel_tags != wf_channel_tags:
-                    raise KeyError(
-                        "Loaded datasets have different channel tags!"
-                    )
-
-        # for i, (wkflfolder, report_name) in enumerate(
-        #     zip(parameters["fp_workflows"], parameters["report_names"])
-        # ):
-        #     # find analysis folder
-        #     postfix = WorkflowRunner._check_previous_runner(
-        #         wkflfolder, report_name
-        #     )
-        #     # find aggregation WorkflowRunner config
-        #     fp_wr_cfg = os.path.join(
-        #         wkflfolder,
-        #         report_name + "_" + postfix,
-        #         report_name + "_aggregation_" + postfix,
-        #         "WorkflowRunner.yaml",
-        #     )
-        #     with open(fp_wr_cfg, "r") as f:
-        #         data = yaml.load(f, Loader=yaml.FullLoader)
-        #     # check for results of 'ripleysk' module
-        #     for mod_key, mod_res in data["results"].items():
-        #         if mod_key == parameters.get("swkfl_ripleysk_key"):
-        #             print(mod_key, mod_res)
-        #             print(parameters.get("swkfl_ripleysk_key"))
-        #             fp_ripleys_integrals[i] = mod_res["fp_ripleys_integrals"]
-        #         elif mod_key == parameters.get("swkfl_manual_key"):
-        #             print(mod_key, mod_res)
-        #             print(parameters.get("swkfl_manual_key"))
-        #             output_folders[i] = mod_res["folder"]
-        #     # find AggregationWorkflowRunner config
-        #     fp_wr_cfg = os.path.join(
-        #         wkflfolder,
-        #         report_name + "_" + postfix,
-        #         "AggregationWorkflowRunner.yaml",
-        #     )
-        #     with open(fp_wr_cfg, "r") as f:
-        #         data = yaml.load(f, Loader=yaml.FullLoader)
-        #     channel_tags = data["aggregation_workflow"][
-        #         "single_dataset_tileparameters"
-        #     ]["#tags"]
-        # fp_ripleys_integrals = [
-        #     fp for fp in fp_ripleys_integrals if fp != ""
-        # ]
-        # output_folders = [fp for fp in output_folders if fp != ""]
-        results["output_folders"] = output_folders
-
-        # load and average the integrals
-        all_integrals = np.stack(
-            [np.loadtxt(fp) for fp in fp_ripleys_meanvals]
-        )
-        averaged_integrals = np.nanmean(all_integrals, axis=0)
-        std_integrals = np.nanstd(all_integrals, axis=0)
-
-        # save into own results folder
-        results["fp_ripleys_meanvals"] = os.path.join(
-            results["folder"], "Ripleys_MeanVals.txt"
-        )
-        np.savetxt(results["fp_ripleys_meanvals"], averaged_integrals)
-
-        results["fp_figmeanvals"] = self._plot_ripleys_integrals(
-            averaged_integrals,
-            results["folder"],
-            channel_tags,
-            parameters["atype"],
-            std=std_integrals,
-        )
-
-        significant_pairs = self._find_ripleys_significant(
-            averaged_integrals, parameters["ripleys_threshold"], channel_tags
-        )
-        results["ripleys_significant"] = significant_pairs
-
-        # save significant pairs into given folders
-        results["fp_ripleys_significant"] = os.path.join(
-            results["folder"], "significant_pairs.txt"
-        )
-        save_fp = [
-            os.path.join(fol, "significant_pairs.yaml")
-            for fol in output_folders
-        ]
-        save_fp.append(results["fp_ripleys_significant"])
-        for fp in save_fp:
-            with open(fp, "w") as f:
-                yaml.dump(significant_pairs, f)
-            # np.savetxt(fp, significant_pairs)
-
-        return parameters, results
-
-    #    @profile_resource_usage
-    @module_decorator
     def ripleysk_average2(self, i, parameters, results):
         """Average multiple Ripley's K analyses (Rafal's variant).
 
@@ -10919,7 +9519,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             Optional keys:
 
             ``swkfl_ripleysk_key`` : str
-                Results key of the ripleysk module (e.g. ``'05_ripleysk'``).
+                Results key of the ripleysk2 module (e.g. ``'05_ripleysk2'``).
             ``swkfl_manual_key`` : str
                 Results key of the manual module to save the integrals to.
                 If these two are absent, saving is not performed.
@@ -11037,15 +9637,17 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         significance_threshold = significance_thresholds[0]
 
+        from picasso_workflow.outpost.spatial_stats import ripleys
+
         # load and plot the single curves
-        fig_curves, ax_curves = outpost_modules.ripleys.init_plot(
+        fig_curves, ax_curves = ripleys.init_plot(
             len(channel_tags),
             "un-normalized",
             ripleys_controltype,
             ripleys_metric,
             figsize_per_target=5,
         )
-        fig_curves_norm, ax_curves_norm = outpost_modules.ripleys.init_plot(
+        fig_curves_norm, ax_curves_norm = ripleys.init_plot(
             len(channel_tags),
             "normalized",
             ripleys_controltype,
@@ -11059,7 +9661,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             curves_norm = np.load(fp_curve_norm)
             for i, name1 in enumerate(channel_tags):
                 for j, name2 in enumerate(channel_tags):
-                    outpost_modules.ripleys.plot_ripleys(
+                    ripleys.plot_ripleys(
                         ripleys_radii,
                         curves[i, j, :],
                         None,
@@ -11073,7 +9675,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                         label_data=reportname,
                         showControlEnvelope=False,
                     )
-                    outpost_modules.ripleys.plot_ripleys(
+                    ripleys.plot_ripleys(
                         ripleys_radii,
                         curves_norm[i, j, :],
                         None,
@@ -11199,7 +9801,6 @@ class AutoPicasso(util.AbstractModuleCollection):
         # # homo-analysis (proportions of 1- or 2-mers of the same kind)
         # props = {}
         dimensionality = 2
-        pixelsize = self.pixelsize
         if isinstance(parameters["density"], list):
             density = {
                 tag: parameters["density"][cid]
@@ -11229,7 +9830,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         # pixelsize = self.analysis_config["camera_info"].get("Pixelsize")
         # structures = self._create_spinna_structure(
         #     self.channel_tags, [1, 2], distance=parameters["distance"])
-        # N_structures = picasso_outpost.generate_N_structures(
+        # N_structures = spinna.generate_N_structures(
         #     structures, n_sim_targets, parameters["res_factor"]
         # )
         # # bin size: more than Nyquist subsampling
@@ -11298,16 +9899,14 @@ class AutoPicasso(util.AbstractModuleCollection):
                 if "z" in locs.columns:
                     exp_data[target] = np.stack(
                         (
-                            locs["x"] * pixelsize,
-                            locs["y"] * pixelsize,
+                            locs["x"],
+                            locs["y"],
                             locs["z"],
                         )
                     ).T
                     # dim = 3
                 else:
-                    exp_data[target] = np.stack(
-                        (locs["x"] * pixelsize, locs["y"] * pixelsize)
-                    ).T
+                    exp_data[target] = np.stack((locs["x"], locs["y"])).T
                     # dim = 2
             structures = self._create_spinna_structure(
                 [A], [[1, 2]], parameters["structure_distance"]
@@ -11372,11 +9971,11 @@ class AutoPicasso(util.AbstractModuleCollection):
                 compound_density = density_gt[A]
                 area = parameters["n_simulate"] / (density_gt[A] * 1e6)
                 n_sim_targets = {A: int(parameters["n_simulate"])}
-            structures, targets = picasso_outpost.load_structures_from_dict(
+            structures, targets = spinna_wrappers.load_structures_from_dict(
                 structures
             )
 
-            N_structures = picasso_outpost.generate_N_structures(
+            N_structures = spinna.generate_N_structures(
                 structures, n_sim_targets, parameters["res_factor"]
             )
 
@@ -11399,8 +9998,8 @@ class AutoPicasso(util.AbstractModuleCollection):
                 "random_rot_mode": "2D",
                 "exp_data": exp_data,
                 "sim_repeats": parameters["sim_repeats"],
-                "fit_NND_bin": fit_NND_bin,
-                "fit_NND_maxdist": fit_NND_maxdist,
+                "NND_bin": fit_NND_bin,
+                "NND_maxdist": fit_NND_maxdist,
                 "N_structures": N_structures,
                 "save_filename": os.path.join(
                     results["folder"], f"interaction-{A}-{B}"
@@ -11413,8 +10012,8 @@ class AutoPicasso(util.AbstractModuleCollection):
                 "n_simulated": n_sim_targets,
             }
 
-            result, fp_fig = picasso_outpost.single_spinna_run(
-                spinna_parameters
+            result, fp_fig = spinna_wrappers.single_spinna_run(
+                **spinna_parameters
             )
             plt.close("all")
             props[f"{A},{B}"] = result["Fitted proportions of structures"]
@@ -11657,7 +10256,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             Module results (see
             :class:`~picasso_workflow.util.AbstractModuleCollection`).
         """
-        from picasso_workflow.dbscan_molint import mask
+        from picasso_workflow.outpost.clustering.dbscan_molint import mask
 
         # get map
         with open(parameters["fp_channel_map"], "r") as f:
@@ -11740,8 +10339,8 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         Largely identical to an implementation in spinna that will be
         integrated into picasso; evaluate deprecation (or moving the source
-        from ``outpost_modules/ripleys`` to ``picasso/spinna``) at that time.
-        The locs must be protein positions at this stage.
+        from ``outpost/spatial_stats/ripleys`` to ``picasso/spinna``) at that
+        time. The locs must be protein positions at this stage.
 
         Parameters
         ----------
@@ -11770,6 +10369,16 @@ class AutoPicasso(util.AbstractModuleCollection):
                 Whether to drop localizations outside the area.
 
             Optional keys:
+
+            ``nth_largest_cell`` : int
+                With ``select_cell``, keep the ``nth`` largest connected
+                component (1 = largest). Default keeps the largest.
+            ``skip_if_missing_cell`` : bool
+                With ``select_cell`` + ``nth_largest_cell``, raise
+                :class:`SkipBranch` when the requested cell does not exist
+                (fewer components than ``nth_largest_cell``) instead of reusing
+                the smallest. Lets a ``branch`` over-request cells and drop the
+                empty branches. Default False.
 
             ``fp_combined_locs`` : str
                 Filepath to the locs combined in the ``combine_channels``
@@ -11820,7 +10429,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             mols = [locs for locs in self.channel_locs]
 
         # mol_coords = [
-        #     outpost_modules.ripleys.convert_picasso_to_coords(mol, pixelsize)
+        #     ripleys.convert_picasso_to_coords(mol, pixelsize)
         #     for mol in mols
         # ]
         binsize = parameters["binsize"]
@@ -11829,7 +10438,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         threshold = parameters["threshold"]
         mask_pixel_size = parameters["mask_pixel_size"]
         # binary = parameters["binary"]
-        cell_mask = outpost_modules.mask.CellMask.from_mol_coords(
+        cell_mask = CellMask.from_mol_coords(
             mols,
             pixelsize,
             binsize,
@@ -11845,7 +10454,17 @@ class AutoPicasso(util.AbstractModuleCollection):
                 # nth_largest_cell is 1-based (1 = largest); filter_mask
                 # uses a 0-based rank internally.
                 kwargs["nth_largest"] = nth - 1
-            cell_mask.filter_mask(**kwargs)
+            if parameters.get("skip_if_missing_cell"):
+                # Used inside a ``branch``: turn "requested cell absent" into a
+                # SkipBranch so this branch is dropped instead of failing (or
+                # silently reusing another cell).
+                kwargs["raise_if_missing"] = True
+                try:
+                    cell_mask.filter_mask(**kwargs)
+                except IndexError as e:
+                    raise SkipBranch(f"create_mask2: {e}")
+            else:
+                cell_mask.filter_mask(**kwargs)
         if dilate_nm := parameters.get("dilate_nm"):
             cell_mask.dilate(dilate_nm)
         if parameters.get("apply_to_locs"):
@@ -11872,7 +10491,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             logger.debug(f"max locs y vals [px] are {ymax}")
         area = cell_mask.area
 
-        # mask, area = outpost_modules.ripleys.get_cell_mask(
+        # mask, area = ripleys.get_cell_mask(
         #     mol_coords,
         #     pixelsize,
         #     binsize=binsize,
@@ -11882,7 +10501,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         #     binary=binary,
         # )
         # if parameters.get("select_cell"):
-        #     mask = outpost_modules.ripleys.filter_mask(mask)
+        #     mask = ripleys.filter_mask(mask)
 
         results["area"] = area
         # results["fp_mask"] = os.path.join(
@@ -11896,7 +10515,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         # results["fp_fig_mask"] = os.path.join(
         #     results["folder"], f"mask_binary-{binary}_{rcode}.png"
         # )
-        # outpost_modules.ripleys.plot_mask(
+        # ripleys.plot_mask(
         #     mask, mask_pixel_size, results["fp_fig_mask"]
         # )
         results["fp_fig_mask_binary"] = os.path.join(
@@ -11951,7 +10570,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         # nth_largest is 1-based (1 = largest); converted to a 0-based
         # rank at the component-selection step below.
         nth_largest = parameters.get("nth_largest", 1)
-        mask = outpost_modules.mask.CellMask.load(parameters["fp_mask"])
+        mask = CellMask.load(parameters["fp_mask"])
         mask_pixel_area = mask._upsample**2
         densities = mask.densities
 
@@ -12179,7 +10798,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             Module results (see
             :class:`~picasso_workflow.util.AbstractModuleCollection`).
         """
-        # from picasso_workflow.dbscan_molint import dbscan
+        # from picasso_workflow.outpost.clustering.dbscan_molint import dbscan
         # get map
         with open(parameters["fp_channel_map"], "r") as f:
             channel_map = yaml.safe_load(f)
@@ -12188,7 +10807,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         epsilon_nm = parameters["epsilon_nm"]
         df_mask = pd.read_hdf(parameters["fp_merge_mask"], key="locs")
         fp_out_base = os.path.join(results["folder"], "dbscan.hdf5")
-        filepaths = picasso_outpost._do_dbscan_molint(
+        filepaths = clustering_molint._do_dbscan_molint(
             results["folder"],
             fp_out_base,
             df_mask,
@@ -12322,9 +10941,9 @@ class AutoPicasso(util.AbstractModuleCollection):
             Module results (see
             :class:`~picasso_workflow.util.AbstractModuleCollection`).
         """
-        from picasso_workflow.dbscan_molint import mask
+        from picasso_workflow.outpost.clustering.dbscan_molint import mask
 
-        # from picasso_workflow.dbscan_molint import dbscan
+        # from picasso_workflow.outpost.clustering.dbscan_molint import dbscan
 
         pixelsize = self.pixelsize
         epsilon_nm = parameters["epsilon_nm"]
@@ -12358,7 +10977,7 @@ class AutoPicasso(util.AbstractModuleCollection):
                 plot_figures=True,
             )
             fp_out_base = os.path.join(results["folder"], f"dbscan_{s}.hdf5")
-            filepaths = picasso_outpost._do_dbscan_molint(
+            filepaths = clustering_molint._do_dbscan_molint(
                 results["folder"],
                 fp_out_base,
                 df_CSR_mask,
@@ -12731,7 +11350,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         origin_colors = ["blue", "gray"]
 
         # plot degree of clustering
-        fp_figs = picasso_outpost.degree_of_clustering(
+        fp_figs = clustering_molint.degree_of_clustering(
             cluster_info_exp,
             cluster_info_csr,
             origin_colors,
@@ -12774,7 +11393,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         (
             significant_barcodes,
             p_values,
-        ) = picasso_outpost._plot_and_compare_barcodes(
+        ) = clustering_molint._plot_and_compare_barcodes(
             barcode_numbers,
             origin_colors,
             targets,
@@ -12813,7 +11432,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         (
             significant_barcodes,
             p_values,
-        ) = picasso_outpost._plot_and_compare_barcodes(
+        ) = clustering_molint._plot_and_compare_barcodes(
             barcode_areas,
             origin_colors,
             targets,
@@ -12834,7 +11453,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             fp_fig = os.path.join(
                 results["folder"], f"ntargets_barcode_{bc[2:]}.png"
             )
-            picasso_outpost._plot_and_compare_ntargets_in_barcodes(
+            clustering_molint._plot_and_compare_ntargets_in_barcodes(
                 df, bc, origin_colors, targets, fp_fig
             )
             fp_fig_ntargets.append(fp_fig)
@@ -12914,7 +11533,7 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         targets = channel_tags
         meanvals = np.loadtxt(parameters["fp_ripleys_meanvals"])
-        fig, ax = picasso_outpost._plot_interaction_graph(
+        fig, ax = clustering_molint._plot_interaction_graph(
             densities * parameters["node_factor"],
             meanvals * parameters["edge_factor"],
             parameters["channel_colors"],
@@ -12959,7 +11578,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         for prop in ["diameter", "std_range", "mean_rmsd"]:
             if val := parameters.get(prop):
                 kwargs[prop] = val
-        gold_picks = picasso_outpost.pick_gold(self.locs, self.info, **kwargs)
+        gold_picks = picks_mod.pick_gold(self.locs, self.info, **kwargs)
 
         results["n_gold"] = len(gold_picks)
         logger.debug(f"# gold particles found: {len(gold_picks)}")
@@ -12978,7 +11597,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         else:
             # function needs to return the locs in a r radius around the gold
             # coordinates
-            gold_locs, nongold_locs = picasso_outpost.picked_locs(
+            gold_locs, nongold_locs = picks_mod.picked_locs(
                 self.locs,
                 self.info,
                 gold_picks,
@@ -13053,16 +11672,22 @@ class AutoPicasso(util.AbstractModuleCollection):
         """
         logger.debug(f"# locs: {len(self.locs)}")
         # search for xy positions that look like gold ('pick similar')
-        diameter = parameters["diameter"]
+        # the override keys are optional: unset ones fall back to
+        # picks_mod.pick_similar's own defaults
         kwargs = {
-            "diameter": diameter,
-            "min_n_locs_per_frame": parameters["min_n_locs_per_frame"],
-            "max_n_locs_per_frame": parameters["max_n_locs_per_frame"],
-            "min_rmsd": parameters["min_rmsd"],
-            "max_rmsd": parameters["max_rmsd"],
+            key: parameters[key]
+            for key in (
+                "diameter",
+                "min_n_locs_per_frame",
+                "max_n_locs_per_frame",
+                "min_rmsd",
+                "max_rmsd",
+            )
+            if parameters.get(key) is not None
         }
+        diameter = kwargs.get("diameter", 2)
         # print(self.locs.dtype)
-        picks, nlocs, rmsds, labels = picasso_outpost.pick_similar(
+        picks, nlocs, rmsds, labels = picks_mod.pick_similar(
             self.locs, self.info, **kwargs
         )
         # print(self.locs.dtype)
@@ -13119,7 +11744,7 @@ class AutoPicasso(util.AbstractModuleCollection):
 
         # all xy coords found for the picks
         if len(picks) > 2:
-            picked_locs = picasso_outpost.picked_locs(
+            picked_locs = picks_mod.picked_locs(
                 self.locs,
                 self.info,
                 picks,
@@ -13252,7 +11877,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             rmsds,
             labels,
             newlabels,
-        ) = picasso_outpost.find_structures(self.locs, self.info, **kwargs)
+        ) = picks_mod.find_structures(self.locs, self.info, **kwargs)
 
         results["n_clusters"] = len(cluster_picks)
         results["n_picks"] = [len(picks) for picks in cluster_picks]
@@ -13312,7 +11937,7 @@ class AutoPicasso(util.AbstractModuleCollection):
         for cluster_id, picks in enumerate(cluster_picks):
             # all xy coords found for this cluster of structure
             if len(picks) > 2:
-                cluster_locs = picasso_outpost.picked_locs(
+                cluster_locs = picks_mod.picked_locs(
                     self.locs,
                     self.info,
                     picks,
@@ -13382,6 +12007,755 @@ class AutoPicasso(util.AbstractModuleCollection):
 
     #    @profile_resource_usage
     @module_decorator
+    def pick_origami(self, i, parameters, results):
+        """Design-aware picking of origami structures.
+
+        Loads an origami's designed geometry, auto-detects and picks the
+        origami structures (tolerating a configurable number of missing
+        docking sites), and emits picasso-compatible picks plus a
+        per-structure geometry table.
+
+        Structures are identified in stages, cheapest first: a coarse
+        ``pick_similar`` pick in the nlocs/rmsd window, a cheap
+        registration-free pair-score pre-screen (lattice periodicity at the
+        design spacing), then per-candidate registration onto the design and
+        an on-lattice gate (matched-site fraction, fit residual, spacing,
+        per-site count/spread uniformity), and finally defect grouping. See
+        :meth:`~picasso_workflow.util.AbstractModuleCollection.pick_origami`
+        for the full strategy and parameter contract.
+
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters : dict
+            The module parameters (see the contract method).
+        results : dict
+            Module results (see
+            :class:`~picasso_workflow.util.AbstractModuleCollection`).
+        """
+        logger.debug(f"# locs: {len(self.locs)}")
+        pixelsize = self.pixelsize
+
+        # The GUI-generated template emits unset optional parameters as
+        # placeholder sentinels ("" for strings, 0.0/0 for numbers). Treat
+        # those as "not provided" so they fall back to real defaults instead
+        # of being taken literally (e.g. max_rmsd=0 would pick nothing).
+        def _opt(key, default=None, zero_is_unset=False):
+            val = parameters.get(key, default)
+            if val == "" or val is None:
+                return default
+            if zero_is_unset and isinstance(val, (int, float)) and val == 0:
+                return default
+            return val
+
+        # --- 1. load the design template (expected geometry) -----------
+        # The design spacing comes from the geometry spec (grid ``spacing_nm``
+        # or the explicit site list); the picker works in that frame.
+        if _opt("design_file"):
+            template_spec = {"design_file": parameters["design_file"]}
+        elif _opt("geometry") is not None:
+            template_spec = parameters["geometry"]
+        else:
+            raise ValueError(
+                "pick_origami needs a 'design_file' or a 'geometry' spec"
+            )
+        template = origami_mod.load_origami_template(template_spec)
+        results["n_sites_expected"] = template.n_sites_expected
+        results["grid_spacing_nm"] = template.grid_spacing_nm
+
+        # --- 2. run the design-aware picker ----------------------------
+        # The pick window is set explicitly via min/max_rmsd and
+        # min/max_n_locs_per_frame (the "Preview phase space" GUI dialog
+        # simulates the expected origami cloud to suggest those bounds); the
+        # module itself no longer simulates.
+        pick_result = origami_mod.pick_origami(
+            self.locs,
+            self.info,
+            template,
+            pixelsize,
+            pick_diameter_factor=_opt("pick_diameter_factor", 1.5),
+            min_n_locs_per_frame=_opt("min_n_locs_per_frame"),
+            max_n_locs_per_frame=_opt("max_n_locs_per_frame"),
+            min_rmsd=_opt("min_rmsd", zero_is_unset=True),
+            max_rmsd=_opt("max_rmsd", zero_is_unset=True),
+            allow_mirror=parameters.get("allow_mirror", True),
+        )
+        accepted_centers = pick_result["accepted_centers_px"]
+        docking_centers = pick_result["docking_site_centers_px"]
+        geometry_table = pick_result["geometry_table"]
+        results["n_candidates"] = pick_result["n_candidates"]
+        results["n_registered"] = pick_result.get("n_registered")
+        results["n_accepted"] = pick_result["n_accepted"]
+        results["funnel"] = pick_result.get("funnel")
+        # Aggregate overview over the accepted structures (for the report).
+        # The full per-structure table is only written to disk (see
+        # fp_geometry_table below), not carried in results.
+        results["accepted_overview"] = _summarize_accepted_structures(
+            geometry_table
+        )
+
+        rcode = generate_random_code(6)
+
+        # footprint diameter actually used by the picker (for pick yaml +
+        # hdf5 picking), so the saved picks match the detection footprint.
+        footprint_diameter = pick_result["footprint_diameter"]
+        docking_diameter = parameters.get(
+            "docking_site_diameter",
+            max(template.grid_spacing_nm / pixelsize / 2, 1e-6),
+        )
+
+        # --- 4a. grouped picked locs, re-centred on the centre of mass -
+        # pick the grid-centred footprints, relocate each pick to its locs'
+        # centre of mass, then re-pick once around the new centres so the
+        # saved picks and locs are all consistent with the actual structures.
+        if len(accepted_centers) > 0:
+            picked_origami_locs = picks_mod.picked_locs(
+                self.locs,
+                self.info,
+                accepted_centers,
+                pick_diameter=footprint_diameter,
+                return_nonpicked=False,
+            )
+            accepted_centers = _recenter_on_com(
+                picked_origami_locs, accepted_centers
+            )
+            picked_origami_locs = picks_mod.picked_locs(
+                self.locs,
+                self.info,
+                accepted_centers,
+                pick_diameter=footprint_diameter,
+                return_nonpicked=False,
+            )
+        else:
+            picked_origami_locs = pd.DataFrame(self.locs).iloc[0:0].copy()
+            picked_origami_locs["group"] = pd.Series(dtype="int32")
+        results["n_picked_locs"] = len(picked_origami_locs)
+        # the geometry-table centres follow the re-centred picks. Only the
+        # accepted rows correspond to accepted_centers (in order); guard
+        # against a geometry_table that also carries rejected rows so the
+        # centres are never written onto the wrong row.
+        accepted_rows = [
+            row for row in geometry_table if row.get("accepted", True)
+        ]
+        for row, c in zip(accepted_rows, accepted_centers):
+            row["center_x_px"] = float(c[0])
+            row["center_y_px"] = float(c[1])
+
+        # --- 4b. origami-footprint picks (Centers + Diameter yaml) -----
+        fp_picks_origami = os.path.join(results["folder"], "pick_origami.yaml")
+        with open(fp_picks_origami, "w") as f:
+            yaml.dump(
+                {
+                    "Centers": [
+                        [float(c[0]), float(c[1])] for c in accepted_centers
+                    ],
+                    "Diameter (nm)": float(footprint_diameter * pixelsize),
+                    "Shape": "Circle",
+                },
+                f,
+            )
+        results["fp_picks_origami"] = fp_picks_origami
+
+        # secondary: picasso picks for all resolved single docking sites
+        fp_picks_dockingsites = os.path.join(
+            results["folder"], "docking_sites.yaml"
+        )
+        with open(fp_picks_dockingsites, "w") as f:
+            yaml.dump(
+                {
+                    "Centers": [
+                        [float(c[0]), float(c[1])] for c in docking_centers
+                    ],
+                    "Diameter (nm)": float(docking_diameter * pixelsize),
+                    "Shape": "Circle",
+                },
+                f,
+            )
+        results["fp_picks_dockingsites"] = fp_picks_dockingsites
+
+        if len(docking_centers) > 0:
+            docking_site_locs = picks_mod.picked_locs(
+                self.locs,
+                self.info,
+                docking_centers,
+                pick_diameter=docking_diameter,
+                return_nonpicked=False,
+            )
+        else:
+            docking_site_locs = pd.DataFrame(self.locs).iloc[0:0].copy()
+            docking_site_locs["group"] = pd.Series(dtype="int32")
+
+        fp_picked_locs_origami = os.path.join(
+            results["folder"], "picked_origami_locs.hdf5"
+        )
+        origami_info = self.info + [
+            {
+                "Generated by": "picasso-workflow.analyse.pick_origami",
+                "data": "picked origami structures",
+            }
+        ]
+        io.save_locs(fp_picked_locs_origami, picked_origami_locs, origami_info)
+        results["fp_picked_locs_origami"] = fp_picked_locs_origami
+
+        fp_picked_locs_dockingsites = os.path.join(
+            results["folder"], "docking_site_locs.hdf5"
+        )
+        docking_info = self.info + [
+            {
+                "Generated by": "picasso-workflow.analyse.pick_origami",
+                "data": "resolved docking sites",
+            }
+        ]
+        io.save_locs(
+            fp_picked_locs_dockingsites, docking_site_locs, docking_info
+        )
+        results["fp_picked_locs_dockingsites"] = fp_picked_locs_dockingsites
+
+        # --- 4c. per-structure geometry table --------------------------
+        fp_geometry_table = os.path.join(
+            results["folder"], "geometry_table.csv"
+        )
+        pd.DataFrame(geometry_table).to_csv(fp_geometry_table, index=False)
+        results["fp_geometry_table"] = fp_geometry_table
+
+        # --- 5. phase-space diagnostic figure --------------------------
+        # nlocs-per-frame vs rmsd, matching the min/max_n_locs_per_frame
+        # parameters (pick_similar uses nlocs_per_frame = total / n_frames):
+        #   - all candidates as a background density contour
+        #   - accepted picks as points
+        n_frames = self.info[0]["Frames"]
+        nlocs = np.asarray(pick_result["candidate_nlocs"]) / n_frames
+        rmsds = np.asarray(pick_result["candidate_rmsds"])
+        acc_nlocs = np.asarray(pick_result.get("accepted_nlocs", []))
+        if len(acc_nlocs):
+            acc_nlocs = acc_nlocs / n_frames
+        acc_rmsds = np.asarray(pick_result.get("accepted_rmsds", []))
+        # the pick_similar active range (nlocs/rmsd rectangle), nlocs in
+        # per-frame units to match the axes
+        pw = pick_result.get("pick_window") or {}
+        pick_window_pf = {
+            "min_nlocs_pf": pw.get("min_nlocs", np.nan) / n_frames,
+            "max_nlocs_pf": pw.get("max_nlocs", np.nan) / n_frames,
+            "min_rmsd": pw.get("min_rmsd", np.nan),
+            "max_rmsd": pw.get("max_rmsd", np.nan),
+        }
+        results["fp_phasespace"] = _plot_origami_phasespace(
+            os.path.join(results["folder"], f"origami-phasespace-{rcode}.png"),
+            nlocs,
+            rmsds,
+            acc_nlocs,
+            acc_rmsds,
+            title=(
+                f"Origami: {results['n_accepted']}"
+                f" / {results['n_candidates']} accepted"
+            ),
+            contour_threshold=parameters.get("contour_threshold", 2000),
+            pick_window=pick_window_pf,
+        )
+
+        # --- 6. representative accepted structures ---------------------
+        n_plot = parameters.get("n_plot_structures")
+        fp_renderings = []
+        if n_plot is not None and len(accepted_centers) > 0:
+            pixelsize_display = parameters.get("display_pixelsize", 1)
+            n_show = min(n_plot, len(accepted_centers))
+            if n_show > _MAX_STRUCTURE_RENDERS:
+                logger.warning(
+                    "pick_origami: n_plot_structures=%s capped to %d renders "
+                    "(rendering + uploading thousands of structures wedges the "
+                    "report).",
+                    n_plot,
+                    _MAX_STRUCTURE_RENDERS,
+                )
+                n_show = _MAX_STRUCTURE_RENDERS
+            for idx, pick_i in enumerate(
+                np.random.choice(
+                    len(accepted_centers), size=n_show, replace=False
+                )
+            ):
+                cx, cy = accepted_centers[pick_i]
+                sel = picked_origami_locs[
+                    picked_origami_locs["group"] == pick_i
+                ]
+                render_kwargs = {
+                    "oversampling": pixelsize / pixelsize_display,
+                    "viewport": _footprint_viewport(
+                        sel["x"], sel["y"], cx, cy, footprint_diameter
+                    ),
+                }
+                fp_renderings.append(
+                    os.path.join(
+                        results["folder"],
+                        f"render_origami_{idx}_{pick_i}-{rcode}.png",
+                    )
+                )
+                render.plot_scene(
+                    sel,
+                    pixelsize_display,
+                    pixelsize,
+                    fp=fp_renderings[-1],
+                    render_kwargs=render_kwargs,
+                    title=f"origami {pick_i}",
+                )
+        # Lay the representative structures out in a grid: rows of up to
+        # 8 columns (fp_renderings is a list of rows for the reporter).
+        max_cols = parameters.get("n_plot_columns", 8)
+        results["fp_renderings"] = [
+            fp_renderings[i : i + max_cols]
+            for i in range(0, len(fp_renderings), max_cols)
+        ]
+
+        # --- 7. optional: cluster accepted structures by geometry ------
+        # Group the picked origami by their resolved site pattern (single
+        # spot / partial / full grid / aggregate) using an invariant
+        # site-graph descriptor, and emit per-pattern picks + a summary.
+        if (
+            _opt("cluster_patterns", False)
+            and len(accepted_centers) > 0
+            and template.grid_spacing_nm
+            and template.grid_spacing_nm > 0
+        ):
+            self._cluster_origami_patterns(
+                parameters,
+                results,
+                pick_result,
+                picked_origami_locs,
+                origami_info,
+                accepted_centers,
+                template,
+                pixelsize,
+                footprint_diameter,
+                n_frames,
+                rcode,
+            )
+        elif _opt("cluster_patterns", False):
+            logger.debug(
+                "pick_origami: cluster_patterns requested but skipped "
+                "(no accepted structures or single-site geometry)."
+            )
+
+        return parameters, results
+
+    def _cluster_origami_patterns(
+        self,
+        parameters,
+        results,
+        pick_result,
+        picked_origami_locs,
+        origami_info,
+        accepted_centers,
+        template,
+        pixelsize,
+        footprint_diameter,
+        n_frames,
+        rcode,
+    ):
+        """Cluster accepted origami by resolved geometry and emit outputs.
+
+        Builds the invariant site-graph descriptor for each accepted
+        structure (:func:`origami_mod.cluster_structure_patterns`) and
+        writes, per discovered pattern cluster, a picasso pick ``.yaml`` and
+        a grouped ``.hdf5``, plus a ``pattern_table.csv`` summary, a
+        representative render per cluster, and a phase-space scatter coloured
+        by pattern. Populates the ``fp_pattern_*`` / ``pattern_summary`` /
+        ``n_pattern_clusters`` result keys.
+        """
+        groups = {
+            int(g): sub for g, sub in picked_origami_locs.groupby("group")
+        }
+        group_ids = sorted(groups)
+        if not group_ids:
+            return
+        structures_xy_nm = [
+            np.column_stack(
+                [np.asarray(groups[g]["x"]), np.asarray(groups[g]["y"])]
+            )
+            * pixelsize
+            for g in group_ids
+        ]
+        # method: design-aware lattice-defect clustering (register each pick
+        # onto the design lattice; cluster by fit quality + defect occupancy)
+        # for multi-node lattice designs; the template-agnostic
+        # pairwise-distance descriptor is the automatic fallback for
+        # arbitrary (< 3 node) designs. The site-resolution knobs
+        # (pattern_eps_frac / pattern_min_samples) apply to both; the lattice
+        # on-lattice gate thresholds use the calibrated function defaults.
+        method = "lattice" if template.n_sites_expected >= 3 else "pairwise"
+        sub_kwargs = {}
+        if parameters.get("pattern_eps_frac"):
+            sub_kwargs["eps_frac"] = float(parameters["pattern_eps_frac"])
+        # min_samples defaults to 7 (not the library floor of 3): bright
+        # DNA-PAINT origami sites carry enough locs that a higher DBSCAN floor
+        # suppresses spurious over-counted sites and recovers substantially
+        # more on-lattice structures (see CHANGELOG / pattern_min_samples).
+        sub_kwargs["min_samples"] = int(
+            parameters.get("pattern_min_samples") or 7
+        )
+        if method == "lattice":
+            lattice_kwargs = dict(sub_kwargs)
+            # 0.0 is a meaningful value here (fall back to the absolute
+            # site-count floor), so test for unset explicitly - a truthiness
+            # check would silently drop a user-supplied 0.0.
+            _msf = parameters.get("pattern_min_sites_frac")
+            if _msf is not None and _msf != "":
+                lattice_kwargs["min_on_lattice_frac"] = float(_msf)
+            if parameters.get("pattern_defect_grouping"):
+                lattice_kwargs["defect_grouping"] = str(
+                    parameters["pattern_defect_grouping"]
+                )
+            cl = origami_mod.cluster_lattice_defects(
+                structures_xy_nm,
+                template.sites_nm,
+                template.grid_spacing_nm,
+                allow_mirror=parameters.get("allow_mirror", True),
+                **lattice_kwargs,
+            )
+        else:
+            cl = origami_mod.cluster_structure_patterns(
+                structures_xy_nm,
+                expected_spacing_nm=template.grid_spacing_nm,
+                **sub_kwargs,
+            )
+        results["pattern_method"] = method
+        labels = np.asarray(cl["labels"])
+        summary = cl["cluster_summary"]
+        # unify the noise / off-lattice flag so the shared code below and the
+        # reporter can stay method-agnostic
+        for c in summary:
+            c.setdefault("is_noise", bool(c.get("is_offlattice", False)))
+        # annotate each cluster with its median pick_similar rmsd (camera px)
+        # and median nlocs-per-frame - the phase-space axes the pick window is
+        # set in. accepted_rmsds/nlocs are aligned to accepted_centers;
+        # group_ids maps structures -> that index, in the same order as labels.
+        acc_rmsds = np.asarray(pick_result.get("accepted_rmsds", []))
+        acc_nlocs = np.asarray(pick_result.get("accepted_nlocs", []))
+        gid_idx = np.asarray(group_ids, dtype=int)
+        for c in summary:
+            m = labels == c["label"]
+            if len(acc_rmsds):
+                rmsd_by_struct = acc_rmsds[gid_idx]
+                c["median_rmsd_px"] = (
+                    float(np.median(rmsd_by_struct[m]))
+                    if np.any(m)
+                    else float("nan")
+                )
+            if len(acc_nlocs) and n_frames:
+                nlpf_by_struct = acc_nlocs[gid_idx] / n_frames
+                c["median_nlocs_per_frame"] = (
+                    float(np.median(nlpf_by_struct[m]))
+                    if np.any(m)
+                    else float("nan")
+                )
+        results["pattern_summary"] = summary
+        results["n_pattern_clusters"] = int(len(set(labels.tolist()) - {-1}))
+
+        fp_pattern_table = os.path.join(results["folder"], "pattern_table.csv")
+        pd.DataFrame(summary).to_csv(fp_pattern_table, index=False)
+        results["fp_pattern_table"] = fp_pattern_table
+
+        # per-cluster picks (.yaml) + grouped locs (.hdf5)
+        fp_pattern_picks = {}
+        diameter_nm = float(footprint_diameter * pixelsize)
+        for lbl in sorted(set(labels.tolist())):
+            member_pos = np.where(labels == lbl)[0]
+            member_gids = [group_ids[i] for i in member_pos]
+            centers_lbl = [accepted_centers[g] for g in member_gids]
+            if lbl == -1:
+                tag = "offlattice" if method == "lattice" else "noise"
+            else:
+                tag = str(int(lbl))
+            fp_yaml = os.path.join(
+                results["folder"], f"pattern_{tag}_picks.yaml"
+            )
+            with open(fp_yaml, "w") as f:
+                yaml.dump(
+                    {
+                        "Centers": [
+                            [float(c[0]), float(c[1])] for c in centers_lbl
+                        ],
+                        "Diameter (nm)": diameter_nm,
+                        "Shape": "Circle",
+                    },
+                    f,
+                )
+            fp_pattern_picks[int(lbl)] = fp_yaml
+            sub = picked_origami_locs[
+                picked_origami_locs["group"].isin(member_gids)
+            ]
+            io.save_locs(
+                os.path.join(results["folder"], f"pattern_{tag}_locs.hdf5"),
+                sub,
+                origami_info,
+            )
+        results["fp_pattern_picks"] = fp_pattern_picks
+
+        # phase-space scatter coloured by pattern (aligned to group_ids)
+        gid_idx = np.asarray(group_ids, dtype=int)
+        acc_nlocs = np.asarray(pick_result.get("accepted_nlocs", []))
+        acc_rmsds = np.asarray(pick_result.get("accepted_rmsds", []))
+        if len(acc_nlocs) and len(acc_rmsds):
+            nlocs_pf = acc_nlocs[gid_idx] / n_frames
+            rmsds_pf = acc_rmsds[gid_idx]
+            fp_pattern_ps = os.path.join(
+                results["folder"], f"pattern-phasespace-{rcode}.png"
+            )
+            results["fp_pattern_phasespace"] = _plot_pattern_phasespace(
+                fp_pattern_ps, nlocs_pf, rmsds_pf, labels, summary
+            )
+
+        # descriptor-space view (PCA of the site-graph features, coloured by
+        # cluster) - shows how the HDBSCAN/GMM clustering actually separated.
+        fs = _plot_pattern_feature_space(
+            os.path.join(
+                results["folder"], f"pattern-featurespace-{rcode}.png"
+            ),
+            cl.get("features"),
+            labels,
+            summary,
+        )
+        if fs:
+            results["fp_pattern_feature_space"] = fs
+        # per-cluster pairwise site-distance signature (the lattice fingerprint)
+        pd_fp = _plot_pattern_pairdist(
+            os.path.join(results["folder"], f"pattern-pairdist-{rcode}.png"),
+            cl.get("features"),
+            cl.get("feature_names", []),
+            labels,
+            summary,
+            cl.get("max_pair_nm", 0.0),
+        )
+        if pd_fp:
+            results["fp_pattern_pairdist"] = pd_fp
+
+        if method == "lattice":
+            # targeted fit-quality phase space (matched-site count vs template
+            # fit RMSE) - the registration observables the gate decides on;
+            # aux is per-structure, aligned to labels.
+            aux = cl.get("aux") or []
+            if len(aux) == len(labels):
+                fit_fp = _plot_lattice_fit_space(
+                    os.path.join(
+                        results["folder"], f"pattern-fitspace-{rcode}.png"
+                    ),
+                    [a.get("n_matched", np.nan) for a in aux],
+                    [a.get("rmse_nm", np.nan) for a in aux],
+                    labels,
+                    summary,
+                )
+                if fit_fp:
+                    results["fp_pattern_fit_space"] = fit_fp
+
+                # registration-free pair-score view (the cheap first-layer
+                # discriminator) vs brightness. accepted_nlocs is aligned to
+                # accepted_centers; gid_idx maps structures -> that index.
+                acc_nlocs = np.asarray(pick_result.get("accepted_nlocs", []))
+                gid_idx = np.asarray(group_ids, dtype=int)
+                if len(acc_nlocs) and n_frames:
+                    ps_fp = _plot_lattice_pairscore_space(
+                        os.path.join(
+                            results["folder"],
+                            f"pattern-pairscore-{rcode}.png",
+                        ),
+                        acc_nlocs[gid_idx] / n_frames,
+                        [a.get("pair_score", np.nan) for a in aux],
+                        labels,
+                        summary,
+                        gate=cl.get("min_pair_score"),
+                    )
+                    if ps_fp:
+                        results["fp_pattern_pairscore_space"] = ps_fp
+
+                # per-gate transparency panels: where the accepted structures
+                # sit against every on-lattice gate threshold.
+                gate_fp = _plot_lattice_gate_panels(
+                    os.path.join(
+                        results["folder"], f"pattern-gates-{rcode}.png"
+                    ),
+                    aux,
+                    labels,
+                    cl.get("gates"),
+                )
+                if gate_fp:
+                    results["fp_pattern_gate_panels"] = gate_fp
+
+            # #locs-per-site histogram per cluster (site-resolution / tuning)
+            hist_fp = _plot_site_nlocs_hist(
+                os.path.join(
+                    results["folder"], f"pattern-sitenlocs-{rcode}.png"
+                ),
+                labels,
+                cl.get("aux"),
+                summary,
+            )
+            if hist_fp:
+                results["fp_pattern_site_nlocs_hist"] = hist_fp
+
+            # export the resolved single docking sites of the on-lattice
+            # structures as a picasso pick set (registration already tags each
+            # with its design-node index). Coordinates are absolute nm, so
+            # nm / pixelsize gives the camera-px pick centre.
+            self._export_lattice_site_picks(
+                results,
+                cl.get("aux"),
+                labels,
+                group_ids,
+                template,
+                pixelsize,
+                parameters,
+            )
+
+        # example renders per cluster: the members most *representative* of the
+        # cluster, NOT the brightest (brightness is deliberately not a
+        # clustering dimension, so the brightest are atypical aggregates). For
+        # the lattice method "typical" = cleanest lattice fit (lowest residual);
+        # for pairwise = nearest the descriptor centroid.
+        pixelsize_display = parameters.get("display_pixelsize", 1)
+        n_examples = int(parameters.get("n_pattern_examples", 8) or 0)
+        aux = cl.get("aux")
+        lattice_rmse = None
+        if method == "lattice" and aux:
+            lattice_rmse = np.array(
+                [a.get("rmse_nm", np.inf) for a in aux], dtype=float
+            )
+        feats_all = np.asarray(cl.get("features"))
+        have_feats = feats_all.ndim == 2 and len(feats_all) == len(labels)
+        if have_feats:
+            from sklearn.preprocessing import StandardScaler
+
+            feats_std = StandardScaler().fit_transform(feats_all)
+        # bound the total across all clusters (n_examples x #clusters can
+        # explode when many clusters are found); log if the budget bites.
+        render_budget = _MAX_STRUCTURE_RENDERS
+        n_nonoise = sum(1 for c in summary if c["label"] != -1)
+        if n_examples * n_nonoise > render_budget:
+            logger.warning(
+                "pick_origami: %d pattern example renders requested "
+                "(%d examples x %d clusters) capped to %d total.",
+                n_examples * n_nonoise,
+                n_examples,
+                n_nonoise,
+                render_budget,
+            )
+        fp_pattern_renderings = {}
+        for c in summary:
+            lbl = c["label"]
+            if lbl == -1 or n_examples <= 0 or render_budget <= 0:
+                continue
+            member_pos = np.where(labels == lbl)[0]
+            take = min(n_examples, render_budget)
+            if lattice_rmse is not None:
+                # cleanest lattice fit first (lowest residual)
+                member_pos = member_pos[np.argsort(lattice_rmse[member_pos])][
+                    :take
+                ]
+            elif have_feats and len(member_pos) > 1:
+                # most typical first: nearest the cluster feature centroid
+                centroid = feats_std[member_pos].mean(axis=0)
+                dist = np.linalg.norm(feats_std[member_pos] - centroid, axis=1)
+                member_pos = member_pos[np.argsort(dist)][:take]
+            else:
+                member_pos = member_pos[:take]
+            row = []
+            for rank, i in enumerate(member_pos):
+                gid = group_ids[i]
+                cx, cy = accepted_centers[gid]
+                sel = picked_origami_locs[picked_origami_locs["group"] == gid]
+                fp = os.path.join(
+                    results["folder"],
+                    f"pattern_{int(lbl)}_ex{rank}_g{gid}-{rcode}.png",
+                )
+                render.plot_scene(
+                    sel,
+                    pixelsize_display,
+                    pixelsize,
+                    fp=fp,
+                    render_kwargs={
+                        "oversampling": pixelsize / pixelsize_display,
+                        "viewport": _footprint_viewport(
+                            sel["x"], sel["y"], cx, cy, footprint_diameter
+                        ),
+                    },
+                    title=(
+                        f"pattern {int(lbl)} " f"({len(groups[gid])} locs)"
+                    ),
+                )
+                row.append(fp)
+            fp_pattern_renderings[int(lbl)] = row
+            render_budget -= len(row)
+        results["fp_pattern_renderings"] = fp_pattern_renderings
+
+    def _export_lattice_site_picks(
+        self,
+        results,
+        aux,
+        labels,
+        group_ids,
+        template,
+        pixelsize,
+        parameters,
+    ):
+        """Export the resolved single docking sites of the on-lattice
+        structures as a picasso pick set + a table tagging each with its
+        design-node index.
+
+        The lattice method already resolves each pick's sites and registers
+        them to the design; this surfaces those sites (matched to a node) as
+        directly usable single-site picks. Populates ``fp_pattern_site_picks``
+        (.yaml), ``fp_pattern_sites_table`` (.csv) and ``n_pattern_sites``.
+        """
+        if not aux:
+            return
+        centers_px, rows = [], []
+        for i, lbl in enumerate(labels):
+            if lbl == -1:
+                continue
+            a = aux[i]
+            sites = np.asarray(a.get("site_centers_nm"))
+            nodes = np.asarray(a.get("site_nodes"))
+            if sites.ndim != 2 or len(sites) != len(nodes):
+                continue
+            gid = int(group_ids[i])
+            rmse = float(a.get("rmse_nm", float("nan")))
+            for (cx_nm, cy_nm), node in zip(sites, nodes):
+                if node < 0:  # only sites matched to a design node
+                    continue
+                cx, cy = float(cx_nm / pixelsize), float(cy_nm / pixelsize)
+                centers_px.append([cx, cy])
+                rows.append(
+                    {
+                        "center_x_px": cx,
+                        "center_y_px": cy,
+                        "node_index": int(node),
+                        "cluster": int(lbl),
+                        "structure_group": gid,
+                        "rmse_nm": rmse,
+                    }
+                )
+        if not centers_px:
+            return
+        docking_diameter = parameters.get(
+            "docking_site_diameter",
+            max(template.grid_spacing_nm / pixelsize / 2, 1e-6),
+        )
+        fp_sites = os.path.join(results["folder"], "pattern_site_picks.yaml")
+        with open(fp_sites, "w") as f:
+            yaml.dump(
+                {
+                    "Centers": centers_px,
+                    "Diameter (nm)": float(docking_diameter * pixelsize),
+                    "Shape": "Circle",
+                },
+                f,
+            )
+        results["fp_pattern_site_picks"] = fp_sites
+        fp_tbl = os.path.join(results["folder"], "pattern_sites.csv")
+        pd.DataFrame(rows).to_csv(fp_tbl, index=False)
+        results["fp_pattern_sites_table"] = fp_tbl
+        results["n_pattern_sites"] = len(centers_px)
+
+    #    @profile_resource_usage
+    @module_decorator
     def undrift_from_picked(self, i, parameters, results):
         """Undrift using picked localizations.
 
@@ -13393,26 +12767,78 @@ class AutoPicasso(util.AbstractModuleCollection):
             Required keys:
 
             ``fp_picked_locs`` : str
-                Filepath to the picked locs to undrift from (an hdf5 file of
-                locs with a ``'group'`` column describing the picks).
+                Filepath to the picks to undrift from. Either an hdf5 file of
+                locs with a ``'group'`` column describing the picks (e.g.
+                ``pick_origami``'s ``fp_picked_locs_origami`` /
+                ``fp_picked_locs_dockingsites``), or a picasso pick-region
+                ``.yaml``
+                (``Centers`` + ``Diameter``, e.g. ``pick_origami``'s
+                ``fp_picks_origami`` / ``fp_picks_dockingsites``) which is
+                applied to ``self.locs`` to build the grouped picks.
         results : dict
             Module results (see
             :class:`~picasso_workflow.util.AbstractModuleCollection`).
         """
         pixelsize = self.pixelsize
-        picked_locs, info = io.load_locs(parameters["fp_picked_locs"])
-        # with open(parameters["fp_picked_locs"], "rb") as f:
-        #     result = pickle.load(f)
+        fp_picked = parameters["fp_picked_locs"]
 
-        if not isinstance(picked_locs, list):
-            # picked locs are saved as one recarray, with the 'group' the pick
-            groups = np.unique(picked_locs["group"])
+        if str(fp_picked).lower().endswith((".yaml", ".yml")):
+            # A picasso pick-region file (Centers + Diameter). Apply it to the
+            # current locs to build grouped picked locs (one group per pick).
+            with open(fp_picked, "r") as f:
+                regions = yaml.safe_load(f)
+            centers = regions["Centers"]
+            if not centers:
+                raise ValueError(
+                    f"{fp_picked}: no pick centers to undrift from (the "
+                    "upstream picker accepted no structures)."
+                )
+            if "Diameter (nm)" in regions:
+                pick_diameter = regions["Diameter (nm)"] / pixelsize
+            elif "Diameter" in regions:
+                pick_diameter = regions["Diameter"]  # already in camera px
+            else:
+                raise ValueError(
+                    f"{fp_picked}: pick-region yaml needs a 'Diameter (nm)' "
+                    "or 'Diameter' entry"
+                )
+            picked_df = picks_mod.picked_locs(
+                self.locs,
+                self.info,
+                centers,
+                pick_diameter=pick_diameter,
+                add_group=True,
+            )
+            groups = np.unique(picked_df["group"])
             picked_locs = [
-                picked_locs[picked_locs["group"] == group] for group in groups
+                picked_df[picked_df["group"] == group] for group in groups
             ]
+        else:
+            picked_locs, info = io.load_locs(fp_picked)
+            if not isinstance(picked_locs, list):
+                # saved as one recarray, with 'group' identifying the pick
+                groups = np.unique(picked_locs["group"])
+                picked_locs = [
+                    picked_locs[picked_locs["group"] == group]
+                    for group in groups
+                ]
+        # Drift can only be estimated if the picks actually contain
+        # localizations. An empty/degenerate pick set (e.g. the upstream
+        # picker accepted no structures) would otherwise crash deep inside
+        # the drift interpolation with a cryptic "array of sample points is
+        # empty".
+        n_pick_locs = sum(len(p) for p in picked_locs)
+        if len(picked_locs) == 0 or n_pick_locs == 0:
+            raise ValueError(
+                f"undrift_from_picked: no localizations in the picks from "
+                f"'{fp_picked}' ({len(picked_locs)} picks, {n_pick_locs} "
+                "locs). The upstream picker likely accepted no structures - "
+                "check its parameters (e.g. an nlocs window that excludes "
+                "everything) and that it produced non-empty picks."
+            )
         # print(result)
         # picked_locs, picked_info = io.load_locs(parameters["fp_picked_locs"])
-        self.locs, self.info, drift = picasso_outpost._undrift_from_picked(
+        self.locs, self.info, drift = picks_mod._undrift_from_picked(
             self.locs, self.info, picked_locs
         )
         drift = pd.DataFrame(drift)
@@ -13472,32 +12898,35 @@ class AutoPicasso(util.AbstractModuleCollection):
             all_xmin = [float(all_xmin)]
             all_xmax = [float(all_xmax)]
         else:
-            if all_xmin is None:
-                all_xmin = [None] * len(all_field)
-            if all_xmax is None:
-                all_xmax = [None] * len(all_field)
+            # Work on copies (never mutate the caller's parameter lists in
+            # place - the single-dataset runner records them to
+            # WorkflowRunner.yaml) and pad to one entry per field, so a short
+            # or omitted min/max list means "no bound" for the trailing fields
+            # rather than an IndexError in the per-field conversion below.
+            all_xmin = list(all_xmin) if all_xmin is not None else []
+            all_xmax = list(all_xmax) if all_xmax is not None else []
+            all_xmin += [None] * (len(all_field) - len(all_xmin))
+            all_xmax += [None] * (len(all_field) - len(all_xmax))
         if parameters.get("mode") == "zscore":
-            # Turn from zscores into absolute values
-            for i, field in enumerate(all_field):
+            # Turn from zscores into absolute values, per field: each field's
+            # thresholds use that field's own mean/std. (fi is a separate name
+            # so it does not shadow the module index i used for filenames.)
+            for fi, field in enumerate(all_field):
+                if all_xmin[fi] is None and all_xmax[fi] is None:
+                    continue
                 mean = np.mean(self.locs[field])
                 std = np.std(self.locs[field])
-                all_xmin = [
-                    None if mi is None else mean + mi * std for mi in all_xmin
-                ]
-                all_xmax = [
-                    None if ma is None else mean + ma * std for ma in all_xmax
-                ]
+                if all_xmin[fi] is not None:
+                    all_xmin[fi] = mean + all_xmin[fi] * std
+                if all_xmax[fi] is not None:
+                    all_xmax[fi] = mean + all_xmax[fi] * std
         elif parameters.get("mode") == "quantile":
-            # Turn from quantiles into absolute values
-            for i, field in enumerate(all_field):
-                all_xmin = [
-                    None if mi is None else np.quantile(self.locs[field], mi)
-                    for mi in all_xmin
-                ]
-                all_xmax = [
-                    None if mi is None else np.quantile(self.locs[field], mi)
-                    for mi in all_xmin
-                ]
+            # Turn from quantiles into absolute values, per field.
+            for fi, field in enumerate(all_field):
+                if all_xmin[fi] is not None:
+                    all_xmin[fi] = np.quantile(self.locs[field], all_xmin[fi])
+                if all_xmax[fi] is not None:
+                    all_xmax[fi] = np.quantile(self.locs[field], all_xmax[fi])
 
         results["nlocs_before"] = len(self.locs)
         # plot heatmaps before filtering
@@ -13632,14 +13061,14 @@ class AutoPicasso(util.AbstractModuleCollection):
         """
         if len(fields) == 1:
             fig, ax = plt.subplots()
-            picasso_outpost.plot_1dhist(self.locs, fields[0], fig, ax)
+            reporting_hist.plot_1dhist(self.locs, fields[0], fig, ax)
         else:
             fig, ax = plt.subplots(
                 nrows=len(fields) - 1, ncols=len(fields) - 1, squeeze=False
             )
             for i, field_x in enumerate(fields[:-1]):
                 for j, field_y in enumerate(fields[i + 1 :]):
-                    picasso_outpost.plot_2dhist(
+                    reporting_hist.plot_2dhist(
                         self.locs, field_x, field_y, fig, ax[i, j]
                     )
                 # if i > 0:
@@ -13667,8 +13096,13 @@ class AutoPicasso(util.AbstractModuleCollection):
             Module results (see
             :class:`~picasso_workflow.util.AbstractModuleCollection`).
         """
-        self.locs = postprocess.link(
-            self.locs, self.info, parameters["d_max"], parameters["tolerance"]
+        # picasso 1.0 takes r_max in nm (0.11 took camera pixels) and returns
+        # (locs, info); d_max is in camera pixels, so convert to nm.
+        self.locs, _ = postprocess.link(
+            self.locs,
+            self.info,
+            r_max=parameters["d_max"] * self.pixelsize,
+            max_dark_time=parameters["tolerance"],
         )
         link_info = {
             "Maximum Distance": parameters["d_max"],
@@ -13946,7 +13380,6 @@ class AutoPicasso(util.AbstractModuleCollection):
         # # homo-analysis (proportions of 1- or 2-mers of the same kind)
         # props = {}
         dimensionality = 2
-        pixelsize = self.pixelsize
 
         if isinstance(parameters["density"], list):
             density = {
@@ -13975,14 +13408,10 @@ class AutoPicasso(util.AbstractModuleCollection):
         for i, tgt in zip([i_target, i_reference], [target, reference]):
             locs = self.channel_locs[i]
             if "z" in locs.columns:
-                exp_data[tgt] = np.stack(
-                    (locs["x"] * pixelsize, locs["y"] * pixelsize, locs["z"])
-                ).T
+                exp_data[tgt] = np.stack((locs["x"], locs["y"], locs["z"])).T
                 # dim = 3
             else:
-                exp_data[tgt] = np.stack(
-                    (locs["x"] * pixelsize, locs["y"] * pixelsize)
-                ).T
+                exp_data[tgt] = np.stack((locs["x"], locs["y"])).T
                 # dim = 2
 
         compound_density = (
@@ -14029,14 +13458,11 @@ class AutoPicasso(util.AbstractModuleCollection):
         # spinna.fit_le builds the monomer/heterodimer structures, forces
         # LE=100%, fits label uncertainty + the best heterodimer distance
         # via compare_models, and converts the fitted proportions to LE.
-        (
-            le_values,
-            fitted_label_unc,
-            best_distance,
-            _best_score,
-            best_props,
-            best_mixer,
-        ) = spinna.fit_le(
+        # With bootstrap=True it additionally returns ``le_std`` (LE std
+        # per target, in percent), computed directly from bootstrap
+        # samples of the best fit (keeping the proportion correlation).
+        do_bootstrap = bool(parameters.get("bootstrap"))
+        fit_le_result = spinna.fit_le(
             target_a=target,
             target_b=reference,
             exp_data=exp_data,
@@ -14048,7 +13474,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             height=sim_width,
             depth=None,
             random_rot_mode="2D",
-            asynch=True,
+            parallel=True,  # picasso 1.0: asynch -> parallel
             # savedir left empty on purpose. When labeling uncertainty is
             # screened, picasso's fit_le scores each candidate on a
             # single-structure target sub-model whose search space has one
@@ -14059,7 +13485,28 @@ class AutoPicasso(util.AbstractModuleCollection):
             # workflow does not consume picasso's internal fit-score CSVs.
             savedir="",
             fitting_mode="bayesian",
+            bootstrap=do_bootstrap,
         )
+        if do_bootstrap:
+            (
+                le_values,
+                fitted_label_unc,
+                best_distance,
+                _best_score,
+                best_props,
+                best_mixer,
+                le_std,
+            ) = fit_le_result
+        else:
+            (
+                le_values,
+                fitted_label_unc,
+                best_distance,
+                _best_score,
+                best_props,
+                best_mixer,
+            ) = fit_le_result
+            le_std = None
         results["best_pair_distance"] = best_distance
         results["best_labeling_uncertainty"] = fitted_label_unc
 
@@ -14076,7 +13523,7 @@ class AutoPicasso(util.AbstractModuleCollection):
             fit_NND_maxdist = 4 * parameters["nn_nth"] * expected_1stNN_peak
 
         # NND figures (simulated vs experimental) for the fitted model
-        fp_fig = picasso_outpost.plot_spinna_nnd(
+        fp_fig = spinna_wrappers.plot_spinna_nnd(
             mixer=best_mixer,
             targets=[target, reference],
             exp_data=exp_data,
@@ -14110,53 +13557,17 @@ class AutoPicasso(util.AbstractModuleCollection):
         le_target = le_values[target] / 100
         le_reference = le_values[reference] / 100
 
-        # error propagation for std (only meaningful when bootstrapping)
-        def le_std(prop_sglo, prop_dbl, std_sglo, std_dbl):
-            """Calculate the standard deviation of le,
-            by error propagation: sum of derivatives
-            with respect to both variables multiplied by their std
-            """
-            deriv_sglo = -2 * prop_dbl / ((2 * prop_sglo + prop_dbl) ** 2)
-            deriv_dbl = (2 * prop_sglo + prop_dbl) ** (-1) - prop_dbl / (
-                2 * prop_sglo + prop_dbl
-            ) ** 2
-            return np.abs(deriv_sglo * std_sglo) + np.abs(deriv_dbl * std_dbl)
-
-        if parameters.get("bootstrap"):
-            # fit_le does not bootstrap; run one bootstrap stoichiometry fit
-            # on the fitted mixer to recover proportion uncertainties.
-            # best_mixer.structures order is [monomer_A, monomer_B, het].
-            N_structures = picasso_outpost.generate_N_structures(
-                best_mixer.structures,
-                n_exp,
-                parameters["granularity"],
-            )
-            _, props_std = spinna.SPINNA(
-                mixer=best_mixer,
-                gt_coords=exp_data,
-                N_sim=parameters["sim_repeats"],
-            ).fit_stoichiometry(
-                N_structures,
-                save=os.path.join(
-                    results["folder"],
-                    f"interaction-{target}-{reference}_le_fit_scores.csv",
-                ),
-                asynch=True,
-                bootstrap=True,
-            )
-            prop_t, prop_r, prop_tr = (
-                best_props[0],
-                best_props[1],
-                best_props[2],
-            )
-            std_t, std_r, std_tr = props_std[0], props_std[1], props_std[2]
-            le_target_std = le_std(prop_r, prop_tr, std_r, std_tr)
-            le_reference_std = le_std(prop_t, prop_tr, std_t, std_tr)
+        # picasso's fit_le(bootstrap=True) returns ``le_std`` per target
+        # in percent, computed directly from bootstrap samples of the
+        # best fit (which keeps the correlation of the summed-to-one
+        # proportions). Store on the 0-1 scale. Without bootstrapping no
+        # uncertainty is available, so the std is 0.
+        if le_std is not None:
+            le_target_std = le_std[target] / 100
+            le_reference_std = le_std[reference] / 100
         else:
-            props_std = [0, 0, 0]
             le_target_std = 0.0
             le_reference_std = 0.0
-        results["spinna_props_std"] = props_std
 
         results["labeling_efficiency"] = {
             parameters["target_name"]: le_target,
@@ -14189,3 +13600,16 @@ class ManualInputLackingError(AutoPicassoError):
 
 class PicassoConfigError(AutoPicassoError):
     """Raised when the picasso configuration is missing or invalid."""
+
+
+class SkipBranch(Exception):
+    """Signal that the current ``branch`` sub-workflow has no data to run.
+
+    A branch sub-module raises this (rather than a hard error) when the branch
+    is legitimately empty -- e.g. ``create_mask2`` was asked for a cell that
+    does not exist. The :meth:`AutoPicasso.branch` module catches it, drops the
+    branch (so the join and the overall pipeline proceed with the remaining
+    branches) and records it under ``results["skipped"]``. It deliberately does
+    *not* subclass :class:`AutoPicassoError`, so genuine analysis errors are
+    never mistaken for an empty branch.
+    """

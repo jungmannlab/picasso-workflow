@@ -1,5 +1,8 @@
 # Python base with a non-root `vscode` user + common dev tooling.
-FROM mcr.microsoft.com/devcontainers/python:3.10
+# 3.11 is the project floor (pyproject `requires-python = ">=3.11"`); picassosr
+# 0.12 (the pinned line) declares `Requires-Python >=3.11`, so a 3.10 base
+# silently resolves the old 0.11 line instead of the pinned pre-release.
+FROM mcr.microsoft.com/devcontainers/python:3.11
 
 # Qt (PyQt6) runs headless in the container (no display) — offscreen platform.
 ENV QT_QPA_PLATFORM=offscreen

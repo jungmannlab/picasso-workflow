@@ -16,7 +16,9 @@ import numpy as np
 import pandas as pd
 from unittest.mock import patch, MagicMock
 
-from picasso_workflow import analyse, util, picasso_outpost
+from picasso_workflow import analyse, util
+from picasso_workflow.tests import temp_folder
+from picasso_workflow.outpost.spinna import wrappers as spinna_wrappers
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +33,22 @@ class MockPicassoMovie:
 
     def __getitem__(self, index):
         return np.random.randint(0, 1000, size=self.shape[1:], dtype=np.uint16)
+
+
+class TestSafeFilenameComponent(unittest.TestCase):
+    """A per-channel tag must stay a single, folder-local filename part."""
+
+    def test_replaces_path_separators(self):
+        # a "/" tag would otherwise write into a missing subdirectory, and a
+        # leading "/" would discard the folder into an absolute path
+        self.assertEqual(analyse._safe_filename_component("cell/A"), "cell_A")
+        self.assertEqual(analyse._safe_filename_component("/abs"), "_abs")
+        self.assertEqual(analyse._safe_filename_component("a\\b"), "a_b")
+
+    def test_leaves_plain_tags_unchanged(self):
+        self.assertEqual(
+            analyse._safe_filename_component("channel 0"), "channel 0"
+        )
 
 
 # @unittest.skip("")
@@ -55,9 +73,7 @@ class TestAnalyseModules(unittest.TestCase):
     ]
 
     def setUp(self):
-        self.results_folder = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)), "..", "..", "temp"
-        )
+        self.results_folder = temp_folder()
         analysis_config = {
             "camera_info": {
                 "Gain": 1,
@@ -225,7 +241,7 @@ class TestAnalyseModules(unittest.TestCase):
             assert os.path.exists(fp)
             os.remove(fp)
 
-    @patch("picasso_workflow.analyse.picasso_outpost.pick_gold")
+    @patch("picasso_workflow.outpost.picks.picks.pick_gold")
     def test_find_gold_empty_saves(self, mock_pick_gold):
         """With no gold found, the empty gold file still saves: the empty
         frame keeps self.locs's numeric dtypes rather than object dtype, which
@@ -240,7 +256,9 @@ class TestAnalyseModules(unittest.TestCase):
                 "photons": np.array([100.0, 200.0, 300.0], dtype=np.float32),
             }
         )
-        self.ap.info = [{"Frames": 3, "Width": 576, "Height": 576}]
+        self.ap.info = [
+            {"Frames": 3, "Width": 576, "Height": 576, "Pixelsize": 130}
+        ]
         _, results = self.ap.find_gold(
             0, {"diameter": 2.0, "remove_gold": False}
         )
@@ -275,13 +293,14 @@ class TestAnalyseModules(unittest.TestCase):
             self.ap._progress_callback = None
             self.ap._abort_callback = None
 
-        # the callbacks were forwarded to picasso...
+        # the callbacks were forwarded to picasso (picasso 1.0: the single
+        # ``progress`` tracker replaces progress_callback)...
         _, kwargs = mock_identify.call_args
-        assert "progress_callback" in kwargs
+        assert "progress" in kwargs
         assert "abort_callback" in kwargs
         # ...but must NOT have leaked into the saved info
         info = self.ap.info[-1]
-        assert "progress_callback" not in info
+        assert "progress" not in info
         assert "abort_callback" not in info
         # real params are still recorded
         assert info["temporal_median_window"] == 20
@@ -337,11 +356,14 @@ class TestAnalyseModules(unittest.TestCase):
             }
             self.ap.identify(0, parameters)
             _, kwargs = mock_identify.call_args
-            assert kwargs["temporal_median_window"] == 20
-            assert kwargs["gaussian_filter_sigma"] == 1.5
-            assert kwargs["threaded"] is False
-            # unset filters are not forwarded (picasso defaults preserved)
-            assert "temporal_median_stride" not in kwargs
+            # picasso 1.0: the filters live on the IdentificationParameters,
+            # and threaded -> parallel.
+            params = kwargs["parameters"]
+            assert params.temporal_median_window == 20
+            assert params.gaussian_filter_sigma == 1.5
+            assert kwargs["parallel"] is False
+            # unset stride stays at the default (None)
+            assert params.temporal_median_stride is None
         shutil.rmtree(os.path.join(self.results_folder, "00_identify"))
 
         # GUI placeholder / off sentinels must NOT be forwarded, so picasso's
@@ -385,8 +407,10 @@ class TestAnalyseModules(unittest.TestCase):
             }
             self.ap.identify(0, parameters)
             _, kwargs = mock_identify.call_args
-            assert kwargs["temporal_median_window"] == 20
-            assert kwargs["temporal_median_stride"] == 5
+            # picasso 1.0: window + stride live on the IdentificationParameters.
+            params = kwargs["parameters"]
+            assert params.temporal_median_window == 20
+            assert params.temporal_median_stride == 5
         shutil.rmtree(os.path.join(self.results_folder, "00_identify"))
 
     @patch("picasso_workflow.analyse.localize.fit")
@@ -410,7 +434,8 @@ class TestAnalyseModules(unittest.TestCase):
         parameters, results = self.ap.localize(0, parameters)
         _, kwargs = mock_fit.call_args
         assert kwargs["fitting_method"] == "gausslq"
-        assert kwargs["multiprocess"] is False
+        # picasso 1.0: multiprocess -> parallel.
+        assert kwargs["parallel"] is False
         assert results["fit_method"] == "gausslq"
         shutil.rmtree(os.path.join(self.results_folder, "00_localize"))
 
@@ -430,7 +455,7 @@ class TestAnalyseModules(unittest.TestCase):
         assert kwargs["fitting_method"] == "spline"
         # a dict calibration is passed through untouched
         assert kwargs["spline_calibration"] == spline_cal
-        assert kwargs["multiprocess"] is True
+        assert kwargs["parallel"] is True
         assert kwargs["eps"] == 0.001
         assert kwargs["max_it"] == 100
         assert results["fit_method"] == "spline"
@@ -591,15 +616,16 @@ class TestAnalyseModules(unittest.TestCase):
         self.ap.info = []
         self.ap.identifications = pd.DataFrame({"frame": [0, 1, 2]})
 
-        # no progress wired -> neither callback forwarded (picasso unchanged)
+        # no progress wired -> no progress tracker forwarded. picasso 1.0
+        # reports the whole fit through a single ``progress`` (0.11's
+        # progress_callback + cut_progress_callback collapsed into one).
         self.ap._progress_callback = None
         self.ap.localize(0, {"box_size": 7, "fit_parallel": False})
         _, kwargs = mock_fit.call_args
-        assert "progress_callback" not in kwargs
-        assert "cut_progress_callback" not in kwargs
+        assert "progress" not in kwargs
         shutil.rmtree(os.path.join(self.results_folder, "00_localize"))
 
-        # progress wired -> both phases report
+        # progress wired -> the fit reports through ``progress``
         mock_fit.reset_mock()
         self.ap._progress_callback = lambda *a, **k: None
         try:
@@ -607,8 +633,7 @@ class TestAnalyseModules(unittest.TestCase):
         finally:
             self.ap._progress_callback = None
         _, kwargs = mock_fit.call_args
-        assert kwargs["progress_callback"] is not None
-        assert kwargs["cut_progress_callback"] is not None
+        assert kwargs["progress"] is not None
         shutil.rmtree(os.path.join(self.results_folder, "00_localize"))
 
     @patch("picasso.zfit.zfit")
@@ -767,8 +792,8 @@ class TestAnalyseModules(unittest.TestCase):
     @patch("picasso_workflow.analyse.postprocess.undrift")
     def undrift_rcc(self, mock_undrift_rcc):
         nspots = 5
+        # picasso 1.0: undrift returns (locs, info, drift).
         mock_undrift_rcc.return_value = (
-            np.random.rand(2, len(self.ap.movie)),
             pd.DataFrame(
                 np.rec.array(
                     [
@@ -778,6 +803,8 @@ class TestAnalyseModules(unittest.TestCase):
                     dtype=self.locs_dtype,
                 )
             ),
+            [{"Pixelsize": 130}],
+            pd.DataFrame({"x": np.zeros(nspots), "y": np.zeros(nspots)}),
         )
         parameters = {
             "segmentation": 5000,
@@ -851,6 +878,9 @@ class TestAnalyseModules(unittest.TestCase):
         parameters, results = self.ap.save_single_dataset(0, parameters)
 
         assert results["res_a"] == 7
+        assert results["checkpoint"] == {
+            "single": {"filepath": results["filepath"]}
+        }
 
         # clean up
         shutil.rmtree(
@@ -864,6 +894,11 @@ class TestAnalyseModules(unittest.TestCase):
         self.ap.channel_tags = []
         parameters, results = self.ap.save_datasets_aggregated(0, parameters)
 
+        assert results["tags"] == []
+        assert results["checkpoint"] == {
+            "channels": {"filepaths": [], "tags": []}
+        }
+
         # clean up
         shutil.rmtree(
             os.path.join(self.results_folder, "00_save_datasets_aggregated")
@@ -876,6 +911,8 @@ class TestAnalyseModules(unittest.TestCase):
         parameters, results = self.ap.load_dataset_localizations(0, parameters)
 
         assert "picasso version" in results.keys()
+        assert results["filepath"] == "locs.hdf5"
+        assert results["checkpoint"] == {"single": {"filepath": "locs.hdf5"}}
 
         # clean up
         shutil.rmtree(
@@ -908,14 +945,20 @@ class TestAnalyseModules(unittest.TestCase):
         parameters, results = self.ap.load_datasets_to_aggregate(0, parameters)
 
         assert "filepaths" in results.keys()
+        assert results["checkpoint"] == {
+            "channels": {
+                "filepaths": parameters["filepaths"],
+                "tags": ["1", "2"],
+            }
+        }
 
         # clean up
         shutil.rmtree(
             os.path.join(self.results_folder, "00_load_datasets_to_aggregate")
         )
 
-    @patch("picasso_workflow.outpost_modules.render.plot_scene")
-    @patch("picasso_workflow.analyse.picasso_outpost.align_channels")
+    @patch("picasso_workflow.outpost.render.render.plot_scene")
+    @patch("picasso_workflow.outpost.alignment.channels.align_channels")
     def align_channels(self, mock_align_channels, mock_plot_scene):
         mock_align_channels.return_value = (
             [[3], [2]],
@@ -936,6 +979,11 @@ class TestAnalyseModules(unittest.TestCase):
         shutil.rmtree(os.path.join(self.results_folder, "00_align_channels"))
 
     def combine_channels(self):
+        # Named for the module (no ``test_`` prefix) so the ``test_modules``
+        # reconciliation invokes it; the ``test_combine_channels_*`` methods
+        # below cover the subset behaviour as standalone tests.
+        # Backward compatibility: with no 'channels' subset, all channels are
+        # combined into a single channel (the previous behaviour).
         # create locs to be combined
         locs_dtype = [
             ("frame", "u4"),
@@ -964,12 +1012,90 @@ class TestAnalyseModules(unittest.TestCase):
         self.ap.channel_locs = [locs1, locs2]
         self.ap.channel_info = [["info1"], ["info2"]]
         self.ap.channel_tags = ["1", "2"]
-        self.ap.combine_channels(0, {})
+        self.ap.combine_channels(0, {"tag": "combined"})
+
+        # All channels collapsed into one combined channel.
+        self.assertEqual(self.ap.channel_tags, ["combined"])
+        self.assertEqual(len(self.ap.channel_locs), 1)
+        self.assertEqual(len(self.ap.channel_locs[0]), 2 * len(self.ap.movie))
+
+        shutil.rmtree(os.path.join(self.results_folder, "00_combine_channels"))
+
+    def test_combine_channels_subset(self):
+        # Combine only a subset of channels into a new named channel (e.g. the
+        # GFP RESI rounds), keeping the other channels untouched.
+        locs_dtype = [
+            ("frame", "u4"),
+            ("photons", "f4"),
+            ("x", "f4"),
+            ("y", "f4"),
+            ("lpx", "f4"),
+            ("lpy", "f4"),
+        ]
+
+        def mklocs():
+            arr = np.rec.array(
+                [
+                    tuple([i] + list(np.random.rand(len(locs_dtype) - 1)))
+                    for i in range(len(self.ap.movie))
+                ],
+                dtype=locs_dtype,
+            )
+            return pd.DataFrame(arr)
+
+        n = len(self.ap.movie)
+        self.ap.channel_locs = [mklocs(), mklocs(), mklocs()]
+        self.ap.channel_info = [["i0"], ["i1"], ["i2"]]
+        self.ap.channel_tags = ["GFP-A", "GFP-B", "ALFA"]
+
+        self.ap.combine_channels(
+            0, {"channels": ["GFP-A", "GFP-B"], "tag": "GFP"}
+        )
+
+        # The two GFP channels are combined into "GFP"; ALFA is kept; the
+        # combined channel is appended last and carries combine_id.
+        self.assertEqual(self.ap.channel_tags, ["ALFA", "GFP"])
+        self.assertEqual(len(self.ap.channel_locs), 2)
+        self.assertEqual(len(self.ap.channel_locs[-1]), 2 * n)
+        self.assertIn("combine_id", self.ap.channel_locs[-1].columns)
+
+        shutil.rmtree(os.path.join(self.results_folder, "00_combine_channels"))
+
+    def test_combine_channels_subset_no_match(self):
+        # A subset that matches no existing tag is a no-op, but must still
+        # populate results["combine_map"] so the Confluence reporter (which
+        # reads it unconditionally) does not KeyError.
+        locs_dtype = [
+            ("frame", "u4"),
+            ("photons", "f4"),
+            ("x", "f4"),
+            ("y", "f4"),
+            ("lpx", "f4"),
+            ("lpy", "f4"),
+        ]
+        arr = np.rec.array(
+            [
+                tuple([i] + list(np.random.rand(len(locs_dtype) - 1)))
+                for i in range(len(self.ap.movie))
+            ],
+            dtype=locs_dtype,
+        )
+        self.ap.channel_locs = [pd.DataFrame(arr)]
+        self.ap.channel_info = [["i0"]]
+        self.ap.channel_tags = ["ALFA"]
+
+        _, results = self.ap.combine_channels(
+            0, {"channels": ["does-not-exist"], "tag": "GFP"}
+        )
+
+        # Channels untouched, and combine_map present (empty) for the reporter.
+        self.assertEqual(self.ap.channel_tags, ["ALFA"])
+        self.assertEqual(results["combine_map"], {})
 
         shutil.rmtree(os.path.join(self.results_folder, "00_combine_channels"))
 
     @patch(
-        "picasso_workflow.analyse.picasso_outpost.convert_zeiss_file",
+        "picasso_workflow.outpost.formats.zeiss.convert_zeiss_file",
         MagicMock,
     )
     def convert_zeiss_movie(self):
@@ -994,12 +1120,11 @@ class TestAnalyseModules(unittest.TestCase):
     #     logger.debug(f"results: {results}")
     #     assert results["duration"] > -1
 
-    @patch(
-        "picasso_workflow.analyse.postprocess.compute_local_density",
-        MagicMock(),
-    )
-    def density(self):
-        self.ap.info = []
+    @patch("picasso_workflow.analyse.postprocess.compute_local_density")
+    def density(self, mock_cld):
+        self.ap.info = [{"Pixelsize": 130}]
+        # picasso 1.0: compute_local_density returns (locs, info).
+        mock_cld.return_value = (self.ap.locs, self.ap.info)
         parameters = {"radius": 5}
         parameters, results = self.ap.density(0, parameters)
         # logger.debug(f'parameters: {parameters}')
@@ -1011,7 +1136,9 @@ class TestAnalyseModules(unittest.TestCase):
     @patch("picasso_workflow.analyse.clusterer.find_cluster_centers")
     @patch("picasso_workflow.analyse.clusterer.dbscan")
     def dbscan(self, mock_dbscan, mock_fcc):
-        self.ap.info = [{"Width": 1000, "Height": 1000, "Frames": 10000}]
+        self.ap.info = [
+            {"Width": 1000, "Height": 1000, "Frames": 10000, "Pixelsize": 130}
+        ]
         locs_dtype = [
             ("frame", "u4"),
             ("photons", "f4"),
@@ -1029,8 +1156,10 @@ class TestAnalyseModules(unittest.TestCase):
             dtype=locs_dtype,
         )
         self.ap.locs = pd.DataFrame(self.ap.locs)
-        mock_dbscan.return_value = (self.ap.locs, {})
-        mock_fcc.return_value = self.ap.locs
+        # picasso 1.0: dbscan returns (locs, info_list); find_cluster_centers
+        # returns (centers, info).
+        mock_dbscan.return_value = (self.ap.locs, self.ap.info + [{}])
+        mock_fcc.return_value = (self.ap.locs, self.ap.info)
 
         parameters = {
             "radius": 5,
@@ -1049,7 +1178,9 @@ class TestAnalyseModules(unittest.TestCase):
     @patch("picasso_workflow.analyse.clusterer.find_cluster_centers")
     @patch("picasso_workflow.analyse.clusterer.hdbscan")
     def hdbscan(self, mock_hdbscan, mock_fcc):
-        self.ap.info = [{"Width": 1000, "Height": 1000, "Frames": 10000}]
+        self.ap.info = [
+            {"Width": 1000, "Height": 1000, "Frames": 10000, "Pixelsize": 130}
+        ]
         locs_dtype = [
             ("frame", "u4"),
             ("photons", "f4"),
@@ -1066,8 +1197,10 @@ class TestAnalyseModules(unittest.TestCase):
             dtype=locs_dtype,
         )
         self.ap.locs = pd.DataFrame(self.ap.locs)
-        mock_hdbscan.return_value = (self.ap.locs, {})
-        mock_fcc.return_value = self.ap.locs
+        # picasso 1.0: hdbscan returns (locs, info_list); find_cluster_centers
+        # returns (centers, info).
+        mock_hdbscan.return_value = (self.ap.locs, self.ap.info + [{}])
+        mock_fcc.return_value = (self.ap.locs, self.ap.info)
 
         parameters = {"min_cluster": 5, "min_samples": 3}
         parameters, results = self.ap.hdbscan(0, parameters)
@@ -1078,16 +1211,85 @@ class TestAnalyseModules(unittest.TestCase):
         shutil.rmtree(os.path.join(self.results_folder, "00_hdbscan"))
 
     def binding_event_analysis(self):
-        # parameters, results = self.ap.binding_event_analysis(0, parameters)
+        """Exercise the binding_event_analysis module (mocked).
 
-        # shutil.rmtree(os.path.join(
-        #     self.results_folder, "00_binding_event_analysis"))
-        pass
+        The heavy ``Measurement`` / ``Plotting`` classes (and the optional
+        ``[binding-events]`` extra they import) are replaced by mock modules
+        via ``sys.modules``, so this runs in the unit tier without lmfit /
+        pandarallel. It guards the module's return contract: the
+        ``module_decorator`` wrapper unpacks ``parameters, results =
+        method(...)``, so a missing ``return`` would raise ``TypeError`` here
+        (the bug fixed in the binding-events migration), and it checks the new
+        ``loc_rate_drop`` / ``destroyed_fraction`` metrics are surfaced.
+        """
+        import sys
+        import types
+        from unittest.mock import PropertyMock
+
+        meas_cls = MagicMock()
+        meas = meas_cls.return_value
+        meas.loc_rate_drop = 0.12
+        meas.destroyed_fraction = 0.05
+        meas.table_g = None
+        meas.table_k = None
+
+        plot_cls = MagicMock()
+        plotter = plot_cls.return_value
+        for name in (
+            "Plot_photons",
+            "Plot_bg",
+            "Plot_sbr",
+            "Plot_tb",
+            "Plot_td",
+            "Plot_r",
+            "Plot_locs",
+        ):
+            getattr(plotter, name).return_value = (None, name + ".png")
+        plotter.SaveAllResults.return_value = {}
+
+        analysis_path = "picasso_workflow.outpost.binding_events.analysis"
+        plotting_path = "picasso_workflow.outpost.binding_events.plotting"
+        analysis_mod = types.ModuleType(analysis_path)
+        analysis_mod.Measurement = meas_cls
+        plotting_mod = types.ModuleType(plotting_path)
+        plotting_mod.Plotting = plot_cls
+
+        parameters = {
+            "fp_locs": os.path.join(self.results_folder, "locs.hdf5")
+        }
+        ap_cls = type(self.ap)
+        with (
+            patch.object(
+                ap_cls, "frames", new_callable=PropertyMock, return_value=20000
+            ),
+            patch.object(
+                ap_cls,
+                "pixelsize",
+                new_callable=PropertyMock,
+                return_value=130.0,
+            ),
+            patch.dict(
+                sys.modules,
+                {analysis_path: analysis_mod, plotting_path: plotting_mod},
+            ),
+        ):
+            parameters, results = self.ap.binding_event_analysis(0, parameters)
+
+        assert isinstance(results, dict)
+        assert results["loc_rate_drop"] == 0.12
+        assert results["destroyed_fraction"] == 0.05
+        assert results["fig_photons"] == "Plot_photons.png"
+
+        shutil.rmtree(
+            os.path.join(self.results_folder, "00_binding_event_analysis")
+        )
 
     @patch("picasso_workflow.analyse.clusterer.find_cluster_centers")
     @patch("picasso_workflow.analyse.clusterer.cluster")
     def smlm_clusterer(self, mock_clusterer, mock_fcc):
-        self.ap.info = [{"Width": 1000, "Height": 1000, "Frames": 10000}]
+        self.ap.info = [
+            {"Width": 1000, "Height": 1000, "Frames": 10000, "Pixelsize": 130}
+        ]
         locs_dtype = [
             ("frame", "u4"),
             ("photons", "f4"),
@@ -1108,8 +1310,10 @@ class TestAnalyseModules(unittest.TestCase):
         # emulate a few clusters so the locs-per-cluster stats/histogram work.
         clustered = self.ap.locs.copy()
         clustered["group"] = np.arange(len(clustered)) % 5
-        mock_clusterer.return_value = (clustered, {})
-        mock_fcc.return_value = clustered.iloc[:5].copy()
+        # picasso 1.0: cluster returns (locs, info_list); find_cluster_centers
+        # returns (centers, info).
+        mock_clusterer.return_value = (clustered, self.ap.info + [{}])
+        mock_fcc.return_value = (clustered.iloc[:5].copy(), self.ap.info)
 
         parameters = {"radius": 5, "min_locs": 10}
         parameters, results = self.ap.smlm_clusterer(0, parameters)
@@ -1129,7 +1333,9 @@ class TestAnalyseModules(unittest.TestCase):
     def gaussian_mixture_cluster(
         self, mock_gmms, mock_test_subclustering, mock_plot
     ):
-        self.ap.info = [{"Width": 1000, "Height": 1000, "Frames": 10000}]
+        self.ap.info = [
+            {"Width": 1000, "Height": 1000, "Frames": 10000, "Pixelsize": 130}
+        ]
         locs_dtype = [
             ("frame", "u4"),
             ("photons", "f4"),
@@ -1148,7 +1354,8 @@ class TestAnalyseModules(unittest.TestCase):
             dtype=locs_dtype,
         )
         self.ap.locs = pd.DataFrame(self.ap.locs)
-        mock_gmms.return_value = self.ap.locs, self.ap.locs, self.ap.info
+        # picasso 1.0: g5m returns (centers, info, clustered_locs).
+        mock_gmms.return_value = self.ap.locs, self.ap.info, self.ap.locs
         mock_test_subclustering.return_value = (None, None)
         mock_plot.return_value = None
 
@@ -1172,7 +1379,9 @@ class TestAnalyseModules(unittest.TestCase):
         ``'NoneType' object is not subscriptable`` (or empty-quantile /
         divide-by-zero) at the histogram/statistics step.
         """
-        self.ap.info = [{"Width": 1000, "Height": 1000, "Frames": 10000}]
+        self.ap.info = [
+            {"Width": 1000, "Height": 1000, "Frames": 10000, "Pixelsize": 130}
+        ]
         self.ap.locs = pd.DataFrame({"x": [1.0], "y": [2.0], "group": [0]})
         parameters = {"min_locs": 10}
         folder = os.path.join(
@@ -1204,7 +1413,9 @@ class TestAnalyseModules(unittest.TestCase):
         module_decorator saves whatever self.locs held into an
         ``error_state`` subfolder of the module's result folder.
         """
-        self.ap.info = [{"Width": 1000, "Height": 1000, "Frames": 10000}]
+        self.ap.info = [
+            {"Width": 1000, "Height": 1000, "Frames": 10000, "Pixelsize": 130}
+        ]
         self.ap.locs = pd.DataFrame(
             {
                 "frame": np.arange(20, dtype="u4"),
@@ -1242,8 +1453,8 @@ class TestAnalyseModules(unittest.TestCase):
         self.ap.locs = None
         self.ap.channel_locs = [ch_locs, ch_locs.copy()]
         self.ap.channel_info = [
-            [{"Width": 10, "Height": 10, "Frames": 100}],
-            [{"Width": 10, "Height": 10, "Frames": 100}],
+            [{"Width": 10, "Height": 10, "Frames": 100, "Pixelsize": 130}],
+            [{"Width": 10, "Height": 10, "Frames": 100, "Pixelsize": 130}],
         ]
         self.ap.channel_tags = ["chan_a", "chan_b"]
 
@@ -1275,6 +1486,44 @@ class TestAnalyseModules(unittest.TestCase):
             self.assertIsNone(self.ap._save_state_on_error(folder))
         finally:
             shutil.rmtree(folder, ignore_errors=True)
+
+    @patch("picasso_workflow.analyse.io.load_locs")
+    def test_load_checkpoint_single(self, mock_load):
+        """load_checkpoint restores self.locs/self.info from a single part."""
+        locs = pd.DataFrame({"x": [1.0, 2.0]})
+        mock_load.return_value = (locs, [{"info": 1}])
+        self.ap.load_checkpoint({"single": {"filepath": "/some/locs.hdf5"}})
+        mock_load.assert_called_once_with("/some/locs.hdf5")
+        self.assertEqual(2, len(self.ap.locs))
+        self.assertEqual([{"info": 1}], self.ap.info)
+
+    @patch("picasso_workflow.analyse.io.load_locs")
+    def test_load_checkpoint_channels(self, mock_load):
+        """load_checkpoint restores channel state, honoring tags and
+        stamping the channel column."""
+        locs = pd.DataFrame({"x": [1.0, 2.0, 3.0]})
+        mock_load.side_effect = lambda fp: (locs.copy(), [{"info": 1}])
+        self.ap.load_checkpoint(
+            {
+                "channels": {
+                    "filepaths": ["/a/t1.hdf5", "/b/t2.hdf5"],
+                    "tags": ["t1", "t2"],
+                }
+            }
+        )
+        self.assertEqual(["t1", "t2"], self.ap.channel_tags)
+        self.assertEqual(2, len(self.ap.channel_locs))
+        self.assertEqual([1, 1, 1], list(self.ap.channel_locs[1]["channel"]))
+
+    @patch("picasso_workflow.analyse.io.load_locs")
+    def test_load_checkpoint_channels_derives_tags(self, mock_load):
+        """Without tags in the descriptor, filenames are used as tags."""
+        locs = pd.DataFrame({"x": [1.0]})
+        mock_load.side_effect = lambda fp: (locs.copy(), [{"info": 1}])
+        self.ap.load_checkpoint(
+            {"channels": {"filepaths": ["/a/t1.hdf5", "/b/t2.hdf5"]}}
+        )
+        self.assertEqual(["t1.hdf5", "t2.hdf5"], self.ap.channel_tags)
 
     @patch("picasso_workflow.analyse.distance.cdist")
     def nneighbor(self, mock_cdist):
@@ -1313,67 +1562,141 @@ class TestAnalyseModules(unittest.TestCase):
 
         shutil.rmtree(os.path.join(self.results_folder, "00_nneighbor"))
 
-    def fit_csr(self):
-        self.ap.info = []
-        neighbors = np.array([[2, 5, 7], [3, 5, 8], [2, 4, 6], [2, 4, 7]])
-        parameters = {
-            "nneighbors": neighbors,
-            "dimensionality": 2,
+    @staticmethod
+    def _knn_density_result(density=1e-4, kmax=5, steps=8):
+        """A representative ``postprocess.knn_density`` return dict."""
+        edges = np.linspace(0.0, 80.0, steps + 1)
+        centres = 0.5 * (edges[:-1] + edges[1:])
+        # per-order histograms: a plausible unimodal shape per k.
+        histograms = np.array(
+            [
+                np.exp(-((centres - 10.0 * k) ** 2) / (2 * 8.0**2))
+                for k in range(1, kmax + 1)
+            ]
+        )
+        histograms /= histograms.sum(axis=1, keepdims=True) * np.diff(edges)[0]
+        return {
+            "k": np.arange(1, kmax + 1),
+            "densities": np.full(kmax, density),
+            "density": density,
+            "count_density": density,
+            "densities_se": np.full(kmax, density * 0.05),
+            "density_se": density * 0.05,
+            "ks_distances": np.full(kmax, 0.05),
+            "p_values": np.linspace(0.2, 0.9, kmax),
+            "n_distances": np.full(kmax, 100),
+            "n_censored": np.zeros(kmax, dtype=int),
+            "edges": edges,
+            "histograms": histograms,
+            "n_molecules": 100,
+            "n_regions": 1,
+            "n_simulations": 99,
+            "k_min": 1,
+            "r_min": 0.0,
+            "edge_correction": True,
+            "use_z": False,
         }
 
-        parameters, results = self.ap.fit_csr(0, parameters)
-        # logger.debug(f'parameters: {parameters}')
-        logger.debug(f"results: {results}")
-        assert results["duration"] > -1
+    @patch("picasso_workflow.analyse.postprocess.knn_density")
+    def fit_csr(self, mock_knn):
+        """fit_csr reads self.locs and maps knn_density outputs.
 
-        shutil.rmtree(os.path.join(self.results_folder, "00_fit_csr"))
+        Named ``fit_csr`` (not ``test_*``) so the ``test_modules`` coverage
+        sweep invokes it for the ``fit_csr`` module; the aggregation and
+        no-locs cases are the separate ``test_fit_csr_*`` methods below.
 
-    @patch("picasso_workflow.analyse.picasso_outpost.nndistribution_from_csr")
-    def test_fit_csr_plot_max_dist_controls_display_range(self, mock_nnd):
-        """plot_max_dist sets the plotting range, independent of the fit.
-
-        The plotting loop evaluates the CSR curve on ``rvals`` spanning
-        0..bin_max; capturing that range shows whether the display extent
-        follows the data (default) or the explicit plot_max_dist.
+        Density comes from the pooled ``"density"`` and the KS p-values
+        from ``"p_values"``; no precomputed nn-distances are used.
         """
-        captured = []
+        mock_knn.return_value = self._knn_density_result(density=1e-4)
+        self.ap.locs = pd.DataFrame(
+            {
+                "x": np.linspace(0, 1000, 50),
+                "y": np.linspace(0, 1000, 50),
+            }
+        )
+        self.ap.info = [{"Width": 512, "Height": 512, "Pixelsize": 130}]
+        self.ap.channel_locs = None
 
-        def _fake(r, *a, **k):
-            r = np.asarray(r, dtype=float)
-            captured.append(float(np.max(r)) if r.size else 0.0)
-            return np.zeros_like(r)
-
-        mock_nnd.side_effect = _fake
-        self.ap.info = []
-        neighbors = np.array([[2, 5, 7], [3, 5, 8], [2, 4, 6], [2, 4, 7]])
-        folder = os.path.join(self.results_folder, "00_fit_csr")
-
-        # default: display range driven by the (small) data distances
-        captured.clear()
-        self.ap.fit_csr(0, {"nneighbors": neighbors, "dimensionality": 2})
-        default_max = max(captured)
-        shutil.rmtree(folder)
-
-        # explicit plot_max_dist extends the display far beyond the data
-        captured.clear()
-        self.ap.fit_csr(
+        _, results = self.ap.fit_csr(
             0,
             {
-                "nneighbors": neighbors,
                 "dimensionality": 2,
-                "plot_max_dist": 500,
+                "kmin": 2,
+                "kmax": 4,
+                "min_dist": 10,
+                "max_dist": 200,
+                "n_simulations": 50,
             },
         )
-        plot_max = max(captured)
-        shutil.rmtree(folder)
 
-        self.assertLess(default_max, 100)
-        self.assertAlmostEqual(plot_max, 500.0, places=6)
+        # single-dataset stage: scalars, not lists
+        self.assertAlmostEqual(results["density"], 1e-4)
+        self.assertEqual(
+            results["ks_pvalues_per_k"],
+            list(np.linspace(0.2, 0.9, 5)),
+        )
+        self.assertIsInstance(results["fp_fig"], str)
+        # Wasserstein GoF is recomputed (option a) and exposed.
+        self.assertIsInstance(results["mean_wasserstein_distance"], float)
+        self.assertIsInstance(results["wasserstein_distances_per_k"], list)
+        # knn_density was called on the locs, not on nn-distances, and the
+        # workflow params are translated to the knn_density kwargs.
+        args, kwargs = mock_knn.call_args
+        self.assertIs(args[0], self.ap.locs)
+        self.assertIs(args[1], self.ap.info)
+        self.assertEqual(kwargs["k_min"], 2)
+        self.assertEqual(kwargs["k_max"], 4)
+        self.assertEqual(kwargs["r_min"], 10.0)
+        self.assertEqual(kwargs["r_max"], 200.0)
+        self.assertEqual(kwargs["n_simulations"], 50)
+        self.assertFalse(kwargs["use_z"])
+        shutil.rmtree(os.path.join(self.results_folder, "00_fit_csr"))
 
-    @patch("picasso_workflow.analyse.picasso_outpost.single_spinna_run")
+    @patch("picasso_workflow.analyse.postprocess.knn_density")
+    def test_fit_csr_aggregation_from_channel_locs(self, mock_knn):
+        """fit_csr iterates channel_locs/channel_info in the agg stage."""
+        mock_knn.side_effect = [
+            self._knn_density_result(density=1e-4),
+            self._knn_density_result(density=2e-4),
+        ]
+        self.ap.locs = None
+        self.ap.channel_locs = [
+            pd.DataFrame(
+                {"x": np.linspace(0, 1000, 40), "y": np.linspace(0, 500, 40)}
+            )
+            for _ in range(2)
+        ]
+        self.ap.channel_info = [
+            [{"Width": 512, "Height": 512, "Pixelsize": 130}],
+            [{"Width": 512, "Height": 512, "Pixelsize": 130}],
+        ]
+        self.ap.channel_tags = ["c0", "c1"]
+
+        _, results = self.ap.fit_csr(0, {"dimensionality": 2, "kmin": 2})
+
+        # aggregation stage: per-channel lists
+        self.assertEqual(results["density"], [1e-4, 2e-4])
+        self.assertEqual(len(results["fp_fig"]), 2)
+        self.assertEqual(len(results["ks_pvalues_per_k"]), 2)
+        self.assertEqual(mock_knn.call_count, 2)
+        # kmin forwarded as knn_density's k_min
+        self.assertEqual(mock_knn.call_args_list[0].kwargs["k_min"], 2)
+        shutil.rmtree(os.path.join(self.results_folder, "00_fit_csr"))
+
+    def test_fit_csr_no_locs_raises(self):
+        """fit_csr raises when no localizations are loaded."""
+        self.ap.locs = None
+        self.ap.channel_locs = None
+        with self.assertRaises(KeyError):
+            self.ap.fit_csr(0, {"dimensionality": 2})
+
+    @patch("picasso_workflow.outpost.spinna.wrappers.single_spinna_run")
     def spinna(self, mock_sptmp):
         mock_sptmp.return_value = (0, [])
-        info = [{"Width": 1000, "Height": 1000, "Frames": 10000}]
+        info = [
+            {"Width": 1000, "Height": 1000, "Frames": 10000, "Pixelsize": 130}
+        ]
         locs_dtype = [
             ("frame", "u4"),
             ("photons", "f4"),
@@ -1428,8 +1751,8 @@ class TestAnalyseModules(unittest.TestCase):
 
         shutil.rmtree(os.path.join(self.results_folder, "00_spinna"))
 
-    @patch("picasso_workflow.analyse.picasso_outpost.single_spinna_run")
-    @patch("picasso_workflow.analyse.picasso_outpost.screen_label_uncertainty")
+    @patch("picasso_workflow.outpost.spinna.wrappers.single_spinna_run")
+    @patch("picasso_workflow.outpost.spinna.wrappers.screen_label_uncertainty")
     def test_spinna_label_uncertainty_screen(self, mock_screen, mock_sptmp):
         """Screening routes to screen_label_uncertainty, feeds the
         best-fit value into single_spinna_run and prepends the scan
@@ -1445,7 +1768,9 @@ class TestAnalyseModules(unittest.TestCase):
         mock_screen.return_value = (best_unc, scan, scan_figs)
         mock_sptmp.return_value = ("spinna-results", ["nnd.png"])
 
-        info = [{"Width": 1000, "Height": 1000, "Frames": 10000}]
+        info = [
+            {"Width": 1000, "Height": 1000, "Frames": 10000, "Pixelsize": 130}
+        ]
         locs_dtype = [
             ("frame", "u4"),
             ("photons", "f4"),
@@ -1518,27 +1843,29 @@ class TestAnalyseModules(unittest.TestCase):
 
         shutil.rmtree(os.path.join(self.results_folder, "00_spinna"))
 
-    @patch("picasso_workflow.picasso_outpost._plot_label_unc_scan")
+    @patch("picasso_workflow.outpost.spinna.wrappers._plot_label_unc_scan")
     @patch(
-        "picasso_workflow.picasso_outpost.spinna."
-        "compare_models_given_label_unc"
+        "picasso_workflow.outpost.spinna.wrappers.spinna."
+        "fit_label_uncertainty"
     )
-    def test_screen_label_uncertainty_selects_best(
-        self, mock_compare, mock_plot
-    ):
-        """screen_label_uncertainty scans multi-candidate targets, keeps
-        the lowest-scoring value and leaves single-candidate targets
-        untouched."""
-        Structure = picasso_outpost.spinna.Structure
+    def test_screen_label_uncertainty_selects_best(self, mock_fit, mock_plot):
+        """screen_label_uncertainty delegates scanning to picasso's
+        fit_label_uncertainty and plots one curve per screened target."""
+        Structure = spinna_wrappers.spinna.Structure
         mono_a = Structure("mono_A")
         mono_a.define_coordinates("A", [0.0], [0.0], [0.0])
         mono_b = Structure("mono_B")
         mono_b.define_coordinates("B", [0.0], [0.0], [0.0])
         structures = [mono_a, mono_b]
 
-        # A screened over 3 values (best is 4.0 -> lowest score), B fixed
+        # A screened over 3 values (best is 4.0 -> lowest score), B fixed.
+        # picasso returns the best value for every target, but a scan
+        # entry only for the multi-candidate (screened) target A.
         label_unc = {"A": [2.0, 4.0, 6.0], "B": [5.0]}
-        mock_compare.side_effect = [(0.5,), (0.1,), (0.3,)]
+        mock_fit.return_value = (
+            {"A": 4.0, "B": 5.0},
+            {"A": {"candidates": [2, 4, 6], "scores": [0.5, 0.1, 0.3]}},
+        )
         mock_plot.return_value = "scan_A.png"
 
         exp_data = {
@@ -1546,7 +1873,7 @@ class TestAnalyseModules(unittest.TestCase):
             "B": np.random.rand(20, 2) * 100,
         }
 
-        best, scan, figs = picasso_outpost.screen_label_uncertainty(
+        best, scan, figs = spinna_wrappers.screen_label_uncertainty(
             structures=structures,
             label_unc=label_unc,
             le={"A": 0.5, "B": 0.5},
@@ -1564,16 +1891,69 @@ class TestAnalyseModules(unittest.TestCase):
         )
 
         self.assertEqual(best, {"A": 4.0, "B": 5.0})
-        self.assertEqual(mock_compare.call_count, 3)
+        mock_fit.assert_called_once()
+        kw = mock_fit.call_args.kwargs
+        self.assertEqual(kw["models"], [structures])
+        self.assertEqual(kw["label_unc"], label_unc)
         # empty savedir avoids picasso's single-candidate save crash
-        self.assertEqual(mock_compare.call_args.kwargs["savedir"], "")
-        self.assertEqual(scan["A"]["candidates"], [2.0, 4.0, 6.0])
+        self.assertEqual(kw["savedir"], "")
+        self.assertEqual(scan["A"]["candidates"], [2, 4, 6])
         self.assertEqual(scan["A"]["scores"], [0.5, 0.1, 0.3])
         self.assertNotIn("B", scan)
+        # one screening figure, for the single screened target A
+        self.assertEqual(mock_plot.call_count, 1)
         self.assertEqual(figs, ["scan_A.png"])
 
-    @patch("picasso_workflow.analyse.picasso_outpost.single_spinna_run")
-    @patch("picasso_workflow.analyse.picasso_outpost.single_spinna_fit_le_run")
+    @patch("picasso_workflow.outpost.spinna.wrappers._plot_label_unc_scan")
+    @patch(
+        "picasso_workflow.outpost.spinna.wrappers.spinna."
+        "fit_label_uncertainty"
+    )
+    def test_screen_label_uncertainty_no_monomer_fallback(
+        self, mock_fit, mock_plot
+    ):
+        """A multi-candidate target with no standalone monomer structure is
+        collapsed to its first candidate before the call (picasso would crash
+        screening it), as the pre-1.0 fallback did."""
+        Structure = spinna_wrappers.spinna.Structure
+        mono_a = Structure("mono_A")
+        mono_a.define_coordinates("A", [0.0], [0.0], [0.0])
+        het = Structure("het_AB")
+        het.define_coordinates("A", [0.0], [0.0], [0.0])
+        het.define_coordinates("B", [10.0], [0.0], [0.0])
+        structures = [mono_a, het]  # B appears only inside the dimer
+
+        # both multi-candidate, but B has no monomer -> B must be collapsed.
+        label_unc = {"A": [2.0, 4.0], "B": [3.0, 5.0]}
+        mock_fit.return_value = ({"A": 4.0, "B": 3.0}, {})
+        mock_plot.return_value = "scan.png"
+
+        exp_data = {"A": np.random.rand(20, 2) * 100}
+        spinna_wrappers.screen_label_uncertainty(
+            structures=structures,
+            label_unc=label_unc,
+            le={"A": 0.5, "B": 0.5},
+            granularity=10,
+            exp_data=exp_data,
+            mask_dict=None,
+            width=1000.0,
+            height=1000.0,
+            depth=None,
+            random_rot_mode="2D",
+            sim_repeats=1,
+            asynch=False,
+            result_dir="/tmp",
+            save_filename="/tmp/spinna-run",
+        )
+
+        kw = mock_fit.call_args.kwargs
+        self.assertEqual(kw["label_unc"]["B"], [3.0])  # collapsed to first
+        self.assertEqual(kw["label_unc"]["A"], [2.0, 4.0])  # still screened
+        # the caller's label_unc dict is not mutated
+        self.assertEqual(label_unc["B"], [3.0, 5.0])
+
+    @patch("picasso_workflow.outpost.spinna.wrappers.single_spinna_run")
+    @patch("picasso_workflow.outpost.spinna.wrappers.single_spinna_fit_le_run")
     def test_spinna_pair_distance_screen(self, mock_fitle, mock_sptmp):
         """pair_distance_screen routes to fit_le (not single_spinna_run),
         passing the distance grid and per-target label_unc lists, and
@@ -1587,7 +1967,9 @@ class TestAnalyseModules(unittest.TestCase):
             0.08,
         )
 
-        info = [{"Width": 1000, "Height": 1000, "Frames": 10000}]
+        info = [
+            {"Width": 1000, "Height": 1000, "Frames": 10000, "Pixelsize": 130}
+        ]
         locs_dtype = [
             ("frame", "u4"),
             ("photons", "f4"),
@@ -1668,8 +2050,8 @@ class TestAnalyseModules(unittest.TestCase):
 
         shutil.rmtree(os.path.join(self.results_folder, "00_spinna"))
 
-    @patch("picasso_workflow.picasso_outpost.plot_spinna_nnd")
-    @patch("picasso_workflow.picasso_outpost.spinna.fit_le")
+    @patch("picasso_workflow.outpost.spinna.wrappers.plot_spinna_nnd")
+    @patch("picasso_workflow.outpost.spinna.wrappers.spinna.fit_le")
     def test_single_spinna_fit_le_run(self, mock_fit_le, mock_plot):
         """single_spinna_fit_le_run forwards the screen inputs to
         spinna.fit_le, plots the best-fit mixer and returns the fitted
@@ -1693,7 +2075,7 @@ class TestAnalyseModules(unittest.TestCase):
 
         tmpdir = tempfile.mkdtemp()
         try:
-            out = picasso_outpost.single_spinna_fit_le_run(
+            out = spinna_wrappers.single_spinna_fit_le_run(
                 target_a="A",
                 target_b="B",
                 exp_data=exp_data,
@@ -1745,7 +2127,7 @@ class TestAnalyseModules(unittest.TestCase):
         mock_plot.assert_called_once()
         self.assertIs(mock_plot.call_args.kwargs["mixer"], best_mixer)
 
-    @patch("picasso_workflow.analyse.picasso_outpost.plot_spinna_nnd")
+    @patch("picasso_workflow.outpost.spinna.wrappers.plot_spinna_nnd")
     @patch("picasso_workflow.analyse.spinna.fit_le")
     def test_labeling_efficiency_analysis_screen(self, mock_fit_le, mock_plot):
         """pair_distance_screen and labeling_uncertainty_screen expand
@@ -1834,7 +2216,89 @@ class TestAnalyseModules(unittest.TestCase):
             )
         )
 
-    @patch("picasso_workflow.analyse.picasso_outpost.spinna_batch")
+    @patch("picasso_workflow.outpost.spinna.wrappers.plot_spinna_nnd")
+    @patch("picasso_workflow.analyse.spinna.fit_le")
+    def test_labeling_efficiency_analysis_bootstrap(
+        self, mock_fit_le, mock_plot
+    ):
+        """With bootstrap=True, fit_le is called with bootstrap=True and
+        its returned 7th element (le_std, in percent) is consumed into
+        results['labeling_efficiency_std'] on the 0-1 scale."""
+        best_mixer = MagicMock()
+        best_mixer.get_structure_names.return_value = ["mA", "mB", "het"]
+        # 7-tuple: the 6-tuple plus le_std (percent) per target.
+        mock_fit_le.return_value = (
+            {"CD80": 52.0, "CD86": 60.0},  # le_values (percent)
+            {"CD80": 5.0, "CD86": 5.0},  # fitted_label_unc
+            12.0,  # best_distance
+            0.08,  # best_score
+            np.array([50.0, 30.0, 20.0]),  # best_props
+            best_mixer,
+            {"CD80": 4.0, "CD86": 6.0},  # le_std (percent)
+        )
+        mock_plot.return_value = ["a.png", "b.png", "c.png", "d.png"]
+
+        locs_dtype = [
+            ("frame", "u4"),
+            ("photons", "f4"),
+            ("x", "f4"),
+            ("y", "f4"),
+            ("lpx", "f4"),
+            ("lpy", "f4"),
+        ]
+
+        def _mklocs():
+            return pd.DataFrame(
+                np.rec.array(
+                    [
+                        tuple([i] + list(np.random.rand(len(locs_dtype) - 1)))
+                        for i in range(len(self.ap.movie))
+                    ],
+                    dtype=locs_dtype,
+                )
+            )
+
+        self.ap.channel_locs = [_mklocs(), _mklocs()]
+        self.ap.channel_tags = ["CD80", "CD86"]
+
+        parameters = {
+            "target_name": "CD80",
+            "reference_name": "CD86",
+            "pair_distance": 10,
+            "labeling_uncertainty": {"CD80": 5, "CD86": 5},
+            "n_simulate": 50000,
+            "density": {"CD80": 9e-5, "CD86": 9e-5},
+            "granularity": 30,
+            "sim_repeats": 5,
+            "nn_nth": 2,
+            "bootstrap": True,
+        }
+        parameters, results = self.ap.labeling_efficiency_analysis(
+            0, parameters
+        )
+
+        mock_fit_le.assert_called_once()
+        self.assertTrue(mock_fit_le.call_args.kwargs["bootstrap"])
+
+        # le_std (percent) consumed onto the 0-1 scale.
+        self.assertAlmostEqual(
+            results["labeling_efficiency_std"]["CD80"], 0.04
+        )
+        self.assertAlmostEqual(
+            results["labeling_efficiency_std"]["CD86"], 0.06
+        )
+        self.assertAlmostEqual(results["labeling_efficiency_std_target"], 0.04)
+        self.assertAlmostEqual(
+            results["labeling_efficiency_std_reference"], 0.06
+        )
+
+        shutil.rmtree(
+            os.path.join(
+                self.results_folder, "00_labeling_efficiency_analysis"
+            )
+        )
+
+    @patch("picasso_workflow.outpost.spinna.wrappers.spinna_batch")
     @patch("picasso_workflow.analyse.io.save_locs")
     def spinna_batch(self, mock_save_locs, mock_spinna_batch):
         # a minimal spinna batch config with two analysis rows; the
@@ -1859,7 +2323,9 @@ class TestAnalyseModules(unittest.TestCase):
         fp_figs = [os.path.join(result_dir, "run1_NND_CD86_CD86.png")]
         mock_spinna_batch.return_value = (result_dir, fp_summary, fp_figs)
 
-        info = [{"Width": 1000, "Height": 1000, "Frames": 10000}]
+        info = [
+            {"Width": 1000, "Height": 1000, "Frames": 10000, "Pixelsize": 130}
+        ]
         locs_dtype = [("frame", "u4"), ("x", "f4"), ("y", "f4")]
         locs = pd.DataFrame(
             np.rec.array([(i, 0.0, 0.0) for i in range(5)], dtype=locs_dtype)
@@ -1903,7 +2369,7 @@ class TestAnalyseModules(unittest.TestCase):
         os.remove(cfg_fp)
         shutil.rmtree(os.path.join(self.results_folder, "00_spinna_batch"))
 
-    @patch("picasso_workflow.analyse.picasso_outpost.spinna_batch")
+    @patch("picasso_workflow.outpost.spinna.wrappers.spinna_batch")
     @patch("picasso_workflow.analyse.io.save_locs")
     def test_spinna_batch_single_dataset(
         self, mock_save_locs, mock_spinna_batch
@@ -1931,7 +2397,9 @@ class TestAnalyseModules(unittest.TestCase):
                 dtype=[("frame", "u4"), ("x", "f4"), ("y", "f4")],
             )
         )
-        self.ap.info = [{"Width": 1000, "Height": 1000, "Frames": 10000}]
+        self.ap.info = [
+            {"Width": 1000, "Height": 1000, "Frames": 10000, "Pixelsize": 130}
+        ]
 
         parameters = {
             "fp_spinna_batch_config": cfg_fp,
@@ -1961,7 +2429,7 @@ class TestAnalyseModules(unittest.TestCase):
             }
         },
     )
-    @patch("picasso_workflow.analyse.picasso_outpost.spinna_batch")
+    @patch("picasso_workflow.outpost.spinna.wrappers.spinna_batch")
     @patch("picasso_workflow.analyse.io.save_locs")
     def test_spinna_batch_converts_paths(
         self, mock_save_locs, mock_spinna_batch, mock_node
@@ -1987,7 +2455,9 @@ class TestAnalyseModules(unittest.TestCase):
             }
         ).to_csv(cfg_fp, index=False)
 
-        info = [{"Width": 1000, "Height": 1000, "Frames": 10000}]
+        info = [
+            {"Width": 1000, "Height": 1000, "Frames": 10000, "Pixelsize": 130}
+        ]
         locs = pd.DataFrame(
             np.rec.array(
                 [(i, 0.0, 0.0) for i in range(5)],
@@ -2026,7 +2496,9 @@ class TestAnalyseModules(unittest.TestCase):
 
     # @patch("picasso_workflow.analyse.picasso_outpost.spinna_temp", MagicMock)
     def spinna_manual(self):
-        info = [{"Width": 1000, "Height": 1000, "Frames": 10000}]
+        info = [
+            {"Width": 1000, "Height": 1000, "Frames": 10000, "Pixelsize": 130}
+        ]
         locs_dtype = [
             ("frame", "u4"),
             ("photons", "f4"),
@@ -2077,6 +2549,77 @@ class TestAnalyseModules(unittest.TestCase):
         return
         shutil.rmtree(os.path.join(self.results_folder, "00_random_val"))
 
+    def plugin(self):
+        """Test the generic picasso-plugin bridge module."""
+        import picasso.plugins as pplugins
+
+        captured = {}
+
+        def fake_api(**kwargs):
+            captured.update(kwargs)
+            return {
+                "locs": "NEWLOCS",
+                "info": [{"from": "plugin"}],
+                "report": "did a thing",
+                "count": 3,
+            }
+
+        fake_api.__name__ = "fake_api"
+
+        # self.ap is shared across all module tests in test_modules; restore
+        # the pipeline state we clobber so later module tests are unaffected.
+        orig_locs = self.ap.locs
+        orig_info = self.ap.info
+        try:
+            # --- happy path: inject state, consume structured return ---
+            with patch.object(
+                pplugins,
+                "load_api_plugins",
+                return_value={"myfunc": fake_api},
+            ):
+                self.ap.locs = "OLDLOCS"
+                self.ap.info = []
+                _, results = self.ap.plugin(
+                    0,
+                    {
+                        "api_name": "myfunc",
+                        "kwargs": {"threshold": 5},
+                        "inject": ["locs", "info"],
+                    },
+                )
+
+            # injected state and explicit kwargs reached the callable
+            self.assertEqual(captured["locs"], "OLDLOCS")
+            self.assertEqual(captured["info"], [])
+            self.assertEqual(captured["threshold"], 5)
+            # structured return updated the pipeline
+            self.assertEqual(self.ap.locs, "NEWLOCS")
+            self.assertEqual(self.ap.info, [{"from": "plugin"}])
+            # results recorded report / leftover result / provenance
+            self.assertEqual(results["plugin_report"], "did a thing")
+            self.assertEqual(results["plugin_result"], {"count": 3})
+            self.assertEqual(results["plugin_api_name"], "myfunc")
+            self.assertEqual(results["injected"], ["locs", "info"])
+            self.assertTrue(results["success"])
+
+            # --- unknown export raises a clear AutoPicassoError ---
+            self.ap.locs = None  # keep _save_state_on_error a no-op
+            with patch.object(pplugins, "load_api_plugins", return_value={}):
+                with self.assertRaises(analyse.AutoPicassoError):
+                    self.ap.plugin(1, {"api_name": "does_not_exist"})
+        finally:
+            self.ap.locs = orig_locs
+            self.ap.info = orig_info
+
+        shutil.rmtree(
+            os.path.join(self.results_folder, "00_plugin"),
+            ignore_errors=True,
+        )
+        shutil.rmtree(
+            os.path.join(self.results_folder, "01_plugin"),
+            ignore_errors=True,
+        )
+
     def render(self):
         return
         shutil.rmtree(os.path.join(self.results_folder, "00_render"))
@@ -2085,23 +2628,528 @@ class TestAnalyseModules(unittest.TestCase):
         return
         shutil.rmtree(os.path.join(self.results_folder, "00_find_structures"))
 
+    @patch("picasso_workflow.outpost.origami.origami.pick_origami")
+    @patch("picasso_workflow.outpost.picks.picks.picked_locs")
+    @patch("picasso_workflow.analyse.render.plot_scene")
+    @patch("picasso_workflow.analyse.io.save_locs")
+    def pick_origami(
+        self,
+        mock_save_locs,
+        mock_plot_scene,
+        mock_picked_locs,
+        mock_pick_origami,
+    ):
+        """Test the pick_origami module wiring (design-aware picking)."""
+        mock_pick_origami.return_value = {
+            "accepted_centers_px": [(10.0, 10.0), (20.0, 22.0)],
+            "docking_site_centers_px": [(10.0, 10.0), (11.0, 11.0)],
+            "geometry_table": [
+                {
+                    "center_x_px": 10.0,
+                    "center_y_px": 10.0,
+                    "n_resolved_sites": 12,
+                    "n_missing_sites": 0,
+                    "mean_spacing_nm": 20.0,
+                    "rmse_nm": 1.2,
+                    "orientation_deg": 35.0,
+                    "mirror": False,
+                    "accepted": True,
+                }
+            ],
+            "n_candidates": 5,
+            "n_registered": 2,
+            "n_accepted": 2,
+            "candidate_nlocs": np.array([50, 75, 100, 40, 90]),
+            "candidate_rmsds": np.array([1.5, 2.0, 2.5, 1.0, 2.2]),
+            "candidate_labels": np.array([0, 0, -1, -1, 0]),
+            "accepted_nlocs": np.array([50, 90]),
+            "accepted_rmsds": np.array([1.5, 2.2]),
+            "sim_nlocs": np.array([48, 52, 60, 88, 92]),
+            "sim_rmsds": np.array([1.4, 1.6, 2.0, 2.1, 2.3]),
+            "pick_window": {
+                "min_nlocs": 40.0,
+                "max_nlocs": 100.0,
+                "min_rmsd": 1.0,
+                "max_rmsd": 2.5,
+            },
+            "footprint_diameter": 0.7,
+        }
+        test_locs = pd.DataFrame(
+            np.rec.array(
+                [
+                    (
+                        0,
+                        10.0,
+                        10.0,
+                        1000,
+                        1.0,
+                        1.0,
+                        100,
+                        0.1,
+                        0.1,
+                        0.5,
+                        50,
+                        1,
+                        0,
+                    ),
+                    (
+                        1,
+                        10.1,
+                        10.1,
+                        1000,
+                        1.0,
+                        1.0,
+                        100,
+                        0.1,
+                        0.1,
+                        0.5,
+                        50,
+                        1,
+                        0,
+                    ),
+                ],
+                dtype=self.locs_dtype + [("group", "<i4")],
+            )
+        )
+        mock_picked_locs.return_value = test_locs
+
+        self.ap.locs = pd.DataFrame(
+            np.rec.array(
+                [
+                    (
+                        i,
+                        10 + np.random.rand(),
+                        10 + np.random.rand(),
+                        1000,
+                        1.0,
+                        1.0,
+                        100,
+                        0.1,
+                        0.1,
+                        0.5,
+                        50,
+                        i,
+                    )
+                    for i in range(50)
+                ],
+                dtype=self.locs_dtype,
+            )
+        )
+        self.ap.info = [
+            {"Width": 64, "Height": 64, "Frames": 1000, "Pixelsize": 130}
+        ]
+
+        parameters = {
+            "geometry": {"n_rows": 3, "n_cols": 4, "spacing_nm": 20.0},
+            "missing_sites_allowed": 2,
+            "candidate_method": "footprint",
+            "n_plot_structures": 1,
+            "display_pixelsize": 1.0,
+        }
+
+        parameters, results = self.ap.pick_origami(0, parameters)
+
+        # the template geometry was resolved from the grid spec
+        assert results["n_sites_expected"] == 12
+        assert abs(results["grid_spacing_nm"] - 20.0) < 1e-6
+        assert results["n_candidates"] == 5
+        assert results["n_accepted"] == 2
+        # the full per-structure table is on disk, not carried in results;
+        # results holds only an aggregate overview of accepted structures
+        assert "geometry_table" not in results
+        assert results["accepted_overview"]["n_accepted"] == 1
+
+        # picasso-compatible outputs + geometry table were written
+        for key in (
+            "fp_picks_origami",
+            "fp_picks_dockingsites",
+            "fp_picked_locs_origami",
+            "fp_picked_locs_dockingsites",
+            "fp_geometry_table",
+            "fp_phasespace",
+        ):
+            assert key in results, f"missing result key {key}"
+        assert os.path.exists(results["fp_picks_origami"])
+        assert os.path.exists(results["fp_picks_dockingsites"])
+        assert os.path.exists(results["fp_geometry_table"])
+        assert os.path.exists(results["fp_phasespace"])
+
+        # the picks yaml is in picasso pick format (Centers + Diameter)
+        import yaml as _yaml
+
+        with open(results["fp_picks_origami"]) as f:
+            picks = _yaml.safe_load(f)
+        assert len(picks["Centers"]) == 2
+        assert "Diameter (nm)" in picks
+
+        assert mock_pick_origami.called
+        assert mock_picked_locs.called
+        assert mock_save_locs.called
+
+        shutil.rmtree(os.path.join(self.results_folder, "00_pick_origami"))
+
+    @patch(
+        "picasso_workflow.outpost.origami.origami."
+        "cluster_structure_patterns"
+    )
+    @patch("picasso_workflow.outpost.origami.origami.pick_origami")
+    @patch("picasso_workflow.outpost.picks.picks.picked_locs")
+    @patch("picasso_workflow.analyse.render.plot_scene")
+    @patch("picasso_workflow.analyse.io.save_locs")
+    def test_pick_origami_cluster_patterns(
+        self,
+        mock_save_locs,
+        mock_plot_scene,
+        mock_picked_locs,
+        mock_pick_origami,
+        mock_cluster,
+    ):
+        """cluster_patterns=True groups accepted structures by geometry and
+        emits per-pattern picks/table/plot/renders."""
+        mock_pick_origami.return_value = {
+            "accepted_centers_px": [(10.0, 10.0), (20.0, 22.0)],
+            "docking_site_centers_px": [],
+            "geometry_table": [],
+            "n_candidates": 2,
+            "n_registered": 0,
+            "n_accepted": 2,
+            "candidate_nlocs": np.array([50, 90]),
+            "candidate_rmsds": np.array([1.5, 2.2]),
+            "candidate_labels": np.array([0, 0]),
+            "accepted_nlocs": np.array([50, 90]),
+            "accepted_rmsds": np.array([1.5, 2.2]),
+            "sim_nlocs": np.array([48, 92]),
+            "sim_rmsds": np.array([1.4, 2.3]),
+            "pick_window": {
+                "min_nlocs": 40.0,
+                "max_nlocs": 100.0,
+                "min_rmsd": 1.0,
+                "max_rmsd": 2.5,
+            },
+            "footprint_diameter": 0.7,
+        }
+        # two picked structures, one localization group each
+        row = (0, 10.0, 10.0, 1000, 1.0, 1.0, 100, 0.1, 0.1, 0.5, 50, 1)
+        picked = pd.DataFrame(
+            np.rec.array(
+                [
+                    row + (0,),
+                    (0, 10.1, 10.1, 1000, 1.0, 1.0, 100, 0.1, 0.1, 0.5, 50, 1)
+                    + (0,),
+                    (0, 20.0, 22.0, 1000, 1.0, 1.0, 100, 0.1, 0.1, 0.5, 50, 1)
+                    + (1,),
+                    (0, 20.1, 22.1, 1000, 1.0, 1.0, 100, 0.1, 0.1, 0.5, 50, 1)
+                    + (1,),
+                ],
+                dtype=self.locs_dtype + [("group", "<i4")],
+            )
+        )
+        mock_picked_locs.return_value = picked
+
+        mock_cluster.return_value = {
+            "labels": np.array([0, 1]),
+            "cluster_summary": [
+                {
+                    "label": 0,
+                    "n_structures": 1,
+                    "median_n_sites": 12.0,
+                    "median_n_locs": 50.0,
+                    "median_nn_nm": 20.0,
+                    "median_site_rg_nm": 27.0,
+                    "is_noise": False,
+                },
+                {
+                    "label": 1,
+                    "n_structures": 1,
+                    "median_n_sites": 1.0,
+                    "median_n_locs": 90.0,
+                    "median_nn_nm": 0.0,
+                    "median_site_rg_nm": 0.0,
+                    "is_noise": False,
+                },
+            ],
+            "features": np.array(
+                [
+                    [12.0, 27.0, 27.0, 20.0, 0.7, 0.2, 0.5, 0.3],
+                    [1.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+                ]
+            ),
+            "feature_names": [
+                "n_sites",
+                "loc_rg_nm",
+                "site_rg_nm",
+                "nn_nm",
+                "elongation",
+                "pdist_0",
+                "pdist_1",
+                "pdist_2",
+            ],
+            "max_pair_nm": 90.0,
+            "method": "hdbscan",
+        }
+
+        self.ap.locs = pd.DataFrame(
+            np.rec.array(
+                [
+                    (
+                        i,
+                        10 + np.random.rand(),
+                        10 + np.random.rand(),
+                        1000,
+                        1.0,
+                        1.0,
+                        100,
+                        0.1,
+                        0.1,
+                        0.5,
+                        50,
+                        i,
+                    )
+                    for i in range(20)
+                ],
+                dtype=self.locs_dtype,
+            )
+        )
+        self.ap.info = [
+            {"Width": 64, "Height": 64, "Frames": 1000, "Pixelsize": 130}
+        ]
+
+        # a < 3-node design routes to the pairwise fallback automatically
+        parameters = {
+            "geometry": {"sites_nm": [[0.0, 0.0], [20.0, 0.0]]},
+            "cluster_patterns": True,
+            "n_plot_structures": 0,
+            "display_pixelsize": 1.0,
+        }
+
+        parameters, results = self.ap.pick_origami(0, parameters)
+
+        assert mock_cluster.called
+        assert results["pattern_method"] == "pairwise"
+        assert results["n_pattern_clusters"] == 2
+        assert len(results["pattern_summary"]) == 2
+        # each cluster annotated with a median pick_similar rmsd (px) and
+        # nlocs-per-frame (accepted_nlocs / n_frames = 1000)
+        by_label = {c["label"]: c for c in results["pattern_summary"]}
+        assert by_label[0]["median_rmsd_px"] == 1.5
+        assert by_label[1]["median_rmsd_px"] == 2.2
+        assert by_label[0]["median_nlocs_per_frame"] == 0.05
+        assert by_label[1]["median_nlocs_per_frame"] == 0.09
+        assert os.path.exists(results["fp_pattern_table"])
+        # descriptor-space (PCA) and pairwise-distance signature figures
+        assert os.path.exists(results["fp_pattern_feature_space"])
+        assert os.path.exists(results["fp_pattern_pairdist"])
+        assert set(results["fp_pattern_picks"]) == {0, 1}
+        for fp in results["fp_pattern_picks"].values():
+            assert os.path.exists(fp)
+        assert os.path.exists(results["fp_pattern_phasespace"])
+        # example renders keyed by pattern label -> list of render fps
+        pat_renders = results["fp_pattern_renderings"]
+        assert set(pat_renders) == {0, 1}
+        assert all(len(v) >= 1 for v in pat_renders.values())
+
+        import yaml as _yaml
+
+        with open(results["fp_pattern_picks"][0]) as f:
+            picks0 = _yaml.safe_load(f)
+        assert len(picks0["Centers"]) == 1
+        assert "Diameter (nm)" in picks0
+
+        shutil.rmtree(os.path.join(self.results_folder, "00_pick_origami"))
+
+    @patch("picasso_workflow.outpost.origami.origami.cluster_lattice_defects")
+    @patch("picasso_workflow.outpost.origami.origami.pick_origami")
+    @patch("picasso_workflow.outpost.picks.picks.picked_locs")
+    @patch("picasso_workflow.analyse.render.plot_scene")
+    @patch("picasso_workflow.analyse.io.save_locs")
+    def test_pick_origami_cluster_patterns_lattice(
+        self,
+        mock_save_locs,
+        mock_plot_scene,
+        mock_picked_locs,
+        mock_pick_origami,
+        mock_lattice,
+    ):
+        """The lattice method (default for grid designs) clusters by defect
+        occupancy and emits a defect-map figure."""
+        mock_pick_origami.return_value = {
+            "accepted_centers_px": [(10.0, 10.0), (20.0, 22.0)],
+            "docking_site_centers_px": [],
+            "geometry_table": [],
+            "n_candidates": 2,
+            "n_registered": 0,
+            "n_accepted": 2,
+            "candidate_nlocs": np.array([50, 90]),
+            "candidate_rmsds": np.array([1.5, 2.2]),
+            "candidate_labels": np.array([0, 0]),
+            "accepted_nlocs": np.array([50, 90]),
+            "accepted_rmsds": np.array([1.5, 2.2]),
+            "sim_nlocs": np.array([48, 92]),
+            "sim_rmsds": np.array([1.4, 2.3]),
+            "pick_window": {
+                "min_nlocs": 40.0,
+                "max_nlocs": 100.0,
+                "min_rmsd": 1.0,
+                "max_rmsd": 2.5,
+            },
+            "footprint_diameter": 0.7,
+        }
+        picked = pd.DataFrame(
+            np.rec.array(
+                [
+                    (0, 10.0, 10.0, 1000, 1.0, 1.0, 100, 0.1, 0.1, 0.5, 50, 1)
+                    + (0,),
+                    (0, 10.1, 10.1, 1000, 1.0, 1.0, 100, 0.1, 0.1, 0.5, 50, 1)
+                    + (0,),
+                    (0, 20.0, 22.0, 1000, 1.0, 1.0, 100, 0.1, 0.1, 0.5, 50, 1)
+                    + (1,),
+                    (0, 20.1, 22.1, 1000, 1.0, 1.0, 100, 0.1, 0.1, 0.5, 50, 1)
+                    + (1,),
+                ],
+                dtype=self.locs_dtype + [("group", "<i4")],
+            )
+        )
+        mock_picked_locs.return_value = picked
+
+        occ_full = [1] * 12
+        occ_defect = [1] * 11 + [0]
+        mock_lattice.return_value = {
+            "labels": np.array([0, 1]),
+            "aux": [
+                {
+                    "n_matched": 12,
+                    "rmse_nm": 1.0,
+                    "pair_score": 2.4,
+                    "site_centers_nm": np.array(
+                        [[1300.0, 1300.0], [1320.0, 1300.0]]
+                    ),
+                    "site_nodes": np.array([0, 1]),
+                    "site_nlocs_matched": np.array([40.0, 55.0]),
+                },
+                {
+                    "n_matched": 11,
+                    "rmse_nm": 1.5,
+                    "pair_score": 1.8,
+                    "site_centers_nm": np.array([[2600.0, 2860.0]]),
+                    "site_nodes": np.array([5]),
+                    "site_nlocs_matched": np.array([48.0]),
+                },
+            ],
+            "n_nodes": 12,
+            "cluster_summary": [
+                {
+                    "label": 0,
+                    "n_structures": 1,
+                    "is_offlattice": False,
+                    "occupancy": occ_full,
+                    "n_sites_occupied": 12,
+                    "n_defects": 0,
+                    "median_rmse_nm": 1.0,
+                    "median_fitted_spacing_nm": 20.0,
+                    "median_frac_on_lattice": 1.0,
+                    "median_n_sites": 12.0,
+                },
+                {
+                    "label": 1,
+                    "n_structures": 1,
+                    "is_offlattice": False,
+                    "occupancy": occ_defect,
+                    "n_sites_occupied": 11,
+                    "n_defects": 1,
+                    "median_rmse_nm": 1.5,
+                    "median_fitted_spacing_nm": 20.0,
+                    "median_frac_on_lattice": 0.92,
+                    "median_n_sites": 11.0,
+                },
+            ],
+            "min_pair_score": 0.5,
+            "gates": {
+                "min_pair_score": 0.5,
+                "min_sites": 8,
+                "rmse_gate_nm": 4.0,
+                "frac_on_lattice_gate": 0.8,
+                "design_nn_nm": 20.0,
+                "spacing_tol": 0.3,
+                "max_nlocs_cv": 0.5,
+                "max_spread_cv": 0.3,
+            },
+        }
+
+        self.ap.locs = pd.DataFrame(
+            np.rec.array(
+                [
+                    (
+                        i,
+                        10 + np.random.rand(),
+                        10 + np.random.rand(),
+                        1000,
+                        1.0,
+                        1.0,
+                        100,
+                        0.1,
+                        0.1,
+                        0.5,
+                        50,
+                        i,
+                    )
+                    for i in range(20)
+                ],
+                dtype=self.locs_dtype,
+            )
+        )
+        self.ap.info = [
+            {"Width": 64, "Height": 64, "Frames": 1000, "Pixelsize": 130}
+        ]
+
+        parameters = {
+            "geometry": {"n_rows": 3, "n_cols": 4, "spacing_nm": 20.0},
+            "cluster_patterns": True,
+            "n_plot_structures": 0,
+            "display_pixelsize": 1.0,
+            # 0.0 must reach the clustering (a truthiness check would drop it)
+            "pattern_min_sites_frac": 0.0,
+        }
+        parameters, results = self.ap.pick_origami(0, parameters)
+
+        # lattice is the default for a grid design
+        assert mock_lattice.called
+        # a user-supplied 0.0 min-sites fraction is threaded through, not
+        # silently dropped as falsy
+        assert mock_lattice.call_args.kwargs["min_on_lattice_frac"] == 0.0
+        assert results["pattern_method"] == "lattice"
+        assert results["n_pattern_clusters"] == 2
+        assert os.path.exists(results["fp_pattern_site_nlocs_hist"])
+        # targeted lattice fit-quality phase space (matched sites vs fit RMSE)
+        assert os.path.exists(results["fp_pattern_fit_space"])
+        # registration-free pair-score phase space (nlocs/frame vs pair-score)
+        assert os.path.exists(results["fp_pattern_pairscore_space"])
+        # per-gate transparency panels
+        assert os.path.exists(results["fp_pattern_gate_panels"])
+        assert os.path.exists(results["fp_pattern_table"])
+        # occupancy carried through to the summary
+        by_label = {c["label"]: c for c in results["pattern_summary"]}
+        assert by_label[1]["n_defects"] == 1
+        # resolved single sites exported as picks + node-tagged table
+        assert results["n_pattern_sites"] == 3
+        assert os.path.exists(results["fp_pattern_site_picks"])
+        assert os.path.exists(results["fp_pattern_sites_table"])
+        import yaml as _y
+
+        with open(results["fp_pattern_site_picks"]) as f:
+            sp = _y.safe_load(f)
+        assert len(sp["Centers"]) == 3
+
+        shutil.rmtree(os.path.join(self.results_folder, "00_pick_origami"))
+
     def pairwise_module_executor(self):
         return
         shutil.rmtree(
             os.path.join(self.results_folder, "00_pairwise_module_executor")
         )
 
-    def ripleysk(self):
-        return
-        shutil.rmtree(os.path.join(self.results_folder, "00_ripleysk"))
-
     def ripleysk2(self):
         return
         shutil.rmtree(os.path.join(self.results_folder, "00_ripleysk2"))
-
-    def ripleysk_average(self):
-        return
-        shutil.rmtree(os.path.join(self.results_folder, "00_ripleysk"))
 
     def ripleysk_average2(self):
         return
@@ -2109,11 +3157,91 @@ class TestAnalyseModules(unittest.TestCase):
             os.path.join(self.results_folder, "00_ripleysk_average2")
         )
 
-    def protein_interactions(self):
-        return
+    @patch("picasso_workflow.analyse.spinna.generate_N_structures")
+    @patch(
+        "picasso_workflow.outpost.spinna.wrappers.load_structures_from_dict"
+    )
+    @patch("picasso_workflow.outpost.spinna.wrappers.single_spinna_run")
+    def protein_interactions(
+        self, mock_single_spinna_run, mock_load_structures, mock_gen_N
+    ):
+        """Drive AutoPicasso.protein_interactions end-to-end with the heavy
+        picasso calls patched, and assert single_spinna_run is invoked with
+        keyword args (NND_bin / NND_maxdist, not the old fit_* names, and not
+        a single positional dict)."""
+        # load_structures_from_dict -> (structures, targets)
+        mock_load_structures.return_value = (["struct"], ["CD80", "CD86"])
+        # generate_N_structures -> simulated structure counts (opaque)
+        mock_gen_N.return_value = {"CD80": 1, "CD86": 1}
+        # single_spinna_run -> (result_dict, fp_fig_list); the result dict
+        # must carry the fitted proportions. For a hetero pair A != B the
+        # downstream code expects a length-6 vector (A, AA, B, BB, AB, AABB).
+        mock_single_spinna_run.return_value = (
+            {"Fitted proportions of structures": [10, 5, 8, 4, 3, 2]},
+            ["interaction-CD80-CD86.png"],
+        )
+
+        info = [
+            {"Width": 1000, "Height": 1000, "Frames": 10000, "Pixelsize": 130}
+        ]
+        locs_dtype = [
+            ("frame", "u4"),
+            ("photons", "f4"),
+            ("x", "f4"),
+            ("y", "f4"),
+            ("lpx", "f4"),
+            ("lpy", "f4"),
+        ]
+
+        def _mklocs():
+            return pd.DataFrame(
+                np.rec.array(
+                    [
+                        tuple([i] + list(np.random.rand(len(locs_dtype) - 1)))
+                        for i in range(len(self.ap.movie))
+                    ],
+                    dtype=locs_dtype,
+                )
+            )
+
+        self.ap.channel_locs = [_mklocs(), _mklocs()]
+        self.ap.channel_info = [info, info]
+        self.ap.channel_tags = ["CD80", "CD86"]
+
+        parameters = {
+            "channel_map": {"CD80": 0, "CD86": 1},
+            "labeling_efficiency": {"CD80": 0.5, "CD86": 0.6},
+            "labeling_uncertainty": 5,
+            "n_simulate": 50000,
+            "density": [0.00009, 0.00009],
+            "nn_nth": 4,
+            "structure_distance": 10.0,
+            "res_factor": 10,
+            "sim_repeats": 5,
+            "interaction_pairs": [["CD80", "CD86"]],
+        }
+
+        parameters, results = self.ap.protein_interactions(0, parameters)
+
+        # single_spinna_run must have been reached and called.
+        self.assertTrue(mock_single_spinna_run.called)
+        # It must be called with keyword args, not a single positional dict.
+        self.assertEqual(len(mock_single_spinna_run.call_args.args), 0)
+        kwargs = mock_single_spinna_run.call_args.kwargs
+        # The dict keys were renamed from fit_NND_* to NND_*.
+        self.assertIn("NND_bin", kwargs)
+        self.assertIn("NND_maxdist", kwargs)
+        self.assertNotIn("fit_NND_bin", kwargs)
+        self.assertNotIn("fit_NND_maxdist", kwargs)
+
         shutil.rmtree(
             os.path.join(self.results_folder, "00_protein_interactions")
         )
+
+    def test_protein_interactions(self):
+        """Collected entry point for the patched protein_interactions
+        exercise above (the patch decorators inject the mocks)."""
+        self.protein_interactions()
 
     def create_mask(self):
         """Create a density mask"""
@@ -2182,8 +3310,8 @@ class TestAnalyseModules(unittest.TestCase):
             )
         )
 
-    @patch("picasso_workflow.analyse.picasso_outpost.pick_gold")
-    @patch("picasso_workflow.analyse.picasso_outpost.picked_locs")
+    @patch("picasso_workflow.outpost.picks.picks.pick_gold")
+    @patch("picasso_workflow.outpost.picks.picks.picked_locs")
     @patch("picasso_workflow.analyse.io.save_locs")
     def find_gold(self, mock_save_locs, mock_picked_locs, mock_pick_gold):
         parameters = {}
@@ -2193,26 +3321,86 @@ class TestAnalyseModules(unittest.TestCase):
 
         shutil.rmtree(os.path.join(self.results_folder, "00_find_gold"))
 
-    @patch("picasso_workflow.analyse.picasso_outpost._undrift_from_picked")
+    @patch("picasso_workflow.outpost.picks.picks.picked_locs")
+    @patch("picasso_workflow.outpost.picks.picks._undrift_from_picked")
     @patch("picasso_workflow.analyse.io.save_locs")
     @patch("picasso_workflow.analyse.io.load_locs")
     def undrift_from_picked(
-        self, mock_load_locs, mock_save_locs, mock_undrift
+        self,
+        mock_load_locs,
+        mock_save_locs,
+        mock_undrift,
+        mock_picked_locs,
     ):
-        # parameters = {"fp_picked_locs": "fp"}
-        # mock_undrift.return_value = (
-        #     "locs",
-        #     [{"name": "info"}],
-        #     ([2, 4, 3], [3, 2, 1]),
-        # )
-        # mock_save_locs.return_value = None
-        # mock_load_locs.return_value = "locs", [{"name": "info"}]
-        # parameters, results = self.ap.undrift_from_picked(0, parameters)
+        """A pick-region .yaml is applied to self.locs (not opened as hdf5)."""
+        import yaml as _yaml
 
-        # shutil.rmtree(
-        #     os.path.join(self.results_folder, "00_undrift_from_picked")
-        # )
-        pass
+        self.ap.locs = pd.DataFrame(
+            np.rec.array(
+                [
+                    (i, 10.0, 10.0, 1000, 1, 1, 100, 0.1, 0.1, 0.5, 50, i)
+                    for i in range(6)
+                ],
+                dtype=self.locs_dtype,
+            )
+        )
+        self.ap.info = [
+            {"Width": 64, "Height": 64, "Frames": 6, "Pixelsize": 130}
+        ]
+
+        # picked_locs (mocked) returns grouped locs: 2 picks (groups 0, 1)
+        grouped = pd.DataFrame(
+            np.rec.array(
+                [
+                    (0, 10.0, 10.0, 1000, 1, 1, 100, 0.1, 0.1, 0.5, 50, 1, 0),
+                    (1, 20.0, 20.0, 1000, 1, 1, 100, 0.1, 0.1, 0.5, 50, 1, 1),
+                ],
+                dtype=self.locs_dtype + [("group", "<i4")],
+            )
+        )
+        mock_picked_locs.return_value = grouped
+        mock_undrift.return_value = (
+            self.ap.locs,
+            self.ap.info,
+            ([0.0, 0.1], [0.0, 0.2]),
+        )
+        self.ap._plot_drift = MagicMock()
+
+        # write a picasso pick-region yaml (Centers + Diameter)
+        fp_yaml = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)),
+            "..",
+            "..",
+            "temp",
+            "picks_undrift.yaml",
+        )
+        os.makedirs(os.path.dirname(fp_yaml), exist_ok=True)
+        with open(fp_yaml, "w") as f:
+            _yaml.dump(
+                {
+                    "Centers": [[10.0, 10.0], [20.0, 20.0]],
+                    "Diameter (nm)": 91.0,
+                    "Shape": "Circle",
+                },
+                f,
+            )
+
+        parameters = {"fp_picked_locs": fp_yaml}
+        parameters, results = self.ap.undrift_from_picked(0, parameters)
+
+        # yaml path: picked_locs applied to self.locs; io.load_locs NOT used
+        assert mock_picked_locs.called
+        assert not mock_load_locs.called
+        # centers forwarded, diameter converted nm -> camera px (91/130)
+        call = mock_picked_locs.call_args
+        assert call[0][2] == [[10.0, 10.0], [20.0, 20.0]]
+        assert abs(call[1]["pick_diameter"] - 91.0 / 130) < 1e-6
+        assert mock_undrift.called
+
+        os.remove(fp_yaml)
+        shutil.rmtree(
+            os.path.join(self.results_folder, "00_undrift_from_picked")
+        )
 
     @patch("picasso_workflow.analyse.io.save_locs", MagicMock)
     def filter_locs(self):
@@ -2239,6 +3427,91 @@ class TestAnalyseModules(unittest.TestCase):
         parameters, results = self.ap.filter_locs(0, parameters)
 
         shutil.rmtree(os.path.join(self.results_folder, "00_filter_locs"))
+
+    def _set_monotonic_locs(self):
+        """Give self.ap.locs deterministic, monotonic photons / x columns.
+
+        Row i has photons = 10*i (0..990) and x = i/10 (0..9.9), so every
+        quantile maps to a known row. Returns the photons array for building
+        expected thresholds.
+        """
+        photons = np.arange(100, dtype="f4") * 10.0
+        locs = pd.DataFrame(
+            {
+                "frame": np.arange(100, dtype="u4"),
+                "photons": photons,
+                "x": photons / 100.0,
+                "y": photons / 100.0,
+            }
+        )
+        self.ap.locs = locs
+        return photons
+
+    @patch("picasso_workflow.analyse.io.save_locs", MagicMock)
+    def test_filter_locs_quantile_single_field(self):
+        """Quantile mode keeps the [q_min, q_max] band, not [q_min, q_min].
+
+        Regression for the bug where the max threshold was computed from the
+        min quantiles, collapsing the band and discarding nearly everything.
+        """
+        photons = self._set_monotonic_locs()
+        q_lo = np.quantile(photons, 0.1)
+        q_hi = np.quantile(photons, 0.9)
+
+        parameters = {
+            "field": "photons",
+            "minval": 0.1,
+            "maxval": 0.9,
+            "mode": "quantile",
+        }
+        _, results = self.ap.filter_locs(0, parameters)
+        shutil.rmtree(os.path.join(self.results_folder, "00_filter_locs"))
+
+        retained = self.ap.locs["photons"].to_numpy()
+        # The band is wide (~80% of rows), not collapsed to a point.
+        assert results["nlocs_after"] > 50
+        assert results["nlocs_after"] < results["nlocs_before"]
+        assert retained.min() >= q_lo - 1e-6
+        assert retained.max() <= q_hi + 1e-6
+
+    @patch("picasso_workflow.analyse.io.save_locs", MagicMock)
+    def test_filter_locs_quantile_multi_field_uses_own_stats(self):
+        """Each field is filtered by its OWN per-field quantiles.
+
+        Regression for the bug where the enumerate loop applied the last
+        field's statistics to every field. Here photons (0..990) and x
+        (0..9.9) live on different scales, so cross-applying one field's
+        absolute thresholds to the other would discard everything.
+        """
+        self._set_monotonic_locs()
+
+        parameters = {
+            "field": ["photons", "x"],
+            "minval": [0.1, 0.1],
+            "maxval": [0.9, 0.9],
+            "mode": "quantile",
+        }
+        _, results = self.ap.filter_locs(0, parameters)
+        shutil.rmtree(os.path.join(self.results_folder, "00_filter_locs"))
+
+        # The caller's min/max lists must not be mutated into absolute values:
+        # the single-dataset runner records them to WorkflowRunner.yaml and a
+        # re-run must still see the original quantile spec.
+        assert parameters["minval"] == [0.1, 0.1]
+        assert parameters["maxval"] == [0.9, 0.9]
+
+        # photons and x are perfectly correlated, so both per-field bands
+        # select the same ~80 rows; a cross-applied threshold would leave 0.
+        assert results["nlocs_after"] > 50
+        retained = self.ap.locs
+        assert (
+            retained["photons"].min()
+            >= np.quantile(np.arange(100, dtype="f4") * 10.0, 0.1) - 1e-6
+        )
+        assert (
+            retained["x"].max()
+            <= np.quantile(np.arange(100, dtype="f4") / 10.0, 0.9) + 1e-6
+        )
 
     def filter_transient_binding(self):
         parameters = {}
@@ -2270,15 +3543,17 @@ class TestAnalyseModules(unittest.TestCase):
         )
 
     @patch("picasso_workflow.analyse.io.save_locs", MagicMock())
-    @patch("picasso_workflow.analyse.postprocess.link", MagicMock())
-    def link_locs(self):
+    @patch("picasso_workflow.analyse.postprocess.link")
+    def link_locs(self, mock_link):
+        # picasso 1.0: link returns (locs, info).
+        mock_link.return_value = (self.ap.locs, self.ap.info)
         parameters = {"d_max": 2, "tolerance": 3}
 
         parameters, results = self.ap.link_locs(0, parameters)
 
         shutil.rmtree(os.path.join(self.results_folder, "00_link_locs"))
 
-    @patch("picasso_workflow.analyse.picasso_outpost.plot_spinna_nnd")
+    @patch("picasso_workflow.outpost.spinna.wrappers.plot_spinna_nnd")
     @patch("picasso_workflow.analyse.spinna.fit_le")
     def labeling_efficiency_analysis(self, mock_fit_le, mock_plot_nnd):
         parameters = {
@@ -2400,196 +3675,386 @@ class TestAnalyseModules(unittest.TestCase):
             os.path.join(self.results_folder, "00_conditional_branch")
         )
 
+    def branch(self):
+        """Test the branch module (explicit and runtime types)."""
+
+        # --- runtime type: branch count + per-branch item from a list -------
+        parameters = {
+            "branch_type": "runtime",
+            "branch_over": [1, 2, 3],
+            "label_template": "cell{n:02d}",
+            "branch_modules": [("dummy_module", {})],
+            "join_modules": [("dummy_module", {})],
+        }
+        parameters, results = self.ap.branch(0, parameters)
+        assert results["branch_type"] == "runtime"
+        assert results["labels"] == ["cell00", "cell01", "cell02"]
+        assert len(results["branches"]) == 3
+        assert results["branches"][0]["label"] == "cell00"
+        assert "00_dummy_module" in results["branches"][0]
+        assert "00_dummy_module" in results["join"]
+        assert results["topology"]["type"] == "runtime"
+        assert len(results["topology"]["branches"]) == 3
+        assert results["skipped"] == []
+        # per-branch and join folders exist
+        assert os.path.isdir(
+            os.path.join(
+                self.results_folder, "00_branch", "cell00", "00_dummy_module"
+            )
+        )
+        assert os.path.isdir(
+            os.path.join(self.results_folder, "00_branch", "join")
+        )
+        shutil.rmtree(os.path.join(self.results_folder, "00_branch"))
+
+        # --- explicit type: fixed n_branches with a per-branch override -----
+        parameters = {
+            "branch_type": "explicit",
+            "n_branches": 3,
+            "branch_labels": ["a", "b", "c"],
+            "branch_modules": [("dummy_module", {})],
+            "join_modules": [("dummy_module", {})],
+        }
+        # capture intra-module progress reported across the sub-modules
+        progress = []
+        self.ap._progress_callback = lambda frac, msg=None: progress.append(
+            (frac, msg)
+        )
+        parameters, results = self.ap.branch(1, parameters)
+        # restore the default (None) rather than deleting the attribute:
+        # test_modules reuses one self.ap across every module test, so a
+        # deleted _progress_callback would break later modules (e.g. identify).
+        self.ap._progress_callback = None
+        assert results["branch_type"] == "explicit"
+        assert results["labels"] == ["a", "b", "c"]
+        assert len(results["branches"]) == 3
+        assert results["topology"]["type"] == "explicit"
+        # progress advanced with per-branch messages (3 branches + 1 join)
+        assert len(progress) == 4
+        fracs = [f for f, _ in progress]
+        assert fracs == sorted(fracs)
+        assert any("a:" in (m or "") for _, m in progress)
+        assert any("join:" in (m or "") for _, m in progress)
+        shutil.rmtree(os.path.join(self.results_folder, "01_branch"))
+
+        # $branch overrides resolve to the branch id's value
+        resolved = analyse.AutoPicasso._resolve_branch_overrides(
+            {"k": ("$branch", [10, 20, 30]), "s": 1}, 1
+        )
+        assert resolved == {"k": 20, "s": 1}
+
+        # $branch_item resolves to this branch's runtime item -- the whole
+        # item, or a key/index into it
+        item = {"nth": 7, "name": "x"}
+        assert analyse.AutoPicasso._resolve_branch_overrides(
+            {"a": ("$branch_item",), "b": ("$branch_item", "nth")}, 0, item
+        ) == {"a": item, "b": 7}
+
+    def test_branch_streams_submodules_live(self):
+        """A reporter with the live hooks gets one open_branch_page per branch
+        and each sub-module handed to it as it finishes (in order), so a child
+        page fills in during execution rather than only at the end."""
+        calls = []
+
+        class FakeLiveReporter:
+            supports_live_branch_pages = True
+
+            def open_branch_page(self, label, module_index=None):
+                calls.append(("open", label, module_index))
+                return ("title-" + label, "id-" + label)
+
+            def report_branch_submodule(
+                self, handle, sub_idx, name, params, results
+            ):
+                calls.append(("sub", handle[0], sub_idx, name))
+
+        self.ap._branch_live_reporters = [FakeLiveReporter()]
+        parameters = {
+            "branch_type": "explicit",
+            "n_branches": 2,
+            "branch_labels": ["a", "b"],
+            "branch_modules": [("dummy_module", {}), ("dummy_module", {})],
+            "join_modules": [],
+        }
+        self.ap.branch(2, parameters)
+
+        # one page opened per branch
+        assert [c[1] for c in calls if c[0] == "open"] == ["a", "b"]
+        # each branch streamed its two sub-modules, in execution order
+        for label in ("a", "b"):
+            subs = [
+                c for c in calls if c[0] == "sub" and c[1] == f"title-{label}"
+            ]
+            assert [c[2] for c in subs] == [0, 1]
+        # a branch's page is opened (with this branch module's index) before
+        # any of its sub-modules stream
+        assert calls[0] == ("open", "a", 2)
+        assert calls[1][:2] == ("sub", "title-a")
+        shutil.rmtree(os.path.join(self.results_folder, "02_branch"))
+
+    def test_branch_skips_reporter_opting_out_of_live_pages(self):
+        """A reporter that has the hook methods but sets
+        ``supports_live_branch_pages = False`` must NOT be streamed to. The
+        single-file HTMLReporter is exactly this case -- it *inherits*
+        open_branch_page / report_branch_submodule from ConfluenceReporter, so
+        a plain hasattr() check would wrongly stream branch sub-reports into
+        its one report file (and re-render them in batch)."""
+        calls = []
+
+        class OptedOutReporter:
+            supports_live_branch_pages = False
+
+            def open_branch_page(self, label, module_index=None):
+                calls.append(("open", label))
+                return ("t", "id")
+
+            def report_branch_submodule(self, *a):
+                calls.append(("sub",))
+
+        self.ap._branch_live_reporters = [OptedOutReporter()]
+        parameters = {
+            "branch_type": "explicit",
+            "n_branches": 1,
+            "branch_labels": ["a"],
+            "branch_modules": [("dummy_module", {})],
+            "join_modules": [],
+        }
+        self.ap.branch(2, parameters)
+        assert calls == []  # opted-out reporter never streamed to
+        shutil.rmtree(os.path.join(self.results_folder, "02_branch"))
+
+    def test_branch_skips_empty_branches(self):
+        """A sub-module raising SkipBranch drops that branch; the join and the
+        remaining branches proceed and the pipeline is not failed."""
+        from picasso_workflow.analyse import SkipBranch
+
+        def skipper(sub_idx, params, calling_module_dir=None, suffix=""):
+            if params.get("boom"):
+                raise SkipBranch("no data here")
+            return params, {"ok": True}
+
+        self.ap.skipper = skipper
+        parameters = {
+            "branch_type": "explicit",
+            "n_branches": 3,
+            "branch_labels": ["a", "b", "c"],
+            "branch_modules": [
+                ("skipper", {"boom": ("$branch", [False, True, False])})
+            ],
+            "join_modules": [],
+        }
+        _, results = self.ap.branch(2, parameters)
+        # branch "b" is dropped; only a and c produce results
+        assert results["labels"] == ["a", "c"]
+        assert len(results["branches"]) == 2
+        assert [s["label"] for s in results["skipped"]] == ["b"]
+        assert results["topology"]["skipped"] == ["b"]
+        del self.ap.skipper
+        shutil.rmtree(os.path.join(self.results_folder, "02_branch"))
+
+    def test_branch_default_summarize_join(self):
+        """A summarize_branches join with no explicit values auto-summarizes
+        the branch module's per-branch numeric results."""
+
+        def metric(sub_idx, params, calling_module_dir=None, suffix=""):
+            return params, {"val": float(params.get("v", 0))}
+
+        self.ap.metric = metric
+        parameters = {
+            "branch_type": "explicit",
+            "n_branches": 3,
+            "branch_labels": ["a", "b", "c"],
+            "branch_modules": [("metric", {"v": ("$branch", [1, 2, 3])})],
+            "join_modules": [("summarize_branches", {})],
+        }
+        _, results = self.ap.branch(2, parameters)
+        summ = results["join"]["00_summarize_branches"]
+        assert summ["mode"] == "replicates"
+        assert "00_metric: val" in summ["stats"]
+        assert abs(summ["stats"]["00_metric: val"]["mean"] - 2.0) < 1e-9
+        assert os.path.isfile(summ["fp_fig"])
+        del self.ap.metric
+        shutil.rmtree(os.path.join(self.results_folder, "02_branch"))
+
+    def test_branch_item_resolution_tolerates_array_params(self):
+        """_resolve_branch_overrides must not choke on array-valued params
+        (a bare ``obj == "$branch_item"`` would raise on an ndarray)."""
+        params = {
+            "roi": np.array([1.0, 2.0, 3.0]),
+            "nth": ("$branch_item",),
+            "keyed": ("$branch_item", "k"),
+        }
+        out = analyse.AutoPicasso._resolve_branch_overrides(
+            params, 0, {"k": 7}
+        )
+        assert np.array_equal(out["roi"], np.array([1.0, 2.0, 3.0]))
+        assert out["nth"] == {"k": 7}
+        assert out["keyed"] == 7
+
+    def test_summarize_branches_autodetect_label_alignment(self):
+        """A metric present in only some branches keeps its values aligned to
+        the correct branch labels (no positional mislabel)."""
+        branches = [
+            {"label": "a", "00_m": {"only_bc": None}},
+            {"label": "b", "00_m": {"only_bc": 2.0}},
+            {"label": "c", "00_m": {"only_bc": 3.0}},
+        ]
+        series, series_labels = analyse.AutoPicasso._autodetect_branch_metrics(
+            branches
+        )
+        # branch "a" has no numeric value -> dropped from both, b/c kept aligned
+        assert series["00_m: only_bc"] == [2.0, 3.0]
+        assert series_labels["00_m: only_bc"] == ["b", "c"]
+
+    def test_branch_skips_join_module_on_skipbranch(self):
+        """A join module raising SkipBranch is dropped, the run continues."""
+        from picasso_workflow.analyse import SkipBranch
+
+        def joinskip(sub_idx, params, calling_module_dir=None, suffix=""):
+            raise SkipBranch("empty join")
+
+        self.ap.joinskip = joinskip
+        parameters = {
+            "branch_type": "explicit",
+            "n_branches": 2,
+            "branch_labels": ["a", "b"],
+            "branch_modules": [("dummy_module", {})],
+            "join_modules": [("joinskip", {})],
+        }
+        _, results = self.ap.branch(2, parameters)
+        assert results["join"] == {}  # skipped, not fatal
+        assert len(results["branches"]) == 2
+        del self.ap.joinskip
+        shutil.rmtree(os.path.join(self.results_folder, "02_branch"))
+
+    def test_summarize_branches_autodetects_metrics(self):
+        """Given a per-branch results list, summarize_branches flattens the
+        numeric metrics (skipping bookkeeping keys) and labels by branch."""
+        branches = [
+            {
+                "label": "a",
+                "00_nn": {"nn": 1.0, "duration": 5.0},
+                "01_x": {"m": 10.0},
+            },
+            {
+                "label": "b",
+                "00_nn": {"nn": 3.0, "duration": 6.0},
+                "01_x": {"m": 20.0},
+            },
+        ]
+        _, results = self.ap.summarize_branches(0, {"values": branches})
+        stats = results["stats"]
+        assert set(stats) == {"00_nn: nn", "01_x: m"}  # duration skipped
+        assert abs(stats["00_nn: nn"]["mean"] - 2.0) < 1e-9
+        assert stats["01_x: m"]["n"] == 2
+        assert os.path.isfile(results["fp_fig"])
+        shutil.rmtree(
+            os.path.join(self.results_folder, "00_summarize_branches")
+        )
+
+    def summarize_branches(self):
+        """Test the summarize_branches plotting module."""
+        # replicates mode: a metric across branches
+        parameters = {
+            "values": [0.4, 0.6, 0.8],
+            "labels": ["a", "b", "c"],
+            "ylabel": "labeling efficiency",
+        }
+        parameters, results = self.ap.summarize_branches(0, parameters)
+        assert results["mode"] == "replicates"
+        assert os.path.isfile(results["fp_fig"])
+        assert results["stats"]["labeling efficiency"]["n"] == 3
+        assert (
+            abs(results["stats"]["labeling efficiency"]["mean"] - 0.6) < 1e-9
+        )
+        shutil.rmtree(
+            os.path.join(self.results_folder, "00_summarize_branches")
+        )
+
+        # screen mode: metric vs a per-branch argument
+        parameters = {
+            "values": {"nn": [1.0, 2.0, 3.0]},
+            "x": [10, 20, 30],
+            "mode": "auto",
+        }
+        parameters, results = self.ap.summarize_branches(1, parameters)
+        assert results["mode"] == "screen"
+        assert os.path.isfile(results["fp_fig"])
+        shutil.rmtree(
+            os.path.join(self.results_folder, "01_summarize_branches")
+        )
+
+        # one dict per branch (e.g. labeling_efficiency = {target, reference})
+        # pivots into one series per key -- must not crash on float(dict).
+        parameters = {
+            "values": [
+                {"tgt": 0.4, "ref": 0.6},
+                {"tgt": 0.5, "ref": 0.7},
+                {"tgt": 0.3, "ref": 0.9},
+            ],
+            "labels": ["c0", "c1", "c2"],
+        }
+        parameters, results = self.ap.summarize_branches(2, parameters)
+        assert set(results["stats"]) == {"tgt", "ref"}
+        assert abs(results["stats"]["tgt"]["mean"] - 0.4) < 1e-9
+        assert os.path.isfile(results["fp_fig"])
+        shutil.rmtree(
+            os.path.join(self.results_folder, "02_summarize_branches")
+        )
+
+        # robustness: a stray non-numeric value is skipped, not fatal
+        parameters, results = self.ap.summarize_branches(
+            3, {"values": [1.0, {"x": 1}, 3.0], "ylabel": "m"}
+        )
+        assert results["stats"]["m"]["n"] == 2
+        shutil.rmtree(
+            os.path.join(self.results_folder, "03_summarize_branches")
+        )
+
+        # violin plot_type: two categories (target/reference), several
+        # replicate cells each -- must render without error.
+        parameters, results = self.ap.summarize_branches(
+            4,
+            {
+                "values": [
+                    {"NCR3-batch4": 0.42, "GFPNb": 0.61},
+                    {"NCR3-batch4": 0.55, "GFPNb": 0.70},
+                    {"NCR3-batch4": 0.33, "GFPNb": 0.88},
+                ],
+                "plot_type": "violin",
+                "ylabel": "labeling efficiency",
+            },
+        )
+        assert results["mode"] == "replicates"
+        assert set(results["stats"]) == {"NCR3-batch4", "GFPNb"}
+        assert os.path.isfile(results["fp_fig"])
+        shutil.rmtree(
+            os.path.join(self.results_folder, "04_summarize_branches")
+        )
+
+        # violin degenerate case (single replicate) falls back to a box
+        # plot instead of crashing on the KDE.
+        parameters, results = self.ap.summarize_branches(
+            5,
+            {
+                "values": [{"a": 0.4, "b": 0.6}],
+                "plot_type": "violin",
+                "ylabel": "m",
+            },
+        )
+        assert os.path.isfile(results["fp_fig"])
+        shutil.rmtree(
+            os.path.join(self.results_folder, "05_summarize_branches")
+        )
+
     def resolution_frc_spatial(self):
         """Is tested separately in tests/outpost_modules/test_resolution_frc.py"""
 
     def resolution_analysis(self):
         pass
 
-    # @unittest.skip("")
-    def undrift_rsso(self):
-        """Test the undrift_rsso module with synthetic drift data"""
-        import numpy as np
-
-        # Create synthetic data with known drift
-        np.random.seed(42)
-        n_frames = 50  # Fewer frames for faster test
-        n_locs_per_frame = 200  # More locs per frame for better statistics
-        true_drift_rate_x = 0.05  # Smaller drift rate (pixels per frame)
-        true_drift_rate_y = 0.03  # Smaller drift rate (pixels per frame)
-
-        # Generate synthetic localizations with drift
-        all_locs = []
-        true_drift_x = []
-        true_drift_y = []
-
-        for frame in range(n_frames):
-            # Calculate cumulative drift
-            drift_x = true_drift_rate_x * frame
-            drift_y = true_drift_rate_y * frame
-            true_drift_x.append(drift_x)
-            true_drift_y.append(drift_y)
-
-            # Generate random localizations with added drift
-            x_base = np.random.uniform(10, 50, n_locs_per_frame)
-            y_base = np.random.uniform(10, 50, n_locs_per_frame)
-
-            frame_locs = np.rec.array(
-                [
-                    (
-                        frame,
-                        x + drift_x,
-                        y + drift_y,
-                        1000,
-                        1.0,
-                        1.0,
-                        100,
-                        0.1,
-                        0.1,
-                        0.5,
-                        50,
-                        1,
-                    )
-                    for x, y in zip(x_base, y_base)
-                ],
-                dtype=self.locs_dtype,
-            )
-            frame_locs = pd.DataFrame(frame_locs)
-
-            all_locs.append(frame_locs)
-
-        # Combine all localizations
-        # synthetic_locs = np.lib.recfunctions.stack_arrays(
-        #     all_locs, asrecarray=True, usemask=False
-        # )
-        synthetic_locs = pd.concat(all_locs, ignore_index=True)
-
-        # Create AutoPicasso instance with synthetic data
-        analysis_config = {
-            "camera_info": {
-                "Gain": 1,
-                "Sensitivity": 0.45,
-                "Baseline": 100,
-                "Qe": 0.82,
-                "Pixelsize": 130,  # nm
-            },
-            "gpufit_installed": False,
-        }
-        ap = analyse.AutoPicasso(self.results_folder, analysis_config)
-        ap.locs = synthetic_locs
-        ap.info = [
-            {"Frames": n_frames, "Width": 64, "Height": 64, "Pixelsize": 100}
-        ]  # 100 nm pixels
-
-        # Test parameters
-        parameters = {
-            "ton": 3.0,  # 3 frame half-life
-            "toff": 10.0,  # 10 frame reappearance time
-            "max_shift": 0.5,  # 0.5 pixel max shift per frame
-            "processing_chunk_size": 25,  # Processing chunk size
-            "min_locs_per_frame": 20,  # Ensure sufficient data for frame-level
-            "min_locs_per_block": 100,  # Ensure sufficient data for block-level
-            "plot_drift": True,
-            "save_locs": False,
-        }
-
-        # Run undrift_rsso
-        parameters, results = ap.undrift_rsso(0, parameters)
-
-        # Verify results - check for essential outputs
-        # The function should complete and create plots
-
-        # Check that drift plot was created
-        # assert "fp_fig" in results, "Should create drift plot"
-        # assert os.path.exists(
-        #     results["fp_fig"]
-        # ), "Drift plot file should exist"
-
-        # # Verify that drift arrays are stored in AutoPicasso instance
-        # assert hasattr(ap, "drift"), "Should store drift in ap.drift"
-        # assert hasattr(ap.drift, "shape"), "Drift should be array-like"
-        # assert len(ap.drift.shape) == 2, "Drift should be 2D array"
-        # assert ap.drift.shape[1] == 2, "Should have x and y drift dimensions"
-        # assert (
-        #     ap.drift.shape[0] == n_frames
-        # ), "Drift array should match number of frames"
-
-        # # Verify drift was detected (should be non-zero since we added artificial drift)
-        # drift_magnitude = np.sqrt(np.sum(ap.drift**2, axis=1)).mean()
-        # assert drift_magnitude > 0, f"Should detect non-zero drift, got {drift_magnitude}"
-
-        # Clean up plots
-        import glob
-
-        undrift_folder = os.path.join(self.results_folder, "00_undrift_rsso")
-        if os.path.exists(undrift_folder):
-            for pattern in [
-                "drift_*.png",
-                "convergence_*.png",
-                "robustness_*.png",
-            ]:
-                for file in glob.glob(os.path.join(undrift_folder, pattern)):
-                    try:
-                        os.remove(file)
-                    except Exception:
-                        pass
-
-    @unittest.skip("")
-    def test_16_undrift_rsso_edge_cases(self):
-        """Test undrift_rsso with edge cases and error conditions"""
-        # Test with insufficient data
-        analysis_config = {
-            "camera_info": {
-                "Gain": 1,
-                "Sensitivity": 0.45,
-                "Baseline": 100,
-                "Qe": 0.82,
-                "Pixelsize": 130,  # nm
-            },
-            "gpufit_installed": False,
-        }
-        ap = analyse.AutoPicasso(self.results_folder, analysis_config)
-
-        # Create minimal dataset (too few localizations)
-        minimal_locs = np.rec.array(
-            [
-                (0, 10.0, 10.0, 1000, 1.0, 1.0, 100, 0.1, 0.1, 0.5, 50, 1),
-                (1, 10.1, 10.1, 1000, 1.0, 1.0, 100, 0.1, 0.1, 0.5, 50, 1),
-            ],
-            dtype=self.locs_dtype,
-        )
-        minimal_locs = pd.DataFrame(minimal_locs)
-
-        ap.locs = minimal_locs
-        ap.info = [{"Frames": 2, "Width": 64, "Height": 64, "Pixelsize": 100}]
-
-        parameters = {
-            "ton": 5.0,
-            "toff": 20.0,
-            "max_shift": 1.0,
-            "min_locs_per_frame": 100,  # Impossibly high threshold
-            "plot_drift": False,
-            "save_locs": False,
-        }
-
-        # Should handle gracefully
-        parameters, results = ap.undrift_rsso(0, parameters)
-
-        # Should still succeed even with insufficient data
-        assert results["success"]
-        assert "total_drift" in results
-
-        # Test with no localizations
-        empty_locs = np.array([], dtype=self.locs_dtype).view(np.recarray)
-        empty_locs = pd.DataFrame(empty_locs)
-        ap.locs = empty_locs
-
-        parameters, results = ap.undrift_rsso(0, parameters)
-        assert results["success"]
-        assert results["total_drift"] == 0.0
-
-    @patch("picasso_workflow.analyse.picasso_outpost.pick_similar")
-    @patch("picasso_workflow.analyse.picasso_outpost.picked_locs")
+    @patch("picasso_workflow.outpost.picks.picks.pick_similar")
+    @patch("picasso_workflow.outpost.picks.picks.picked_locs")
     @patch("picasso_workflow.analyse.render.plot_scene")
     @patch("picasso_workflow.analyse.io.save_locs")
     def find_similar(
@@ -2725,11 +4190,7 @@ class TestAnalyse(unittest.TestCase):
     ]
 
     def setUp(self):
-        self.results_folder = os.path.normpath(
-            os.path.join(
-                os.path.dirname(os.path.abspath(__file__)), "..", "..", "temp"
-            )
-        )
+        self.results_folder = temp_folder()
         analysis_config = {
             "camera_info": {
                 "Gain": 1,
@@ -2766,6 +4227,50 @@ class TestAnalyse(unittest.TestCase):
 
         shutil.rmtree(os.path.join(self.results_folder, "00_my_method"))
 
+    def test_01b_module_decorator_records_checkpoint(self):
+        """The auto-save path records a checkpoint descriptor for resume."""
+
+        class TestClass:
+            results_folder = self.results_folder
+            analysis_config = {"always_save": True}
+            locs = "sentinel-locs"
+            channel_locs = ["a", "b"]
+            channel_tags = ["t1", "t2"]
+
+            def _save_locs(self, fp):
+                pass
+
+            def _save_datasets_agg(self, folder):
+                return [
+                    os.path.join(folder, t + ".hdf5")
+                    for t in self.channel_tags
+                ]
+
+            # the decorator's auto-save now delegates to this shared method
+            # (also used by the stepwise-boundary checkpoint)
+            save_locs_checkpoint = analyse.AutoPicasso.save_locs_checkpoint
+
+            @analyse.module_decorator
+            def my_method(self, i, parameters, results):
+                return parameters, results
+
+        tc = TestClass()
+        parameters, results = tc.my_method(0, {})
+        folder = results["folder"]
+        try:
+            assert results["checkpoint"]["single"] == {
+                "filepath": os.path.join(folder, "locs.hdf5")
+            }
+            assert results["checkpoint"]["channels"] == {
+                "filepaths": [
+                    os.path.join(folder, "t1.hdf5"),
+                    os.path.join(folder, "t2.hdf5"),
+                ],
+                "tags": ["t1", "t2"],
+            }
+        finally:
+            shutil.rmtree(folder, ignore_errors=True)
+
     def test_02_AutoPicasso_create_sample_movie(self):
         self.ap.movie = np.random.randint(
             0, 1000, size=(100, 32, 48), dtype=np.uint16
@@ -2781,17 +4286,43 @@ class TestAnalyse(unittest.TestCase):
 
         os.remove(os.path.join(self.results_folder, "samplemov.mp4"))
 
-    @patch("picasso_workflow.analyse.localize.get_spots")
-    def test_04_AutoPicasso_auto_min_netgrad(self, mock_get_spots):
-        mock_get_spots.return_value = [
-            np.random.randint(0, 1000, size=(7, 7), dtype=np.uint16)
-        ] * 48
+    @patch("picasso_workflow.analyse.localize.estimate_min_net_gradient")
+    @patch("picasso_workflow.analyse.localize.identify_by_frame_number")
+    @patch("picasso_workflow.analyse.AutoPicasso._draw_sample_spots")
+    def test_04_AutoPicasso_auto_min_netgrad(
+        self, mock_draw, mock_identify, mock_estimate
+    ):
+        # picasso 1.0 provides the estimator as a public API; the workflow
+        # delegates to it and maps min_net_gradient -> estd_net_grad.
+        edges = np.linspace(-3000.0, 5000.0, num=500)
+        mock_estimate.return_value = {
+            "min_net_gradient": 4123.7,
+            "background": 100.0,
+            "background_width": 50.0,
+            "histogram": np.ones(len(edges) - 1),
+            "bin_edges": edges,
+            "frames": np.array([9]),
+        }
+        mock_identify.return_value = pd.DataFrame(
+            {"frame": [9], "net_gradient": [4123.7]}
+        )
+        mock_draw.return_value = (
+            np.zeros((28, 84), dtype=np.uint8),
+            100.0,
+            9000.0,
+        )
         fn = os.path.join(self.results_folder, "autominnet.png")
         results = self.ap._auto_min_netgrad(
             box_size=7, frame_numbers=[9], filename=fn
         )
         logger.debug(results)
+        assert results["estd_net_grad"] == 4123.7
         assert results["filename"] == fn
+        mock_estimate.assert_called_once()
+        # box + start_net_gradient forwarded with the API's keyword names
+        _, kwargs = mock_estimate.call_args
+        assert kwargs["box"] == 7
+        assert kwargs["start_net_gradient"] == -3000
 
         os.remove(fn)
 
@@ -3057,3 +4588,223 @@ class TestAnalyse(unittest.TestCase):
         shutil.rmtree(
             os.path.join(self.results_folder, "03_conditional_branch")
         )
+
+    @patch("picasso_workflow.analyse.postprocess.decorrelation")
+    def test_12_resolution_decorr_spatial(self, mock_decorr):
+        """resolution_decorr_spatial tiles the FOV and calls picasso's
+        postprocess.decorrelation per region viewport.
+
+        Locs span a 20 um x 10 um extent (nm units); with region_size=10
+        um that is a 2x1 grid. Each region exceeds min_locs_per_region, so
+        both are processed; the mock returns a fixed resolution per call.
+        """
+        # locs in nm: x in [0, 20000), y in [0, 10000).
+        n = 2000
+        rng = np.random.default_rng(0)
+        self.ap.locs = pd.DataFrame(
+            {
+                "x": rng.uniform(0, 20000, n),
+                "y": rng.uniform(0, 10000, n),
+            }
+        )
+        self.ap.info = [{"Width": 200, "Height": 100, "Pixelsize": 100.0}]
+
+        mock_decorr.return_value = {"resolution": 25.0}
+
+        parameters, results = self.ap.resolution_decorr_spatial(
+            0,
+            {
+                "region_size": 10.0,
+                "min_locs_per_region": 100,
+                "n_radii": 40,
+                "n_filters": 8,
+            },
+        )
+
+        # 2x1 grid, both regions valid.
+        assert results["n_regions_total"] == 2
+        assert results["n_regions"] == 2
+        assert results["resolution_decorr_spatial"] == 25.0
+        assert results["resolution_std"] == 0.0
+        assert results["resolutions_per_region"] == [25.0, 25.0]
+        assert os.path.isfile(results["fig_decorr"])
+
+        # Param mapping n_r->n_radii, n_gauss->n_filters is passed through;
+        # dropped render params are not forwarded.
+        _, call_kwargs = mock_decorr.call_args
+        assert call_kwargs["n_radii"] == 40
+        assert call_kwargs["n_filters"] == 8
+        assert "pixelsize_render" not in call_kwargs
+        assert "apod_edge_width" not in call_kwargs
+        # viewport is ((y_min, x_min), (y_max, x_max)) in nm.
+        (y0, x0), (y1, x1) = call_kwargs["viewport"]
+        assert y1 > y0 and x1 > x0
+
+        shutil.rmtree(
+            os.path.join(self.results_folder, "00_resolution_decorr_spatial")
+        )
+
+    @patch("picasso_workflow.analyse.postprocess.decorrelation")
+    def test_12b_resolution_decorr_spatial_nan_region(self, mock_decorr):
+        """A NaN resolution from a region is excluded from the mean, and a
+        ValueError (region too small to render) is skipped, not raised."""
+        n = 2000
+        rng = np.random.default_rng(1)
+        self.ap.locs = pd.DataFrame(
+            {
+                "x": rng.uniform(0, 20000, n),
+                "y": rng.uniform(0, 10000, n),
+            }
+        )
+        self.ap.info = [{"Width": 200, "Height": 100, "Pixelsize": 100.0}]
+
+        # first region -> valid, second -> NaN.
+        mock_decorr.side_effect = [
+            {"resolution": 30.0},
+            {"resolution": np.nan},
+        ]
+        parameters, results = self.ap.resolution_decorr_spatial(
+            0, {"region_size": 10.0, "min_locs_per_region": 100}
+        )
+        assert results["n_regions"] == 2  # both counted
+        # mean/std over the single non-NaN value.
+        assert results["resolution_decorr_spatial"] == 30.0
+        assert results["resolution_std"] == 0.0
+        shutil.rmtree(
+            os.path.join(self.results_folder, "00_resolution_decorr_spatial")
+        )
+
+    @patch("picasso_workflow.analyse.postprocess.decorrelation")
+    def test_12c_resolution_decorr_spatial_empty_locs(self, mock_decorr):
+        """Empty locs degrade to NaN (guarded min/max reduction) rather than
+        crashing, and decorrelation is never called."""
+        self.ap.locs = pd.DataFrame({"x": [], "y": []}, dtype=float)
+        self.ap.info = [{"Width": 200, "Height": 100, "Pixelsize": 100.0}]
+        _, results = self.ap.resolution_decorr_spatial(
+            0, {"region_size": 10.0, "min_locs_per_region": 100}
+        )
+        mock_decorr.assert_not_called()
+        assert np.isnan(results["resolution_decorr_spatial"])
+        assert np.isnan(results["resolution_std"])
+        shutil.rmtree(
+            os.path.join(self.results_folder, "00_resolution_decorr_spatial")
+        )
+
+    def test_12d_resolution_decorr_spatial_bad_config_raises(self):
+        """A misconfigured n_radii/n_filters surfaces a clear ValueError
+        instead of being swallowed by the per-region catch (silent NaN)."""
+        self.ap.locs = pd.DataFrame({"x": [1.0, 2.0], "y": [1.0, 2.0]})
+        self.ap.info = [{"Width": 200, "Height": 100, "Pixelsize": 100.0}]
+        with self.assertRaises(ValueError):
+            self.ap.resolution_decorr_spatial(0, {"n_radii": 5})
+        with self.assertRaises(ValueError):
+            self.ap.resolution_decorr_spatial(0, {"n_filters": 1})
+
+
+def test_footprint_viewport_centres_on_com():
+    """The render viewport is centred on the localizations' centre of mass,
+    not the (off-centre) pick_similar grid centre, and a fixed footprint
+    size is preserved."""
+    # locs clustered around (10, 20); pick centre offset to (12, 18)
+    x = np.array([9.0, 10.0, 11.0])
+    y = np.array([19.0, 20.0, 21.0])
+    (ymin, xmin), (ymax, xmax) = analyse._footprint_viewport(
+        x, y, cx=12.0, cy=18.0, footprint_diameter=6.0
+    )
+    # centred on the COM (10, 20), NOT the pick centre (12, 18)
+    assert (xmin + xmax) / 2 == 10.0
+    assert (ymin + ymax) / 2 == 20.0
+    # side equals the footprint diameter
+    assert xmax - xmin == 6.0
+    assert ymax - ymin == 6.0
+
+
+def test_footprint_viewport_falls_back_to_pick_centre():
+    """With no localizations the viewport falls back to the pick centre."""
+    (ymin, xmin), (ymax, xmax) = analyse._footprint_viewport(
+        [], [], cx=5.0, cy=7.0, footprint_diameter=4.0
+    )
+    assert (xmin + xmax) / 2 == 5.0
+    assert (ymin + ymax) / 2 == 7.0
+
+
+def test_recenter_on_com_moves_centres_to_group_com():
+    """Each pick centre is relocated to the centre of mass of its group's
+    localizations (group id == index into centers); an empty group keeps its
+    original centre."""
+    picked = pd.DataFrame(
+        {
+            "x": [10.0, 12.0, 30.0, 30.0],
+            "y": [20.0, 22.0, 5.0, 7.0],
+            "group": [0, 0, 2, 2],
+        }
+    )
+    # group 1 has no locs -> keeps its original centre
+    centers = [(0.0, 0.0), (99.0, 88.0), (0.0, 0.0)]
+    out = analyse._recenter_on_com(picked, centers)
+    assert out[0] == [11.0, 21.0]  # COM of group 0
+    assert out[1] == [99.0, 88.0]  # untouched (no locs)
+    assert out[2] == [30.0, 6.0]  # COM of group 2
+
+
+def test_recenter_on_com_empty_is_noop():
+    """No localizations at all -> centres are returned unchanged."""
+    empty = pd.DataFrame({"x": [], "y": [], "group": []})
+    centers = [(1.0, 2.0), (3.0, 4.0)]
+    out = analyse._recenter_on_com(empty, centers)
+    assert out == [[1.0, 2.0], [3.0, 4.0]]
+
+
+class Test_SaveLocsSanity(unittest.TestCase):
+    """_save_locs must keep the in-memory locs identical to the saved file.
+
+    io.save_locs sanitizes (lib.ensure_sanity drops NaN/inf rows, e.g.
+    failed GPU fits with NaN lpx); if the in-memory table keeps those
+    rows, downstream modules see data the file does not have (a NaN lpx
+    makes render's median blur NaN and crash -- seen live), and a
+    resumed run differs from a straight-through one.
+    """
+
+    def setUp(self):
+        import tempfile
+
+        self.results_folder = tempfile.mkdtemp()
+        analysis_config = {
+            "camera_info": {"Pixelsize": 130},
+            "gpufit_installed": False,
+        }
+        from picasso_workflow import analyse
+
+        self.ap = analyse.AutoPicasso(self.results_folder, analysis_config)
+        self.ap.locs = pd.DataFrame(
+            {
+                "frame": np.arange(10, dtype="u4"),
+                "x": np.random.rand(10).astype("f4") * 10,
+                "y": np.random.rand(10).astype("f4") * 10,
+                "photons": np.random.rand(10).astype("f4") * 1000,
+                "lpx": np.random.rand(10).astype("f4") / 10,
+                "lpy": np.random.rand(10).astype("f4") / 10,
+            }
+        )
+        # two bad fits: NaN localization precision
+        self.ap.locs.loc[3, "lpx"] = np.nan
+        self.ap.locs.loc[7, "lpy"] = np.nan
+        self.ap.info = [
+            {"Width": 64, "Height": 32, "Frames": 1000, "Pixelsize": 130}
+        ]
+
+    def tearDown(self):
+        shutil.rmtree(self.results_folder, ignore_errors=True)
+
+    def test_save_locs_adopts_sanitized_table(self):
+        from picasso import io as pio
+
+        fp = os.path.join(self.results_folder, "locs.hdf5")
+        self.ap._save_locs(fp)
+
+        # the NaN rows are gone from memory ...
+        self.assertEqual(8, len(self.ap.locs))
+        self.assertFalse(self.ap.locs[["lpx", "lpy"]].isna().any().any())
+        # ... and memory matches the file exactly
+        saved, _ = pio.load_locs(fp)
+        self.assertEqual(len(saved), len(self.ap.locs))

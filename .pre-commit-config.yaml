@@ -5,6 +5,10 @@ repos:
     -   id: trailing-whitespace
     -   id: end-of-file-fixer
     -   id: check-yaml
+        # The constructor recipe is not standalone-valid YAML: platform
+        # selectors (# [win] / # [osx]) intentionally repeat keys like
+        # post_install / icon_image, which constructor resolves before parsing.
+        exclude: ^release/construct\.yaml$
     -   id: check-added-large-files
 # Use the maintained black mirror, pinned to the version the team runs locally
 # so pre-commit and a manual `black` agree (keep in sync via

@@ -11,14 +11,16 @@ from __future__ import annotations
 from picasso_workflow import util, CONFIG
 from picasso_workflow import progress as pwprogress
 from picasso_workflow.modulespec import MODULE_REGISTRY, Scope
+from picasso_workflow.picasso_set.params import (
+    docstring as picasso_set_docstring,
+)
 from picasso_workflow import workflow_references as wfref
 from loguru import logger
 import subprocess
 import os
 import re
-import sys
-import json
 import shlex
+import sys
 import getpass
 import yaml
 import importlib.util
@@ -26,11 +28,10 @@ import importlib.util
 # import pkgutil
 # import importlib
 import traceback
-import tempfile
 import functools
 import inspect
 import textwrap
-from picasso import lib
+from picasso_workflow._picasso_api import lib
 from PyQt6 import QtWidgets, QtCore, QtGui
 from PyQt6.QtCore import Qt, QEvent
 
@@ -42,6 +43,97 @@ except ImportError:
 # Number of channels listed inline in a parameter row's per-channel
 # summary before it is elided. The tooltip always lists all of them.
 _SUMMARY_MAX_CHANNELS = 4
+
+# Parameters whose behaviour/units changed in a release; flagged in the GUI so
+# users revisit their values. Keyed (module_name, param_name) -> note. The
+# marker auto-hides a few releases after ``changed_in`` (see
+# ``_param_flag_active``). ``param_name`` may be a nested sub-parameter (e.g.
+# ``align_channels``'s ``max_shift`` lives under ``align_pars``); the test
+# suite checks every key still resolves to a rendered descriptor param.
+PARAM_CHANGE_FLAGS = {
+    ("align_channels", "max_shift"): {
+        "changed_in": "0.7.0",
+        "message": (
+            "Now interpreted in nanometres (picasso 1.0). It was an ambiguous "
+            "~pixel value defaulting to 10, so an old '10' meant roughly 10 px "
+            "(~1.3 um); 10 now means 10 nm. When unset the default is 500 nm. "
+            "Revisit this value."
+        ),
+    },
+    ("fit_csr", "min_dist"): {
+        "changed_in": "0.7.0",
+        "message": (
+            "Now in nanometres (maps to knn_density r_min/r_max). Revisit if "
+            "you set a pixel-based value."
+        ),
+    },
+    ("fit_csr", "max_dist"): {
+        "changed_in": "0.7.0",
+        "message": (
+            "Now in nanometres (maps to knn_density r_min/r_max). Revisit if "
+            "you set a pixel-based value."
+        ),
+    },
+    ("create_mask2", "dilate_nm"): {
+        "changed_in": "0.7.0",
+        "message": (
+            "Mask erosion/dilation now uses a true Euclidean distance in nm "
+            "(was an iteration-based pixel approximation) and no longer erodes "
+            "inward from the image border. Eroded/dilated masks differ "
+            "slightly, and masks touching the field-of-view edge behave "
+            "differently. Revisit if you tuned this."
+        ),
+    },
+    ("refine_mask_by_density", "smoothe_nm"): {
+        "changed_in": "0.7.0",
+        "message": (
+            "Mask erosion/dilation now uses a true Euclidean distance in nm "
+            "(was an iteration-based pixel approximation) and no longer erodes "
+            "inward from the image border. Eroded/dilated masks differ "
+            "slightly, and masks touching the field-of-view edge behave "
+            "differently. Revisit if you tuned this."
+        ),
+    },
+}
+# Hide a flag this many minor releases after its ``changed_in`` version.
+PARAM_FLAG_HORIZON_MINORS = 3
+
+
+def _param_flag_active(changed_in, current=__GUIVERSION__):
+    """Return whether a parameter-change flag should still be shown.
+
+    The marker auto-expires once the running version reaches
+    ``PARAM_FLAG_HORIZON_MINORS`` minor releases past ``changed_in`` (patch
+    reset to 0; e.g. ``"0.7.0"`` expires at ``"0.10.0"``). The check is
+    fail-open: an unknown/unparseable running version keeps the flag showing.
+
+    Parameters
+    ----------
+    changed_in : str
+        The release in which the parameter's behaviour changed (e.g.
+        ``"0.7.0"``).
+    current : str
+        The running version (defaults to the GUI version). ``"unknown"``,
+        empty, or unparseable values yield ``True``.
+
+    Returns
+    -------
+    bool
+        ``True`` while the flag should be shown, ``False`` once expired.
+    """
+    if not current or str(current).lower() == "unknown":
+        return True
+    try:
+        from packaging.version import parse
+
+        cur = parse(str(current).lstrip("v"))
+        base = parse(str(changed_in).lstrip("v"))
+        major, minor = base.major, base.minor
+        expire = parse(f"{major}.{minor + PARAM_FLAG_HORIZON_MINORS}.0")
+        return cur < expire
+    except Exception:
+        # Fail-open: anything unparseable keeps the flag visible.
+        return True
 
 
 def _read_text_safe(path):
@@ -369,6 +461,14 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             if not method.startswith("_") and method not in excluded_methods
         ]
 
+        # picasso-set modules are registry-backed (resolved via __getattr__),
+        # not methods of this class
+        module_methods += [
+            name
+            for name, spec in MODULE_REGISTRY.items()
+            if spec.module_set == "picasso"
+        ]
+
         # Sort alphabetically for consistent ordering
         return sorted(module_methods)
 
@@ -376,6 +476,31 @@ class ModuleDescriptor(util.AbstractModuleCollection):
         """Reads and returns the docstring of a module"""
         fun = getattr(self, module)
         return fun.__doc__
+
+    def __getattr__(self, name):
+        """Resolve picasso-set module names to their registry-backed specs.
+
+        The picasso-set modules have no hand-written descriptor methods;
+        their ``(parameters_spec, results_spec)`` tuples live in
+        ``ModuleSpec.params``. Any registry-listed picasso-set name resolves
+        to a zero-argument callable returning that tuple (with the GUI
+        docstring attached), exactly like the descriptor methods. Everything
+        else raises ``AttributeError`` as usual (``__getattr__`` is only
+        consulted after normal lookup fails).
+        """
+        if not name.startswith("_"):
+            spec = MODULE_REGISTRY.get(name)
+            if spec is not None and spec.module_set == "picasso":
+
+                def describe():
+                    return spec.params
+
+                describe.__name__ = name
+                describe.__doc__ = picasso_set_docstring(name)
+                return describe
+        raise AttributeError(
+            f"{type(self).__name__!r} object has no attribute {name!r}"
+        )
 
     def dummy_module(self):
         """A module that does nothing, for quickly removing
@@ -427,6 +552,84 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             "folder": {
                 "type": "str",
                 "description": "Output folder for module results",
+            },
+        }
+
+        return parameters_spec, results_spec
+
+    def plugin(self):
+        """Call an installed, enabled picasso API plugin export.
+
+        Parameters
+        ----------
+        parameters : dict
+            Required keys:
+                api_name : str
+                    Name of the PICASSO_API export to call.
+            Optional keys:
+                kwargs : dict
+                    Keyword arguments passed verbatim to the callable.
+                inject : list
+                    Workflow state to pass as keyword arguments
+                    (``locs``/``info``/``movie``).
+
+        Returns
+        -------
+        parameters : dict
+            as input, unchanged
+        results : dict
+            updated with plugin_api_name, plugin_callable, injected and
+            (depending on the callable's return) plugin_report, plugin_files
+            and plugin_result.
+        """
+        parameters_spec = {
+            "api_name": {
+                "type": "str",
+                "required": True,
+                "description": "Name of the PICASSO_API export to call.",
+            },
+            "kwargs": {
+                "type": "dict",
+                "required": False,
+                "description": "Keyword arguments passed to the callable.",
+            },
+            "inject": {
+                "type": "list",
+                "element_type": "str",
+                "required": False,
+                "description": (
+                    "Workflow state to pass as keyword arguments "
+                    "(locs/info/movie)."
+                ),
+            },
+        }
+
+        results_spec = {
+            "plugin_api_name": {
+                "type": "str",
+                "description": "The PICASSO_API export that was called.",
+            },
+            "plugin_callable": {
+                "type": "str",
+                "description": "Module and name of the resolved callable.",
+            },
+            "injected": {
+                "type": "list",
+                "element_type": "str",
+                "description": "Workflow state injected into the call.",
+            },
+            "plugin_report": {
+                "type": "str",
+                "description": "Report content returned by the plugin.",
+            },
+            "plugin_files": {
+                "type": "list",
+                "element_type": "str",
+                "description": "Output files reported by the plugin.",
+            },
+            "plugin_result": {
+                "type": "dict",
+                "description": "Remaining values returned by the plugin.",
             },
         }
 
@@ -635,8 +838,12 @@ class ModuleDescriptor(util.AbstractModuleCollection):
         parameters_spec = {
             "filename": {
                 "type": "path",
-                "description": "Path to the movie file to load",
+                "description": (
+                    "Path to the movie file to load. Defaults to the "
+                    "per-channel 'filepath' column of the tile parameters"
+                ),
                 "extensions": [".raw", ".tif", ".tiff", ".ome.tif"],
+                "default": ("$$map", "filepath"),
                 "required": True,
             },
             "sample_movie": {
@@ -652,6 +859,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                     "n_sample": {
                         "type": "int",
                         "description": "Number of frames to sample",
+                        "unit": "frames",
                         "min": 1,
                         "default": 40,
                     },
@@ -858,6 +1066,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             "box_size": {
                 "type": "int",
                 "description": "Size of the detection box in pixels",
+                "unit": "px",
                 "min": 3,
                 "max": 21,
                 "step": 2,
@@ -947,6 +1156,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "median background filter applied before spot detection. "
                 "0 (or 1) disables it; >= 2 to filter. Re-tune min_gradient "
                 "when enabling.",
+                "unit": "frames",
                 "min": 0,
                 "required": False,
             },
@@ -954,6 +1164,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "type": "int",
                 "description": "Stride (frames) for the temporal-median "
                 "filter. Only used when the window is >= 2.",
+                "unit": "frames",
                 "min": 0,
                 "required": False,
             },
@@ -1507,6 +1718,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "type": "float",
                 "description": "Field of view of the zoom in rendering around \
                     the center of mass in nm",
+                "unit": "nm",
                 "min": 0,
                 "default": 10000,
                 "required": False,
@@ -1515,6 +1727,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "type": "float",
                 "description": "The rendered pixel size [nm] of the full FOV \
                     rendering",
+                "unit": "nm",
                 "min": 0,
                 "default": 130,
                 "required": False,
@@ -1523,6 +1736,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "type": "float",
                 "description": "The rendered pixel size [nm] of the zoom in \
                     rendering around the center of mass",
+                "unit": "nm",
                 "min": 0,
                 "default": 100,
                 "required": False,
@@ -1650,6 +1864,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             "segmentation": {
                 "type": "int",
                 "description": "the number of frames segmented for RCC",
+                "unit": "frames",
                 "min": 2,
                 "max": 1000,
                 "default": 50,
@@ -1755,6 +1970,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             "segmentation": {
                 "type": "int",
                 "description": "the number of frames segmented",
+                "unit": "frames",
                 "min": 2,
                 "max": 1000,
                 "default": 50,
@@ -1763,6 +1979,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             "intersect_d": {
                 "type": "float",
                 "description": "Intersect distance in nanometers.",
+                "unit": "nm",
                 "min": 0,
                 "required": True,
             },
@@ -1771,6 +1988,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "description": "Radius of the local search region in \
                 nanometers. Should be larger than the maximum expected drift \
                 wihtin segmentation.",
+                "unit": "nm",
                 "min": 0,
                 "required": True,
             },
@@ -1846,36 +2064,17 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             in the decorator wrapper
         """
         parameters_spec = {
-            "message": {
+            "prompt": {
                 "type": "str",
-                "description": "Message to display to user",
-                "required": False,
+                "description": "The user prompt",
+                "required": True,
                 "multiline": True,
             },
-            "wait_for_input": {
-                "type": "bool",
-                "description": "Whether to wait for user confirmation",
-                "default": True,
-                "required": False,
+            "filename": {
+                "type": "str",
+                "description": "The file the user should provide",
+                "required": True,
             },
-            # "prompt": {
-            #     # TODO: Add type, description, min, max, default,
-            #     #     required, step, extensions, properties
-            #     # Hint: type appears to be str
-            #     # Hint: required = True
-            # },
-            # "filename": {
-            #     # TODO: Add type, description, min, max, default,
-            #     # required, step, extensions, properties
-            #     # Hint: type appears to be str
-            #     # Hint: required = True
-            # },
-            # "save_locs": {
-            #     # TODO: Add type, description, min, max, default,
-            #     # required, step, extensions, properties
-            #     # Hint: type appears to be bool
-            #     # Hint: required = False (optional)
-            # },
         }
 
         results_spec = {
@@ -2052,6 +2251,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             "radius": {
                 "type": "float",
                 "description": "Radius for local density calculation in nm",
+                "unit": "nm",
                 "min": 1.0,
                 "max": 1000.0,
                 "default": 50.0,
@@ -2151,6 +2351,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             "radius": {
                 "type": "float",
                 "description": "The DBSCAN radius parameter in nm",
+                "unit": "nm",
                 "min": 1.0,
                 "max": 1000.0,
                 "default": 50.0,
@@ -2321,29 +2522,20 @@ class ModuleDescriptor(util.AbstractModuleCollection):
         parameters: dict
             with required keys:
                 fp_locs : str
-                    file path to input locs
-                n_frames
+                    file path to the input (clustered) locs .hdf5
+
+        Notes
+        -----
+        The acquisition's frame count and pixel size come from the dataset
+        (``self.frames`` / ``self.pixelsize``), not from parameters. The
+        former ``radius`` / ``min_binding_time`` form fields were removed: the
+        analysis now lives in ``outpost.binding_events.Measurement``, which
+        does not take them.
         """
         parameters_spec = {
-            "radius": {
-                "type": "float",
-                "description": "Clustering radius in nm",
-                "min": 1.0,
-                "max": 1000.0,
-                "default": 20.0,
-                "required": True,
-            },
-            "min_binding_time": {
-                "type": "float",
-                "description": "Minimum binding time threshold",
-                "min": 0.0,
-                "max": 10.0,
-                "default": 0.1,
-                "required": False,
-            },
             "fp_locs": {
                 "type": "path",
-                "description": "The filepath of the .hdf5 file to write",
+                "description": "Filepath of the clustered .hdf5 locs to read",
                 "required": False,
             },
         }
@@ -2410,6 +2602,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             "radius": {
                 "type": "float",
                 "description": "Clustering radius parameter [nm]",
+                "unit": "nm",
                 "min": 0.0,
                 "max": 1000.0,
                 "default": 50.0,
@@ -2429,6 +2622,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             "radius_z": {
                 "type": "float",
                 "description": "The smlm radius_z [nm]",
+                "unit": "nm",
                 "default": None,
                 "required": False,
             },
@@ -2645,17 +2839,11 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             in the decorator wrapper
         """
         parameters_spec = {
-            "save_data": {
-                "type": "bool",
-                "description": "Whether to save nearest neighbor data",
-                "default": True,
-                "required": False,
-            },
             "dims": {
                 "type": "list",
                 "description": "the distance dimensions, e.g. ['x', 'y']",
                 "default": ["x", "y"],
-                "required": False,
+                "required": True,
             },
             "nth_NN": {
                 "type": "int",
@@ -2727,25 +2915,25 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             The index of the module in the workflow
         parameters : dict
             Required keys:
-                nneighbors : str or numpy.ndarray or list
-                    If str: filepath to nearest neighbor data file
-                    If array: 2D array (N, k) of kth nearest neighbor
-                    distances
-                    If list: multiple datasets or file paths
                 dimensionality : int
                     Spatial dimensionality (2 or 3) for CSR model
             Optional keys:
                 kmin : int
-                    Minimum k-th nearest neighbor order to fit (default: 1)
+                    Lowest k-th nearest neighbor order to fit (default: 1)
+                kmax : int
+                    Highest neighbour order considered (default: 5)
                 min_dist : float
-                    Minimum observable distance in nm due to technical
-                    limits
+                    Shortest neighbour distance in nm used in the fit
+                    (maps to knn_density r_min)
                 max_dist : float
-                    Maximum distance for filtering analysis
-                bkg_fraction : float
-                    Background fraction for fitting
-                fit_bkg : bool
-                    Whether to fit background (default: False)
+                    Upper end in nm of the plotted distance histograms
+                    (maps to knn_density r_max)
+                n_simulations : int
+                    Number of CSR simulations used for p-values and
+                    goodness-of-fit (default: 99)
+                gof_wasserstein_warn : float
+                    Wasserstein goodness-of-fit warning threshold
+                    (default: 0.3)
         results : dict
             Automatic keys (provided by decorator):
                 start time : str
@@ -2782,57 +2970,68 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             metrics
         """
         parameters_spec = {
-            "nneighbors": {
-                "type": ["str", "numpy.ndarray", "list"],
-                "description": (
-                    "Nearest neighbor data (file path, array, or list)"
-                ),
-                "extensions": [".txt", ".npy"],
-                "required": True,
-            },
             "dimensionality": {
                 "type": "int",
                 "description": "Spatial dimensionality (2 or 3) for CSR model",
                 "options": [2, 3],
+                "min": 2,
+                "max": 3,
                 "default": 2,
                 "required": True,
             },
             "kmin": {
                 "type": "int",
-                "description": "Minimum k-th nearest neighbor order to fit",
+                "description": "Lowest k-th nearest neighbor order to fit",
                 "min": 1,
                 "max": 20,
                 "default": 1,
                 "required": False,
             },
+            "kmax": {
+                "type": "int",
+                "description": "Highest neighbour order considered.",
+                "min": 1,
+                "max": 20,
+                "default": 5,
+                "required": False,
+            },
             "min_dist": {
                 "type": "float",
                 "description": (
-                    "Minimum observable distance in nm due to technical"
-                    + " limits"
+                    "Shortest neighbour distance in nm used in the fit"
+                    + " (maps to knn_density r_min)"
                 ),
+                "unit": "nm",
                 "min": 0.0,
                 "max": 100.0,
                 "required": False,
             },
             "max_dist": {
                 "type": "float",
-                "description": "Maximum distance for filtering analysis",
+                "description": (
+                    "Upper end in nm of the plotted distance histograms"
+                    + " (maps to knn_density r_max)"
+                ),
+                "unit": "nm",
                 "min": 10.0,
                 "max": 10000.0,
                 "required": False,
             },
-            "bkg_fraction": {
-                "type": "float",
-                "description": "Background fraction for fitting",
-                "min": 0.0,
-                "max": 1.0,
+            "n_simulations": {
+                "type": "int",
+                "description": (
+                    "Number of CSR simulations used for p-values and"
+                    + " goodness-of-fit."
+                ),
+                "min": 1,
+                "default": 99,
                 "required": False,
             },
-            "fit_bkg": {
-                "type": "bool",
-                "description": "Whether to fit background",
-                "default": False,
+            "gof_wasserstein_warn": {
+                "type": "float",
+                "description": "Wasserstein goodness-of-fit warning threshold.",
+                "min": 0.0,
+                "default": 0.3,
                 "required": False,
             },
         }
@@ -2910,7 +3109,14 @@ class ModuleDescriptor(util.AbstractModuleCollection):
         parameters_spec = {
             "filename": {
                 "type": "str",
-                "description": "Custom filename for saved data",
+                "description": (
+                    "Custom filename for saved data. Defaults to the "
+                    "dataset's tag from the tile parameters; the third "
+                    "tuple element is the fallback for single-dataset "
+                    "runs and tag-less aggregations (None = the "
+                    "module's locs.hdf5 default)"
+                ),
+                "default": ("$$map", "#tags", None),
                 "required": False,
             }
         }
@@ -2972,7 +3178,9 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "type": "list",
                 "description": "Custom tags for each dataset",
                 "element_type": "str",
-                "required": False,
+                # the module zips filepaths with tags, so this is
+                # de-facto required
+                "required": True,
             },
         }
 
@@ -3018,7 +3226,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                     the previously saved hdf5 files to be loaded and
                     aligned. if not given, the last processed data is used
                 align_pars : dict
-                    kwargs of picasso_outpost.align_channels
+                    kwargs of outpost.alignment.channels.align_channels
                         max_iterations, convergence
                 fp_fiducials : list of str
                     the previously saved hdf5 files of fiducial markers
@@ -3288,6 +3496,16 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             in the decorator wrapper
         """
         parameters_spec = {
+            "channels": {
+                "type": "list",
+                "element_type": "str",
+                "description": "Tags of the channels to combine (a subset). "
+                "Only these are combined into 'tag'; the other channels are "
+                "kept. Leave empty to combine all channels. Use several "
+                "combine_channels modules for several RESI targets (e.g. the "
+                "GFP rounds into 'GFP', the ALFA rounds into 'ALFA').",
+                "required": False,
+            },
             "channel_weights": {
                 "type": "list",
                 "description": "Relative weights for each channel",
@@ -3306,6 +3524,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "type": "str",
                 "description": "The column name for the IDs to the different \
                     datasets. Allows back-tracking locs to their origin.",
+                "default": "combine_id",
                 "required": False,
             },
         }
@@ -3609,6 +3828,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                     "targets (good value is e.g. 5). Used when "
                     "'labeling_uncertainty_screen' below is unchecked."
                 ),
+                "unit": "nm",
                 "default": 5.0,
                 "required": True,
             },
@@ -3625,12 +3845,14 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                     "min": {
                         "type": "float",
                         "description": "Range start [nm]",
+                        "unit": "nm",
                         "min": 0.0,
                         "default": 2.0,
                     },
                     "max": {
                         "type": "float",
                         "description": "Range end [nm] (inclusive)",
+                        "unit": "nm",
                         "min": 0.0,
                         "default": 12.0,
                     },
@@ -3639,6 +3861,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                         "description": (
                             "Step [nm]; defines the number of candidates"
                         ),
+                        "unit": "nm",
                         "min": 0.1,
                         "default": 2.0,
                     },
@@ -3660,12 +3883,14 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                     "min": {
                         "type": "float",
                         "description": "Smallest separation [nm]",
+                        "unit": "nm",
                         "min": 0.0,
                         "default": 5.0,
                     },
                     "max": {
                         "type": "float",
                         "description": "Largest separation [nm]",
+                        "unit": "nm",
                         "min": 0.0,
                         "default": 40.0,
                     },
@@ -3674,6 +3899,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                         "description": (
                             "Step [nm]; defines the number of candidates"
                         ),
+                        "unit": "nm",
                         "min": 0.1,
                         "default": 5.0,
                     },
@@ -3890,109 +4116,6 @@ class ModuleDescriptor(util.AbstractModuleCollection):
 
         return parameters_spec, results_spec
 
-    def ripleysk(self):
-        """Perforn Ripley's K analysis between the channels using
-        Magdalena's code.
-
-        Parameters
-        ----------
-        parameters:
-            ripleys_n_random_controls : int
-                number of random controls, default: 100
-            ripleys_rmax : int
-                the maximum radius, default 200
-            ripleys_dr : float
-                the radius interval, default 5
-            radii : 1D np array
-                the radius values. If given, ripleys_rmax and
-                ripleys_dr are ignored.
-            ripleys_threshold : float
-                the threshold of ripleys integrals above which the
-                interaction is deemed significant.
-            fp_combined_locs : str
-                filepath to the combined locs of all channel_locs
-            atype : str
-                the type of analysis: 'Ripleys' for the standard
-                Ripley's K analysis, or 'RDF' for calculation of the
-                radial distribution function instead of K, and random
-                controls by relocating each point by a random x/y in a
-                circle with the currently investigated r, which preserves
-                the density fluctuations (instead of CSR simulation)
-        """
-        parameters_spec = {
-            "radii": {
-                "type": "list",
-                "description": "List of analysis radii in nm",
-                "element_type": "float",
-                "min": 1.0,
-                "max": 1000.0,
-                "required": True,
-            },
-            "edge_correction": {
-                "type": "str",
-                "description": "Edge correction method",
-                "options": ["none", "translation", "isotropic"],
-                "default": "translation",
-                "required": False,
-            },
-            "ripleys_n_random_controls": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: number of random controls, default: 100
-                # Hint: type appears to be int
-            },
-            "ripleys_rmax": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the maximum radius, default 200
-                # Hint: type appears to be int
-            },
-            "ripleys_dr": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the radius interval, default 5
-                # Hint: type appears to be float
-            },
-            "ripleys_threshold": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the threshold of ripleys integrals above which the interaction is deemed significant.
-                # Hint: type appears to be float
-            },
-            "fp_combined_locs": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: filepath to the combined locs of all channel_locs
-                # Hint: type appears to be str
-            },
-            "atype": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the type of analysis: 'Ripleys' for the standard Ripley's K analysis, or 'RDF' for calculation of the radial distribution function instead of K, an...
-                # Hint: type appears to be str
-            },
-        }
-
-        results_spec = {
-            "start time": {
-                "type": "str",
-                "description": "Module execution start timestamp",
-            },
-            "end time": {
-                "type": "str",
-                "description": "Module execution end timestamp",
-            },
-            "duration": {
-                "type": "float",
-                "description": "Module execution duration in seconds",
-                "min": 0.0,
-            },
-            "folder": {
-                "type": "str",
-                "description": "Output folder for module results",
-            },
-            "ripley_k_values": {
-                "type": "numpy.ndarray",
-                "description": "Calculated Ripley's K values",
-            },
-        }
-
-        return parameters_spec, results_spec
-
     def ripleysk2(self):
         """Perforn Ripley's K analysis between the channels using
         Rafal's code.
@@ -4056,98 +4179,129 @@ class ModuleDescriptor(util.AbstractModuleCollection):
 
         """
         parameters_spec = {
-            "radii": {
-                "type": "list",
-                "description": "List of analysis radii in nm",
-                "element_type": "float",
-                "min": 1.0,
-                "max": 1000.0,
+            "metric": {
+                "type": "str",
+                "description": "Analysis type: 'RK' (standard Ripley's K), "
+                "'RDF' (radial distribution function) or 'FRC' (fraction "
+                "of molecular types within the radii)",
+                "options": ["RK", "RDF", "FRC"],
                 "required": True,
             },
-            "algorithm": {
-                "type": "str",
-                "description": "Algorithm variant to use",
-                "options": ["fast", "accurate", "parallel"],
-                "default": "fast",
+            "ripleys_n_random_controls": {
+                "type": "int",
+                "description": "Number of random controls",
+                "default": 100,
                 "required": False,
             },
-            "ripleys_n_random_controls": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: number of random controls, default: 100
-                # Hint: type appears to be int
-            },
             "ripleys_rmax": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the maximum radius, default 200
-                # Hint: type appears to be int
+                "type": "int",
+                "description": "The maximum radius (ignored if 'radii' "
+                "is given)",
+                "default": 200,
+                "required": False,
             },
             "ripleys_dr": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the radius interval, default 5
-                # Hint: type appears to be float
+                "type": "float",
+                "description": "The radius interval (ignored if 'radii' "
+                "is given)",
+                "default": 5,
+                "required": False,
+            },
+            "radii": {
+                "type": "list",
+                "description": "The radius values in nm. If given, "
+                "ripleys_rmax and ripleys_dr are ignored",
+                "unit": "nm",
+                "element_type": "float",
+                "required": False,
             },
             "ripleys_threshold": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the threshold of ripleys integrals above which the interaction is deemed significant.
-                # Hint: type appears to be float
+                "type": "float",
+                "description": "Threshold on the integrals above which an "
+                "interaction is significant",
+                "required": False,
             },
             "area": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the cell area in µm^2 optional. only used with controltype=CSR
-                # Hint: type appears to be float
+                "type": "float",
+                "description": "Cell area in µm^2 (only with "
+                "controltype='CSR')",
+                "default": 1,
+                "required": False,
             },
             "fp_mask": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the filepath to the cell mask. optional, only used with CSR. can be binary or density mask
-                # Hint: type appears to be str
-            },
-            "mask_pixel_size": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the pixel size of mask pixels (move to mask class which internally keeps this information) optional, only used with controltype=CSR
-                # Hint: type appears to be float
-            },
-            "metric": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the type of analysis: 'RK' for the standard Ripley's K analysis, or 'RDF' for calculation of the radial distribution function instead of K, and ran...
-                # Hint: type appears to be str
+                "type": "path",
+                "description": "Filepath to the cell mask (binary or "
+                "density; only with CSR)",
+                "required": False,
             },
             "controltype": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: CSR simulation within the density mask, or randomizing the real data
-                # Hint: type appears to be str
+                "type": "str",
+                "description": "'CSR' (CSR simulation within the density "
+                "mask) or 'RND' (randomize the real data)",
+                "options": ["CSR", "RND"],
+                "required": False,
             },
             "randomization_radius": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: for controltype \"RND\", the radius [nm] by which to randomize. optional.
-                # Hint: type appears to be float
+                "type": "float",
+                "description": "For controltype 'RND', the radius (nm) to "
+                "randomize by",
+                "unit": "nm",
+                "required": False,
             },
             "shuffle_self": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: for metric \"FRC\", whether to shuffle only other types or also the self type
-                # Hint: type appears to be bool
+                "type": "bool",
+                "description": "For metric 'FRC', whether to shuffle the "
+                "self type too",
+                "default": False,
+                "required": False,
             },
             "relocate_self": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: for metric \"FRC\", whether to relocate centerpoints to fraction_exclude
-                # Hint: type appears to be bool
+                "type": "bool",
+                "description": "For metric 'FRC', whether to relocate "
+                "centerpoints to 'type_self' after shuffling",
+                "default": False,
+                "required": False,
+            },
+            "fraction_exclude_self": {
+                "type": "bool",
+                "description": "For metric 'FRC', types to exclude from "
+                "the FRC fraction",
+                "default": False,
+                "required": False,
+            },
+            "normalize_to_bulkfraction": {
+                "type": "bool",
+                "description": "For metric 'FRC', whether to normalize to "
+                "the bulk fraction",
+                "required": False,
             },
             "significance_threshold": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: threshold above which heatmap entries are colored
-                # Hint: type appears to be float
+                "type": "float",
+                "description": "Threshold above which heatmap entries "
+                "are colored",
+                "required": False,
             },
             "normalization": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: type appears to be str
+                "type": "str",
+                "description": "The normalization to apply",
+                "required": False,
+            },
+            "aggfun": {
+                "type": "str",
+                "description": "Aggregation function for the controls",
+                "required": False,
             },
             "edge_correction": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: if True, only locs further from mask edges than max radius are used for evaluation
-                # Hint: type appears to be bool
+                "type": "bool",
+                "description": "If True, only locs further from the mask "
+                "edges than the max radius are used",
+                "required": False,
             },
             "showControlEnvelope": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: type appears to be bool
+                "type": "bool",
+                "description": "Whether to show the control envelope in "
+                "plots",
+                "required": False,
             },
         }
 
@@ -4172,106 +4326,6 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             "ripley_k2_values": {
                 "type": "numpy.ndarray",
                 "description": "Calculated Ripley's K values (variant 2)",
-            },
-        }
-
-        return parameters_spec, results_spec
-
-    def ripleysk_average(self):
-        """Average the results of multiple Ripley's K Analyses, analyse
-        the significant pairs after averaging, and save them into the
-        separate workflow manual folders (for further analysis there)
-
-        Parameters
-        ----------
-        parameters:
-            # fp_ripleys_integrals : list of str
-            #     the various single analyses to average, e.g. of
-            #     different workflows
-            fp_workflows : list of str
-                the paths to the folders of separate workflows
-                where the separate ripleys analyses have been done
-            report_names : list of str
-                the report names of those worklfows
-            ripleys_threshold : float
-                the threshold of ripleys integrals above which the
-                interaction is deemed significant.
-            atype : str
-                "Ripleys" or "RDF"
-            # output_folders : list of str
-            #     folders to write the significant pairs into. This can
-            #     e.g. be the 'manual' results folders of the
-            #     workflows, so these can proceed.
-        optional:
-            swkfl_ripleysk_key : str
-                the results key of the ripleysk module.
-                e.g. '05_ripleysk'
-            swkfl_manual_key : str
-                the results key of the manual module to save the
-                integrals to
-            if those two are not given, saving is not performed
-        """
-        parameters_spec = {
-            "weight_method": {
-                "type": "str",
-                "description": "Method for weighting individual analyses",
-                "options": ["equal", "by_nlocs", "by_area"],
-                "default": "equal",
-                "required": False,
-            },
-            "fp_workflows": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the paths to the folders of separate workflows where the separate ripleys analyses have been done
-                # Hint: type appears to be list
-            },
-            "report_names": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the report names of those worklfows
-                # Hint: type appears to be list
-            },
-            "ripleys_threshold": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the threshold of ripleys integrals above which the interaction is deemed significant.
-                # Hint: type appears to be float
-            },
-            "atype": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: # output_folders : list of str #     folders to write the significant pairs into. This can #     e.g. be the 'manual' results folders of the #     ...
-                # Hint: type appears to be str
-            },
-            "swkfl_ripleysk_key": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the results key of the ripleysk module. e.g. '05_ripleysk'
-                # Hint: type appears to be str
-            },
-            "swkfl_manual_key": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the results key of the manual module to save the integrals to if those two are not given, saving is not performed
-                # Hint: type appears to be str
-            },
-        }
-
-        results_spec = {
-            "start time": {
-                "type": "str",
-                "description": "Module execution start timestamp",
-            },
-            "end time": {
-                "type": "str",
-                "description": "Module execution end timestamp",
-            },
-            "duration": {
-                "type": "float",
-                "description": "Module execution duration in seconds",
-                "min": 0.0,
-            },
-            "folder": {
-                "type": "str",
-                "description": "Output folder for module results",
-            },
-            "average_ripley_k": {
-                "type": "numpy.ndarray",
-                "description": "Averaged Ripley's K values",
             },
         }
 
@@ -4316,60 +4370,32 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             #     workflows, so these can proceed.
         optional:
             swkfl_ripleysk_key : str
-                the results key of the ripleysk module.
-                e.g. '05_ripleysk'
+                the results key of the ripleysk2 module.
+                e.g. '05_ripleysk2'
             swkfl_manual_key : str
                 the results key of the manual module to save the
                 integrals to
             if those two are not given, saving is not performed
         """
         parameters_spec = {
-            "statistical_method": {
-                "type": "str",
-                "description": "Statistical method for averaging",
-                "options": ["mean", "median", "trimmed_mean"],
-                "default": "mean",
-                "required": False,
-            },
             "fp_workflows": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the paths to the folders of separate workflows where the separate ripleys analyses have been done
-                # Hint: type appears to be list
+                "type": "list",
+                "description": "Paths to the folders of the separate "
+                "workflows where the individual Ripley's analyses were done",
+                "element_type": "str",
+                "required": True,
             },
             "report_names": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the report names of those worklfows
-                # Hint: type appears to be list
-            },
-            "ripleys_threshold": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the threshold of ripleys integrals above which the interaction is deemed significant.
-                # Hint: type appears to be float
-            },
-            "metric": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the type of analysis: 'RK' for the standard Ripley's K analysis, or 'RDF' for calculation of the radial distribution function instead of K, and ran...
-                # Hint: type appears to be str
-            },
-            "controltype": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: CSR simulation within the density mask, or randomizing the real data
-                # Hint: type appears to be str
-            },
-            "randomization_radius": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: for controltype \"RND\", the radius [nm] by which to randomize. # output_folders : list of str #     folders to write the significant pairs into. Thi...
-                # Hint: type appears to be float
+                "type": "list",
+                "description": "The report names of those workflows",
+                "element_type": "str",
+                "required": True,
             },
             "swkfl_ripleysk_key": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the results key of the ripleysk module. e.g. '05_ripleysk'
-                # Hint: type appears to be str
-            },
-            "swkfl_manual_key": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the results key of the manual module to save the integrals to if those two are not given, saving is not performed
-                # Hint: type appears to be str
+                "type": "str",
+                "description": "The results key of the ripleysk2 module, "
+                "e.g. '05_ripleysk2'",
+                "required": True,
             },
         }
 
@@ -4443,67 +4469,64 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 if str: filepath to a yaml file with list of tuples
         """
         parameters_spec = {
-            "interaction_radius": {
-                "type": "float",
-                "description": "Maximum interaction distance in nm",
-                "min": 1.0,
-                "max": 500.0,
-                "default": 50.0,
+            "channel_map": {
+                "type": "dict",
+                "description": "Maps between channels (protein names, tags "
+                "before combining) and index in the combine_id column of "
+                "combined locs",
                 "required": True,
             },
-            "confidence_level": {
-                "type": "float",
-                "description": "Statistical confidence level",
-                "min": 0.5,
-                "max": 0.99,
-                "default": 0.95,
-                "required": False,
-            },
-            "channel_map": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: maps between channels (protein names, tags before combining) and index in the combine_id column of combined locs labeling_efficiency : dict, channe...
-                # Hint: type appears to be dict
-            },
             "labeling_efficiency": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: type appears to be dict
+                "type": "dict",
+                "description": "Labeling efficiency per channel tag "
+                "(range 0-100)",
+                "required": True,
             },
             "labeling_uncertainty": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: type appears to be dict
+                "type": "dict",
+                "description": "Labeling uncertainty [nm] per channel tag "
+                "(good value e.g. 5)",
+                "required": True,
             },
             "n_simulate": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: number of target molecules to be simulated; good value is e.g. 50000 density : dict, channel tag to float density to simulate [nm^2 or nm^3]; area ...
-                # Hint: type appears to be int
+                "type": "int",
+                "description": "Number of target molecules to simulate "
+                "(good value e.g. 50000)",
+                "required": True,
             },
             "density": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: type appears to be dict
+                "type": "dict",
+                "description": "Density to simulate per channel tag "
+                "[nm^2 or nm^3]; area density if 2D, volume density if 3D",
+                "required": True,
             },
             "nn_nth": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: number of nearest neighbors to analyse
-                # Hint: type appears to be int
+                "type": "int",
+                "description": "Number of nearest neighbors to analyse",
+                "required": True,
             },
             "structure_distance": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the protein distance between each other in nm
-                # Hint: type appears to be float
+                "type": "float",
+                "description": "The protein distance between each other in nm",
+                "unit": "nm",
+                "required": True,
             },
             "res_factor": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the spinna res_factor
-                # Hint: type appears to be float
+                "type": "float",
+                "description": "The spinna res_factor",
+                "required": True,
             },
             "sim_repeats": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: number of simulation repeats, for noise reduction interaction_pairs: list of list of two strings, or str pairs that are able to interact
-                # Hint: type appears to be int
+                "type": "int",
+                "description": "Number of simulation repeats, for noise "
+                "reduction",
+                "required": True,
             },
             "interaction_pairs": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: type appears to be list
+                "type": "list",
+                "description": "Pairs that are able to interact (list of "
+                "two-string lists, or a filepath to a yaml of tuples)",
+                "required": True,
             },
         }
 
@@ -4639,62 +4662,49 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             in the decorator wrapper
         """
         parameters_spec = {
-            "threshold": {
-                "type": "float",
-                "description": "Density threshold for mask creation",
-                "min": 0.0,
-                "max": 1000.0,
+            "fp_channel_map": {
+                "type": "path",
+                "description": "Filepath to the map from 'combine_channels' "
+                "module (dict from channel name to ID int in "
+                "locs['combine_id'])",
                 "required": True,
             },
-            "smoothing_radius": {
-                "type": "float",
-                "description": "Radius for density smoothing",
-                "min": 1.0,
-                "max": 200.0,
-                "default": 20.0,
-                "required": False,
-            },
-            "fp_channel_map": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: filepath to the map from 'combine_channels' module, which is a dict from channel name to ID int in the locs['combine_id']
-                # Hint: type appears to be str
-                # Hint: required = True
-            },
             "fp_combined_locs": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: filepath to the locs combined in 'combine_channels' module
-                # Hint: type appears to be str
-                # Hint: required = True
+                "type": "path",
+                "description": "Filepath to the locs combined in the "
+                "'combine_channels' module",
+                "required": True,
             },
             "margin": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: Size of the added empty margin to the FOV, in nm
-                # Hint: type appears to be float
-                # Hint: required = True
+                "type": "float",
+                "description": "Size of the empty margin added to the FOV, "
+                "in nm",
+                "unit": "nm",
+                "required": True,
             },
             "binsize": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: Size o fthe 2D histogram bins of the first step, in nm
-                # Hint: type appears to be float
-                # Hint: required = True
+                "type": "float",
+                "description": "Size of the first-step 2D histogram bins, "
+                "in nm",
+                "unit": "nm",
+                "required": True,
             },
             "sigma_mask_blur": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: parameter of the gaussian blur in binsize units
-                # Hint: type appears to be int
-                # Hint: required = True
+                "type": "int",
+                "description": "Gaussian-blur parameter, in binsize units",
+                "required": True,
             },
             "mask_resolution": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: Controls the digital resolution of the mask, in nm
-                # Hint: type appears to be float
-                # Hint: required = True
+                "type": "float",
+                "description": "Digital resolution of the mask, in nm",
+                "unit": "nm",
+                "required": True,
             },
             "combine_col": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the name of the combine column, e.g. 'combine_id' or 'protein'. Same as used in 'combine_channels' module
-                # Hint: type appears to be str
-                # Hint: required = True
+                "type": "str",
+                "description": "Name of the combine column (e.g. "
+                "'combine_id' or 'protein')",
+                "required": True,
             },
         }
 
@@ -4730,7 +4740,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
         3rd version of the DC Atlas. It is (mostly?) identical with an
         implementation of it in spinna, which will be integrated into
         picasso soon. Evaluate deprecation (or moving source from
-        outpost_modules/ripleys to picasso/spinna) at that time.
+        outpost/spatial_stats/ripleys to picasso/spinna) at that time.
 
         the locs must be protein positions at this stage.
 
@@ -4779,20 +4789,10 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             in the decorator wrapper
         """
         parameters_spec = {
-            "algorithm": {
-                "type": "str",
-                "description": "Mask creation algorithm",
-                "options": ["threshold", "otsu", "adaptive"],
-                "required": True,
-            },
-            "parameters_dict": {
-                "type": "dict",
-                "description": "Algorithm-specific parameters",
-                "required": False,
-            },
             "binsize": {
                 "type": "float",
                 "description": "The bin size in nanometers.",
+                "unit": "nm",
                 "default": 20,
                 "min": 0,
                 "required": True,
@@ -4800,6 +4800,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             "blursize": {
                 "type": "float",
                 "description": "The gaussian blur to apply in nanometers.",
+                "unit": "nm",
                 "min": 0,
                 "default": 400,
                 "required": True,
@@ -4808,6 +4809,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "type": "float",
                 "description": "The pixelsize of the final mask, in \
                     nanometers.",
+                "unit": "nm",
                 "min": 0,
                 "required": True,
             },
@@ -4839,6 +4841,16 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "min": 1,
                 "required": True,
             },
+            "skip_if_missing_cell": {
+                "type": "bool",
+                "description": "If select_cell + nth_largest_cell: when the \
+                    requested cell does not exist (fewer cells than \
+                    nth_largest_cell), skip this branch instead of reusing the \
+                    smallest cell. Use inside a branch that over-requests \
+                    cells.",
+                "default": False,
+                "required": False,
+            },
             "fill_holes": {
                 "type": "bool",
                 "description": "Whether to fill holes in the cell mask",
@@ -4848,6 +4860,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "type": "float",
                 "description": "The nanometers to dilate the mask (useful \
                     if a large threshold has been used)",
+                "unit": "nm",
                 "required": True,
             },
             "apply_to_locs": {
@@ -5013,6 +5026,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "description": "The distance in nanometers to dilate and erode\
                     the mask. This can be useful to remove excessive holes and\
                     ragging in the mask due to the density thre...",
+                "unit": "nm",
                 "required": False,
             },
         }
@@ -5076,71 +5090,45 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             in the decorator wrapper
         """
         parameters_spec = {
-            "radius": {
-                "type": "float",
-                "description": "DBSCAN radius for interaction clustering",
-                "min": 1.0,
-                "max": 500.0,
-                "default": 30.0,
-                "required": True,
-            },
-            "min_samples": {
-                "type": "int",
-                "description": "Minimum samples for interaction clusters",
-                "min": 1,
-                "max": 50,
-                "default": 3,
-                "required": True,
-            },
-            "interaction_threshold": {
-                "type": "float",
-                "description": "Distance threshold for interactions",
-                "min": 1.0,
-                "max": 200.0,
-                "default": 50.0,
-                "required": False,
-            },
             "fp_channel_map": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: filepath to the map from 'combine_channels' module, which is a dict from channel name to ID int in the locs['combine_id']
-                # Hint: type appears to be str
-                # Hint: required = True
+                "type": "path",
+                "description": "Filepath to the map from 'combine_channels' "
+                "module (dict from channel name to ID int in "
+                "locs['combine_id'])",
+                "required": True,
             },
             "epsilon_nm": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: dbscan epsilon in nm
-                # Hint: type appears to be float
-                # Hint: required = True
+                "type": "float",
+                "description": "DBSCAN epsilon in nm",
+                "unit": "nm",
+                "required": True,
             },
             "minpts": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: minimum number of points
-                # Hint: type appears to be int
-                # Hint: required = True
+                "type": "int",
+                "description": "Minimum number of points",
+                "required": True,
             },
             "sigma_linker": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: ... in nm
-                # Hint: type appears to be float
-                # Hint: required = True
+                "type": "float",
+                "description": "Linker size in nm",
+                "unit": "nm",
+                "required": True,
             },
             "fp_merge_mask": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: filepath to the merge mask (generated in module
-                # Hint: type appears to be str
-                # Hint: required = True
+                "type": "path",
+                "description": "Filepath to the merge mask (generated in "
+                "module 'create_mask')",
+                "required": True,
             },
             "thresh_type": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: ...
-                # Hint: type appears to be str
-                # Hint: required = True
+                "type": "str",
+                "description": "Threshold type",
+                "required": True,
             },
             "cell_name": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the name of the cell currently analyzed
-                # Hint: type appears to be str
-                # Hint: required = True
+                "type": "str",
+                "description": "The name of the cell currently analyzed",
+                "required": True,
             },
         }
 
@@ -5240,6 +5228,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             "epsilon_nm": {
                 "type": "float",
                 "description": "dbscan epsilon in nm",
+                "unit": "nm",
                 "required": True,
             },
             "minpts": {
@@ -5250,6 +5239,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             "sigma_linker": {
                 "type": "float",
                 "description": "... in nm",
+                "unit": "nm",
                 "required": True,
             },
             "fp_merge_mask": {
@@ -5324,61 +5314,54 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             in the decorator wrapper
         """
         parameters_spec = {
-            "motif_size": {
-                "type": "int",
-                "description": "Size of motifs to search for",
-                "min": 2,
-                "max": 20,
-                "default": 5,
+            "fp_workflows": {
+                "type": "list",
+                "description": "Paths to the folders of the separate "
+                "workflows to merge",
+                "element_type": "str",
                 "required": True,
             },
-            "similarity_threshold": {
-                "type": "float",
-                "description": "Threshold for motif similarity",
-                "min": 0.0,
-                "max": 1.0,
-                "default": 0.8,
-                "required": False,
-            },
-            "fp_workflows": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the paths to the folders of separate workflows where the separate ripleys analyses have been done
-                # Hint: type appears to be list
-                # Hint: required = True
-            },
             "report_names": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the report names of those worklfows
-                # Hint: type appears to be list
-                # Hint: required = True
+                "type": "list",
+                "description": "The report names of those workflows",
+                "element_type": "str",
+                "required": True,
             },
             "swkfl_dbscan_molint_key": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the results key of the dbscan module. e.g. '09_dbscan_molint'
-                # Hint: type appears to be str
-                # Hint: required = True
+                "type": "str",
+                "description": "The results key of the DBSCAN module, "
+                "e.g. '09_dbscan_molint'",
+                "required": True,
             },
             "swkfl_CSR_sim_in_mask_key": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the results key of the CSR dbscan module. e.g. '10_CSR_sim_in_mask' population_threshold : float, 0 - 1 only select barcodes with a relative popula...
-                # Hint: type appears to be str
-                # Hint: required = True
+                "type": "str",
+                "description": "The results key of the CSR DBSCAN module, "
+                "e.g. '10_CSR_sim_in_mask'",
+                "required": True,
             },
             "population_threshold": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: type appears to be float
-                # Hint: required = True
+                "type": "float",
+                "description": "Only select barcodes with a relative "
+                "population above this (0 - 1)",
+                "min": 0.0,
+                "max": 1.0,
+                "required": True,
             },
             "ttest_pvalue_max": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: type appears to be float
-                # Hint: required = True
+                "type": "float",
+                "description": "The p-value below which the exp-vs-CSR "
+                "difference in cluster count for a barcode is significant",
+                "min": 0.0,
+                "max": 1.0,
+                "required": True,
             },
-            "channel_colors": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: colors to describe the receptors with
-                # Hint: type appears to be list
-                # Hint: required = True
+            "cellfraction_threshold": {
+                "type": "float",
+                "description": "The fraction of cells (0 - 1) that must "
+                "carry the barcode at least once",
+                "min": 0.0,
+                "max": 1.0,
+                "required": True,
             },
         }
 
@@ -5445,66 +5428,45 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             in the decorator wrapper
         """
         parameters_spec = {
-            "graph_type": {
-                "type": "str",
-                "description": "Type of interaction graph",
-                "options": ["adjacency", "distance", "correlation"],
+            "fp_workflows": {
+                "type": "list",
+                "description": "Paths to the folders of the separate "
+                "workflows where the separate ripleys analyses were done",
+                "element_type": "str",
                 "required": True,
             },
-            "edge_threshold": {
-                "type": "float",
-                "description": "Threshold for graph edges",
-                "min": 0.0,
-                "max": 1000.0,
-                "required": False,
-            },
-            "fp_workflows": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the paths to the folders of separate workflows where the separate ripleys analyses have been done
-                # Hint: type appears to be list
-                # Hint: required = True
-            },
             "report_names": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the report names of those worklfows
-                # Hint: type appears to be list
-                # Hint: required = True
+                "type": "list",
+                "description": "The report names of those workflows",
+                "element_type": "str",
+                "required": True,
             },
             "swkfl_protint_key": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the results key of the protein_interactions module. e.g. '09_protein_interactions'
-                # Hint: type appears to be str
-                # Hint: required = True
-            },
-            "fp_density": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: fp to the denfsities of the channels.
-                # Hint: type appears to be str
-                # Hint: required = True
+                "type": "str",
+                "description": "The results key of the protein_interactions "
+                "module, e.g. '09_protein_interactions'",
+                "required": True,
             },
             "fp_ripleys_meanvals": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the filepath to the interaction matrix
-                # Hint: type appears to be str
-                # Hint: required = True
-            },
-            "edge_factor": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: factor to display useful sizes
-                # Hint: type appears to be float
-                # Hint: required = True
+                "type": "path",
+                "description": "The filepath to the interaction matrix",
+                "required": True,
             },
             "node_factor": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: factor to display useful sizes
-                # Hint: type appears to be float
-                # Hint: required = True
+                "type": "float",
+                "description": "Factor to display useful node sizes",
+                "required": True,
+            },
+            "edge_factor": {
+                "type": "float",
+                "description": "Factor to display useful edge sizes",
+                "required": True,
             },
             "channel_colors": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: colors to describe the receptors with
-                # Hint: type appears to be list
-                # Hint: required = True
+                "type": "list",
+                "description": "Colors to describe the receptors with",
+                "element_type": "str",
+                "required": True,
             },
         }
 
@@ -5654,32 +5616,6 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             in the decorator wrapper
         """
         parameters_spec = {
-            "nlocs_threshold": {
-                "type": "int",
-                "description": (
-                    "Minimum number of localizations for gold detection"
-                ),
-                "min": 10,
-                "max": 10000,
-                "default": 100,
-                "required": True,
-            },
-            "rms_threshold": {
-                "type": "float",
-                "description": "Maximum RMS deviation threshold",
-                "min": 0.1,
-                "max": 10.0,
-                "default": 2.0,
-                "required": True,
-            },
-            "frame_window": {
-                "type": "int",
-                "description": "Frame window for kinetics analysis",
-                "min": 10,
-                "max": 1000,
-                "default": 100,
-                "required": False,
-            },
             "remove_gold": {
                 "type": "bool",
                 "description": "If present and set to True, the gold \
@@ -5689,11 +5625,26 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             },
             "diameter": {
                 "type": "float",
-                "description": "The pick similar diameter for \
-                    identifying gold std_range, mean_rmsd : float \
-                    the pick similar parameters identifying gold",
+                "description": "The pick-similar diameter for identifying "
+                "gold",
                 "min": 0.0,
-                "default": 2.0,
+                "default": 2.5,
+                "required": False,
+            },
+            "std_range": {
+                "type": "float",
+                "description": "The pick-similar std_range parameter "
+                "identifying gold (picasso.pick_gold default 1.4)",
+                "min": 0.0,
+                "default": 1.4,
+                "required": False,
+            },
+            "mean_rmsd": {
+                "type": "float",
+                "description": "The pick-similar mean_rmsd (nm) identifying "
+                "gold (picasso.pick_gold default 50.0)",
+                "min": 0.0,
+                "default": 50.0,
                 "required": False,
             },
         }
@@ -5766,65 +5717,50 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             in the decorator wrapper
         """
         parameters_spec = {
-            "reference_structure": {
-                "type": "int",
-                "description": "Index of reference structure",
-                "min": 0,
-                "required": True,
-            },
-            "similarity_metric": {
-                "type": "str",
-                "description": "Metric for similarity calculation",
-                "options": ["euclidean", "cosine", "correlation"],
-                "required": True,
-            },
-            "tolerance": {
+            "diameter": {
                 "type": "float",
-                "description": "Tolerance for similarity matching",
-                "min": 0.0,
-                "max": 1.0,
-                "default": 0.1,
+                "description": "The pick-similar diameter for identifying "
+                "gold",
+                "default": 2.0,
                 "required": False,
             },
-            "diameter": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the pick similar diameter for identifying gold
-                # Hint: type appears to be float
-                # Hint: required = True
-            },
             "min_n_locs_per_frame": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: type appears to be float
-                # Hint: required = False (optional)
+                "type": "float",
+                "description": "Min percentage (0-1) of frames with events "
+                "in the pick region to pick",
+                "default": 0.01,
+                "required": False,
             },
             "max_n_locs_per_frame": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: type appears to be float
-                # Hint: required = False (optional)
+                "type": "float",
+                "description": "Max percentage (0-1) of frames with events "
+                "in the pick region to pick",
+                "default": 0.01,
+                "required": False,
             },
             "min_rmsd": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the minimum root mean square distance from pick center to pick
-                # Hint: type appears to be float
-                # Hint: required = False (optional)
+                "type": "float",
+                "description": "Minimum RMS distance from the pick center "
+                "to pick",
+                "required": False,
             },
             "max_rmsd": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the maximum root mean square distance from pick center to pick
-                # Hint: type appears to be float
-                # Hint: required = False (optional)
+                "type": "float",
+                "description": "Maximum RMS distance from the pick center "
+                "to pick",
+                "required": False,
             },
             "n_plot_structures": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the number of structures to plot
-                # Hint: type appears to be int
-                # Hint: required = False (optional)
+                "type": "int",
+                "description": "Number of structures to plot",
+                "required": False,
             },
             "display_pixelsize": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the pixelsize for display in nm, default: 1
-                # Hint: type appears to be float
-                # Hint: required = False (optional)
+                "type": "float",
+                "description": "Pixel size for display in nm",
+                "unit": "nm",
+                "default": 1,
+                "required": False,
             },
         }
 
@@ -5885,55 +5821,42 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             in the decorator wrapper
         """
         parameters_spec = {
-            "cluster_method": {
-                "type": "str",
-                "description": "Method for structure clustering",
-                "options": ["kmeans", "hierarchical", "spectral"],
+            "diameter": {
+                "type": "float",
+                "description": "The pick-similar diameter for identifying "
+                "gold",
                 "required": True,
             },
-            "n_structures": {
-                "type": "int",
-                "description": "Number of structure types to identify",
-                "min": 1,
-                "max": 20,
-                "default": 5,
+            "min_n_locs_per_frame": {
+                "type": "float",
+                "description": "Percentage of frames with events in the pick "
+                "region below which there is noise",
+                "default": 0.01,
                 "required": False,
             },
-            "diameter": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the pick similar diameter for identifying gold
-                # Hint: type appears to be float
-                # Hint: required = True
-            },
-            "min_n_locs_per_frame": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the percentage of frames with events in the pick region below which there is noise. default: 0.01
-                # Hint: type appears to be float
-                # Hint: required = False (optional)
-            },
             "n_plot_structures": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the number of structures to plot
-                # Hint: type appears to be int
-                # Hint: required = False (optional)
+                "type": "int",
+                "description": "Number of structures to plot",
+                "required": False,
             },
             "display_pixelsize": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the pixelsize for display in nm, default: 1
-                # Hint: type appears to be float
-                # Hint: required = False (optional)
+                "type": "float",
+                "description": "Pixel size for display in nm",
+                "unit": "nm",
+                "default": 1,
+                "required": False,
             },
             "xi": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the xi parameter for clustering. default 0.05
-                # Hint: type appears to be float
-                # Hint: required = False (optional)
+                "type": "float",
+                "description": "The OPTICS xi clustering parameter",
+                "default": 0.05,
+                "required": False,
             },
             "min_cluster_size": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the minimun cluster size (fract). default .05
-                # Hint: type appears to be float
-                # Hint: required = False (optional)
+                "type": "float",
+                "description": "Minimum cluster size as a fraction",
+                "default": 0.05,
+                "required": False,
             },
         }
 
@@ -5964,6 +5887,401 @@ class ModuleDescriptor(util.AbstractModuleCollection):
 
         return parameters_spec, results_spec
 
+    def pick_origami(self):
+        """Design-aware picking of origami structures.
+
+        Loads an origami's designed geometry (a picasso design file, a
+        regular grid, or an explicit site list), finds and picks the
+        origami structures automatically, and tolerates a configurable
+        number of missing docking sites.
+
+        Parameters
+        ----------
+        i : int
+            the index of the module
+        parameters : dict
+            with a design source (one of):
+                design_file : str
+                    path to a picasso design .yaml file
+                geometry : dict
+                    a grid {n_rows, n_cols, spacing_nm, angle} or an
+                    explicit {sites_nm: [[x, y], ...]} layout
+            and optional keys:
+                pick_diameter_factor, min_n_locs_per_frame,
+                max_n_locs_per_frame, min_rmsd, max_rmsd, allow_mirror,
+                n_plot_structures, display_pixelsize, cluster_patterns and
+                the pattern_* clustering parameters
+        results : dict
+            the results this function generates. This is created
+            in the decorator wrapper
+        """
+        parameters_spec = {
+            "design_file": {
+                "type": "str",
+                "description": "Path to a picasso design .yaml file",
+                "extensions": [".yaml"],
+                "required": False,
+            },
+            "geometry": {
+                "type": "dict",
+                "description": (
+                    "Grid {n_rows, n_cols, spacing_nm, angle} or explicit "
+                    "{sites_nm: [[x, y], ...]} layout"
+                ),
+                "required": False,
+            },
+            "pick_diameter_factor": {
+                "type": "float",
+                "description": (
+                    "Pick diameter as a multiple of the origami size "
+                    "(1.5 = 150%)"
+                ),
+                "min": 0.0,
+                "default": 1.5,
+                "required": False,
+            },
+            "min_n_locs_per_frame": {
+                "type": ["float", "str"],
+                "description": (
+                    "Override the simulated min nlocs window (per-frame, or "
+                    "quantile 'q..')"
+                ),
+                "required": False,
+            },
+            "max_n_locs_per_frame": {
+                "type": ["float", "str"],
+                "description": (
+                    "Override the simulated max nlocs window (per-frame, or "
+                    "quantile 'q..')"
+                ),
+                "required": False,
+            },
+            "min_rmsd": {
+                "type": "float",
+                "description": "Override the simulated min RMSD (camera px)",
+                "unit": "px",
+                "required": False,
+            },
+            "max_rmsd": {
+                "type": "float",
+                "description": "Override the simulated max RMSD (camera px)",
+                "unit": "px",
+                "required": False,
+            },
+            "allow_mirror": {
+                "type": "bool",
+                "description": "Allow a mirrored match to the design",
+                "default": True,
+                "required": False,
+            },
+            "n_plot_structures": {
+                "type": "int",
+                "description": "Number of representative structures to plot",
+                "min": 0,
+                "required": False,
+            },
+            "display_pixelsize": {
+                "type": "float",
+                "description": "Pixel size for display in nm, default: 1",
+                "unit": "nm",
+                "min": 0.0,
+                "default": 1.0,
+                "required": False,
+            },
+            "cluster_patterns": {
+                "type": "bool",
+                "description": (
+                    "Cluster accepted structures by resolved geometry "
+                    "(single spot / partial / full grid / aggregate) and "
+                    "emit per-pattern picks + a summary"
+                ),
+                "default": False,
+                "required": False,
+            },
+            "n_pattern_examples": {
+                "type": "int",
+                "description": (
+                    "Representative structures rendered per pattern cluster "
+                    "for the report (nearest the cluster centroid); 0 to skip"
+                ),
+                "min": 0,
+                "default": 8,
+                "required": False,
+            },
+            "pattern_eps_frac": {
+                "type": "float",
+                "description": (
+                    "Docking-site subclustering neighbourhood as a fraction "
+                    "of site spacing. Lower it if sites are merged / n_sites "
+                    "is under-counted; raise it if a single site splits"
+                ),
+                "min": 0.0,
+                "max": 0.5,
+                "default": 0.2,
+                "required": False,
+            },
+            "pattern_min_samples": {
+                "type": "int",
+                "description": (
+                    "DBSCAN min_samples for docking-site subclustering (a "
+                    "site needs at least this many localizations; values "
+                    "below 2 are treated as 2)"
+                ),
+                "min": 2,
+                "default": 7,
+                "required": False,
+            },
+            "pattern_defect_grouping": {
+                "type": "str",
+                "description": (
+                    "Lattice method: how to group on-lattice picks - "
+                    "'completeness' (by number of occupied sites; a few "
+                    "robust classes) or 'exact' (by the exact defect pattern)"
+                ),
+                "options": ["completeness", "exact"],
+                "default": "completeness",
+                "required": False,
+            },
+            "pattern_min_sites_frac": {
+                "type": "float",
+                "description": (
+                    "Lattice method: min matched sites as a fraction of the "
+                    "design nodes to be on-lattice"
+                ),
+                "min": 0.0,
+                "max": 1.0,
+                "default": 0.66,
+                "required": False,
+            },
+            "contour_threshold": {
+                "type": "float",
+                "description": (
+                    "Contour-detection threshold for finding candidate "
+                    "origami footprints"
+                ),
+                "default": 2000,
+                "required": False,
+            },
+            "n_plot_columns": {
+                "type": "int",
+                "description": (
+                    "Number of columns in the representative-structures "
+                    "plot grid"
+                ),
+                "min": 1,
+                "default": 8,
+                "required": False,
+            },
+        }
+
+        results_spec = {
+            "start time": {
+                "type": "str",
+                "description": "Module execution start timestamp",
+            },
+            "end time": {
+                "type": "str",
+                "description": "Module execution end timestamp",
+            },
+            "duration": {
+                "type": "float",
+                "description": "Module execution duration in seconds",
+                "min": 0.0,
+            },
+            "folder": {
+                "type": "str",
+                "description": "Output folder for module results",
+            },
+            "n_candidates": {
+                "type": "int",
+                "description": "Number of candidate origami footprints found",
+            },
+            "n_registered": {
+                "type": "int",
+                "description": (
+                    "Candidates that passed the site-count prefilter and were "
+                    "registered against the design template"
+                ),
+            },
+            "n_accepted": {
+                "type": "int",
+                "description": "Number of accepted origami structures",
+            },
+            "n_sites_expected": {
+                "type": "int",
+                "description": "Expected docking sites per origami",
+            },
+            "grid_spacing_nm": {
+                "type": "float",
+                "description": "Design inter-site spacing used (nm)",
+            },
+            "n_picked_locs": {
+                "type": "int",
+                "description": "Number of localizations in accepted origamis",
+            },
+            "fp_picks_origami": {
+                "type": "str",
+                "description": (
+                    "filepath to the picasso pick-region .yaml for accepted "
+                    "origami footprints (Centers + Diameter)"
+                ),
+            },
+            "fp_picks_dockingsites": {
+                "type": "str",
+                "description": (
+                    "filepath to the picasso pick-region .yaml for all "
+                    "resolved single docking sites (Centers + Diameter)"
+                ),
+            },
+            "fp_picked_locs_origami": {
+                "type": "str",
+                "description": (
+                    "filepath to the .hdf5 of picked localizations grouped "
+                    "per accepted origami (one 'group' per origami)"
+                ),
+            },
+            "fp_picked_locs_dockingsites": {
+                "type": "str",
+                "description": (
+                    "filepath to the .hdf5 of picked localizations grouped "
+                    "per resolved docking site (one 'group' per site)"
+                ),
+            },
+            "fp_geometry_table": {
+                "type": "str",
+                "description": (
+                    "filepath to the per-structure geometry table (.csv)"
+                ),
+            },
+            "fp_phasespace": {
+                "type": "str",
+                "description": (
+                    "filepath to the nlocs/rmsd candidate phase-space figure"
+                ),
+            },
+            "fp_renderings": {
+                "type": "list",
+                "description": "filepaths to representative structure renders",
+            },
+            "n_pattern_clusters": {
+                "type": "int",
+                "description": (
+                    "Number of geometry-pattern clusters discovered "
+                    "(cluster_patterns only)"
+                ),
+            },
+            "pattern_summary": {
+                "type": "list",
+                "description": (
+                    "Per-pattern summary (label, n_structures, median "
+                    "n_sites/n_locs/spacing); cluster_patterns only"
+                ),
+            },
+            "fp_pattern_table": {
+                "type": "str",
+                "description": (
+                    "filepath to the per-pattern summary table (.csv)"
+                ),
+            },
+            "fp_pattern_picks": {
+                "type": "dict",
+                "description": (
+                    "map of pattern label -> picasso pick-region .yaml for "
+                    "that pattern's structures (cluster_patterns only)"
+                ),
+            },
+            "fp_pattern_phasespace": {
+                "type": "str",
+                "description": (
+                    "filepath to the phase-space figure coloured by "
+                    "geometry pattern (cluster_patterns only)"
+                ),
+            },
+            "fp_pattern_fit_space": {
+                "type": "str",
+                "description": (
+                    "filepath to the lattice fit-quality phase space "
+                    "(matched-site count vs template fit RMSE), coloured by "
+                    "defect cluster (lattice method only)"
+                ),
+            },
+            "fp_pattern_pairscore_space": {
+                "type": "str",
+                "description": (
+                    "filepath to the registration-free pair-score phase "
+                    "space (nlocs-per-frame vs lattice pair-score), coloured "
+                    "by defect cluster (lattice method only)"
+                ),
+            },
+            "fp_pattern_gate_panels": {
+                "type": "str",
+                "description": (
+                    "filepath to the per-gate transparency panels (one "
+                    "histogram per on-lattice gate with its threshold; "
+                    "green = accepted) (lattice method only)"
+                ),
+            },
+            "fp_pattern_feature_space": {
+                "type": "str",
+                "description": (
+                    "filepath to the PCA descriptor-space figure coloured by "
+                    "pattern cluster (cluster_patterns only)"
+                ),
+            },
+            "fp_pattern_pairdist": {
+                "type": "str",
+                "description": (
+                    "filepath to the per-cluster pairwise site-distance "
+                    "signature figure (pairwise method only)"
+                ),
+            },
+            "fp_pattern_site_nlocs_hist": {
+                "type": "str",
+                "description": (
+                    "filepath to the per-cluster localizations-per-site "
+                    "histogram (lattice method only)"
+                ),
+            },
+            "fp_pattern_site_picks": {
+                "type": "str",
+                "description": (
+                    "filepath to the picasso pick .yaml of the resolved "
+                    "single docking sites of on-lattice structures "
+                    "(lattice method only)"
+                ),
+            },
+            "fp_pattern_sites_table": {
+                "type": "str",
+                "description": (
+                    "filepath to the .csv of resolved single sites with their "
+                    "design-node index / cluster / structure (lattice only)"
+                ),
+            },
+            "n_pattern_sites": {
+                "type": "int",
+                "description": (
+                    "number of resolved single docking sites exported "
+                    "(lattice method only)"
+                ),
+            },
+            "pattern_method": {
+                "type": "str",
+                "description": (
+                    "which pattern-clustering method ran ('lattice' or "
+                    "'pairwise')"
+                ),
+            },
+            "fp_pattern_renderings": {
+                "type": "dict",
+                "description": (
+                    "map of pattern label -> list of example structure "
+                    "render filepaths (cluster_patterns only)"
+                ),
+            },
+        }
+
+        return parameters_spec, results_spec
+
     def undrift_from_picked(self):
         """Performs undrift from piced locs.
 
@@ -5985,8 +6303,12 @@ class ModuleDescriptor(util.AbstractModuleCollection):
         parameters_spec = {
             "fp_picked_locs": {
                 "type": ["numpy.ndarray", "str"],
-                "description": "Picked localization coordinates or file path",
-                "extensions": [".hdf5", ".txt"],
+                "description": (
+                    "Picks to undrift from: an hdf5 of grouped picked locs, "
+                    "or a picasso pick-region .yaml (Centers + Diameter) "
+                    "applied to the current locs"
+                ),
+                "extensions": [".hdf5", ".yaml", ".txt"],
                 "required": True,
             },
             "interpolation_method": {
@@ -6233,40 +6555,17 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             in the decorator wrapper
         """
         parameters_spec = {
-            "max_distance": {
-                "type": "float",
-                "description": "Maximum linking distance in nm",
-                "min": 1.0,
-                "max": 1000.0,
-                "default": 100.0,
-                "required": True,
-            },
-            "max_frame_gap": {
-                "type": "int",
-                "description": "Maximum frame gap for linking",
-                "min": 1,
-                "max": 100,
-                "default": 5,
-                "required": True,
-            },
-            "linking_algorithm": {
-                "type": "str",
-                "description": "Algorithm for localization linking",
-                "options": ["nearest_neighbor", "hungarian", "lap"],
-                "default": "hungarian",
-                "required": False,
-            },
             "d_max": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: maximum distance to link [px]
-                # Hint: type appears to be int
-                # Hint: required = True
+                "type": "int",
+                "description": "Maximum distance to link, in pixels",
+                "unit": "px",
+                "required": True,
             },
             "tolerance": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: maximum transient dark time [frames]
-                # Hint: type appears to be int
-                # Hint: required = True
+                "type": "int",
+                "description": "Maximum transient dark time, in frames",
+                "unit": "frames",
+                "required": True,
             },
         }
 
@@ -6332,63 +6631,59 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             in the decorator wrapper
         """
         parameters_spec = {
-            "sub_module": {
+            "module_name": {
                 "type": "str",
-                "description": "Name of the sub-module to execute",
+                "description": "The module to call",
                 "required": True,
             },
-            "sub_module_params": {
-                "type": "dict",
-                "description": "Parameters for the sub-module",
-                "required": False,
-            },
-            "module_name": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the module to call
-                # Hint: type appears to be str
-                # Hint: required = True
-            },
             "param_target1": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: parameter name of the first target to set for the module
-                # Hint: type appears to be str
-                # Hint: required = True
+                "type": "str",
+                "description": "Parameter name of the first target to set "
+                "for the module",
+                "required": True,
             },
             "param_target2": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: parameter name of the second target to set for the module
-                # Hint: type appears to be str
-                # Hint: required = True
+                "type": "str",
+                "description": "Parameter name of the second target to set "
+                "for the module",
+                "required": True,
             },
             "module_kwargs": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the other arguments to the module
-                # Hint: type appears to be dict
-                # Hint: required = True
+                "type": "dict",
+                "description": "The other arguments to the module",
+                "required": False,
+            },
+            "xlabel": {
+                "type": "str",
+                "description": "Label for the x-axis of the heatmap",
+                "required": True,
+            },
+            "ylabel": {
+                "type": "str",
+                "description": "Label for the y-axis of the heatmap",
+                "required": True,
             },
             "result_scalar": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the key to display in a heatmap as main result
-                # Hint: type appears to be str
-                # Hint: required = False (optional)
+                "type": "str",
+                "description": "The key to display in a heatmap as main "
+                "result",
+                "required": False,
             },
             "scalar_threshold": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the saturation value in the heatmap
-                # Hint: type appears to be float
-                # Hint: required = False (optional)
+                "type": "float",
+                "description": "The saturation value in the heatmap",
+                "required": False,
             },
             "scalar_minval": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the minimum value for color in the heatmap
-                # Hint: type appears to be float
-                # Hint: required = False (optional)
+                "type": "float",
+                "description": "The minimum value for color in the heatmap",
+                "required": False,
             },
             "result_fpfig": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: the key to the filepath of one or more figures generated to display for documentation
-                # Hint: type appears to be str or list
-                # Hint: required = False (optional)
+                "type": ["str", "list"],
+                "description": "The key to the filepath of one or more "
+                "figures generated to display for documentation",
+                "required": False,
             },
         }
 
@@ -6606,6 +6901,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             "pair_distance": {
                 "type": "int",
                 "description": "Target-Reference pair distance [nm]",
+                "unit": "nm",
                 "default": 10,
                 "required": True,
             },
@@ -6621,12 +6917,14 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                     "min": {
                         "type": "float",
                         "description": "Smallest distance [nm]",
+                        "unit": "nm",
                         "min": 0.0,
                         "default": 5.0,
                     },
                     "max": {
                         "type": "float",
                         "description": "Largest distance [nm]",
+                        "unit": "nm",
                         "min": 0.0,
                         "default": 20.0,
                     },
@@ -6635,6 +6933,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                         "description": (
                             "Step [nm]; defines the number of candidates"
                         ),
+                        "unit": "nm",
                         "min": 0.1,
                         "default": 2.5,
                     },
@@ -6644,6 +6943,7 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "type": "dict",
                 "description": "Dictionary mapping from target/reference (tag) "
                 "to labeling uncertainty [nm]",
+                "unit": "nm",
                 # "default": 5,
                 "required": True,
             },
@@ -6660,12 +6960,14 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                     "min": {
                         "type": "float",
                         "description": "Range start [nm]",
+                        "unit": "nm",
                         "min": 0.0,
                         "default": 2.0,
                     },
                     "max": {
                         "type": "float",
                         "description": "Range end [nm] (inclusive)",
+                        "unit": "nm",
                         "min": 0.0,
                         "default": 12.0,
                     },
@@ -6674,16 +6976,11 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                         "description": (
                             "Step [nm]; defines the number of candidates"
                         ),
+                        "unit": "nm",
                         "min": 0.1,
                         "default": 2.0,
                     },
                 },
-            },
-            "n_simulate": {
-                "type": "int",
-                "description": "Number of structures to simulate",
-                "default": 500000,
-                "required": True,
             },
             "density": {
                 "type": "dict",
@@ -6713,13 +7010,21 @@ class ModuleDescriptor(util.AbstractModuleCollection):
             "NND_bin": {
                 "type": "int",
                 "description": "Bin size (nm). Auto-calculated if None or 0",
+                "unit": "nm",
                 "default": 0,
                 "required": False,
             },
             "NND_maxdist": {
                 "type": "int",
                 "description": "Maximum distance in histogram (nm). Auto-calculated if None or 0.",
+                "unit": "nm",
                 "default": 0,
+                "required": False,
+            },
+            "bootstrap": {
+                "type": "bool",
+                "description": "If True, also return the per-target "
+                "labeling-efficiency std from bootstrap resampling",
                 "required": False,
             },
         }
@@ -6871,6 +7176,312 @@ class ModuleDescriptor(util.AbstractModuleCollection):
 
         return parameters_spec, results_spec
 
+    def branch(self):
+        """Fan out into per-branch sub-workflows, then optionally re-join.
+
+        Runs a shared prefix once, then runs ``branch_modules`` once per
+        branch and finally ``join_modules`` once with the per-branch results
+        pooled back together. ``branch_type="explicit"`` runs a fixed
+        ``n_branches`` (per-branch differences via ("$branch", [...])
+        overrides); ``"runtime"`` runs one branch per element of the list that
+        ``branch_over`` resolves to at run time, exposing each element to the
+        branch via the ("$branch_item", ...) token.
+
+        Parameters
+        ----------
+        i : int
+            the index of the module
+        parameters : dict
+            with required keys:
+                branch_type : str
+                    "explicit" (fixed n_branches) or "runtime" (count from a
+                    resolved list).
+                branch_modules : list of tuples
+                    (module_name, module_parameters) run once per branch.
+            with keys required by branch_type:
+                n_branches : int
+                    for "explicit": the number of branches.
+                branch_over : value or command
+                    for "runtime": resolves to a list L; one branch per
+                    element; each branch reads L[branch_id] via
+                    ("$branch_item", ...).
+            with optional keys:
+                branch_labels : list
+                    explicit names for the branches.
+                label_template : str
+                    for "runtime": label format with {n} / {item}.
+                join_modules : list of tuples
+                    (module_name, module_parameters) run once after all
+                    branches; may pool per-branch results via
+                    ("$get_prior_result", "results, NN_branch, branches,
+                    $all, MM_module, key").
+                parameter_command_executor : ParameterCommandExecutor
+                    injected by the runner to resolve sub-module commands.
+        results : dict
+            the results this function generates
+
+        Returns
+        -------
+        parameters : dict
+            as input, potentially changed values, for consistency
+        results : dict
+            the analysis results including:
+                - branch_type : str
+                - labels : list of branch labels
+                - branches : list of per-branch result dicts
+                - join : dict of join-module results
+                - topology : the executed module-path tree
+        """
+        parameters_spec = {
+            "branch_type": {
+                "type": "str",
+                "options": ["explicit", "runtime"],
+                "default": "explicit",
+                "description": (
+                    'Either "explicit" (fixed n_branches with per-branch '
+                    '("$branch",[...]) overrides) or "runtime" (one branch per '
+                    "element of the list branch_over resolves to)."
+                ),
+                "required": True,
+            },
+            "n_branches": {
+                "type": "int",
+                "description": (
+                    'Number of branches (branch_type="explicit"). Each branch '
+                    "runs the same modules; per-branch differences come from "
+                    '("$branch", [v0, v1, ...]) parameter overrides.'
+                ),
+                "required": False,
+                "min": 1,
+                "visible_if": {"branch_type": ["explicit"]},
+            },
+            "branch_labels": {
+                "type": "list",
+                "description": (
+                    "Optional names for the branches (branch_type="
+                    '"explicit"), e.g. ["cell0", "cell1", "cell2"].'
+                ),
+                "required": False,
+                "visible_if": {"branch_type": ["explicit"]},
+            },
+            "branch_modules": {
+                "type": "list",
+                "description": (
+                    "List of (module_name, module_parameters) tuples run "
+                    "once per branch."
+                ),
+                "required": True,
+            },
+            "branch_over": {
+                "type": "list",
+                "description": (
+                    'For branch_type="runtime": a value or command (build one '
+                    "with cmd) that resolves to a list at run time. The list "
+                    "length sets the number of branches; each branch reads its "
+                    'element via ("$branch_item",) in a sub-module parameter.'
+                ),
+                "required": False,
+                "visible_if": {"branch_type": ["runtime"]},
+            },
+            "label_template": {
+                "type": "str",
+                "description": (
+                    'For branch_type="runtime": optional label format string, '
+                    'e.g. "cell{n:02d}" ({n} = branch index, {item} = the '
+                    "resolved element)."
+                ),
+                "required": False,
+                "visible_if": {"branch_type": ["runtime"]},
+            },
+            "join_modules": {
+                "type": "list",
+                "description": (
+                    "Optional (module_name, module_parameters) tuples run "
+                    "once after all branches to pool per-branch results."
+                ),
+                "required": False,
+            },
+            "parameter_command_executor": {
+                "type": "ParameterCommandExecutor",
+                "description": (
+                    "Injected by the runner to resolve sub-module commands."
+                ),
+                "required": False,
+            },
+        }
+
+        results_spec = {
+            "start time": {
+                "type": "str",
+                "description": "Module execution start timestamp",
+            },
+            "end time": {
+                "type": "str",
+                "description": "Module execution end timestamp",
+            },
+            "duration": {
+                "type": "float",
+                "description": "Module execution duration in seconds",
+                "min": 0.0,
+            },
+            "folder": {
+                "type": "str",
+                "description": "Output folder for module results",
+            },
+            "branch_type": {
+                "type": "str",
+                "description": 'The branch type ("explicit" or "runtime").',
+            },
+            "labels": {
+                "type": "list",
+                "description": "The branch labels.",
+            },
+            "branches": {
+                "type": "list",
+                "description": (
+                    "Per-branch result dicts, each keyed by NN_module."
+                ),
+            },
+            "join": {
+                "type": "dict",
+                "description": "The join-module results.",
+            },
+            "topology": {
+                "type": "dict",
+                "description": "The executed module-path tree.",
+            },
+        }
+
+        return parameters_spec, results_spec
+
+    def summarize_branches(self):
+        """Summarize per-branch results as a figure.
+
+        A general-purpose plotting/summary module, typically used as a
+        ``branch`` join module: it renders a scalar result collected across
+        branches (via ``$all``) as a box/strip plot ("replicates" mode) or
+        against a per-branch argument ("screen" mode).
+
+        Parameters
+        ----------
+        i : int
+            the index of the module
+        parameters : dict
+            with optional keys:
+                values : list or dict
+                    one numeric value per branch (list), or a dict of
+                    series-name -> list for several metrics on one figure.
+                    Usually a ("$get_prior_result", "results, NN_branch,
+                    branches, $all, MM_module, key") command. Omit it as a
+                    branch join module to auto-summarize every numeric
+                    per-branch result (small multiples, one metric each).
+                labels : list
+                    per-branch labels for x ticks / annotations (default: the
+                    branch labels when auto-summarizing)
+                x : list
+                    per-branch argument values; enables "screen" mode
+                mode : one of "auto", "replicates", "screen"
+                xlabel, ylabel, title, filename : str
+        results : dict
+            the results this function generates
+
+        Returns
+        -------
+        parameters : dict
+            as input, potentially changed values, for consistency
+        results : dict
+            the analysis results including fp_fig, mode and stats
+        """
+        parameters_spec = {
+            "values": {
+                "type": "str",
+                "description": (
+                    "Optional. Leave empty as a branch join module: it then "
+                    "auto-summarizes every numeric per-branch result (labels "
+                    "come from the branch labels). Otherwise: one numeric value "
+                    "per branch (a list), a dict of series-name -> list, or a "
+                    '$get_prior_result over "results, NN_branch, branches, '
+                    '$all, MM_module, key".'
+                ),
+                "required": False,
+            },
+            "labels": {
+                "type": "str",
+                "description": "Per-branch labels for the x axis.",
+                "required": False,
+            },
+            "x": {
+                "type": "str",
+                "description": (
+                    'Per-branch argument values; enables "screen" mode '
+                    "(metric vs argument)."
+                ),
+                "required": False,
+            },
+            "mode": {
+                "type": "options",
+                "options": ["auto", "replicates", "screen"],
+                "description": (
+                    '"replicates" (box/strip over branches) or "screen" '
+                    '(metric vs argument); "auto" chooses by whether x is set.'
+                ),
+                "default": "auto",
+                "required": False,
+            },
+            "xlabel": {
+                "type": "str",
+                "description": "X-axis label.",
+                "required": False,
+            },
+            "ylabel": {
+                "type": "str",
+                "description": "Y-axis label.",
+                "required": False,
+            },
+            "title": {
+                "type": "str",
+                "description": "Figure title.",
+                "required": False,
+            },
+            "filename": {
+                "type": "str",
+                "description": "Output figure filename.",
+                "required": False,
+            },
+        }
+        results_spec = {
+            "start time": {
+                "type": "str",
+                "description": "Module execution start timestamp",
+            },
+            "end time": {
+                "type": "str",
+                "description": "Module execution end timestamp",
+            },
+            "duration": {
+                "type": "float",
+                "description": "Module execution duration in seconds",
+                "min": 0.0,
+            },
+            "folder": {
+                "type": "str",
+                "description": "Output folder for module results",
+            },
+            "fp_fig": {
+                "type": "str",
+                "description": "Path to the generated summary figure.",
+            },
+            "mode": {
+                "type": "str",
+                "description": 'The display mode used ("replicates"/"screen").',
+            },
+            "stats": {
+                "type": "dict",
+                "description": "Per-series n/mean/std/min/max.",
+            },
+        }
+        return parameters_spec, results_spec
+
     def resolution_analysis(self):
         """Perform resolution analysis using point pattern autocorrelation
 
@@ -6924,51 +7535,43 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 path to radial profile plot
         """
         parameters_spec = {
-            "xlabel": {
-                "type": "str",
-                "description": "Label for the x-axis of the test plot",
-                "required": True,
-            },
-            "ylabel": {
-                "type": "str",
-                "description": "Label for the y-axis of the test plot",
-                "required": True,
-            },
             "delta_r": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: grid spacing for autocorrelation (default: 5 nm)
-                # Hint: type appears to be float
-                # Hint: required = False (optional)
+                "type": "float",
+                "description": "Grid spacing for autocorrelation (nm)",
+                "unit": "nm",
+                "default": 5.0,
+                "required": False,
             },
             "r_max": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: maximum radius for autocorrelation (default: 100 nm)
-                # Hint: type appears to be float
-                # Hint: required = False (optional)
+                "type": "float",
+                "description": "Maximum radius for autocorrelation (nm)",
+                "unit": "nm",
+                "default": 100.0,
+                "required": False,
             },
             "batch_size": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: number of data points per batch for chunking (auto-calculated if None)
-                # Hint: type appears to be int or None
-                # Hint: required = False (optional)
+                "type": "int",
+                "description": "Data points per batch for chunking "
+                "(auto if None)",
+                "required": False,
             },
             "n_processes": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: number of parallel processes (auto-detected if None, capped at 4)
-                # Hint: type appears to be int or None
-                # Hint: required = False (optional)
+                "type": "int",
+                "description": "Number of parallel processes (auto if None, "
+                "capped at 4)",
+                "required": False,
             },
             "use_chunking": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: enable memory-efficient chunking for large datasets (default: True)
-                # Hint: type appears to be bool
-                # Hint: required = False (optional)
+                "type": "bool",
+                "description": "Memory-efficient chunking for large datasets",
+                "default": True,
+                "required": False,
             },
             "use_sparse": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: use sparse matrices for very large grids (default: False)
-                # Hint: type appears to be bool
-                # Hint: required = False (optional)
+                "type": "bool",
+                "description": "Use sparse matrices for very large grids",
+                "default": False,
+                "required": False,
             },
         }
 
@@ -7093,63 +7696,57 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 path to FRC curve plot
         """
         parameters_spec = {
-            "xlabel": {
-                "type": "str",
-                "description": "Label for the x-axis of the test plot",
-                "required": True,
-            },
-            "ylabel": {
-                "type": "str",
-                "description": "Label for the y-axis of the test plot",
-                "required": True,
-            },
             "pixelsize_render": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: pixel size for rendered images in nm (default: 5 nm)
-                # Hint: type appears to be float
-                # Hint: required = False (optional)
+                "type": "float",
+                "description": "Pixel size for rendered images in nm",
+                "unit": "nm",
+                "default": 5.0,
+                "required": False,
             },
             "smoothing_sigma": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: Gaussian smoothing sigma in pixels (default: None)
-                # Hint: type appears to be float or None
-                # Hint: required = False (optional)
+                "type": "float",
+                "description": "Gaussian smoothing sigma in pixels "
+                "(None = no smoothing)",
+                "required": False,
             },
             "threshold": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: FRC threshold for resolution cutoff (default: 1/7 ≈ 0.143)
-                # Hint: type appears to be float
-                # Hint: required = False (optional)
+                "type": "float",
+                "description": "FRC threshold for the resolution cutoff "
+                "(default 1/7 ≈ 0.143)",
+                "default": 1.0 / 7.0,
+                "required": False,
             },
             "region_size": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: size of each spatial region in micrometers (default: 10.0 µm)
-                # Hint: type appears to be float
-                # Hint: required = False (optional)
+                "type": "float",
+                "description": "Size of each spatial region in micrometers",
+                "unit": "µm",
+                "default": 10.0,
+                "required": False,
             },
             "min_locs_per_region": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: minimum localizations per region to process (default: 500)
-                # Hint: type appears to be int
-                # Hint: required = False (optional)
+                "type": "int",
+                "description": "Minimum localizations per region to process",
+                "default": 500,
+                "required": False,
             },
             "max_frc_range_nm": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: maximum FRC range in nm (default: None = full range)
-                # Hint: type appears to be float or None
-                # Hint: required = False (optional)
+                "type": "float",
+                "description": "Maximum FRC range in nm (None = full range)",
+                "unit": "nm",
+                "required": False,
             },
             "n_processes": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: number of parallel processes (default: 4)
-                # Hint: type appears to be int
-                # Hint: required = False (optional)
+                "type": "int",
+                "description": "Number of parallel processes",
+                "default": 4,
+                "required": False,
             },
             "smoothing_window": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: moving average window size for FRC smoothing in 1/nm (default: 0.005)
-                # Hint: type appears to be float
-                # Hint: required = False (optional)
+                "type": "float",
+                "description": "Moving-average window size for FRC smoothing "
+                "in 1/nm",
+                "default": 0.005,
+                "required": False,
             },
         }
 
@@ -7220,77 +7817,47 @@ class ModuleDescriptor(util.AbstractModuleCollection):
 
         return parameters_spec, results_spec
 
-    def undrift_rsso(self):
-        """Undrift localized data using iterative RSSO-based drift correction
+    def resolution_decorr_spatial(self):
+        """Estimate resolution using spatial image decorrelation.
 
-        This method applies an iterative RSSO (Redundant Spot Shift
-        Overrepresentation) approach where each frame is compared against
-        the whole dataset to compute total drift for that frame. The process
-        is repeated iteratively with the undrifted dataset to improve accuracy.
-        Includes uncertainty analysis, confidence evaluation, windowing and
-        outlier detection.
+        Divides the FOV into spatial regions and computes a
+        decorrelation-based resolution per region using picasso 1.0's
+        ``postprocess.decorrelation`` (true Descloux et al.). picasso
+        renders the localizations internally and auto-sweeps pixel sizes,
+        so no render/apodization/filter geometry is tuned here.
 
         Parameters
         ----------
         i : int
-            the module index in the protocol
-        parameters : dict
-            necessary items:
-                ton : float
-                    Half-life of localization in frames (how long a spot
-                    stays visible)
-                toff : float
-                    Time in frames for a spot to reappear after
-                    disappearing
-                max_shift : float
-                    Maximum expected drift per frame in pixels
-            optional items:
-                min_locs_per_frame : int
-                    Minimum localizations per frame for reliable drift
-                    estimation (default: 10)
-                max_iterations : int
-                    Maximum number of iterative refinement rounds (default: 5)
-                convergence_threshold : float
-                    RMS drift change threshold for convergence in nm (default: 0.1)
-                plot_drift : bool
-                    Whether to save drift plots (default: True)
-                save_locs : bool
-                    Whether to save undrifted localizations (default: True)
-                n_processes : int or None
-                    Number of processes for parallel computation (default: auto)
-                confidence_threshold : float
-                    Confidence threshold for windowing analysis (default: 0.8)
-                outlier_detection_enabled : bool
-                    Enable RSSO failure and outlier detection (default: True)
-                outlier_z_threshold : float
-                    Z-score threshold for temporal outlier detection (default: 3.5)
-                min_signal_to_noise : float
-                    Minimum signal-to-noise ratio for drift measurements (default: 0.5)
-                windowing_enabled : bool
-                    Enable adaptive windowing for low-confidence frames (default: True)
-                window_size_range : tuple
-                    Min and max window sizes for adaptive windowing (default: (3, 20))
+            the index of the module
+        parameters: dict
+            with optional keys:
+                region_size : float
+                    size of each spatial region in micrometers
+                    (default: 10.0 µm)
+                min_locs_per_region : int
+                    minimum localizations per region to process
+                    (default: 500)
+                n_radii : int
+                    number of decorrelation radii (default: 50, must be
+                    >= 10)
+                n_filters : int
+                    number of high-pass filters (default: 10, must be
+                    >= 2)
 
-        Returns
-        -------
-        parameters : dict
-            as input, potentially changed values, for consistency
-        results : dict
-            the analysis results including:
-                success : bool
-                    whether drift correction succeeded
-                drift_x, drift_y : ndarray
-                    total drift trajectories in nm for each frame
-                uncertainty_x, uncertainty_y : ndarray
-                    uncertainty estimates for drift measurements
-                drift_quality : ndarray
-                    quality/confidence metrics per frame
-                n_iterations : int
-                    number of iterations performed
-                convergence_rms : float
-                    final RMS change indicating convergence
-                drift_plots : str
-                    path to drift visualization plots
+        Results:
+            resolution_decorr_spatial : float
+                mean decorrelation resolution over valid regions in nm
+            resolution_std : float
+                standard deviation across regions
+            n_regions : int
+                number of valid regions processed
+            n_regions_total : int
+                total number of regions tiled
+            resolutions_per_region : ndarray
+                per-region resolution values in nm
+            fig_decorr : str
+                path to the per-region resolution histogram
         """
         parameters_spec = {
             "xlabel": {
@@ -7303,80 +7870,40 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "description": "Label for the y-axis of the test plot",
                 "required": True,
             },
-            "ton": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: Half-life of localization in frames (how long a spot stays visible)
-                # Hint: type appears to be float
+            "region_size": {
+                "type": "float",
+                "description": ("Size of each spatial region in micrometers."),
+                "unit": "um",
+                "min": 0.0,
+                "default": 10.0,
+                "required": False,
             },
-            "toff": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: Time in frames for a spot to reappear after disappearing
-                # Hint: type appears to be float
+            "min_locs_per_region": {
+                "type": "int",
+                "description": (
+                    "Minimum localizations per region to process."
+                ),
+                "min": 1,
+                "default": 500,
+                "required": False,
             },
-            "max_shift": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: Maximum expected drift per frame in pixels optional items:
-                # Hint: type appears to be float
+            "n_radii": {
+                "type": "int",
+                "description": (
+                    "Number of decorrelation radii (must be at least 10)."
+                ),
+                "min": 10,
+                "default": 50,
+                "required": False,
             },
-            "min_locs_per_frame": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: Minimum localizations per frame for reliable drift estimation (default: 10)
-                # Hint: type appears to be int
-            },
-            "max_iterations": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: Maximum number of iterative refinement rounds (default: 5)
-                # Hint: type appears to be int
-            },
-            "convergence_threshold": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: RMS drift change threshold for convergence in nm (default: 0.1)
-                # Hint: type appears to be float
-            },
-            "plot_drift": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: Whether to save drift plots (default: True)
-                # Hint: type appears to be bool
-            },
-            # "save_locs": {
-            #     # TODO: Add type, description, min, max, default, required, step, extensions, properties
-            #     # Hint: description: Whether to save undrifted localizations (default: True)
-            #     # Hint: type appears to be bool
-            # },
-            "n_processes": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: Number of processes for parallel computation (default: auto)
-                # Hint: type appears to be int or None
-            },
-            "confidence_threshold": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: Confidence threshold for windowing analysis (default: 0.8)
-                # Hint: type appears to be float
-            },
-            "outlier_detection_enabled": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: Enable RSSO failure and outlier detection (default: True)
-                # Hint: type appears to be bool
-            },
-            "outlier_z_threshold": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: Z-score threshold for temporal outlier detection (default: 3.5)
-                # Hint: type appears to be float
-            },
-            "min_signal_to_noise": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: Minimum signal-to-noise ratio for drift measurements (default: 0.5)
-                # Hint: type appears to be float
-            },
-            "windowing_enabled": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: Enable adaptive windowing for low-confidence frames (default: True)
-                # Hint: type appears to be bool
-            },
-            "window_size_range": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: description: Min and max window sizes for adaptive windowing (default: (3, 20))
-                # Hint: type appears to be tuple
+            "n_filters": {
+                "type": "int",
+                "description": (
+                    "Number of high-pass filters (must be at least 2)."
+                ),
+                "min": 2,
+                "default": 10,
+                "required": False,
             },
         }
 
@@ -7398,852 +7925,50 @@ class ModuleDescriptor(util.AbstractModuleCollection):
                 "type": "str",
                 "description": "Output folder for module results",
             },
-            "random_val": {
+            "resolution_decorr_spatial": {
                 "type": "float",
-                "description": "A random value between 0 and 1",
+                "description": (
+                    "Mean decorrelation resolution over valid regions in nm"
+                ),
             },
-            "fp_fig": {
+            "resolution_std": {
+                "type": "float",
+                "description": "Standard deviation of resolution across regions",
+            },
+            "n_regions": {
+                "type": "int",
+                "description": "Number of valid regions processed",
+            },
+            "n_regions_total": {
+                "type": "int",
+                "description": "Total number of regions tiled",
+            },
+            "resolutions_per_region": {
+                "type": "list",
+                "description": "Per-region resolution values in nm",
+            },
+            "fig_decorr": {
                 "type": "str",
-                "description": "Filepath to the generated test figure",
-            },
-            "success": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: type appears to be bool
-            },
-            "drift_quality": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: type appears to be ndarray
-            },
-            "n_iterations": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: type appears to be int
-            },
-            "convergence_rms": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: type appears to be float
-            },
-            "drift_plots": {
-                # TODO: Add type, description, min, max, default, required, step, extensions, properties
-                # Hint: type appears to be str
+                "description": (
+                    "Filepath to the per-region resolution histogram"
+                ),
             },
         }
 
         return parameters_spec, results_spec
 
 
-class SlurmCommunicator:
-    """Communication interface for SLURM job scheduling and SSH command
-    execution.
-
-    This class provides methods to interact with SLURM job schedulers through
-    SSH, create SLURM job scripts, submit jobs, and monitor their status. It's
-    designed to work with remote compute clusters running SLURM workload
-    manager.
-
-    Attributes
-    ----------
-    hostname : str
-        SSH hostname or IP address
-    username : str
-        SSH username for authentication
-    port : int
-        SSH port number (default: 22)
-    ssh_key_path : str
-        Path to SSH private key file
-    timeout : int
-        SSH connection timeout in seconds
-    """
-
-    def __init__(
-        self, hostname, username, port=22, ssh_key_path=None, timeout=30
-    ):
-        """Initialize SLURM communicator with SSH connection parameters.
-
-        Parameters
-        ----------
-        hostname : str
-            SSH hostname or IP address
-        username : str
-            SSH username for authentication
-        port : int, optional
-            SSH port number. Defaults to 22.
-        ssh_key_path : str, optional
-            Path to SSH private key file.
-            If None, uses default SSH authentication.
-        timeout : int, optional
-            SSH connection timeout in seconds. Defaults to 30.
-        """
-        self.hostname = hostname
-        self.username = username
-        self.port = port
-        self.ssh_key_path = ssh_key_path
-        self.timeout = timeout
-
-        logger.info(
-            f"Initialized SlurmCommunicator for {username}@{hostname}:{port}"
-        )
-
-    def execute_ssh_command(self, command, working_directory=None):
-        """Execute a command via SSH on the remote host.
-
-        Parameters
-        ----------
-        command : str
-            Shell command to execute
-        working_directory : str, optional
-            Directory to execute command in
-
-        Returns
-        -------
-        dict: Dictionary containing:
-            - stdout (str): Standard output
-            - stderr (str): Standard error
-            - return_code (int): Command exit code
-            - success (bool): True if return_code == 0
-
-        Raises
-        ------
-        subprocess.CalledProcessError: If SSH connection fails
-        FileNotFoundError: If SSH executable not found
-        """
-        ssh_cmd = [
-            "ssh",
-            "-p",
-            str(self.port),
-            "-o",
-            "ConnectTimeout={}".format(self.timeout),
-            "-o",
-            "StrictHostKeyChecking=no",
-        ]
-
-        if self.ssh_key_path:
-            ssh_cmd.extend(["-i", self.ssh_key_path])
-
-        # Construct full command
-        if working_directory:
-            remote_command = f"cd {working_directory} && {command}"
-        else:
-            remote_command = command
-
-        ssh_cmd.extend([f"{self.username}@{self.hostname}", remote_command])
-
-        logger.debug(f"Executing SSH command: {' '.join(ssh_cmd)}")
-
-        try:
-            result = subprocess.run(
-                ssh_cmd,
-                capture_output=True,
-                text=True,
-                timeout=self.timeout
-                * 2,  # Allow extra time for command execution
-            )
-
-            response = {
-                "stdout": result.stdout,
-                "stderr": result.stderr,
-                "return_code": result.returncode,
-                "success": result.returncode == 0,
-            }
-
-            if not response["success"]:
-                logger.warning(
-                    "SSH command failed with return code "
-                    + f"{result.returncode}: {result.stderr}"
-                )
-            else:
-                logger.debug("SSH command completed successfully")
-
-            return response
-
-        except subprocess.TimeoutExpired:
-            logger.error(
-                f"SSH command timed out after {self.timeout * 2} seconds"
-            )
-            return {
-                "stdout": "",
-                "stderr": (
-                    f"Command timed out after {self.timeout * 2} seconds"
-                ),
-                "return_code": -1,
-                "success": False,
-            }
-        except Exception as e:
-            logger.error(f"SSH command execution failed: {str(e)}")
-            return {
-                "stdout": "",
-                "stderr": str(e),
-                "return_code": -1,
-                "success": False,
-            }
-
-    def test_connection(self):
-        """Test SSH connection to the remote host.
-
-        Returns
-        -------
-        bool: True if connection successful, False otherwise
-        """
-        result = self.execute_ssh_command('echo "Connection test successful"')
-        return result["success"]
-
-    def assemble_slurm_commands(
-        self,
-        host_cluster,
-        scriptname="start_workflow.py",
-        modules=None,
-        faulthandler=True,
-        cpu_only=False,
-    ):
-        """Assembles picasso-workflow specific commands for running a batch
-        job on a SLURM cluster.
-
-        ``modules`` overrides the environment modules to ``module load`` (a
-        list of names). None falls back to the cluster's configured
-        ``Modules``; an empty list loads nothing.
-
-        ``faulthandler`` exports ``PYTHONFAULTHANDLER=1`` so a native crash
-        (e.g. a LAPACK/CUDA fault in a fit/CRLB call) prints a Python->C
-        traceback instead of dying silently. ``cpu_only`` exports
-        ``CUDA_VISIBLE_DEVICES=""`` to hide every GPU, forcing picasso's CPU
-        fit/CRLB kernels -- a debug switch to isolate a GPU-side crash from the
-        CPU path.
-        """
-        # A host with no ClusterEnvironment entry (e.g. an unconfigured
-        # cluster, or a minimal config with no bundled config.yaml) degrades
-        # gracefully: every lookup below is a .get() with a default, so no
-        # path/module exports are emitted rather than crashing.
-        cluster_env = (
-            CONFIG.get("ClusterEnvironment", {}).get(host_cluster) or {}
-        )
-
-        commands = []
-
-        commands.append("source ~/.bashrc")
-
-        # Confluence credentials live in a dedicated secrets file rather than
-        # ~/.bashrc, whose non-interactive guard would `return` before
-        # reaching any exports inside a batch job. The file has no such
-        # guard, so it always runs (and is a no-op if absent).
-        secrets_file = "~/.picasso_secrets"
-        commands.append(f"[ -f {secrets_file} ] && source {secrets_file}")
-
-        commands.append("source /etc/profile.d/modules.sh")
-        # if use_pw_module:
-        #     commands.append(f"module load {pw_module}")
-        # else:
-        #     commands.append(f"module load {anaconda_module}")
-
-        # if not use_pw_module:
-        #     commands.append(f"conda activate {conda_env}")
-
-        # Load environment modules (from the Run tab's Modules field, or config
-        # ClusterEnvironment.<host>.Modules when not overridden). GPU fitting
-        # (e.g. spline-mle-gpu) needs a CUDA toolkit that provides libNVVM; on
-        # module-based HPC systems the cleanest way is to `module load
-        # cuda/<ver>`, which also sets CUDA_HOME so numba finds it. Harmless on
-        # CPU-only runs.
-        if modules is None:
-            modules = cluster_env.get("Modules", []) or []
-        for module_name in modules:
-            commands.append(f"module load {module_name}")
-
-        # Ignore ~/.local/lib site-packages: a stray user-site install (e.g.
-        # numba) otherwise shadows the conda env's package and can break CUDA
-        # discovery. Keep the job pinned to the env resolved below.
-        commands.append("export PYTHONNOUSERSITE=1")
-
-        # Dump the Python -> C traceback on fatal signals (e.g. a LAPACK
-        # SIGSEGV inside a native fit/CRLB call, which leaves no Python
-        # exception). Inherited by multiprocessing workers, so a crash in a
-        # pool worker is pinpointed too. Negligible overhead.
-        if faulthandler:
-            commands.append("export PYTHONFAULTHANDLER=1")
-
-        # Debug switch: hide every GPU so picasso's CUDA probe
-        # (cuda.is_available()) returns False and the fit/CRLB run on the
-        # (fully-guarded) CPU kernels. Isolates a GPU-side crash -- e.g. a
-        # spline CRLB kernel fault that dies as a hard SIGSEGV instead of a
-        # catchable CudaAPIError -- from the CPU path. Note picasso runs the
-        # spline CRLB on the GPU whenever one is visible, even for the CPU
-        # 'spline-mle' fit method, so this is the only lever that keeps it off.
-        if cpu_only:
-            commands.append('export CUDA_VISIBLE_DEVICES=""')
-
-        # instead of using slurm modules, let's directly append paths.
-        bin_path = cluster_env.get("BinPath", None)
-        if bin_path:
-            commands.append(f"export PATH={bin_path}:$PATH")
-        lib_path = cluster_env.get("LibraryPath", None)
-        if lib_path:
-            commands.append(
-                f"export LD_LIBRARY_PATH={lib_path}:$LD_LIBRARY_PATH"
-            )
-        python_path = cluster_env.get("PythonPath", None)
-        if python_path:
-            commands.append(f"export PYTHONPATH={python_path}:$PYTHONPATH")
-        conda_env = cluster_env.get("CondaEnv", None)
-        if conda_env:
-            commands.append(f"export CONDA_DEFAULT_ENV={conda_env}")
-        conda_prefix = cluster_env.get("CondaPrefix", None)
-        if conda_prefix:
-            commands.append(f"export CONDA_PREFIX={conda_prefix}")
-
-        # Capture the workflow's exit status. srun propagates the step's
-        # failure (e.g. 143 = 128 + SIGTERM when a rank is killed / an MPI
-        # teardown cancels the step). create_slurm_script exits the batch
-        # script with this, so a failed/cancelled run is reported as FAILED
-        # rather than COMPLETED (a bare `srun ...` followed by an `echo` would
-        # otherwise make the batch script exit 0 regardless).
-        commands.append(f"srun python {scriptname}")
-        commands.append("PW_RC=$?")
-
-        return commands
-
-    def create_slurm_script(
-        self,
-        job_name,
-        commands,
-        slurm_options=None,
-        output_file=None,
-        error_file=None,
-        working_directory=None,
-    ):
-        """Create a SLURM job script with specified parameters.
-
-        Parameters
-        ----------
-        job_name : str
-            Name for the SLURM job
-        commands : list or str
-            List of shell commands or single command string
-        slurm_options : dict, optional
-            SLURM directive options. Keys should be SLURM parameter names
-            (without --), values should be parameter values.
-            Common options:
-                  - partition: Queue/partition name
-                  - nodes: Number of nodes
-                  - ntasks: Number of tasks
-                  - cpus-per-task: CPUs per task
-                  - mem: Memory per node
-                  - time: Time limit (HH:MM:SS)
-                  - mail-type: Email notification type
-                  - mail-user: Email address
-        output_file : str, optional
-            Path for stdout redirection
-        error_file : str, optional
-            Path for stderr redirection
-        working_directory : str, optional
-            Working directory for the job
-
-        Returns
-        -------
-        str: Complete SLURM script content
-        """
-        script_lines = ["#!/bin/bash"]
-
-        # Add SLURM directives
-        script_lines.append(f"#SBATCH --job-name={job_name}")
-
-        if output_file:
-            script_lines.append(f"#SBATCH --output={output_file}")
-        else:
-            script_lines.append(f"#SBATCH --output={job_name}_%j.out")
-
-        if error_file:
-            script_lines.append(f"#SBATCH --error={error_file}")
-        else:
-            script_lines.append(f"#SBATCH --error={job_name}_%j.err")
-
-        # Add additional SLURM options
-        if slurm_options:
-            for option, value in slurm_options.items():
-                if value is not None:
-                    script_lines.append(f"#SBATCH --{option}={value}")
-
-        script_lines.append("")  # Empty line after SLURM directives
-
-        # Add working directory change if specified
-        if working_directory:
-            script_lines.append(f"cd {working_directory}")
-            script_lines.append("")
-
-        # Add timestamp and job info
-        script_lines.extend(
-            [
-                'echo "Job started at: $(date)"',
-                'echo "Running on node: $(hostname)"',
-                'echo "Job ID: $SLURM_JOB_ID"',
-                'echo "Current working directory: $(pwd)"',
-                'echo ""',
-            ]
-        )
-
-        # Add user commands
-        if isinstance(commands, str):
-            commands = [commands]
-
-        for cmd in commands:
-            script_lines.append(cmd)
-
-        # Add job completion timestamp, then exit with the workflow's status so
-        # SLURM reports the job's real outcome. PW_RC is set by
-        # assemble_slurm_commands after the srun step; ${PW_RC:-0} keeps other
-        # callers (which never set it) exiting 0 as before.
-        script_lines.extend(
-            [
-                "",
-                'echo ""',
-                'echo "Job completed at: $(date) (exit ${PW_RC:-0})"',
-                "exit ${PW_RC:-0}",
-            ]
-        )
-
-        return "\n".join(script_lines)
-
-    def write_slurm_script(self, script_content, folder, local=True):
-        """Write SLURM script content to a file on the remote host.
-
-        Parameters
-        ----------
-        script_content : str
-            Complete SLURM script content
-        folder : str
-            Path where to save the script on remote host
-        local : bool
-            whether the folder is available on the local system
-
-        Returns
-        -------
-        dict: Result of the write operation (see execute_ssh_command)
-        """
-        if local:
-            filepath = os.path.join(folder, "run_workflow_slurm.sh")
-            # write with UNIX style newlines ('\n') instead of DOS ('\r\n')
-            with open(filepath, "w", newline="\n") as f:
-                f.write(script_content)
-            return filepath
-
-        # otherwise, copy to remote host
-        # Create a temporary local file
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".sh", delete=False
-        ) as tmp_file:
-            tmp_file.write(script_content)
-            tmp_file_path = tmp_file.name
-
-        try:
-            # Copy file to remote host using scp
-            scp_cmd = [
-                "scp",
-                "-P",
-                str(self.port),
-                "-o",
-                "ConnectTimeout={}".format(self.timeout),
-                "-o",
-                "StrictHostKeyChecking=no",
-            ]
-
-            if self.ssh_key_path:
-                scp_cmd.extend(["-i", self.ssh_key_path])
-
-            scp_cmd.extend(
-                [
-                    tmp_file_path,
-                    f"{self.username}@{self.hostname}:{folder}",
-                ]
-            )
-
-            logger.debug(f"Copying SLURM script: {' '.join(scp_cmd)}")
-
-            result = subprocess.run(
-                scp_cmd, capture_output=True, text=True, timeout=self.timeout
-            )
-
-            if result.returncode == 0:
-                # Make script executable
-                chmod_result = self.execute_ssh_command(f"chmod +x {folder}")
-                if chmod_result["success"]:
-                    logger.info(
-                        f"SLURM script written successfully to {folder}"
-                    )
-                    return {
-                        "stdout": f"Script written to {folder}",
-                        "stderr": "",
-                        "return_code": 0,
-                        "success": True,
-                    }
-                else:
-                    return chmod_result
-            else:
-                logger.error(f"Failed to copy SLURM script: {result.stderr}")
-                return {
-                    "stdout": result.stdout,
-                    "stderr": result.stderr,
-                    "return_code": result.returncode,
-                    "success": False,
-                }
-
-        except Exception as e:
-            logger.error(f"Error writing SLURM script: {str(e)}")
-            return {
-                "stdout": "",
-                "stderr": str(e),
-                "return_code": -1,
-                "success": False,
-            }
-        finally:
-            # Clean up temporary file
-            try:
-                os.unlink(tmp_file_path)
-            except OSError:
-                pass
-
-    def submit_job(self, script_path, dest_machine, additional_options=None):
-        """Submit a SLURM job using sbatch.
-
-        Parameters
-        ----------
-        script_path : str
-            Path to the SLURM script on remote host
-        additional_options : list, optional
-            Additional sbatch options
-
-        Returns
-        -------
-        dict: Result containing job submission information:
-            - job_id (int or None): SLURM job ID if successful
-            - stdout (str): sbatch output
-            - stderr (str): sbatch errors
-            - success (bool): True if job submitted successfully
-        """
-        # check script path. if it is local, convert to its location on
-        # the remote host
-        from picasso_workflow.metaworkflow import PathParser
-
-        pp = PathParser()
-        script_path = pp.convert_path(script_path, dest_machine)
-
-        sbatch_cmd = "sbatch"
-
-        if additional_options:
-            sbatch_cmd += " " + " ".join(additional_options)
-
-        sbatch_cmd += f" {script_path}"
-
-        logger.info(f"Submitting job via SSH: {sbatch_cmd}")
-        result = self.execute_ssh_command(sbatch_cmd)
-
-        # Parse job ID from output
-        job_id = None
-        if result["success"] and result["stdout"]:
-            # sbatch typically outputs: "Submitted batch job 12345"
-            import re
-
-            match = re.search(r"Submitted batch job (\d+)", result["stdout"])
-            if match:
-                job_id = int(match.group(1))
-                logger.info(f"Job submitted successfully with ID: {job_id}")
-            else:
-                logger.warning("Job submitted but could not parse job ID")
-
-        return {
-            "job_id": job_id,
-            "stdout": result["stdout"],
-            "stderr": result["stderr"],
-            "success": result["success"],
-        }
-
-    def get_job_status(self, job_id):
-        """Get the status of a SLURM job.
-
-        Parameters
-        ----------
-        job_id : int
-            SLURM job ID
-
-        Returns
-        -------
-        dict: Job status information:
-            - status (str):
-                Job status (PENDING, RUNNING, COMPLETED, FAILED, etc.)
-            - details (dict): Additional job information
-            - success (bool): True if status query successful
-        """
-        squeue_cmd = f'squeue --job={job_id} --format="%T %R %S %E" --noheader'
-        result = self.execute_ssh_command(squeue_cmd)
-
-        if result["success"] and result["stdout"].strip():
-            # Parse squeue output
-            fields = result["stdout"].strip().split()
-            if len(fields) >= 1:
-                status = fields[0]
-                reason = fields[1] if len(fields) > 1 else ""
-                start_time = fields[2] if len(fields) > 2 else ""
-                end_time = fields[3] if len(fields) > 3 else ""
-
-                return {
-                    "status": status,
-                    "details": {
-                        "reason": reason,
-                        "start_time": start_time,
-                        "end_time": end_time,
-                    },
-                    "success": True,
-                }
-
-        # If squeue doesn't show the job, it has left the queue: query sacct
-        # for the terminal state plus the diagnostics that explain a failure
-        # (exit code, peak memory for OOM, elapsed time). squeue drops a job
-        # the moment it finishes, so this fallback is the only way to learn
-        # whether it COMPLETED, FAILED, TIMEOUT or was OUT_OF_MEMORY.
-        sacct_cmd = (
-            f"sacct --job={job_id} "
-            "--format=State,ExitCode,MaxRSS,Elapsed --noheader --parsable2"
-        )
-        sacct_result = self.execute_ssh_command(sacct_cmd)
-
-        if sacct_result["success"] and sacct_result["stdout"].strip():
-            # first line is the top-level job step; take the widest state.
-            line = sacct_result["stdout"].strip().split("\n")[0]
-            fields = line.split("|")
-            status = fields[0] if fields else "UNKNOWN"
-            details = {}
-            if len(fields) > 1 and fields[1]:
-                details["exit_code"] = fields[1]
-            if len(fields) > 2 and fields[2]:
-                details["max_rss"] = fields[2]
-            if len(fields) > 3 and fields[3]:
-                details["elapsed"] = fields[3]
-            return {"status": status, "details": details, "success": True}
-
-        return {
-            "status": "UNKNOWN",
-            "details": {"error": result["stderr"]},
-            "success": False,
-        }
-
-    def fetch_progress(self, remote_folder):
-        """Fetch the most recent ``progress.json`` under ``remote_folder``.
-
-        A run writes ``progress.json`` into a timestamped subfolder whose name
-        is only known at runtime, so we locate the newest one by mtime over
-        SSH and cat it. This reuses the same SSH transport as the job-status
-        queries -- no cluster-side daemon is needed.
-
-        Parameters
-        ----------
-        remote_folder : str
-            Remote path of the run's results folder.
-
-        Returns
-        -------
-        dict or None
-            The parsed progress state, or None if not found/unreadable.
-        """
-        if not remote_folder:
-            return None
-        folder = shlex.quote(remote_folder)
-        # newest progress.json by modification time, path only
-        find_cmd = (
-            f"find {folder} -name progress.json -printf '%T@ %p\\n' "
-            "2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-"
-        )
-        res = self.execute_ssh_command(find_cmd)
-        path = (res.get("stdout") or "").strip()
-        if not path:
-            return None
-        cat = self.execute_ssh_command(f"cat {shlex.quote(path)}")
-        if not cat.get("success"):
-            return None
-        try:
-            return json.loads(cat["stdout"])
-        except (ValueError, KeyError):
-            return None
-
-    def fetch_all_progress(self, remote_folder):
-        """Fetch *every* ``progress.json`` under ``remote_folder`` in one call.
-
-        An aggregation run has one progress file per stage (top-level
-        aggregation, each single dataset, the aggregation stage). Fetching
-        them individually would be one slow SSH round-trip each, so this cats
-        them all in a single command, separated by a marker, and splits the
-        result client-side.
-
-        Parameters
-        ----------
-        remote_folder : str
-            Remote path of the run's results folder.
-
-        Returns
-        -------
-        list of dict
-            Parsed progress states (empty if none / unreachable).
-        """
-        if not remote_folder:
-            return []
-        folder = shlex.quote(remote_folder)
-        sep = "===PWF-PROGRESS-SEP==="
-        # Rank 0 writes ``progress.json``; worker ranks write
-        # ``progress.rankN.json`` (see progress.default_sinks). Match both, or a
-        # multi-rank aggregation run reports only rank 0's share of the datasets.
-        # ``-exec`` passes each match as an argument, so paths containing spaces
-        # or newlines survive (a ``for f in $(find ...)`` word-splits them and
-        # loses the file, blanking the monitor for a genuinely running job).
-        cmd = (
-            f"find {folder} \\( -name progress.json -o "
-            f"-name 'progress.rank*.json' \\) "
-            f'-exec sh -c \'echo "{sep}"; cat "$1"\' _ {{}} \\; 2>/dev/null'
-        )
-        res = self.execute_ssh_command(cmd)
-        out = res.get("stdout") or ""
-        states = []
-        for chunk in out.split(sep):
-            chunk = chunk.strip()
-            if not chunk:
-                continue
-            try:
-                states.append(json.loads(chunk))
-            except ValueError:
-                continue
-        return states
-
-    def write_abort_flag(self, remote_folder):
-        """Drop an ``abort.flag`` in every run folder under ``remote_folder``.
-
-        The running workflow checks this file between modules and inside long
-        picasso calls, so this requests a graceful stop (complementary to
-        ``scancel``, which kills hard).
-
-        Parameters
-        ----------
-        remote_folder : str
-            Remote path of the run's results folder.
-
-        Returns
-        -------
-        dict
-            The SSH command result.
-        """
-        folder = shlex.quote(remote_folder)
-        # Place a flag next to every progress.json (single + aggregation runs).
-        # ``-exec`` with ``dirname "$1"`` handles paths with spaces/newlines; a
-        # ``for d in $(find ...)`` word-splits them, so a graceful abort would
-        # silently miss those folders and never reach the running workflow.
-        cmd = (
-            f"find {folder} -name progress.json -exec sh -c "
-            '\'touch "$(dirname "$1")/abort.flag"\' _ {} \\; '
-            f"2>/dev/null; touch {folder}/abort.flag"
-        )
-        return self.execute_ssh_command(cmd)
-
-    def cancel_job(self, job_id):
-        """Cancel a SLURM job.
-
-        Parameters
-        ----------
-        job_id : int
-            SLURM job ID to cancel
-
-        Returns
-        -------
-        dict: Result of the cancellation (see execute_ssh_command)
-        """
-        scancel_cmd = f"scancel {job_id}"
-        result = self.execute_ssh_command(scancel_cmd)
-
-        if result["success"]:
-            logger.info(f"Job {job_id} cancelled successfully")
-        else:
-            logger.error(f"Failed to cancel job {job_id}: {result['stderr']}")
-
-        return result
-
-    def list_jobs(self, user=None):
-        """List SLURM jobs for a user.
-
-        Parameters
-        ----------
-        user : str, optional
-            Username to list jobs for.
-                            If None, uses the SSH username.
-
-        Returns
-        -------
-        dict: Dictionary containing:
-            - jobs (list): List of job dictionaries with job information
-            - success (bool): True if listing successful
-        """
-        if user is None:
-            user = self.username
-
-        squeue_cmd = (
-            f"squeue --user={user} "
-            + '--format="%i %T %j %u %P %M %l %D %R" --noheader'
-        )
-        result = self.execute_ssh_command(squeue_cmd)
-
-        jobs = []
-        if result["success"] and result["stdout"].strip():
-            for line in result["stdout"].strip().split("\n"):
-                fields = line.split()
-                if len(fields) >= 6:
-                    job_info = {
-                        "job_id": fields[0],
-                        "status": fields[1],
-                        "job_name": fields[2],
-                        "user": fields[3],
-                        "partition": fields[4],
-                        "time_used": fields[5],
-                        "time_limit": fields[6] if len(fields) > 6 else "",
-                        "nodes": fields[7] if len(fields) > 7 else "",
-                        "reason": (
-                            " ".join(fields[8:]) if len(fields) > 8 else ""
-                        ),
-                    }
-                    jobs.append(job_info)
-
-        return {
-            "jobs": jobs,
-            "success": result["success"],
-            "stderr": result["stderr"],
-        }
-
-    def get_queue_info(self):
-        """Get information about SLURM partitions/queues.
-
-        Returns
-        -------
-        dict: Dictionary containing:
-            - partitions (list): List of partition information dictionaries
-            - success (bool): True if query successful
-        """
-        sinfo_cmd = 'sinfo --format="%P %a %l %D %T %N" --noheader'
-        result = self.execute_ssh_command(sinfo_cmd)
-
-        partitions = []
-        if result["success"] and result["stdout"].strip():
-            for line in result["stdout"].strip().split("\n"):
-                fields = line.split()
-                if len(fields) >= 5:
-                    partition_info = {
-                        "name": fields[0].rstrip(
-                            "*"
-                        ),  # Remove default partition marker
-                        "availability": fields[1],
-                        "time_limit": fields[2],
-                        "nodes": fields[3],
-                        "state": fields[4],
-                        "node_list": (
-                            " ".join(fields[5:]) if len(fields) > 5 else ""
-                        ),
-                    }
-                    partitions.append(partition_info)
-
-        return {
-            "partitions": partitions,
-            "success": result["success"],
-            "stderr": result["stderr"],
-        }
+# ``SlurmCommunicator`` moved to the Qt-free ``slurm_submit`` module so the
+# WP-9 cluster-submit worker can reuse the SSH/sbatch transport without
+# importing PyQt. Re-exported here so this module's call sites and the
+# existing GUI tests (``gui.SlurmCommunicator(...)``) keep working unchanged.
+from picasso_workflow.slurm_submit import (  # noqa: E402,F401
+    SlurmCommunicator,
+    apptainer_config,
+    default_image_basename,
+    resolve_cluster_image_path,
+    resolve_pw_version,
+)
 
 
 class FilePathEditor(QtWidgets.QWidget):
@@ -8595,6 +8320,13 @@ class ParameterWidgetInfo:
         sub_parameters=None,
         toggle_function=None,
         summary_label=None,
+        per_branch_checkbox=None,
+        label=None,
+        param_name=None,
+        has_default=False,
+        default_value=None,
+        display_name=None,
+        change_marker=None,
     ):
         """Initialize parameter widget info.
 
@@ -8616,12 +8348,33 @@ class ParameterWidgetInfo:
         self.metadata = metadata
         self.original_type = original_type
         self.summary_label = summary_label
+        # Checkbox to mark a parameter branch-specific; only shown while a
+        # branch sub-module is being edited (set by _create_parameter_row).
+        self.per_branch_checkbox = per_branch_checkbox
         self.sub_parameters = (
             sub_parameters or {}
         )  # For nested dict parameters
         self.toggle_function = (
             toggle_function  # For dict parameters with checkboxes
         )
+        # Default/override toggle state (see _apply_param_default_state). A
+        # parameter with a spec default starts in the "use default" state:
+        # the widget is greyed/disabled and the value is omitted from the
+        # generated workflow, so the code default applies. Clicking the label
+        # switches to "override".
+        self.label = label
+        self.param_name = param_name
+        self.has_default = has_default
+        self.default_value = default_value
+        # Label text: the parameter name plus its unit when the spec
+        # declares one (e.g. "radius [px]").
+        self.display_name = display_name or param_name
+        self.use_default = has_default
+        # Amber "changed" marker shown when this parameter's behaviour/units
+        # changed in a recent release (see PARAM_CHANGE_FLAGS). It is a
+        # separate widget from the main label so _apply_param_default_state's
+        # label restyling never clobbers it.
+        self.change_marker = change_marker
 
 
 class ParameterCmdDialog(QtWidgets.QDialog):
@@ -8715,7 +8468,13 @@ class ParameterCmdDialog(QtWidgets.QDialog):
         layout.addWidget(QtWidgets.QLabel("Command type:"))
         self.command_combo = QtWidgets.QComboBox()
         self.command_combo.addItems(
-            ["map", "index", "Previous Module Result", "Prior Result"]
+            [
+                "map",
+                "index",
+                "Previous Module Result",
+                "Prior Result",
+                "Branch item",
+            ]
         )  # , "sum", "max", "min"])
         self.command_combo.setItemDelegate(ToolTipDelegate(self.command_combo))
         self.command_combo.currentIndexChanged.connect(
@@ -8731,6 +8490,8 @@ class ParameterCmdDialog(QtWidgets.QDialog):
             "immediately before this one.",
             3: "Prior Result: reuse a result of any earlier module, or "
             "collect it across all single-dataset runs as a list.",
+            4: "Branch item: inside a runtime branch, insert this branch's "
+            "element of the branch_over list.",
         }
         _cmd_model = self.command_combo.model()
         for _i, _tip in _cmd_tips.items():
@@ -8870,6 +8631,20 @@ class ParameterCmdDialog(QtWidgets.QDialog):
         )
         self.index_spin.valueChanged.connect(self._on_index_spin)
 
+        # Branch-item command widgets (runtime branches).
+        self.branch_item_label = QtWidgets.QLabel(
+            "Key/index into the branch item (optional):"
+        )
+        self.branch_item_key = QtWidgets.QLineEdit()
+        self.branch_item_key.setPlaceholderText(
+            "empty = whole item; else a dict key or list index"
+        )
+        self.branch_item_key.setToolTip(
+            "Leave empty to use this branch's whole item. Give a dict key or "
+            "a list index to read one field of it."
+        )
+        self.branch_item_key.textChanged.connect(self._refresh_command)
+
         layout.addWidget(QtWidgets.QLabel("Assembled Command:"))
         self.command_result = QtWidgets.QLineEdit()
         layout.addSpacing(10)
@@ -8956,6 +8731,20 @@ class ParameterCmdDialog(QtWidgets.QDialog):
         command type and timing.
         """
         val = self.current_value
+        # $branch_item is a per-branch marker (not a $/$$ timing command) and
+        # may be a length-1 tuple, so handle it before the generic parse.
+        if (
+            isinstance(val, tuple)
+            and len(val) >= 1
+            and val[0] == "$branch_item"
+        ):
+            self._select_command("Branch item")
+            if len(val) >= 2:
+                self.branch_item_key.blockSignals(True)
+                self.branch_item_key.setText(str(val[1]))
+                self.branch_item_key.blockSignals(False)
+            self._refresh_command()
+            return
         if not (
             isinstance(val, tuple)
             and len(val) >= 2
@@ -9222,6 +9011,9 @@ class ParameterCmdDialog(QtWidgets.QDialog):
             # Populate results for previous module
             if self.current_module_index > 0:
                 self._on_module_selected(self.current_module_index - 1)
+        elif command_type == "Branch item":
+            self.dynamic_layout.addWidget(self.branch_item_label)
+            self.dynamic_layout.addWidget(self.branch_item_key)
         # For sum, max, min commands, also show module/result selection
         elif command_type in ["sum", "max", "min"]:
             self.dynamic_layout.addWidget(self.module_label)
@@ -9328,6 +9120,18 @@ class ParameterCmdDialog(QtWidgets.QDialog):
             if self.param_name
             else "this parameter"
         )
+        if command_type == "Branch item":
+            self.help_label.setText(
+                "<b>Branch item</b> inserts, for each branch of a "
+                '<code>branch_type="runtime"</code> branch, that branch\'s '
+                "element of the <code>branch_over</code> list. Leave the key "
+                "empty for the whole item, or give a dict key / list index to "
+                "read one field.<br><br>Example: "
+                "<code>('$branch_item',)</code> or "
+                "<code>('$branch_item', 'nth')</code><br>"
+                "Timing does not apply: it is resolved per branch."
+            )
+            return
         if command_type == "map":
             body = (
                 f"<b>Map</b> gives each channel its own value for {target}, "
@@ -9515,6 +9319,18 @@ class ParameterCmdDialog(QtWidgets.QDialog):
                 mod_str = ""
 
             command_string = f"('{timing_cmd}get_previous_module_result{mod_str}', '{result_name}')"
+        elif command_type == "Branch item":
+            # $branch_item is resolved by the branch module (per branch),
+            # independent of the $ / $$ timing, so it is not prefixed with one.
+            key = self.branch_item_key.text().strip()
+            if not key:
+                command_string = "('$branch_item',)"
+            else:
+                try:
+                    int(key)
+                    command_string = f"('$branch_item', {key})"
+                except ValueError:
+                    command_string = f"('$branch_item', '{key}')"
         return command_string
 
 
@@ -9704,6 +9520,555 @@ class TileParametersDialog(QtWidgets.QDialog):
             )
 
 
+class PhaseSpacePreviewDialog(QtWidgets.QDialog):
+    """Preview the simulated origami nlocs/rmsd phase space.
+
+    Simulates the expected ``(nlocs, rmsd)`` cloud for the current
+    ``pick_origami`` geometry + kinetics (via
+    :func:`picasso_workflow.origami.origami_phase_space_preview`),
+    shows it with the suggested pick window, and lets the user write the
+    suggested ``min/max_n_locs_per_frame`` (and RMSD) back into the module's
+    parameter fields. The simulation is cheap (order 0.1 s), so this is
+    interactive.
+    """
+
+    def __init__(self, parent, param_values, apply_callback):
+        super().__init__(parent)
+        self.setWindowTitle("Origami phase-space preview")
+        self.resize(760, 680)
+        self._params = param_values or {}
+        self._apply_callback = apply_callback
+        self._preview = None
+
+        layout = QtWidgets.QVBoxLayout(self)
+
+        # Acquisition inputs that are not part of the module parameters
+        # (they come from the movie/camera at run time).
+        form = QtWidgets.QFormLayout()
+        self.n_frames_spin = QtWidgets.QSpinBox()
+        self.n_frames_spin.setRange(1, 100_000_000)
+        self.n_frames_spin.setValue(40000)
+        form.addRow("Number of frames:", self.n_frames_spin)
+        self.pixelsize_spin = QtWidgets.QDoubleSpinBox()
+        self.pixelsize_spin.setRange(1.0, 100000.0)
+        self.pixelsize_spin.setValue(130.0)
+        self.pixelsize_spin.setSuffix(" nm")
+        form.addRow("Pixel size:", self.pixelsize_spin)
+
+        # Simulation inputs. These used to be pick_origami parameters, but they
+        # only shape the *suggested* window - the module takes the resulting
+        # min/max_rmsd + min/max_n_locs_per_frame explicitly - so they live
+        # here in the (design-time) preview instead.
+        self.mean_locs_spin = QtWidgets.QDoubleSpinBox()
+        self.mean_locs_spin.setRange(0.0, 1e6)
+        self.mean_locs_spin.setDecimals(1)
+        self.mean_locs_spin.setValue(20.0)
+        self.mean_locs_spin.setToolTip(
+            "Mean localizations per docking site (0 = derive from kinetics)"
+        )
+        form.addRow("Mean locs / site:", self.mean_locs_spin)
+
+        self.missing_sites_spin = QtWidgets.QSpinBox()
+        self.missing_sites_spin.setRange(0, 1000)
+        self.missing_sites_spin.setValue(2)
+        form.addRow("Missing sites allowed:", self.missing_sites_spin)
+
+        self.site_uncertainty_spin = QtWidgets.QDoubleSpinBox()
+        self.site_uncertainty_spin.setRange(0.0, 1000.0)
+        self.site_uncertainty_spin.setValue(3.0)
+        self.site_uncertainty_spin.setSuffix(" nm")
+        form.addRow("Site uncertainty:", self.site_uncertainty_spin)
+
+        self.n_sim_spin = QtWidgets.QSpinBox()
+        self.n_sim_spin.setRange(1, 1_000_000)
+        self.n_sim_spin.setValue(1500)
+        form.addRow("# simulations:", self.n_sim_spin)
+
+        self.sim_quantile_spin = QtWidgets.QDoubleSpinBox()
+        self.sim_quantile_spin.setRange(0.0, 0.5)
+        self.sim_quantile_spin.setDecimals(4)
+        self.sim_quantile_spin.setValue(0.01)
+        form.addRow("Window tail quantile:", self.sim_quantile_spin)
+
+        self.random_seed_spin = QtWidgets.QSpinBox()
+        self.random_seed_spin.setRange(0, 1_000_000_000)
+        self.random_seed_spin.setValue(0)
+        form.addRow("Random seed:", self.random_seed_spin)
+
+        # kinetics (used only when 'Mean locs / site' is 0); free-text so
+        # scientific notation is natural (k_on 1e6, concentration 5e-9, ...)
+        self.kinetics_edits = {}
+        for key, placeholder in (
+            ("k_on", "1e6"),
+            ("tau_b", "0.5"),
+            ("concentration", "5e-9"),
+            ("exposure", "0.1"),
+        ):
+            edit = QtWidgets.QLineEdit()
+            edit.setPlaceholderText(placeholder)
+            self.kinetics_edits[key] = edit
+            form.addRow(f"kinetics {key}:", edit)
+        layout.addLayout(form)
+
+        self.sim_button = QtWidgets.QPushButton("Simulate && preview")
+        self.sim_button.clicked.connect(self._simulate)
+        layout.addWidget(self.sim_button)
+
+        from matplotlib.figure import Figure
+        from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
+
+        self._figure = Figure(figsize=(6, 4))
+        self._canvas = FigureCanvasQTAgg(self._figure)
+        layout.addWidget(self._canvas, 1)
+
+        self.result_label = QtWidgets.QLabel(
+            "Set the acquisition parameters and click " "'Simulate & preview'."
+        )
+        self.result_label.setWordWrap(True)
+        layout.addWidget(self.result_label)
+
+        buttons = QtWidgets.QDialogButtonBox()
+        self.apply_button = buttons.addButton(
+            "Apply window to parameters",
+            QtWidgets.QDialogButtonBox.ButtonRole.ApplyRole,
+        )
+        self.apply_button.setEnabled(False)
+        self.apply_button.clicked.connect(self._apply)
+        close_button = buttons.addButton(
+            QtWidgets.QDialogButtonBox.StandardButton.Close
+        )
+        close_button.clicked.connect(self.reject)
+        layout.addWidget(buttons)
+
+    @staticmethod
+    def _as_float(value, default):
+        try:
+            if value is None or value == "":
+                return default
+            return float(value)
+        except (TypeError, ValueError):
+            return default
+
+    @staticmethod
+    def _as_int(value, default):
+        try:
+            if value is None or value == "":
+                return default
+            return int(value)
+        except (TypeError, ValueError):
+            return default
+
+    def _simulate(self):
+        from picasso_workflow.outpost.origami import origami
+
+        p = self._params
+        geometry = p.get("geometry")
+        if not geometry:
+            self.result_label.setText(
+                "No geometry set - fill in the 'geometry' parameter "
+                "(e.g. {'n_rows': 3, 'n_cols': 4, 'spacing_nm': 20}) first."
+            )
+            return
+        mean_locs = self.mean_locs_spin.value() or None
+        kinetics = None
+        if mean_locs is None:
+            vals = {
+                k: self._as_float(e.text(), None)
+                for k, e in self.kinetics_edits.items()
+            }
+            if all(v is not None for v in vals.values()):
+                kinetics = vals
+        if kinetics is None and mean_locs is None:
+            self.result_label.setText(
+                "Set 'Mean locs / site', or fill all four kinetics fields "
+                "(k_on, tau_b, concentration, exposure), to simulate."
+            )
+            return
+        try:
+            preview = origami.origami_phase_space_preview(
+                geometry,
+                n_frames=self.n_frames_spin.value(),
+                kinetics=kinetics,
+                mean_locs_per_site=mean_locs,
+                missing_sites_allowed=self.missing_sites_spin.value(),
+                site_uncertainty_nm=self.site_uncertainty_spin.value(),
+                pixelsize=self.pixelsize_spin.value(),
+                n_sim=self.n_sim_spin.value(),
+                sim_quantile=self.sim_quantile_spin.value(),
+                random_seed=self.random_seed_spin.value(),
+            )
+        except Exception as exc:
+            self.result_label.setText(f"Simulation failed: {exc}")
+            return
+
+        self._preview = preview
+        self._plot(preview)
+        self.result_label.setText(
+            "Suggested window:  min_n_locs_per_frame = "
+            f"{preview['min_n_locs_per_frame']:.4g},  "
+            f"max_n_locs_per_frame = {preview['max_n_locs_per_frame']:.4g}  "
+            f"(RMSD {preview['min_rmsd']:.3g}-{preview['max_rmsd']:.3g} px).  "
+            f"{preview['n_sites_expected']} sites, "
+            f"{preview['mean_locs_per_site']:.1f} locs/site."
+        )
+        self.apply_button.setEnabled(True)
+
+    def _plot(self, preview):
+        from matplotlib.patches import Rectangle
+
+        self._figure.clear()
+        ax = self._figure.add_subplot(111)
+        ax.scatter(
+            preview["sim_nlocs_per_frame"],
+            preview["sim_rmsd_px"],
+            s=8,
+            alpha=0.3,
+            color="b",
+            label="expected origami",
+        )
+        x0 = preview["min_n_locs_per_frame"]
+        x1 = preview["max_n_locs_per_frame"]
+        y0 = preview["min_rmsd"]
+        y1 = preview["max_rmsd"]
+        ax.add_patch(
+            Rectangle(
+                (x0, y0),
+                x1 - x0,
+                y1 - y0,
+                fill=False,
+                edgecolor="r",
+                lw=2,
+                label="pick window",
+            )
+        )
+        ax.set_xlabel("# localizations per frame in footprint")
+        ax.set_ylabel("root mean square distance (camera px)")
+        ax.legend()
+        self._figure.tight_layout()
+        self._canvas.draw()
+
+    def _apply(self):
+        if not self._preview:
+            return
+        w = self._preview
+        self._apply_callback(
+            w["min_n_locs_per_frame"],
+            w["max_n_locs_per_frame"],
+            w["min_rmsd"],
+            w["max_rmsd"],
+        )
+        self.accept()
+
+
+class GettingStartedDialog(QtWidgets.QDialog):
+    """First-run onboarding: explains where settings live and how to begin.
+
+    Shown automatically on first launch (a fresh install runs on built-in
+    default settings, which otherwise leaves a new user with no obvious next
+    step). Reopenable from the Help menu.
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Getting started with picasso-workflow")
+        self.setMinimumWidth(560)
+        layout = QtWidgets.QVBoxLayout(self)
+
+        cfg = self.user_config_path()
+        text = QtWidgets.QLabel(
+            "<h3>Welcome to picasso-workflow</h3>"
+            "<p>You're running with built-in <b>default settings</b>. To do "
+            "real work you'll want your own configuration.</p>"
+            "<p><b>Where settings live.</b> picasso-workflow reads a per-user "
+            "config file:<br><code>"
+            f"{cfg}</code><br>"
+            "Create and edit it to set your workflow <i>templates</i> and "
+            "(optionally) Confluence reporting. It overrides the built-in "
+            "defaults — you never edit the installed app itself.</p>"
+            "<p><b>Good to know.</b> The <b>Doctor</b> tab (top-right) shows "
+            "which config and <code>.env</code> files are loaded and from "
+            "where, so you can confirm your settings took effect.</p>"
+            "<p><b>First steps</b></p>"
+            "<ol>"
+            "<li>Create your settings file (button below) and edit it.</li>"
+            "<li>Pick a <b>Results Folder</b> at the top of the window.</li>"
+            "<li>Load a template or build a workflow, then <b>Run</b>.</li>"
+            "</ol>"
+        )
+        text.setTextFormat(Qt.TextFormat.RichText)
+        text.setWordWrap(True)
+        text.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextBrowserInteraction
+        )
+        layout.addWidget(text)
+
+        layout.addWidget(self._build_confluence_group())
+
+        btns = QtWidgets.QHBoxLayout()
+        create_btn = QtWidgets.QPushButton("Create my settings file…")
+        create_btn.clicked.connect(lambda: self.open_user_config(self))
+        btns.addWidget(create_btn)
+        btns.addStretch(1)
+        self.dont_show = QtWidgets.QCheckBox("Don't show this again")
+        self.dont_show.setChecked(True)
+        btns.addWidget(self.dont_show)
+        close_btn = QtWidgets.QPushButton("Close")
+        close_btn.clicked.connect(self.accept)
+        close_btn.setDefault(True)
+        btns.addWidget(close_btn)
+        layout.addLayout(btns)
+
+    def _build_confluence_group(self):
+        """Optional Confluence token entry, persisted to the per-user .env."""
+        box = QtWidgets.QGroupBox("Confluence reporting (optional)")
+        v = QtWidgets.QVBoxLayout(box)
+
+        info = QtWidgets.QLabel(
+            "To publish reports to Confluence, picasso-workflow needs a "
+            "personal access token in the <code>CONFLUENCE_TOKEN</code> "
+            "environment variable.<br>"
+            "<b>Get one:</b> in Confluence, open your profile → "
+            "<i>Settings → Personal Access Tokens</i> (Server/Data Center) or "
+            "<i>id.atlassian.com → Security → API tokens</i> (Cloud), create a "
+            "token, and paste it below.<br>"
+            "It is saved to your per-user <code>.env</code> and loaded on every "
+            "launch — never written to <code>config.yaml</code> or the logs."
+        )
+        info.setTextFormat(Qt.TextFormat.RichText)
+        info.setWordWrap(True)
+        info.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextBrowserInteraction
+        )
+        v.addWidget(info)
+
+        row = QtWidgets.QHBoxLayout()
+        self._token_edit = QtWidgets.QLineEdit()
+        self._token_edit.setEchoMode(QtWidgets.QLineEdit.EchoMode.Password)
+        self._token_edit.setPlaceholderText("paste your Confluence token")
+        row.addWidget(self._token_edit, 1)
+        show = QtWidgets.QCheckBox("Show")
+        show.toggled.connect(
+            lambda on: self._token_edit.setEchoMode(
+                QtWidgets.QLineEdit.EchoMode.Normal
+                if on
+                else QtWidgets.QLineEdit.EchoMode.Password
+            )
+        )
+        row.addWidget(show)
+        save = QtWidgets.QPushButton("Save token")
+        save.clicked.connect(self._save_token)
+        row.addWidget(save)
+        v.addLayout(row)
+
+        self._token_status = QtWidgets.QLabel()
+        self._refresh_token_status()
+        v.addWidget(self._token_status)
+        return box
+
+    @staticmethod
+    def _token_env_names():
+        """The Confluence token env vars, from confluence.py's single source."""
+        try:
+            from picasso_workflow.confluence import _CONFLUENCE_PROFILES
+
+            return _CONFLUENCE_PROFILES["Confluence"]["token_env"]
+        except Exception:  # pragma: no cover - defensive fallback
+            return ("CONFLUENCE_TOKEN", "CONFLUENCE_BEARER")
+
+    def _refresh_token_status(self):
+        is_set = any(os.environ.get(name) for name in self._token_env_names())
+        self._token_status.setText(
+            "A Confluence token is currently set."
+            if is_set
+            else "No Confluence token is set yet."
+        )
+
+    def _save_token(self):
+        token = self._token_edit.text().strip()
+        if not token:
+            QtWidgets.QMessageBox.information(
+                self, "No token", "Paste a token first, then click Save."
+            )
+            return
+        ok, message = self.save_confluence_token(token)
+        if ok:
+            self._token_edit.clear()
+            self._refresh_token_status()
+            QtWidgets.QMessageBox.information(self, "Token saved", message)
+        else:
+            QtWidgets.QMessageBox.warning(
+                self, "Could not save token", message
+            )
+
+    @staticmethod
+    def _config_dir():
+        from picasso_workflow import _user_config_dir
+
+        return _user_config_dir()
+
+    @staticmethod
+    def env_path():
+        return GettingStartedDialog._config_dir() / ".env"
+
+    @staticmethod
+    def save_confluence_token(token):
+        """Persist ``token`` as the Confluence token in the per-user .env.
+
+        Writes to ``~/.config/picasso_workflow/.env`` (loaded at every launch),
+        tightens its permissions, and sets the variable in the current process
+        so it takes effect immediately. The token value is never logged.
+        Returns ``(ok, message)``.
+        """
+        from dotenv import set_key
+
+        canonical = GettingStartedDialog._token_env_names()[0]
+        try:
+            env = GettingStartedDialog.env_path()
+            env.parent.mkdir(parents=True, exist_ok=True)
+            env.touch(exist_ok=True)
+            try:
+                os.chmod(env, 0o600)
+            except OSError:
+                pass  # best-effort (e.g. Windows)
+            set_key(str(env), canonical, token)
+            os.environ[canonical] = token  # effective this session
+        except Exception as e:
+            return False, str(e)
+        return True, f"Saved to {env}. It will be used on every launch."
+
+    @staticmethod
+    def user_config_path():
+        return GettingStartedDialog._config_dir() / "config.yaml"
+
+    @staticmethod
+    def marker_path():
+        return GettingStartedDialog._config_dir() / ".getting_started_shown"
+
+    @staticmethod
+    def open_user_config(parent=None):
+        """Seed the per-user config from the bundled template, then open it."""
+        import importlib.resources
+
+        cfg = GettingStartedDialog.user_config_path()
+        try:
+            cfg.parent.mkdir(parents=True, exist_ok=True)
+            if not cfg.exists():
+                tmpl = importlib.resources.files("picasso_workflow").joinpath(
+                    "config_template.yaml"
+                )
+                cfg.write_text(
+                    tmpl.read_text(encoding="utf-8"), encoding="utf-8"
+                )
+            QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(str(cfg)))
+        except Exception as e:
+            QtWidgets.QMessageBox.warning(
+                parent, "Could not create the settings file", str(e)
+            )
+
+    def accept(self):
+        if self.dont_show.isChecked():
+            try:
+                m = self.marker_path()
+                m.parent.mkdir(parents=True, exist_ok=True)
+                m.write_text("1", encoding="utf-8")
+            except Exception:
+                pass
+        super().accept()
+
+
+class _UpdateCheckWorker(QtCore.QObject):
+    """Runs the GitHub "is there a newer release?" check off the GUI thread."""
+
+    # Emits an update_check.UpdateInfo if a newer release exists, else None.
+    finished = QtCore.pyqtSignal(object)
+
+    def __init__(self, current_version: str) -> None:
+        super().__init__()
+        self._current_version = current_version
+
+    def run(self) -> None:
+        try:
+            from picasso_workflow.update_check import check_for_update
+
+            result = check_for_update(self._current_version)
+        except Exception:  # pragma: no cover - defensive; must never raise
+            result = None
+        self.finished.emit(result)
+
+
+class _ReleaseCheckWorker(QtCore.QObject):
+    """On-demand GitHub release check (Help -> Check for updates).
+
+    Like :class:`_UpdateCheckWorker` but emits the richer ``CheckResult`` so
+    the menu dialog can report up-to-date vs. couldn't-check, not just "newer".
+    """
+
+    finished = QtCore.pyqtSignal(object)  # emits update_check.CheckResult
+
+    def __init__(self, current_version: str) -> None:
+        super().__init__()
+        self._current_version = current_version
+
+    def run(self) -> None:
+        from picasso_workflow.update_check import fetch_latest_release
+
+        # fetch_latest_release never raises (it reports status="error").
+        self.finished.emit(fetch_latest_release(self._current_version))
+
+
+class _ClusterImageListWorker(QtCore.QObject):
+    """List a shared folder's ``.sif`` images over SSH, off the GUI thread.
+
+    The listing is a blocking SSH round-trip, so it must not run on the GUI
+    thread (it would freeze the window, sometimes for seconds behind a VPN).
+    Emits ``finished(images, error, image_dir, host, auto)``: ``images`` is the
+    sorted list of ``.sif`` basenames (possibly empty) on success, or ``None``
+    when the listing failed -- in which case ``error`` is a short
+    human-readable message. The ``image_dir``/``host``/``auto`` context is
+    echoed back so the GUI-thread handler can be a plain bound method; a
+    lambda carrying that context would be a context-less functor connection
+    that Qt runs in THIS worker thread (mutating widgets off the GUI thread).
+    Never raises into the thread (a dead listing must not abort the process);
+    failures travel back as ``error``.
+    """
+
+    finished = QtCore.pyqtSignal(object, object, object, object, object)
+
+    def __init__(self, communicator, image_dir, host, auto) -> None:
+        super().__init__()
+        self._comm = communicator
+        self._image_dir = image_dir
+        self._host = host
+        self._auto = auto
+
+    def _emit(self, images, error) -> None:
+        self.finished.emit(
+            images, error, self._image_dir, self._host, self._auto
+        )
+
+    def run(self) -> None:
+        try:
+            result = self._comm.execute_ssh_command(
+                f"ls -1 {shlex.quote(self._image_dir)}"
+            )
+        except Exception as exc:  # noqa: BLE001 - reported to the GUI thread
+            self._emit(None, str(exc))
+            return
+        if not result.get("success"):
+            self._emit(
+                None,
+                f"exit {result.get('return_code')}: "
+                f"{(result.get('stderr', '') or '').strip()}",
+            )
+            return
+        images = sorted(
+            name.strip()
+            for name in (result.get("stdout", "") or "").splitlines()
+            if name.strip().endswith(".sif")
+        )
+        self._emit(images, None)
+
+
 class Window(QtWidgets.QMainWindow):
     """Main window for the picasso-workflow GUI application."""
 
@@ -9730,6 +10095,16 @@ class Window(QtWidgets.QMainWindow):
             -1
         )  # -1 means not editing an existing item
         self.editing_workflow_tab = -1  # 0 = single, 1 = aggregation
+        # When editing a branch sub-module, this holds
+        # {"section": "branch"|"join", "sub": int}; None for a top-level module.
+        self.editing_workflow_subnode = None
+        # Branch context while editing a branch sub-module:
+        # {"n_branches": int, "labels": list|None, "branch_id": int}. None
+        # otherwise. _branch_override_params maps a parameter name to its full
+        # per-branch value list for the sub-module currently shown, so edits
+        # to the displayed branch id write back into ("$branch", [...]).
+        self.editing_branch_context = None
+        self._branch_override_params = {}
 
         layout = QtWidgets.QGridLayout()
         central_widget = QtWidgets.QWidget()
@@ -9738,7 +10113,9 @@ class Window(QtWidgets.QMainWindow):
 
         workflow_template_combo = QtWidgets.QComboBox()
         workflow_template_combo.addItem("")
-        for template in CONFIG["Templates"].keys():
+        # Tolerate a missing / null / non-dict "Templates" in a user-edited
+        # config.yaml (same defensiveness as _refresh_template_combo).
+        for template in (CONFIG.get("Templates") or {}).keys():
             workflow_template_combo.addItem(template)
         workflow_template_combo.setEditable(False)
         workflow_template_combo.currentTextChanged.connect(
@@ -9746,6 +10123,9 @@ class Window(QtWidgets.QMainWindow):
         )
         workflow_template_combo.setToolTip("Load a template workflow")
         layout.addWidget(workflow_template_combo, 0, 0)
+        # kept as an attribute so it can be repopulated after a live config
+        # reload (Getting Started dialog / Help -> Reload settings).
+        self.workflow_template_combo = workflow_template_combo
         # Results folder selection
         results_folder_button = QtWidgets.QPushButton("Results Folder")
         results_folder_button.setToolTip(
@@ -9787,9 +10167,15 @@ class Window(QtWidgets.QMainWindow):
         )
         layout.addWidget(self.workflow_type, 0, 4)
 
+        # Update-available banner (hidden until the background check finds a
+        # newer release). Sits between the top controls and the tabs; takes no
+        # space while hidden.
+        self.update_banner = self._build_update_banner()
+        layout.addWidget(self.update_banner, 1, 0, 1, 5)
+
         # Create tab widget
         self.tabs = QtWidgets.QTabWidget()
-        layout.addWidget(self.tabs, 1, 0, 1, 5)
+        layout.addWidget(self.tabs, 2, 0, 1, 5)
 
         # Workflow Config tab
         config_tab = QtWidgets.QWidget()
@@ -9940,43 +10326,46 @@ class Window(QtWidgets.QMainWindow):
         run_on_cluster_layout = QtWidgets.QVBoxLayout(run_on_cluster_tab)
         self.run_tabs.addTab(run_on_cluster_tab, "Run on SLURM Cluster")
 
-        # Cluster configuration widgets
-        cluster_config_layout = QtWidgets.QHBoxLayout()
+        # Cluster configuration grid -- a grid (not a single HBox row) so the
+        # many controls keep usable width. Field columns (1/3/5) stretch; the
+        # label columns (0/2/4) stay compact.
+        cluster_config_layout = QtWidgets.QGridLayout()
         cluster_config_widget = QtWidgets.QWidget()
         cluster_config_widget.setLayout(cluster_config_layout)
         run_on_cluster_layout.addWidget(cluster_config_widget)
+        for _col in (1, 3, 5):
+            cluster_config_layout.setColumnStretch(_col, 1)
 
-        # Cluster Host dropdown
-        cluster_config_layout.addWidget(QtWidgets.QLabel("Cluster Host:"))
+        # Cluster Host dropdown (row 0, full width)
+        cluster_config_layout.addWidget(
+            QtWidgets.QLabel("Cluster Host:"), 0, 0
+        )
         self.cluster_host_combo = QtWidgets.QComboBox()
         for host in CONFIG["SlurmLoginNodes"].keys():
             self.cluster_host_combo.addItem(host)
         self.cluster_host_combo.setEditable(True)
-        # self.cluster_host_combo.addItems(["localhost", "cluster.example.com"])
-        cluster_config_layout.addWidget(self.cluster_host_combo)
+        cluster_config_layout.addWidget(self.cluster_host_combo, 0, 1, 1, 5)
 
-        # Number of nodes
-        cluster_config_layout.addWidget(QtWidgets.QLabel("#nodes:"))
+        # Resources (row 1): nodes / cores / GPUs
+        cluster_config_layout.addWidget(QtWidgets.QLabel("#nodes:"), 1, 0)
         self.cluster_nodes_spin = QtWidgets.QSpinBox()
         self.cluster_nodes_spin.setMinimum(1)
         self.cluster_nodes_spin.setMaximum(1000)
         self.cluster_nodes_spin.setValue(
             CONFIG["SlurmDefault"].get("nodes", 1)
         )
-        cluster_config_layout.addWidget(self.cluster_nodes_spin)
+        cluster_config_layout.addWidget(self.cluster_nodes_spin, 1, 1)
 
-        # Number of cores per node
-        cluster_config_layout.addWidget(QtWidgets.QLabel("#cores/node:"))
+        cluster_config_layout.addWidget(QtWidgets.QLabel("#cores/node:"), 1, 2)
         self.cluster_cores_spin = QtWidgets.QSpinBox()
         self.cluster_cores_spin.setMinimum(1)
         self.cluster_cores_spin.setMaximum(256)
         self.cluster_cores_spin.setValue(
             CONFIG["SlurmDefault"].get("cores", 1)
         )
-        cluster_config_layout.addWidget(self.cluster_cores_spin)
+        cluster_config_layout.addWidget(self.cluster_cores_spin, 1, 3)
 
-        # Number of GPUs per node (0 = no GPU requested)
-        cluster_config_layout.addWidget(QtWidgets.QLabel("#GPUs/node:"))
+        cluster_config_layout.addWidget(QtWidgets.QLabel("#GPUs/node:"), 1, 4)
         self.cluster_gpus_spin = QtWidgets.QSpinBox()
         self.cluster_gpus_spin.setMinimum(0)
         self.cluster_gpus_spin.setMaximum(64)
@@ -9985,14 +10374,15 @@ class Window(QtWidgets.QMainWindow):
             "Number of GPUs to request per node via SLURM "
             "(adds '#SBATCH --gres=gpu:N'). 0 = no GPU."
         )
-        cluster_config_layout.addWidget(self.cluster_gpus_spin)
+        cluster_config_layout.addWidget(self.cluster_gpus_spin, 1, 5)
 
         # SLURM partition (queue). GPU nodes usually live in a dedicated
         # partition, so a --gres=gpu request must target it or the job never
         # schedules. Populated per selected cluster from config
         # (SlurmPartitions) and editable, so an unlisted partition can be
         # typed by hand. Blank -> omit --partition and use SLURM's default.
-        cluster_config_layout.addWidget(QtWidgets.QLabel("Partition:"))
+        # Scheduling (row 2): partition / memory / timeout
+        cluster_config_layout.addWidget(QtWidgets.QLabel("Partition:"), 2, 0)
         self.cluster_partition_combo = QtWidgets.QComboBox()
         self.cluster_partition_combo.setEditable(True)
         self.cluster_partition_combo.setToolTip(
@@ -10000,7 +10390,7 @@ class Window(QtWidgets.QMainWindow):
             "GPU nodes usually require a dedicated partition; leave blank to "
             "use the cluster default partition."
         )
-        cluster_config_layout.addWidget(self.cluster_partition_combo)
+        cluster_config_layout.addWidget(self.cluster_partition_combo, 2, 1)
         self._populate_cluster_partitions(
             str(self.cluster_host_combo.currentText())
         )
@@ -10015,7 +10405,7 @@ class Window(QtWidgets.QMainWindow):
         # and editable. GPU fitting needs a CUDA toolkit providing libNVVM, so
         # a cuda module is loaded here (also sets CUDA_HOME for numba). Blank
         # -> load nothing.
-        cluster_config_layout.addWidget(QtWidgets.QLabel("Modules:"))
+        cluster_config_layout.addWidget(QtWidgets.QLabel("Modules:"), 3, 0)
         self.cluster_modules_edit = QtWidgets.QLineEdit()
         self.cluster_modules_edit.setPlaceholderText("e.g., cuda/13.0")
         self.cluster_modules_edit.setToolTip(
@@ -10027,7 +10417,7 @@ class Window(QtWidgets.QMainWindow):
         # preserved across cluster changes while an untouched field follows the
         # new cluster's config.
         self._cluster_modules_default = ""
-        cluster_config_layout.addWidget(self.cluster_modules_edit)
+        cluster_config_layout.addWidget(self.cluster_modules_edit, 3, 1, 1, 5)
         self._populate_cluster_modules(
             str(self.cluster_host_combo.currentText())
         )
@@ -10035,25 +10425,66 @@ class Window(QtWidgets.QMainWindow):
             self._populate_cluster_modules
         )
 
-        # Memory
-        cluster_config_layout.addWidget(QtWidgets.QLabel("Memory:"))
+        # Apptainer image on the shared mount. The GUI's cluster path always
+        # runs the workflow INSIDE this image, so the cluster runs the same
+        # picasso-workflow version the image was built with (rather than the
+        # host conda env). Editable; defaults to picasso-workflow-<GUI
+        # version>.sif. "List" fills the dropdown from the shared folder
+        # (config ClusterApptainer.image_dir) over SSH.
+        cluster_config_layout.addWidget(
+            QtWidgets.QLabel("Apptainer image:"), 4, 0
+        )
+        self.cluster_image_combo = QtWidgets.QComboBox()
+        self.cluster_image_combo.setEditable(True)
+        self.cluster_image_combo.setMinimumWidth(240)
+        cluster_config_layout.addWidget(self.cluster_image_combo, 4, 1, 1, 4)
+        self.cluster_image_refresh_button = QtWidgets.QPushButton("List")
+        self.cluster_image_refresh_button.setToolTip(
+            "List the .sif images in the shared folder on the selected "
+            "cluster (over SSH) and fill the dropdown. The default is "
+            "picasso-workflow-<this GUI's version>.sif."
+        )
+        self.cluster_image_refresh_button.clicked.connect(
+            lambda: self._refresh_cluster_images(auto=False)
+        )
+        cluster_config_layout.addWidget(
+            self.cluster_image_refresh_button, 4, 5
+        )
+        # Version-derived default image name (host-independent); computed once
+        # since the installed version cannot change at runtime. Prefer the
+        # installed dist metadata (present even in a non-git wheel install,
+        # where _version.py / __GUIVERSION__ is "unknown") over __GUIVERSION__.
+        self._image_version_default = (
+            default_image_basename(resolve_pw_version()) or ""
+        )
+        # Tracks the last programmatically applied image, so a manual pick is
+        # preserved across cluster switches while an untouched field follows
+        # the version default (mirrors self._cluster_modules_default).
+        self._cluster_image_default = ""
+        self._populate_cluster_images(
+            str(self.cluster_host_combo.currentText())
+        )
+        self.cluster_host_combo.currentTextChanged.connect(
+            self._populate_cluster_images
+        )
+
+        # Memory (row 2, col 2-3)
+        cluster_config_layout.addWidget(QtWidgets.QLabel("Memory:"), 2, 2)
         self.cluster_memory_edit = QtWidgets.QLineEdit()
         self.cluster_memory_edit.setPlaceholderText("e.g., 4GB")
         self.cluster_memory_edit.setText(
             CONFIG["SlurmDefault"].get("memory", "4GB")
         )
-        self.cluster_memory_edit.setMaximumWidth(100)
-        cluster_config_layout.addWidget(self.cluster_memory_edit)
+        cluster_config_layout.addWidget(self.cluster_memory_edit, 2, 3)
 
-        # Timeout
-        cluster_config_layout.addWidget(QtWidgets.QLabel("Timeout:"))
+        # Timeout (row 2, col 4-5)
+        cluster_config_layout.addWidget(QtWidgets.QLabel("Timeout:"), 2, 4)
         self.cluster_timeout_edit = QtWidgets.QLineEdit()
         self.cluster_timeout_edit.setPlaceholderText("e.g., 24:00:00")
         self.cluster_timeout_edit.setText(
             CONFIG["SlurmDefault"].get("timeout", "24:00:00")
         )
-        self.cluster_timeout_edit.setMaximumWidth(100)
-        cluster_config_layout.addWidget(self.cluster_timeout_edit)
+        cluster_config_layout.addWidget(self.cluster_timeout_edit, 2, 5)
 
         # Faulthandler: dump the Python->C traceback on a native crash (a
         # LAPACK/CUDA fault in a fit/CRLB call leaves no Python exception).
@@ -10067,7 +10498,9 @@ class Window(QtWidgets.QMainWindow):
             "the error log instead of dying silently. Inherited by "
             "multiprocessing workers. Negligible overhead; recommended on."
         )
-        cluster_config_layout.addWidget(self.cluster_faulthandler_check)
+        cluster_config_layout.addWidget(
+            self.cluster_faulthandler_check, 5, 0, 1, 2
+        )
 
         # Debug: hide every GPU (CUDA_VISIBLE_DEVICES="") so the fit/CRLB run
         # on the CPU kernels. Off by default; use it to bisect a GPU-side crash
@@ -10081,7 +10514,9 @@ class Window(QtWidgets.QMainWindow):
             "GPU-side crash (a spline CRLB kernel fault dies as a hard "
             "SIGSEGV, not a catchable error). Leave off for normal / GPU runs."
         )
-        cluster_config_layout.addWidget(self.cluster_cpu_only_check)
+        cluster_config_layout.addWidget(
+            self.cluster_cpu_only_check, 5, 2, 1, 2
+        )
 
         # self.cluster_use_module = QtWidgets.QCheckBox("Use p-w module")
         # self.cluster_use_module.setMaximumWidth(200)
@@ -10174,23 +10609,26 @@ class Window(QtWidgets.QMainWindow):
         )
         job_id_layout.addWidget(self.job_id_input, stretch=1)
 
-        # --- live progress monitor -----------------------------------------
-        self._build_progress_monitor(run_on_cluster_layout)
-
-        # Display area for job information
-        job_display_label = QtWidgets.QLabel("Job Information:")
-        run_on_cluster_layout.addWidget(job_display_label)
-
-        self.job_info_display = QtWidgets.QTextEdit()
-        self.job_info_display.setReadOnly(True)
-        self.job_info_display.setMaximumHeight(200)
-        run_on_cluster_layout.addWidget(self.job_info_display)
+        run_on_cluster_layout.addStretch(1)
 
         run_locally_tab = QtWidgets.QWidget()
         run_locally_layout = QtWidgets.QVBoxLayout(run_locally_tab)
         self.run_tabs.addTab(run_locally_tab, "Run locally")
-        self.run_tabs.setTabEnabled(1, False)  # in development
-        self.run_tabs.setTabToolTip(1, "Not Implemented yet")
+        self.run_tabs.setTabToolTip(
+            1,
+            "Run the workflow on this machine, in the GUI's Python "
+            "environment. Progress and run information appear below.",
+        )
+        local_info = QtWidgets.QLabel(
+            "Runs the generated start_workflow.py on this machine, with "
+            f"the GUI's Python environment:\n{sys.executable}\n"
+            "Output is logged to local_run.log in the results folder; "
+            "live progress and run information are shown below (shared "
+            "with cluster runs)."
+        )
+        local_info.setWordWrap(True)
+        local_info.setStyleSheet("color: #666;")
+        run_locally_layout.addWidget(local_info)
         local_buttons = QtWidgets.QHBoxLayout()
         self.local_buttons_widget = QtWidgets.QWidget()
         self.local_buttons_widget.setLayout(local_buttons)
@@ -10198,6 +10636,75 @@ class Window(QtWidgets.QMainWindow):
         start_locally_button = QtWidgets.QPushButton("Start Workflow locally")
         local_buttons.addWidget(start_locally_button)
         start_locally_button.clicked.connect(self.start_locally)
+        stop_local_button = QtWidgets.QPushButton("Stop after current module")
+        stop_local_button.setToolTip(
+            "Request a graceful stop: the local workflow finishes the "
+            "current module, saves its state, and exits cleanly at the "
+            "next module boundary. The run can be continued later with "
+            "'Continue previous run (resume)'."
+        )
+        local_buttons.addWidget(stop_local_button)
+        stop_local_button.clicked.connect(self.on_stop_local_run)
+        kill_local_button = QtWidgets.QPushButton("Kill local run")
+        kill_local_button.setToolTip(
+            "Terminate the local workflow process immediately (the current "
+            "module's results are lost; saved checkpoints remain usable "
+            "for a resume)."
+        )
+        local_buttons.addWidget(kill_local_button)
+        kill_local_button.clicked.connect(self.on_kill_local_run)
+        show_log_button = QtWidgets.QPushButton("Show log tail")
+        show_log_button.setToolTip(
+            "Append the last lines of local_run.log to the run "
+            "information below."
+        )
+        local_buttons.addWidget(show_log_button)
+        show_log_button.clicked.connect(self.on_show_local_log)
+        run_locally_layout.addStretch(1)
+
+        # Live progress and run information are shared between the cluster
+        # and local run modes (the monitor already fuses both sources), so
+        # they live below the run sub-tabs rather than inside one of them.
+        shared_run_widget = QtWidgets.QWidget()
+        shared_run_layout = QtWidgets.QVBoxLayout(shared_run_widget)
+        shared_run_layout.setContentsMargins(0, 0, 0, 0)
+        self._build_progress_monitor(shared_run_layout)
+        # Clickable link to the run's Confluence report page (populated by the
+        # monitor from progress.json's report_url; hidden until available).
+        self.confluence_link_label = QtWidgets.QLabel()
+        self.confluence_link_label.setOpenExternalLinks(True)
+        self.confluence_link_label.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextBrowserInteraction
+        )
+        self.confluence_link_label.setVisible(False)
+        shared_run_layout.addWidget(self.confluence_link_label)
+        info_row = QtWidgets.QHBoxLayout()
+        info_col = QtWidgets.QVBoxLayout()
+        info_col.addWidget(QtWidgets.QLabel("Run information:"))
+        self.job_info_display = QtWidgets.QTextEdit()
+        self.job_info_display.setReadOnly(True)
+        self.job_info_display.setMaximumHeight(200)
+        info_col.addWidget(self.job_info_display)
+        info_row.addLayout(info_col, 1)
+        # error details: failed modules' tracebacks, filled by the monitor
+        error_col = QtWidgets.QVBoxLayout()
+        error_col.addWidget(QtWidgets.QLabel("Error details:"))
+        self.error_details_display = QtWidgets.QTextEdit()
+        self.error_details_display.setReadOnly(True)
+        self.error_details_display.setMaximumHeight(200)
+        self.error_details_display.setLineWrapMode(
+            QtWidgets.QTextEdit.LineWrapMode.NoWrap
+        )
+        mono = QtGui.QFont("Monospace")
+        mono.setStyleHint(QtGui.QFont.StyleHint.TypeWriter)
+        self.error_details_display.setFont(mono)
+        self.error_details_display.setPlaceholderText(
+            "Tracebacks of failed modules appear here."
+        )
+        error_col.addWidget(self.error_details_display)
+        info_row.addLayout(error_col, 1)
+        shared_run_layout.addLayout(info_row)
+        run_layout.addWidget(shared_run_widget, 3, 0, 1, 4)
 
         # Results tab: browse a run folder, (re)generate its HTML report
         # from the saved state, and view/open it -- no Confluence needed.
@@ -10205,6 +10712,75 @@ class Window(QtWidgets.QMainWindow):
         QtWidgets.QVBoxLayout(results_tab)
         self.tabs.addTab(results_tab, "Results")
         self._build_results_tab(results_tab)
+
+        # Render tab: explore a run's saved localizations with the embedded
+        # picasso Render canvas. The embedded render window is created lazily
+        # (on first render), so building this tab is cheap.
+        from picasso_workflow.render_tab import RenderTab
+
+        self.render_tab = RenderTab(self)
+        self.tabs.addTab(self.render_tab, "Render")
+
+        # Doctor tab: read-only diagnostics (config/.env sources, logfile,
+        # versions, connection settings) plus opt-in Confluence connection
+        # tests. Entirely passive to build; makes no network calls on open.
+        from picasso_workflow.doctor_tab import DoctorTab
+
+        self.doctor_tab = DoctorTab(self)
+        self.tabs.addTab(self.doctor_tab, "Doctor")
+        # refresh the render tab's run list when it is first shown / selected
+        self.tabs.currentChanged.connect(self._on_main_tab_changed)
+
+        # Check (off-thread) whether a newer release is on GitHub; reveals the
+        # update banner if so. Fully passive and fail-soft -- never blocks
+        # startup or shows anything when offline / up to date.
+        self._update_thread = None
+        # The cluster-image dropdown auto-populates (off-thread) the first time
+        # the "Run on SLURM Cluster" sub-tab is shown; these back that.
+        self._cluster_image_thread = None
+        self._cluster_images_autolisted = False
+        self.run_tabs.currentChanged.connect(
+            lambda *_: self._maybe_autolist_cluster_images()
+        )
+        # Join background threads on quit (destroying a live QThread aborts the
+        # process). Connected ONCE here -- the startup check, the on-demand
+        # Help check and the manual "List" button all reuse their one thread
+        # slot, so a per-use connect would accumulate duplicate handlers.
+        app = QtWidgets.QApplication.instance()
+        if app is not None:
+            app.aboutToQuit.connect(self._stop_update_thread)
+            app.aboutToQuit.connect(self._stop_cluster_image_thread)
+        self._start_update_check()
+
+        # Tools menu: the cluster admin console (shared-mount Apptainer images,
+        # SLURM queue, disk usage). The Tools menu always carries the
+        # Manual → Workflow wizard; the Admin console below it is cluster-admin
+        # tooling, HIDDEN unless config AdminConsole.enabled is true (the
+        # standalone `picasso-workflow-admin-gui` command still works
+        # regardless). A malformed / missing AdminConsole degrades to hidden.
+        tools_menu = self.menuBar().addMenu("Tools")
+        _admin_cfg = CONFIG.get("AdminConsole")
+        # Require an explicit boolean true -- a stray `enabled: "no"` (a truthy
+        # string) must NOT reveal the menu.
+        if isinstance(_admin_cfg, dict) and _admin_cfg.get("enabled") is True:
+            tools_menu.addAction("Admin console…", self._open_admin_console)
+        tools_menu.addAction(
+            "Manual → Workflow…", self._open_manual_to_workflow_wizard
+        )
+
+        # Help menu: re-openable onboarding + a shortcut to the settings file.
+        help_menu = self.menuBar().addMenu("Help")
+        help_menu.addAction("Getting Started…", self._show_getting_started)
+        help_menu.addAction(
+            "Open settings file…",
+            lambda: GettingStartedDialog.open_user_config(self),
+        )
+        help_menu.addAction(
+            "Reload settings file", self._reload_config_into_ui
+        )
+        help_menu.addAction("Check for updates…", self._check_for_updates)
+        # On first launch, show the onboarding guide once the window is up.
+        QtCore.QTimer.singleShot(0, self._maybe_show_getting_started)
 
         # select files to process
         # Single Workflow only: choose how input data is provided - an
@@ -10233,25 +10809,25 @@ class Window(QtWidgets.QMainWindow):
         self.files_box.addWidget(self.files_mode_label, 0, 0)
         self.files_box.addWidget(self.files_mode_combo, 0, 1, 1, 2)
 
-        # Create button container for dynamic button layout
+        # Create button container for dynamic button layout. A grid (rather
+        # than a single row) lets the many aggregation buttons wrap onto
+        # several rows so their labels stay readable on a narrow window.
         self.file_buttons_widget = QtWidgets.QWidget()
-        self.file_buttons_layout = QtWidgets.QHBoxLayout(
+        self.file_buttons_layout = QtWidgets.QGridLayout(
             self.file_buttons_widget
         )
         self.file_buttons_layout.setContentsMargins(0, 0, 0, 0)
         self.files_box.addWidget(self.file_buttons_widget, 1, 0, 1, 3)
 
-        # Initial buttons for Single Workflow (will be managed by _update_file_buttons)
+        # Initial buttons for Single Workflow. These are (re)created and laid
+        # out by _update_file_buttons, called once during setup via
+        # _on_workflow_type_changed.
         self.add_files_button = QtWidgets.QPushButton("Add files")
         self.add_files_button.clicked.connect(self.add_files)
         self.remove_files_button = QtWidgets.QPushButton("Remove selected")
         self.remove_files_button.clicked.connect(self.remove_selected_files)
         self.clear_files_button = QtWidgets.QPushButton("Clear list")
         self.clear_files_button.clicked.connect(self.clear_file_list)
-
-        self.file_buttons_layout.addWidget(self.add_files_button)
-        self.file_buttons_layout.addWidget(self.remove_files_button)
-        self.file_buttons_layout.addWidget(self.clear_files_button)
 
         d = {"Name1": "/path/to/file1.txt", "Name2": "/path/to/file2.txt"}
         self.files_table = DroppableTableWidget()
@@ -10263,8 +10839,14 @@ class Window(QtWidgets.QMainWindow):
         header.setSectionResizeMode(
             0, QtWidgets.QHeaderView.ResizeMode.ResizeToContents
         )
+        # Size the File Path column to its content (rather than stretching to
+        # fit) so long paths overflow and a horizontal scrollbar appears,
+        # keeping the full path reachable on a narrow window.
         header.setSectionResizeMode(
-            1, QtWidgets.QHeaderView.ResizeMode.Stretch
+            1, QtWidgets.QHeaderView.ResizeMode.ResizeToContents
+        )
+        self.files_table.setHorizontalScrollMode(
+            QtWidgets.QAbstractItemView.ScrollMode.ScrollPerPixel
         )
         dict_to_table(d, self.files_table)
         # Store delegate as instance variable to prevent garbage collection
@@ -10293,8 +10875,15 @@ class Window(QtWidgets.QMainWindow):
         header_agg.setSectionResizeMode(
             1, QtWidgets.QHeaderView.ResizeMode.ResizeToContents
         )
+        # Let the File Path column grow past the viewport (and scroll) rather
+        # than stretch-to-fit; the last section stretches by default on trees,
+        # so turn that off first.
+        header_agg.setStretchLastSection(False)
         header_agg.setSectionResizeMode(
-            2, QtWidgets.QHeaderView.ResizeMode.Stretch
+            2, QtWidgets.QHeaderView.ResizeMode.ResizeToContents
+        )
+        self.files_tree_agg.setHorizontalScrollMode(
+            QtWidgets.QAbstractItemView.ScrollMode.ScrollPerPixel
         )
         self.file_path_delegate_tree_agg = FilePathDelegate(self)
         self.files_tree_agg.setItemDelegateForColumn(
@@ -10321,11 +10910,19 @@ class Window(QtWidgets.QMainWindow):
         header_inv.setSectionResizeMode(
             1, QtWidgets.QHeaderView.ResizeMode.ResizeToContents
         )
+        # Size the File Path column to content so long paths overflow and a
+        # horizontal scrollbar appears instead of truncating. The path is not
+        # the last column here, so leave stretchLastSection on: the trailing
+        # Condition column absorbs the slack when paths are short (no dead
+        # band), while a long path still overflows and triggers the scrollbar.
         header_inv.setSectionResizeMode(
-            2, QtWidgets.QHeaderView.ResizeMode.Stretch
+            2, QtWidgets.QHeaderView.ResizeMode.ResizeToContents
         )
         header_inv.setSectionResizeMode(
-            3, QtWidgets.QHeaderView.ResizeMode.ResizeToContents
+            3, QtWidgets.QHeaderView.ResizeMode.Stretch
+        )
+        self.files_tree_inv.setHorizontalScrollMode(
+            QtWidgets.QAbstractItemView.ScrollMode.ScrollPerPixel
         )
         self.file_path_delegate_tree_inv = FilePathDelegate(self)
         self.files_tree_inv.setItemDelegateForColumn(
@@ -10381,11 +10978,115 @@ class Window(QtWidgets.QMainWindow):
 
         self.module_combobox = QtWidgets.QComboBox()
         self.module_combobox.addItem("Select module")
+        # the set toggle (checkbox below) starts on the classic set;
+        # _refresh_module_palette rebuilds the palette when it is toggled
         self.module_combobox.addItems(
-            self.module_descriptor.get_module_names()
+            [
+                name
+                for name in self.module_descriptor.get_module_names()
+                if not self._is_hidden_by_module_set(name, False)
+                and not self._is_experimental(name)
+            ]
         )
         self.module_combobox.currentTextChanged.connect(self.on_module_changed)
         current_layout.addWidget(self.module_combobox)
+
+        # Toggle between the two module sets: unchecked = classic
+        # picasso-workflow modules, checked = the native-picasso set
+        # (picasso_* names) plus the data loaders and savers.
+        self.show_picasso_set_checkbox = QtWidgets.QCheckBox(
+            "Only show native-picasso (picasso_*) modules"
+        )
+        self.show_picasso_set_checkbox.setToolTip(
+            "Toggle the module palette between the classic picasso-workflow "
+            "modules and the native-picasso set, which mirrors the picasso "
+            "CLI/library operations with the exact picasso parameter names "
+            "and defaults (shown together with the data loaders and "
+            "savers). The sets can be mixed in one workflow by toggling "
+            "while building it."
+        )
+        self.show_picasso_set_checkbox.setChecked(False)
+        self.show_picasso_set_checkbox.toggled.connect(
+            lambda _checked: self._refresh_module_palette()
+        )
+        current_layout.addWidget(self.show_picasso_set_checkbox)
+
+        # Branch-id selector: shown only when a branch sub-module is selected,
+        # to choose which branch's per-branch ("$branch", [...]) parameter
+        # values are displayed/edited.
+        self.branch_id_container = QtWidgets.QWidget()
+        _branch_id_layout = QtWidgets.QHBoxLayout(self.branch_id_container)
+        _branch_id_layout.setContentsMargins(0, 0, 0, 0)
+        _branch_id_layout.addWidget(QtWidgets.QLabel("Branch id:"))
+        self.branch_id_combobox = QtWidgets.QComboBox()
+        self.branch_id_combobox.setToolTip(
+            "Which branch's per-branch parameter values to show/edit. "
+            "Branch-specific parameters are highlighted."
+        )
+        self.branch_id_combobox.currentIndexChanged.connect(
+            self._on_branch_id_changed
+        )
+        _branch_id_layout.addWidget(self.branch_id_combobox)
+        _branch_id_layout.addStretch()
+        self.branch_id_container.setVisible(False)
+        current_layout.addWidget(self.branch_id_container)
+
+        # "Join module" toggle: shown when a branch sub-module is selected.
+        # Checking it moves the sub-module into the branch's join section (a
+        # fan-in module that runs once after all branches); unchecking moves it
+        # back to the per-branch section.
+        self.join_module_container = QtWidgets.QWidget()
+        _join_layout = QtWidgets.QHBoxLayout(self.join_module_container)
+        _join_layout.setContentsMargins(0, 0, 0, 0)
+        self.join_module_checkbox = QtWidgets.QCheckBox(
+            "Join module (fan-in; runs once after all branches)"
+        )
+        self.join_module_checkbox.setToolTip(
+            "Move this sub-module into the branch's join section (or back). "
+            "Join modules run once after every branch and pool per-branch "
+            "results via the $all wildcard."
+        )
+        self.join_module_checkbox.toggled.connect(self._on_join_module_toggled)
+        _join_layout.addWidget(self.join_module_checkbox)
+        _join_layout.addStretch()
+        self.join_module_container.setVisible(False)
+        current_layout.addWidget(self.join_module_container)
+
+        # "Run only on channels where <column>" control: restrict this
+        # single-dataset module to channels where a per-channel boolean
+        # tile-parameter column is set. Shown only for a selected top-level
+        # single-dataset module in an aggregation/investigation workflow (the
+        # only place channels exist). Stored on the module as the reserved
+        # "#run_on_channels" key and compiled into a conditional_branch at run
+        # time (see util.compile_channel_restrictions).
+        self.run_on_channels_container = QtWidgets.QWidget()
+        _roc_layout = QtWidgets.QHBoxLayout(self.run_on_channels_container)
+        _roc_layout.setContentsMargins(0, 0, 0, 0)
+        self.run_on_channels_checkbox = QtWidgets.QCheckBox(
+            "Run only on channels where column:"
+        )
+        self.run_on_channels_checkbox.setToolTip(
+            "Restrict this single-dataset module to channels where the chosen "
+            "per-channel boolean column is set (e.g. cluster only RESI "
+            "channels); other channels skip it, while the aggregation "
+            "workflow still runs on all of them. Tick which channels in "
+            "'Per-Channel Params…'. Downstream modules must tolerate the "
+            "channels that skip this one."
+        )
+        self.run_on_channels_checkbox.toggled.connect(
+            self._on_run_on_channels_toggled
+        )
+        self.run_on_channels_combo = QtWidgets.QComboBox()
+        self.run_on_channels_combo.setToolTip(
+            "Per-channel boolean column deciding where this module runs."
+        )
+        self.run_on_channels_combo.currentIndexChanged.connect(
+            self._on_run_on_channels_column_changed
+        )
+        _roc_layout.addWidget(self.run_on_channels_checkbox)
+        _roc_layout.addWidget(self.run_on_channels_combo, 1)
+        self.run_on_channels_container.setVisible(False)
+        current_layout.addWidget(self.run_on_channels_container)
         # label describing the module selected. Rendered as word-wrapped
         # rich text inside its own scroll area so long descriptions stay
         # readable and the divider below can resize the region.
@@ -10451,6 +11152,14 @@ class Window(QtWidgets.QMainWindow):
         self.single_workflow_list.currentRowChanged.connect(
             self._on_workflow_selection_changed
         )
+        self.single_workflow_list.setContextMenuPolicy(
+            Qt.ContextMenuPolicy.CustomContextMenu
+        )
+        self.single_workflow_list.customContextMenuRequested.connect(
+            lambda pos: self._show_workflow_context_menu(
+                self.single_workflow_list, "single", pos
+            )
+        )
         single_workflow_layout.addWidget(self.single_workflow_list)
 
         aggregation_workflow_tab = QtWidgets.QWidget()
@@ -10464,11 +11173,24 @@ class Window(QtWidgets.QMainWindow):
         self.aggregation_workflow_list.currentRowChanged.connect(
             self._on_workflow_selection_changed
         )
+        self.aggregation_workflow_list.setContextMenuPolicy(
+            Qt.ContextMenuPolicy.CustomContextMenu
+        )
+        self.aggregation_workflow_list.customContextMenuRequested.connect(
+            lambda pos: self._show_workflow_context_menu(
+                self.aggregation_workflow_list, "aggregation", pos
+            )
+        )
         aggregation_workflow_layout.addWidget(self.aggregation_workflow_list)
         # Add workflow tabs to the splitter below the current-module editor.
         self.modules_splitter.addWidget(self.workflow_tabs)
         self.modules_splitter.setStretchFactor(0, 0)
         self.modules_splitter.setStretchFactor(1, 1)
+        # Give the workflow module list the larger initial share: the editor
+        # above only needs room for the combobox, description and a few
+        # parameter rows, while the list grows with the workflow. (Qt
+        # distributes these as proportions scaled to the real height.)
+        self.modules_splitter.setSizes([320, 520])
         # Connect tab change signal
         self.workflow_tabs.currentChanged.connect(
             self._on_workflow_tab_changed
@@ -10520,6 +11242,43 @@ class Window(QtWidgets.QMainWindow):
             "Save localizations after every module."
         )
         self.addl_options_layout.addWidget(self.always_save)
+
+        self.continue_previous = QtWidgets.QCheckBox(
+            "Continue previous run (resume)."
+        )
+        self.continue_previous.setToolTip(
+            "Resume the latest run in the results folder instead of "
+            "starting from scratch: previously succeeded modules are "
+            "skipped, saved localizations are restored from the last "
+            "checkpoint, and modules with changed parameters re-run."
+        )
+        self.addl_options_layout.addWidget(self.continue_previous)
+
+        # Stepwise development: run the workflow only up to a chosen module,
+        # inspect the results, adjust parameters, then step on. Each step is
+        # a normal (local or cluster) launch that resumes the previous one,
+        # so "Continue previous run" is forced on while stepping.
+        self.stepwise_enable = QtWidgets.QCheckBox("Run only up to module:")
+        self.stepwise_enable.setToolTip(
+            "Stepwise workflow development: stop cleanly after the chosen "
+            "module instead of running the whole pipeline. The boundary "
+            "module saves its localizations as a checkpoint; inspect the "
+            "results, adjust parameters, pick a later module and start "
+            "again (locally or on the cluster) to continue from there. "
+            "Modules whose parameters you changed re-run automatically.\n"
+            "Tip: right-click a module in the workflow list to run up to "
+            "it directly."
+        )
+        self.addl_options_layout.addWidget(self.stepwise_enable)
+        self.stepwise_target = QtWidgets.QComboBox()
+        self.stepwise_target.setEnabled(False)
+        self.stepwise_target.setToolTip(
+            "The last module to run in this step. Everything after it stays "
+            "pending until a later step."
+        )
+        self.addl_options_layout.addWidget(self.stepwise_target)
+        self.stepwise_enable.toggled.connect(self._on_stepwise_toggled)
+        self._refresh_stepwise_targets()
 
         # resize the widgets
         # Keep a sensible minimum width, but let the splitters drive height.
@@ -11488,17 +12247,26 @@ class Window(QtWidgets.QMainWindow):
         self.files_mode_combo.setCurrentIndex(mode)
         self._apply_files_mode_state()
 
-    def _update_file_buttons(self, workflow_type_index):
-        """Update button layout based on workflow type."""
-        # Clear existing buttons
+    def _lay_out_file_buttons(self, buttons, columns):
+        """Clear the file-buttons grid and lay ``buttons`` out, wrapping.
+
+        Buttons fill left-to-right, top-to-bottom at ``columns`` per row, so a
+        long list wraps onto several rows instead of being squeezed into one
+        unreadably narrow row.
+        """
         while self.file_buttons_layout.count():
             item = self.file_buttons_layout.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
+        for idx, button in enumerate(buttons):
+            self.file_buttons_layout.addWidget(
+                button, idx // columns, idx % columns
+            )
 
+    def _update_file_buttons(self, workflow_type_index):
+        """Update button layout based on workflow type."""
         self.find_files_button = QtWidgets.QPushButton("Find in folder")
         self.find_files_button.clicked.connect(self.find_dataset_files)
-        self.file_buttons_layout.addWidget(self.find_files_button)
 
         if workflow_type_index == 0:  # Single Workflow
             self.add_files_button = QtWidgets.QPushButton("Add files")
@@ -11510,9 +12278,16 @@ class Window(QtWidgets.QMainWindow):
             self.clear_files_button = QtWidgets.QPushButton("Clear list")
             self.clear_files_button.clicked.connect(self.clear_file_list)
 
-            self.file_buttons_layout.addWidget(self.add_files_button)
-            self.file_buttons_layout.addWidget(self.remove_files_button)
-            self.file_buttons_layout.addWidget(self.clear_files_button)
+            # Few buttons: a single row is readable.
+            self._lay_out_file_buttons(
+                [
+                    self.find_files_button,
+                    self.add_files_button,
+                    self.remove_files_button,
+                    self.clear_files_button,
+                ],
+                columns=4,
+            )
 
             # Buttons were just recreated - re-apply the files-mode state
             self._apply_files_mode_state()
@@ -11549,16 +12324,26 @@ class Window(QtWidgets.QMainWindow):
             self.clear_tree_button = QtWidgets.QPushButton("Clear")
             self.clear_tree_button.clicked.connect(self.clear_tree)
 
-            # Grouped by verb, and within each verb dataset before
-            # channel - matching the tree's parent/child nesting.
-            self.file_buttons_layout.addWidget(self.add_dataset_button)
-            self.file_buttons_layout.addWidget(self.add_channel_button)
-            self.file_buttons_layout.addWidget(self.rename_dataset_button)
-            self.file_buttons_layout.addWidget(self.rename_channel_button)
-            self.file_buttons_layout.addWidget(self.remove_dataset_button)
-            self.file_buttons_layout.addWidget(self.remove_channel_button)
-            self.file_buttons_layout.addWidget(self.tile_params_button)
-            self.file_buttons_layout.addWidget(self.clear_tree_button)
+            # Wrap to 3 columns (row-major) so labels stay readable. One
+            # coherent row per group: utilities, then all dataset actions,
+            # then all channel actions (add/rename/remove in each).
+            self._lay_out_file_buttons(
+                [
+                    # row 1: utilities
+                    self.find_files_button,
+                    self.tile_params_button,
+                    self.clear_tree_button,
+                    # row 2: dataset actions
+                    self.add_dataset_button,
+                    self.rename_dataset_button,
+                    self.remove_dataset_button,
+                    # row 3: channel actions
+                    self.add_channel_button,
+                    self.rename_channel_button,
+                    self.remove_channel_button,
+                ],
+                columns=3,
+            )
 
     def manage_tile_params(self):
         """Open the per-channel / per-cell tile-parameter editor."""
@@ -11878,8 +12663,270 @@ class Window(QtWidgets.QMainWindow):
         """Clear all rows from the table."""
         if self.files_table.rowCount() == 0:
             return
+
+        reply = QtWidgets.QMessageBox.question(
+            self,
+            "Clear list",
+            "Remove all files from the list?",
+            QtWidgets.QMessageBox.StandardButton.Yes
+            | QtWidgets.QMessageBox.StandardButton.No,
+        )
+        if reply != QtWidgets.QMessageBox.StandardButton.Yes:
+            return
+
         self.files_table.setRowCount(0)
         self._log_workflow_config_event("files_table.clear")
+
+    # -- update-available banner -------------------------------------------
+
+    def _build_update_banner(self):
+        """Return the (initially hidden) "new version available" banner."""
+        banner = QtWidgets.QFrame()
+        banner.setStyleSheet(
+            "QFrame { background: #fff8e1; border: 1px solid #f0c000; "
+            "border-radius: 4px; }"
+        )
+        banner.setVisible(False)
+        row = QtWidgets.QHBoxLayout(banner)
+        row.setContentsMargins(8, 4, 8, 4)
+
+        self._update_banner_label = QtWidgets.QLabel()
+        self._update_banner_label.setTextFormat(Qt.TextFormat.RichText)
+        self._update_banner_label.setOpenExternalLinks(True)
+        self._update_banner_label.setStyleSheet("border: none;")
+        row.addWidget(self._update_banner_label, 1)
+
+        dismiss = QtWidgets.QPushButton("Dismiss")
+        dismiss.setStyleSheet("border: none;")
+        dismiss.clicked.connect(lambda: banner.setVisible(False))
+        row.addWidget(dismiss, 0)
+        return banner
+
+    def _start_update_check(self):
+        """Kick off the GitHub release check on a background thread.
+
+        Skipped in headless/test runs (``QT_QPA_PLATFORM=offscreen``) and when
+        the user opts out via ``PICASSO_WORKFLOW_NO_UPDATE_CHECK`` -- a network
+        thread spun up during construction would otherwise be torn down while
+        still blocked on the socket (QThread "destroyed while running" abort).
+        """
+        if os.environ.get("QT_QPA_PLATFORM") == "offscreen" or os.environ.get(
+            "PICASSO_WORKFLOW_NO_UPDATE_CHECK"
+        ):
+            return
+        try:
+            worker = _UpdateCheckWorker(__GUIVERSION__)
+            thread = QtCore.QThread(self)
+            worker.moveToThread(thread)
+            # Keep the worker alive for the thread's lifetime; otherwise PyQt
+            # may garbage-collect it before ``started`` fires (see doctor_tab).
+            thread._pw_worker = worker
+            thread.started.connect(worker.run)
+            worker.finished.connect(self._on_update_check_result)
+            worker.finished.connect(thread.quit)
+            worker.finished.connect(worker.deleteLater)
+            thread.finished.connect(thread.deleteLater)
+            thread.finished.connect(self._forget_update_thread)
+            self._update_thread = thread
+            # aboutToQuit->_stop_update_thread is connected once in __init__.
+            thread.start()
+        except Exception as e:  # pragma: no cover - defensive
+            logger.debug(f"Could not start the update check: {e}")
+
+    def _on_update_check_result(self, info):
+        """Reveal the banner if ``info`` is an UpdateInfo, else do nothing."""
+        if info is None:
+            return
+        try:
+            self._update_banner_label.setText(
+                f"A new version of picasso-workflow "
+                f"(<b>{info.latest}</b>) is available &mdash; "
+                f'<a href="{info.url}">download it here</a>.'
+            )
+            self.update_banner.setVisible(True)
+        except Exception as e:  # pragma: no cover - defensive
+            logger.debug(f"Could not show the update banner: {e}")
+
+    def _check_for_updates(self):
+        """Help menu: on-demand GitHub release check -> result dialog.
+
+        Reuses the startup check's thread slot + lifecycle
+        (``_forget_update_thread`` / ``_stop_update_thread`` / ``closeEvent``);
+        the re-entry guard means it no-ops while the startup check (or a prior
+        manual one) is still running. Routes to a dialog instead of the banner.
+        """
+        if getattr(self, "_update_thread", None) is not None:
+            return
+        try:
+            worker = _ReleaseCheckWorker(__GUIVERSION__)
+            thread = QtCore.QThread(self)
+            worker.moveToThread(thread)
+            thread._pw_worker = worker
+            thread.started.connect(worker.run)
+            worker.finished.connect(self._on_manual_update_result)
+            worker.finished.connect(thread.quit)
+            worker.finished.connect(worker.deleteLater)
+            thread.finished.connect(thread.deleteLater)
+            thread.finished.connect(self._forget_update_thread)
+            self._update_thread = thread
+            # aboutToQuit->_stop_update_thread is connected once in __init__.
+            thread.start()
+        except Exception as e:  # pragma: no cover - defensive
+            logger.debug(f"Could not start the update check: {e}")
+
+    def _on_manual_update_result(self, result):
+        """Report the on-demand check's outcome (newer / current / error)."""
+        from picasso_workflow.update_check import (
+            RELEASES_PAGE_URL,
+            UpdateInfo,
+        )
+
+        try:
+            if result.status == "update":
+                # Also raise the passive banner, for consistency with startup.
+                self._on_update_check_result(
+                    UpdateInfo(result.latest, result.url)
+                )
+                self._update_message_box(
+                    "Update available",
+                    "A newer version of picasso-workflow is available."
+                    f"<br><br>Installed: <b>{result.current}</b><br>"
+                    f"Latest: <b>{result.latest}</b><br><br>"
+                    f'Download it from <a href="{result.url}">the releases '
+                    "page</a>.",
+                )
+            elif result.status == "current":
+                QtWidgets.QMessageBox.information(
+                    self,
+                    "Check for updates",
+                    "picasso-workflow is up to date "
+                    f"(version {result.current}).",
+                )
+            else:  # "error"
+                detail = f":<br><br>{result.error}" if result.error else "."
+                self._update_message_box(
+                    "Check for updates",
+                    f"Could not check for updates{detail}<br><br>"
+                    f'See <a href="{RELEASES_PAGE_URL}">the releases '
+                    "page</a>.",
+                    warning=True,
+                )
+        except Exception as e:  # pragma: no cover - defensive
+            logger.debug(f"Could not show the update result: {e}")
+
+    def _update_message_box(self, title, html, warning=False):
+        """A rich-text message box whose ``<a href>`` links open in a browser.
+
+        QMessageBox renders rich text but its labels don't follow external
+        links by default -- enable it so the releases link is clickable.
+        """
+        box = QtWidgets.QMessageBox(self)
+        box.setIcon(
+            QtWidgets.QMessageBox.Icon.Warning
+            if warning
+            else QtWidgets.QMessageBox.Icon.Information
+        )
+        box.setWindowTitle(title)
+        box.setTextFormat(Qt.TextFormat.RichText)
+        box.setText(html)
+        for label in box.findChildren(QtWidgets.QLabel):
+            label.setOpenExternalLinks(True)
+        box.exec()
+
+    def _forget_update_thread(self):
+        self._update_thread = None
+
+    def _stop_update_thread(self):
+        """Quit/join the update-check thread on shutdown (destroying a live
+        QThread aborts the process).
+
+        Clears the reference first so closeEvent and aboutToQuit (which both
+        call this) can't double-join, and tolerates the thread's C++ object
+        already being torn down after normal completion.
+        """
+        thread = getattr(self, "_update_thread", None)
+        self._update_thread = None
+        if thread is None:
+            return
+        try:
+            thread.quit()
+            thread.wait()
+        except RuntimeError:
+            # The QThread already finished and was deleteLater'd -- nothing to
+            # join.
+            pass
+
+    def closeEvent(self, event):
+        """Join background threads before the window is destroyed."""
+        self._stop_update_thread()
+        self._stop_cluster_image_thread()
+        super().closeEvent(event)
+
+    # -- getting-started onboarding ----------------------------------------
+
+    def _maybe_show_getting_started(self):
+        """Show the onboarding guide on first launch only (fail-soft)."""
+        # Skip in headless/test runs so the modal dialog can't hang the suite.
+        if os.environ.get("QT_QPA_PLATFORM") == "offscreen":
+            return
+        try:
+            if GettingStartedDialog.marker_path().exists():
+                return
+        except Exception:
+            return
+        self._show_getting_started()
+
+    def _show_getting_started(self):
+        try:
+            GettingStartedDialog(self).exec()
+        except Exception as e:  # pragma: no cover - defensive
+            logger.debug(f"Getting Started dialog failed: {e}")
+            return
+        # Pick up a config the user just created/edited without a restart.
+        self._reload_config_into_ui()
+
+    def _reload_config_into_ui(self):
+        """Re-read the config files and refresh config-driven widgets."""
+        try:
+            from picasso_workflow import reload_config
+
+            reload_config()
+        except Exception as e:  # pragma: no cover - defensive
+            logger.debug(f"Could not reload config: {e}")
+            return
+        self._refresh_template_combo()
+
+    def _refresh_template_combo(self):
+        """Repopulate the template dropdown from the (reloaded) CONFIG."""
+        combo = getattr(self, "workflow_template_combo", None)
+        if combo is None:
+            return
+        current = combo.currentText()
+        combo.blockSignals(True)
+        combo.clear()
+        combo.addItem("")
+        for template in (CONFIG.get("Templates") or {}).keys():
+            combo.addItem(template)
+        idx = combo.findText(current)
+        combo.setCurrentIndex(idx if idx >= 0 else 0)
+        combo.blockSignals(False)
+
+    def _on_main_tab_changed(self, index):
+        """Refresh the Render / Doctor tabs when they are shown."""
+        widget = self.tabs.widget(index)
+        if widget is getattr(self, "render_tab", None):
+            try:
+                self.render_tab.refresh()
+            except Exception as e:
+                logger.debug(f"Could not refresh the Render tab: {e}")
+        elif widget is getattr(self, "doctor_tab", None):
+            try:
+                self.doctor_tab.refresh()
+            except Exception as e:
+                logger.debug(f"Could not refresh the Doctor tab: {e}")
+        # Switching to the Run tab makes the cluster sub-tab visible without a
+        # sub-tab change, so catch the one-shot image auto-populate here too.
+        self._maybe_autolist_cluster_images()
 
     # ------------------------------------------------------------------
     # Results tab: HTML report viewer
@@ -12192,7 +13239,7 @@ class Window(QtWidgets.QMainWindow):
     def on_template_changed(self, template_name):
         """Load a template"""
         try:
-            template_path = CONFIG["Templates"][template_name]
+            template_path = (CONFIG.get("Templates") or {})[template_name]
             if template_path[:2] == 'r"' or template_path[:2] == "r'":
                 template_path = template_path[2:-1]
 
@@ -12910,8 +13957,8 @@ class Window(QtWidgets.QMainWindow):
             # Store parameters in actionable format (no conversion)
             # Tuples remain tuples, dicts remain dicts, etc.
             workflow_list.append((module_name, params))
-            index = len(workflow_list) - 1
-            list_widget.addItem(f"{index:02d}: {module_name}")
+        # Render the list (indenting any branch sub-modules).
+        self._refresh_workflow_list(list_widget, workflow_list)
 
         # Per-list audit event. Both _load_workflow_definition and the
         # alt loader funnel through here, so this also covers the early
@@ -13080,6 +14127,14 @@ class Window(QtWidgets.QMainWindow):
             if value is not None:
                 param_values[param_name] = value
 
+        # A new branch comes with a summarize_branches join by default: it
+        # auto-summarizes the branches' numeric results (no arguments needed).
+        # It appears as an indented join row the user can edit or delete.
+        if module_name == "branch":
+            param_values.setdefault(
+                "join_modules", [("summarize_branches", {})]
+            )
+
         # Add to the appropriate workflow list based on selected tab.
         current_tab_index = self.workflow_tabs.currentIndex()
         if current_tab_index == 0:  # Single Dataset Workflow
@@ -13093,10 +14148,21 @@ class Window(QtWidgets.QMainWindow):
         else:  # e.g. Investigation tab -- no module list to add to
             return
 
-        # Insert after the current selection (append when nothing selected).
-        current_row = list_widget.currentRow()
+        # If a branch sub-row is selected, add the new module into that
+        # branch's section (after the selected sub-module) instead of at the
+        # top level.
+        sel_node = self._selected_node(list_widget)
+        if sel_node is not None and sel_node.get("kind") in ("sub", "sub_add"):
+            self._add_into_branch(
+                list_widget, modules, sel_node, module_name, param_values, tab
+            )
+            return
+
+        # Insert after the selected top-level module (a selected branch
+        # sub-row resolves to its owning branch). Append when nothing selected.
+        sel_module = self._selected_module_index(list_widget)
         old_len = len(modules)
-        insert_idx = current_row + 1 if current_row >= 0 else len(modules)
+        insert_idx = sel_module + 1 if sel_module >= 0 else len(modules)
         modules.insert(insert_idx, (module_name, param_values))
 
         # Inserting renumbers later modules, so shift any back-references that
@@ -13110,14 +14176,17 @@ class Window(QtWidgets.QMainWindow):
         if ref_changes:
             self._populate_stored_parameters(modules[insert_idx][1])
 
-        # Mutate the list widget with signals blocked, then point the editing
-        # state at the new row and select it (without a stale save/reload).
+        # Rebuild the list (indented subs) with signals blocked, then point the
+        # editing state at the new module and select its row.
         list_widget.blockSignals(True)
-        list_widget.insertItem(insert_idx, f"{insert_idx:02d}: {module_name}")
-        self._renumber_workflow_items(list_widget, modules)
+        self._refresh_workflow_list(list_widget, modules)
         self.editing_workflow_index = insert_idx
         self.editing_workflow_tab = current_tab_index
-        list_widget.setCurrentRow(insert_idx)
+        self.editing_workflow_subnode = None
+        self._clear_branch_context()
+        list_widget.setCurrentRow(
+            self._module_item_row(list_widget, insert_idx)
+        )
         list_widget.blockSignals(False)
 
         self._log_workflow_config_event(
@@ -13191,10 +14260,21 @@ class Window(QtWidgets.QMainWindow):
             self.module_combobox.clear()
             self.module_combobox.addItem("Select module")
             model = self.module_combobox.model()
+            show_picasso_set = self.show_picasso_set_checkbox.isChecked()
             for name in self.module_descriptor.get_module_names():
                 spec = MODULE_REGISTRY.get(name)
                 if spec is not None and scope not in spec.scopes:
                     continue  # hide scope-inappropriate modules
+                # hide experimental modules, but keep the current selection
+                # visible so an existing row using one stays editable
+                if name != previous and self._is_experimental(name):
+                    continue
+                # keep the current selection visible even when its module
+                # set is toggled off (e.g. editing an existing row)
+                if name != previous and self._is_hidden_by_module_set(
+                    name, show_picasso_set
+                ):
+                    continue
                 self.module_combobox.addItem(name)
                 if spec is not None and not spec.requires <= available:
                     item = model.item(self.module_combobox.count() - 1)
@@ -13208,6 +14288,66 @@ class Window(QtWidgets.QMainWindow):
             self.module_combobox.setCurrentIndex(idx if idx >= 0 else 0)
         finally:
             self.module_combobox.blockSignals(False)
+
+    @staticmethod
+    def _is_hidden_by_module_set(name, show_picasso_set):
+        """True when the set toggle currently hides module ``name``.
+
+        The checkbox toggles the palette between the two module sets:
+        unchecked shows the classic picasso-workflow modules, checked shows
+        the native-picasso set (``picasso_*``) plus the data loaders and
+        savers (``role`` in loader/saver), without which a picasso-set
+        workflow could neither start nor persist its results. Both sets can
+        still be mixed in one workflow by toggling while building it.
+
+        Parameters
+        ----------
+        name : str
+            A module name from the palette.
+        show_picasso_set : bool
+            Current state of the picasso-set toggle.
+        """
+        spec = MODULE_REGISTRY.get(name)
+        if show_picasso_set:
+            if spec is None:
+                return True  # unregistered names belong to the classic set
+            return spec.module_set != "picasso" and spec.role not in (
+                "loader",
+                "saver",
+            )
+        return spec is not None and spec.module_set == "picasso"
+
+    @staticmethod
+    def _is_experimental(name):
+        """True when module ``name`` is flagged experimental (palette-hidden).
+
+        Experimental modules are functional and dispatchable from a workflow
+        but kept out of the palette until ready for users (see
+        :class:`~picasso_workflow.modulespec.ModuleSpec`). An existing
+        workflow row that uses one is still inserted on demand by
+        :meth:`_module_palette_index`, so it remains editable.
+
+        Parameters
+        ----------
+        name : str
+            A module name from the palette.
+        """
+        spec = MODULE_REGISTRY.get(name)
+        return spec is not None and spec.experimental
+
+    def _module_palette_index(self, module_name):
+        """Return the palette index of ``module_name``, inserting if hidden.
+
+        A module may be absent from the palette because the set toggle
+        currently hides its module set; insert it so an existing workflow
+        row using it can still be displayed and edited. Returns -1 for
+        genuinely unknown names.
+        """
+        index = self.module_combobox.findText(module_name)
+        if index < 0 and module_name in MODULE_REGISTRY:
+            self.module_combobox.addItem(module_name)
+            index = self.module_combobox.count() - 1
+        return index
 
     def _editing_existing_module(self):
         """True when an existing workflow item is selected for editing."""
@@ -13239,13 +14379,145 @@ class Window(QtWidgets.QMainWindow):
         # item tracked by editing_workflow_index/_tab.
         self._update_editing_workflow_item()
 
+    # ------------------------------------------------------------------
+    # Workflow list rendering with inline branch sub-modules
+    # ------------------------------------------------------------------
+    # A "branch" module carries nested sub-workflows in its parameters
+    # (branch_modules / join_modules). Instead of showing those as raw
+    # argument text, the workflow list renders them as indented rows right
+    # under the branch. Each QListWidget item carries a node descriptor in
+    # its UserRole data so selection / add / remove / reorder resolve to the
+    # owning top-level module regardless of the extra indented rows:
+    #   {"kind": "module", "top": i, "section": None, "sub": None}
+    #   {"kind": "sub",    "top": i, "section": "branch"|"join", "sub": j}
+
+    _WF_NODE_ROLE = Qt.ItemDataRole.UserRole
+
+    def _refresh_workflow_list(self, list_widget, modules):
+        """Rebuild ``list_widget`` from ``modules``, indenting branch subs.
+
+        Signals are blocked during the rebuild; callers restore the desired
+        selection afterwards.
+        """
+        role = self._WF_NODE_ROLE
+        was_blocked = list_widget.signalsBlocked()
+        list_widget.blockSignals(True)
+        list_widget.clear()
+        for idx, entry in enumerate(modules):
+            name = entry[0]
+            params = entry[1] if len(entry) > 1 else {}
+            item = QtWidgets.QListWidgetItem(f"{idx:02d}: {name}")
+            item.setData(
+                role,
+                {"kind": "module", "top": idx, "section": None, "sub": None},
+            )
+            list_widget.addItem(item)
+            if name == "branch" and isinstance(params, dict):
+                for section, key, tag in (
+                    ("branch", "branch_modules", ""),
+                    ("join", "join_modules", "J"),
+                ):
+                    submods = params.get(key) or []
+                    for j, sub in enumerate(submods):
+                        if isinstance(sub, (tuple, list)) and sub:
+                            subname = sub[0]
+                        else:
+                            subname = str(sub)
+                        label = f"        {idx:02d}.{tag}{j:02d}  {subname}"
+                        sitem = QtWidgets.QListWidgetItem(label)
+                        sitem.setData(
+                            role,
+                            {
+                                "kind": "sub",
+                                "top": idx,
+                                "section": section,
+                                "sub": j,
+                            },
+                        )
+                        list_widget.addItem(sitem)
+                    if not submods:
+                        # Placeholder for an empty section so it can be built
+                        # up inline: selecting this row and adding a module
+                        # inserts the first sub-module here (sub=-1 -> at 0).
+                        label = f"        {idx:02d}.{tag}    + add {section} "
+                        label += "module"
+                        pitem = QtWidgets.QListWidgetItem(label)
+                        pitem.setData(
+                            role,
+                            {
+                                "kind": "sub_add",
+                                "top": idx,
+                                "section": section,
+                                "sub": -1,
+                            },
+                        )
+                        pitem.setForeground(QtGui.QColor("gray"))
+                        list_widget.addItem(pitem)
+        list_widget.blockSignals(was_blocked)
+        # the stepwise target combo mirrors the workflow module lists
+        self._refresh_stepwise_targets()
+
+    def _row_node(self, list_widget, row):
+        """Return the node descriptor for a list row (or None)."""
+        if list_widget is None or row < 0:
+            return None
+        item = list_widget.item(row)
+        if item is None:
+            return None
+        return item.data(self._WF_NODE_ROLE)
+
+    def _selected_module_index(self, list_widget):
+        """Top-level module index of the current selection (-1 if none).
+
+        A selected branch sub-row resolves to its owning branch module.
+        """
+        row = list_widget.currentRow()
+        node = self._row_node(list_widget, row)
+        if node is None:
+            return row  # legacy 1:1 fallback (no node data)
+        return node["top"]
+
+    def _module_item_row(self, list_widget, top_idx):
+        """Row of the top-level module item with index ``top_idx`` (-1)."""
+        for row in range(list_widget.count()):
+            node = self._row_node(list_widget, row)
+            if (
+                node is not None
+                and node.get("kind") == "module"
+                and node.get("top") == top_idx
+            ):
+                return row
+        return -1
+
+    def _selected_node(self, list_widget):
+        """Full node descriptor for the current selection (or None)."""
+        return self._row_node(list_widget, list_widget.currentRow())
+
+    def _locate_row(self, list_widget, selector):
+        """Row matching a selector tuple after a rebuild.
+
+        selector is ``("module", top)`` or ``("sub", top, section, sub)``.
+        """
+        for row in range(list_widget.count()):
+            node = self._row_node(list_widget, row)
+            if node is None:
+                continue
+            if selector[0] == "module":
+                if node["kind"] == "module" and node["top"] == selector[1]:
+                    return row
+            elif selector[0] == "sub":
+                if (
+                    node["kind"] == "sub"
+                    and node["top"] == selector[1]
+                    and node["section"] == selector[2]
+                    and node["sub"] == selector[3]
+                ):
+                    return row
+        return -1
+
     def _renumber_workflow_items(self, list_widget, modules):
-        """Update QListWidget items with correct numbering after reordering."""
-        for i in range(len(modules)):
-            module_name = modules[i][
-                0
-            ]  # Extract name from (name, params) tuple
-            list_widget.item(i).setText(f"{i:02d}: {module_name}")
+        """Rebuild the workflow list (indented branch subs, correct numbers)."""
+        self._refresh_workflow_list(list_widget, modules)
 
     def _on_workflow_selection_changed(self, current_row):
         """Handle selection change in workflow list - display module in Current Module section."""
@@ -13253,8 +14525,11 @@ class Window(QtWidgets.QMainWindow):
             # Clear editing state when nothing is selected
             self.editing_workflow_index = -1
             self.editing_workflow_tab = -1
+            self.editing_workflow_subnode = None
+            self._clear_branch_context()
             # Back to "Add" mode and append-at-end availability.
             self._refresh_module_palette()
+            self._sync_run_on_channels_control()
             return
 
         # Save current parameters before loading new selection
@@ -13262,54 +14537,564 @@ class Window(QtWidgets.QMainWindow):
 
         # Get the current tab to determine which workflow list to use
         current_tab_index = self.workflow_tabs.currentIndex()
+        list_widget = None
+        if current_tab_index == 0:
+            list_widget = self.single_workflow_list
+        elif current_tab_index == 1:
+            list_widget = self.aggregation_workflow_list
+
+        # Resolve the selected row to a top-level module index and, if it is a
+        # branch sub-row, to that sub-module within the branch.
+        node = self._row_node(list_widget, current_row)
+
+        # A branch "+ add ... module" placeholder is an insertion affordance,
+        # not an editable item: put the editor in Add mode (so the action
+        # button adds into that branch section) and leave the row selected.
+        if node is not None and node.get("kind") == "sub_add":
+            self.editing_workflow_index = -1
+            self.editing_workflow_tab = -1
+            self.editing_workflow_subnode = None
+            self._clear_branch_context()
+            self._refresh_module_palette()
+            self._sync_run_on_channels_control()
+            return
+
+        top_index = node["top"] if node is not None else current_row
+
+        modules = None
+        if current_tab_index == 0:
+            modules = self.single_workflow_modules
+        elif current_tab_index == 1:
+            modules = self.aggregation_workflow_modules
 
         # Track which workflow item is being edited
-        self.editing_workflow_index = current_row
+        self.editing_workflow_index = top_index
         self.editing_workflow_tab = current_tab_index
+        self.editing_workflow_subnode = None
 
-        if current_tab_index == 0:  # Single Dataset Workflow
-            if current_row < len(self.single_workflow_modules):
-                module_name, param_values = self.single_workflow_modules[
-                    current_row
-                ]
-                # Update module combobox to show this module
-                index = self.module_combobox.findText(module_name)
-                if index >= 0:
-                    # Block signals to prevent on_module_changed from firing
-                    self.module_combobox.blockSignals(True)
-                    try:
-                        self.module_combobox.setCurrentIndex(index)
-                        # Manually trigger widget update since signal is blocked
-                        self.on_module_changed(module_name)
-                        # Populate parameters with stored values
-                        self._populate_stored_parameters(param_values)
-                        self._validate_parameters()  # Clear red borders from filled fields
-                    finally:
-                        # Always unblock signals, even if exception occurs
-                        self.module_combobox.blockSignals(False)
-        elif current_tab_index == 1:  # Aggregation Workflow
-            if current_row < len(self.aggregation_workflow_modules):
-                module_name, param_values = self.aggregation_workflow_modules[
-                    current_row
-                ]
-                # Update module combobox to show this module
-                index = self.module_combobox.findText(module_name)
-                if index >= 0:
-                    # Block signals to prevent on_module_changed from firing
-                    self.module_combobox.blockSignals(True)
-                    try:
-                        self.module_combobox.setCurrentIndex(index)
-                        # Manually trigger widget update since signal is blocked
-                        self.on_module_changed(module_name)
-                        # Populate parameters with stored values
-                        self._populate_stored_parameters(param_values)
-                        self._validate_parameters()  # Clear red borders from filled fields
-                    finally:
-                        # Always unblock signals, even if exception occurs
-                        self.module_combobox.blockSignals(False)
+        if modules is None or not (0 <= top_index < len(modules)):
+            self._refresh_module_palette()
+            return
+
+        # Load the branch sub-module's own parameters when a sub-row is
+        # selected; otherwise the top-level module's parameters.
+        to_load = self._branch_submodule_at(modules, node)
+        if to_load is not None:
+            module_name, param_values, self.editing_workflow_subnode = to_load
+        else:
+            module_name, param_values = modules[top_index]
+
+        # Show / configure the branch-id selector for a branch sub-module,
+        # before the parameters are populated (they resolve per-branch values).
+        self._setup_branch_context(modules, node, top_index)
+
+        # Update module combobox to show this module
+        index = self._module_palette_index(module_name)
+        if index >= 0:
+            # Block signals to prevent on_module_changed from firing
+            self.module_combobox.blockSignals(True)
+            try:
+                self.module_combobox.setCurrentIndex(index)
+                # Manually trigger widget update since signal is blocked
+                self.on_module_changed(module_name)
+                # Populate parameters with stored values
+                self._populate_stored_parameters(param_values)
+                self._validate_parameters()  # Clear red borders
+            finally:
+                # Always unblock signals, even if exception occurs
+                self.module_combobox.blockSignals(False)
 
         # Reflect what is addable after the newly selected insertion point.
         self._refresh_module_palette()
+        # Refresh the per-channel control for the new selection (the
+        # _populate_stored_parameters path above also does this, but not when
+        # the module is absent from the palette; idempotent if called twice).
+        self._sync_run_on_channels_control()
+
+    def _branch_submodule_at(self, modules, node):
+        """Return ``(name, params, subnode)`` for a selected branch sub-row.
+
+        ``subnode`` is ``{"section", "sub"}`` for use as
+        ``editing_workflow_subnode``. Returns ``None`` when ``node`` is not a
+        (valid) branch sub-row, so the caller falls back to the top-level
+        module.
+        """
+        if node is None or node.get("kind") != "sub":
+            return None
+        top = node["top"]
+        if not (0 <= top < len(modules)):
+            return None
+        branch_params = modules[top][1]
+        if not isinstance(branch_params, dict):
+            return None
+        key = (
+            "branch_modules"
+            if node.get("section") == "branch"
+            else "join_modules"
+        )
+        submods = branch_params.get(key) or []
+        j = node.get("sub")
+        if not (isinstance(j, int) and 0 <= j < len(submods)):
+            return None
+        sub = submods[j]
+        if not (isinstance(sub, (tuple, list)) and sub):
+            return None
+        sub_name = sub[0]
+        sub_params = (
+            sub[1] if len(sub) > 1 and isinstance(sub[1], dict) else {}
+        )
+        return sub_name, sub_params, {"section": node["section"], "sub": j}
+
+    @staticmethod
+    def _is_branch_override(value):
+        """Whether a stored value is a ``("$branch", [v0, v1, ...])`` marker."""
+        return (
+            isinstance(value, (tuple, list))
+            and len(value) >= 2
+            and str(value[0]) == "$branch"
+            and isinstance(value[1], (list, tuple))
+        )
+
+    def _branch_count(self, branch_params):
+        """Number of branches declared by a branch module's parameters."""
+        n = branch_params.get("n_branches")
+        labels = branch_params.get("branch_labels")
+        if n is None and labels is not None:
+            n = len(labels)
+        try:
+            return int(n)
+        except (TypeError, ValueError):
+            return 0
+
+    def _setup_branch_context(self, modules, node, top_index):
+        """Configure the branch-id selector and join toggle for the selection.
+
+        The join toggle is shown for any branch sub-module. Per-branch controls
+        (branch-id selector + overrides) are shown only for a *branch-section*
+        sub-module; join modules run once, so they have no per-branch values.
+        """
+        self._branch_override_params = {}
+        is_sub = node is not None and node.get("kind") == "sub"
+        if not (is_sub and 0 <= top_index < len(modules)):
+            self._clear_branch_context()
+            return
+        branch_params = modules[top_index][1]
+        if not isinstance(branch_params, dict):
+            self._clear_branch_context()
+            return
+
+        section = node.get("section")
+        # The "join module" toggle is available for any branch sub-module.
+        self._set_join_checkbox(checked=(section == "join"), visible=True)
+
+        if section == "join":
+            # Join modules are not per branch: no branch-id / overrides.
+            self.editing_branch_context = None
+            self.branch_id_container.setVisible(False)
+            return
+
+        n = self._branch_count(branch_params)
+        if n > 0:
+            labels = branch_params.get("branch_labels")
+            prev = (self.editing_branch_context or {}).get("branch_id", 0)
+            branch_id = prev if 0 <= prev < n else 0
+            self.editing_branch_context = {
+                "n_branches": n,
+                "labels": labels,
+                "branch_id": branch_id,
+            }
+            self._populate_branch_id_combobox(n, labels, branch_id)
+            self.branch_id_container.setVisible(True)
+        else:
+            self.editing_branch_context = None
+            self.branch_id_container.setVisible(False)
+
+    def _set_join_checkbox(self, checked, visible):
+        """Set the 'join module' checkbox state without firing its signal."""
+        if not hasattr(self, "join_module_container"):
+            return
+        self.join_module_checkbox.blockSignals(True)
+        self.join_module_checkbox.setChecked(checked)
+        self.join_module_checkbox.blockSignals(False)
+        self.join_module_container.setVisible(visible)
+
+    def _clear_branch_context(self):
+        """Hide the branch-id selector / join toggle and drop the context."""
+        self.editing_branch_context = None
+        self._branch_override_params = {}
+        if hasattr(self, "branch_id_container"):
+            self.branch_id_container.setVisible(False)
+        if hasattr(self, "join_module_container"):
+            self.join_module_container.setVisible(False)
+
+    @staticmethod
+    def _strip_branch_overrides(params, branch_id=0):
+        """Replace ("$branch", [...]) values with one concrete value.
+
+        Used when a per-branch sub-module becomes a join module: join modules
+        run once, so any per-branch override collapses to a single value.
+        """
+
+        def walk(value):
+            if isinstance(value, dict):
+                return {k: walk(v) for k, v in value.items()}
+            if isinstance(value, (list, tuple)):
+                if (
+                    isinstance(value, tuple)
+                    and len(value) >= 2
+                    and str(value[0]) == "$branch"
+                    and isinstance(value[1], (list, tuple))
+                ):
+                    lst = value[1]
+                    if not lst:
+                        return None
+                    return lst[branch_id] if branch_id < len(lst) else lst[-1]
+                seq = [walk(v) for v in value]
+                return tuple(seq) if isinstance(value, tuple) else seq
+            return value
+
+        return walk(params)
+
+    def _on_join_module_toggled(self, checked):
+        """Move the current branch sub-module between branch and join sections."""
+        subnode = self.editing_workflow_subnode
+        if subnode is None:
+            return
+        tab = self.editing_workflow_tab
+        if tab == 0:
+            modules = self.single_workflow_modules
+            list_widget = self.single_workflow_list
+            tabname = "single"
+        elif tab == 1:
+            modules = self.aggregation_workflow_modules
+            list_widget = self.aggregation_workflow_list
+            tabname = "aggregation"
+        else:
+            return
+        top = self.editing_workflow_index
+        if not (0 <= top < len(modules)) or modules[top][0] != "branch":
+            return
+        branch_params = modules[top][1]
+        cur_section = subnode["section"]
+        target_section = "join" if checked else "branch"
+        if cur_section == target_section:
+            return
+
+        # Persist pending edits into the current section first.
+        self._update_editing_workflow_item()
+
+        src_key = (
+            "branch_modules" if cur_section == "branch" else "join_modules"
+        )
+        dst_key = (
+            "join_modules" if target_section == "join" else "branch_modules"
+        )
+        src = branch_params.setdefault(src_key, [])
+        dst = branch_params.setdefault(dst_key, [])
+        j = subnode["sub"]
+        if not (0 <= j < len(src)):
+            return
+        name, params = src[j]
+        if target_section == "join":
+            # collapse any per-branch overrides -- join runs once
+            bid = (self.editing_branch_context or {}).get("branch_id", 0)
+            params = self._strip_branch_overrides(params, bid)
+        del src[j]
+        dst.append((name, params))
+        new_sub = len(dst) - 1
+
+        # Reselect the moved sub-module in its new section.
+        self.editing_workflow_index = -1
+        self.editing_workflow_tab = -1
+        self.editing_workflow_subnode = None
+        self._clear_branch_context()
+        self._refresh_workflow_list(list_widget, modules)
+        row = self._locate_row(
+            list_widget, ("sub", top, target_section, new_sub)
+        )
+        if row >= 0:
+            list_widget.setCurrentRow(row)
+        self._refresh_module_palette()
+        self._log_workflow_config_event(
+            "modules.branch_sub_section_changed",
+            tab=tabname,
+            index=top,
+            to_section=target_section,
+            module=name,
+        )
+
+    def _populate_branch_id_combobox(self, n, labels, branch_id):
+        """Fill the branch-id combobox with ``n`` entries (labelled)."""
+        self.branch_id_combobox.blockSignals(True)
+        self.branch_id_combobox.clear()
+        for k in range(n):
+            if labels is not None and k < len(labels):
+                self.branch_id_combobox.addItem(f"{k}: {labels[k]}")
+            else:
+                self.branch_id_combobox.addItem(str(k))
+        self.branch_id_combobox.setCurrentIndex(branch_id)
+        self.branch_id_combobox.blockSignals(False)
+
+    def _on_branch_id_changed(self, idx):
+        """Reload the sub-module's parameters for the newly selected branch."""
+        if self.editing_branch_context is None or idx < 0:
+            return
+        # Flush edits for the previously shown branch id, then switch.
+        self._update_editing_workflow_item()
+        self.editing_branch_context["branch_id"] = idx
+
+        subnode = self.editing_workflow_subnode
+        if subnode is None:
+            return
+        modules = (
+            self.single_workflow_modules
+            if self.editing_workflow_tab == 0
+            else self.aggregation_workflow_modules
+        )
+        top = self.editing_workflow_index
+        if not (0 <= top < len(modules)):
+            return
+        branch_params = modules[top][1]
+        key = (
+            "branch_modules"
+            if subnode["section"] == "branch"
+            else "join_modules"
+        )
+        submods = branch_params.get(key) or []
+        j = subnode["sub"]
+        if 0 <= j < len(submods) and isinstance(submods[j], (tuple, list)):
+            sub = submods[j]
+            sub_params = (
+                sub[1] if len(sub) > 1 and isinstance(sub[1], dict) else {}
+            )
+            self._populate_stored_parameters(sub_params)
+            self._validate_parameters()
+
+    def _highlight_override_row(self, widget_info, on):
+        """Highlight (or clear) a parameter row shown as branch-specific."""
+        row = getattr(widget_info, "row_widget", None)
+        if row is None:
+            return
+        row.setStyleSheet("background-color: #fff3cd;" if on else "")
+
+    def _apply_param_default_state(
+        self, widget_info, use_default, persist=True
+    ):
+        """Switch a parameter between "use default" and "override".
+
+        In the default state the input widget (and its cmd / per-branch
+        controls) is disabled and greyed and shows the spec default, and the
+        parameter is omitted from the generated workflow (``_get_widget_value``
+        returns ``None``), so the code default applies. In the override state
+        the widget is editable and the value is written. Clicking the label
+        toggles the two. No-op for parameters without a spec default.
+        """
+        if not getattr(widget_info, "has_default", False):
+            return
+        widget_info.use_default = bool(use_default)
+        w = widget_info.widget
+        lbl = getattr(widget_info, "label", None)
+        name = (
+            getattr(widget_info, "display_name", None)
+            or getattr(widget_info, "param_name", "")
+            or ""
+        )
+        dv = widget_info.default_value
+        cmd = getattr(widget_info, "cmd_button", None)
+        pbc = getattr(widget_info, "per_branch_checkbox", None)
+        if use_default:
+            # show the default value, then grey + disable (block signals so
+            # setting the value does not trigger a premature auto-save while
+            # the form is still being built)
+            w.blockSignals(True)
+            self._set_widget_value(
+                w, dv, widget_info.original_type, widget_info
+            )
+            w.blockSignals(False)
+            w.setEnabled(False)
+            if cmd is not None:
+                cmd.setEnabled(False)
+            if pbc is not None:
+                pbc.setEnabled(False)
+            if lbl is not None:
+                # the greyed value widget already shows the default, so keep
+                # the label to just the name and put the hint in the tooltip
+                lbl.setText(name)
+                lbl.setStyleSheet("color: gray; font-style: italic;")
+                if dv is None:
+                    lbl.setToolTip(
+                        "Unset - the module's own fallback applies. "
+                        "Click to set a value."
+                    )
+                else:
+                    lbl.setToolTip(
+                        f"Using the code default ({dv}). Click to override."
+                    )
+        else:
+            w.setEnabled(True)
+            if cmd is not None:
+                cmd.setEnabled(True)
+            if pbc is not None:
+                pbc.setEnabled(True)
+            if lbl is not None:
+                lbl.setText(name)
+                lbl.setStyleSheet("")
+                desc = widget_info.metadata.get("description", "")
+                lbl.setToolTip(
+                    (desc + "\n" if desc else "")
+                    + f"Default: {dv}. Click to use it."
+                )
+        if persist:
+            self._on_parameter_changed()
+
+    def _sync_per_branch_controls(self):
+        """Show/populate the per-branch checkboxes for the current form.
+
+        Checkboxes are visible only while editing a branch sub-module, and
+        checked for parameters currently carrying a ``("$branch", [...])``
+        override.
+        """
+        active = self.editing_branch_context is not None
+        for pname, wi in self.parameter_widgets.items():
+            checkbox = getattr(wi, "per_branch_checkbox", None)
+            if checkbox is None:
+                continue
+            checkbox.setVisible(active and wi.original_type != "dict")
+            checkbox.blockSignals(True)
+            checkbox.setChecked(
+                active and pname in self._branch_override_params
+            )
+            checkbox.blockSignals(False)
+
+    # -- per-channel "run only on channels" control --------------------
+    def _editing_single_module_params(self):
+        """Params dict of the top-level single-dataset module being edited.
+
+        Returns ``None`` unless a top-level (non branch-sub) module is
+        selected in the Single Dataset Workflow tab.
+        """
+        if self.editing_workflow_tab != 0 or self.editing_workflow_subnode:
+            return None
+        idx = self.editing_workflow_index
+        modules = self.single_workflow_modules
+        if not (0 <= idx < len(modules)):
+            return None
+        params = modules[idx][1]
+        return params if isinstance(params, dict) else None
+
+    def _channel_scope_columns(self):
+        """Names of channel-scope tile-parameter columns (sorted)."""
+        return sorted(
+            name
+            for name, entry in self._tile_params().items()
+            if entry.get("scope") == "channel"
+        )
+
+    def _unique_tile_param_name(self, base):
+        """A tile-param column name based on ``base`` not already taken."""
+        existing = self._tile_params()
+        if base not in existing:
+            return base
+        i = 2
+        while f"{base}_{i}" in existing:
+            i += 1
+        return f"{base}_{i}"
+
+    def _sync_run_on_channels_control(self):
+        """Show/populate the per-channel "run only on channels" control.
+
+        Visible only for a selected top-level single-dataset module in an
+        aggregation/investigation workflow (where channels exist); reflects the
+        module's stored ``#run_on_channels`` column.
+        """
+        container = getattr(self, "run_on_channels_container", None)
+        if container is None:
+            return
+        params = self._editing_single_module_params()
+        is_agg = self.workflow_type.currentIndex() in (1, 2)
+        if params is None or not is_agg:
+            container.setVisible(False)
+            return
+
+        current = params.get(util.RUN_ON_CHANNELS_KEY)
+        columns = self._channel_scope_columns()
+        # Keep an orphaned reference (its column was later removed) visible.
+        if current and current not in columns:
+            columns = columns + [current]
+
+        self.run_on_channels_combo.blockSignals(True)
+        self.run_on_channels_combo.clear()
+        self.run_on_channels_combo.addItems(columns)
+        if current:
+            self.run_on_channels_combo.setCurrentText(current)
+        self.run_on_channels_combo.blockSignals(False)
+
+        self.run_on_channels_checkbox.blockSignals(True)
+        self.run_on_channels_checkbox.setChecked(bool(current))
+        self.run_on_channels_checkbox.blockSignals(False)
+        self.run_on_channels_combo.setEnabled(bool(current))
+        container.setVisible(True)
+
+    def _on_run_on_channels_toggled(self, checked):
+        """Enable/disable the per-channel restriction for the edited module."""
+        params = self._editing_single_module_params()
+        if params is None:
+            return
+        if checked:
+            col = self.run_on_channels_combo.currentText().strip()
+            if not col:
+                # Auto-create a per-channel boolean column named after the
+                # module (ticked per channel in 'Per-Channel Params…').
+                module_name = self.single_workflow_modules[
+                    self.editing_workflow_index
+                ][0]
+                col = self._unique_tile_param_name(f"run_{module_name}")
+                self.register_tile_param(col, scope="channel", default=False)
+            params[util.RUN_ON_CHANNELS_KEY] = col
+            self._log_workflow_config_event(
+                "modules.run_on_channels_set",
+                index=self.editing_workflow_index,
+                column=col,
+            )
+        else:
+            params.pop(util.RUN_ON_CHANNELS_KEY, None)
+            self._log_workflow_config_event(
+                "modules.run_on_channels_cleared",
+                index=self.editing_workflow_index,
+            )
+        self._sync_run_on_channels_control()
+
+    def _on_run_on_channels_column_changed(self, _idx):
+        """Point the edited module's restriction at the chosen column."""
+        if not self.run_on_channels_checkbox.isChecked():
+            return
+        params = self._editing_single_module_params()
+        if params is None:
+            return
+        col = self.run_on_channels_combo.currentText().strip()
+        if col:
+            params[util.RUN_ON_CHANNELS_KEY] = col
+
+    def _on_per_branch_toggled(self, param_name, checked):
+        """Convert a parameter to/from a per-branch ("$branch", [...]) value."""
+        if self.editing_branch_context is None:
+            return
+        widget_info = self.parameter_widgets.get(param_name)
+        if widget_info is None:
+            return
+        n = self.editing_branch_context["n_branches"]
+        if checked:
+            # Seed every branch with the current scalar value.
+            value = self._get_widget_value(
+                widget_info.widget, widget_info.original_type, widget_info
+            )
+            self._branch_override_params[param_name] = [value] * max(n, 1)
+            self._highlight_override_row(widget_info, True)
+        else:
+            self._branch_override_params.pop(param_name, None)
+            self._highlight_override_row(widget_info, False)
+        # Persist the shared<->branch-specific change to the sub-module.
+        self._update_editing_workflow_item()
 
     def _populate_stored_parameters(self, param_values):
         """Populate parameter widgets with stored values from a workflow module.
@@ -13322,14 +15107,58 @@ class Window(QtWidgets.QMainWindow):
             if param_name in param_values:
                 value_data = param_values[param_name]
 
+                # Per-branch override ("$branch", [...]) shown in a normal
+                # widget for the selected branch id, highlighted. Only when a
+                # branch sub-module is being edited (branch context active).
+                if self.editing_branch_context is not None and (
+                    self._is_branch_override(value_data)
+                ):
+                    per_branch = list(value_data[1])
+                    self._branch_override_params[param_name] = per_branch
+                    bid = self.editing_branch_context["branch_id"]
+                    if bid < len(per_branch):
+                        per_value = per_branch[bid]
+                    else:
+                        per_value = per_branch[-1] if per_branch else None
+                    # a branch-specific value is an override, never a default
+                    self._apply_param_default_state(
+                        widget_info, False, persist=False
+                    )
+                    self._set_widget_value(
+                        widget_info.widget,
+                        per_value,
+                        widget_info.original_type,
+                        widget_info,
+                    )
+                    self._highlight_override_row(widget_info, True)
+                    continue
+
                 # Check if value is a command tuple (starts with $ or $$)
                 if self._is_command_value(value_data):
-                    # This is a command - convert widget to textbox
+                    # a command is an override; un-grey before converting
+                    self._apply_param_default_state(
+                        widget_info, False, persist=False
+                    )
                     self._convert_widget_to_textbox(
                         param_name, str(tuple(value_data))
                     )
                     continue
 
+                # A stored value equal to the spec default is treated as
+                # "use default" (greyed, omitted on re-save); a different
+                # value is an explicit override.
+                if getattr(widget_info, "has_default", False) and (
+                    value_data == widget_info.default_value
+                ):
+                    self._apply_param_default_state(
+                        widget_info, True, persist=False
+                    )
+                    self._highlight_override_row(widget_info, False)
+                    continue
+
+                self._apply_param_default_state(
+                    widget_info, False, persist=False
+                )
                 # Set value in widget
                 self._set_widget_value(
                     widget_info.widget,
@@ -13337,6 +15166,17 @@ class Window(QtWidgets.QMainWindow):
                     widget_info.original_type,
                     widget_info,
                 )
+                self._highlight_override_row(widget_info, False)
+            elif getattr(widget_info, "has_default", False):
+                # not in the workflow -> use the code default (greyed)
+                self._apply_param_default_state(
+                    widget_info, True, persist=False
+                )
+
+        # Show/refresh the per-branch checkboxes for the current context.
+        self._sync_per_branch_controls()
+        # Show/refresh the per-channel "run only on channels" control.
+        self._sync_run_on_channels_control()
 
     def _on_workflow_tab_changed(self, tab_index):
         """Handle workflow tab change - display selected module if any."""
@@ -13348,18 +15188,21 @@ class Window(QtWidgets.QMainWindow):
         self._refresh_module_palette()
 
         if tab_index == 0:  # Single Dataset Workflow
-            current_row = self.single_workflow_list.currentRow()
+            current_row = self._selected_module_index(
+                self.single_workflow_list
+            )
             if current_row >= 0 and current_row < len(
                 self.single_workflow_modules
             ):
                 # Update editing state to new tab/row
                 self.editing_workflow_tab = tab_index
                 self.editing_workflow_index = current_row
+                self.editing_workflow_subnode = None
 
                 module_name, param_values = self.single_workflow_modules[
                     current_row
                 ]
-                index = self.module_combobox.findText(module_name)
+                index = self._module_palette_index(module_name)
                 if index >= 0:
                     # Block signals to prevent on_module_changed from firing
                     self.module_combobox.blockSignals(True)
@@ -13374,18 +15217,21 @@ class Window(QtWidgets.QMainWindow):
                         # Always unblock signals, even if exception occurs
                         self.module_combobox.blockSignals(False)
         elif tab_index == 1:  # Aggregation Workflow
-            current_row = self.aggregation_workflow_list.currentRow()
+            current_row = self._selected_module_index(
+                self.aggregation_workflow_list
+            )
             if current_row >= 0 and current_row < len(
                 self.aggregation_workflow_modules
             ):
                 # Update editing state to new tab/row
                 self.editing_workflow_tab = tab_index
                 self.editing_workflow_index = current_row
+                self.editing_workflow_subnode = None
 
                 module_name, param_values = self.aggregation_workflow_modules[
                     current_row
                 ]
-                index = self.module_combobox.findText(module_name)
+                index = self._module_palette_index(module_name)
                 if index >= 0:
                     # Block signals to prevent on_module_changed from firing
                     self.module_combobox.blockSignals(True)
@@ -13399,6 +15245,9 @@ class Window(QtWidgets.QMainWindow):
                     finally:
                         # Always unblock signals, even if exception occurs
                         self.module_combobox.blockSignals(False)
+
+        # The active tab / selected module changed; refresh extra controls.
+        self._sync_run_on_channels_control()
 
     def _on_workflow_type_changed(self, type_index):
         """Handle workflow type change - enable/disable workflow tabs accordingly.
@@ -13471,6 +15320,214 @@ class Window(QtWidgets.QMainWindow):
             self.workflow_tabs.setTabEnabled(1, True)  # Aggregation: enabled
             self.workflow_tabs.setTabEnabled(2, True)  # Investigation: enabled
 
+        self._refresh_stepwise_targets()
+        # The channel-restriction control is only meaningful for
+        # aggregation/investigation workflows; refresh its visibility.
+        self._sync_run_on_channels_control()
+
+    def _on_stepwise_toggled(self, checked):
+        """Enable/disable stepwise mode.
+
+        Stepping is a sequence of resumed runs, so "Continue previous run"
+        is forced on (and locked) while stepwise mode is active; its
+        previous state is restored when stepping is switched off.
+        """
+        self.stepwise_target.setEnabled(checked)
+        if checked:
+            self._continue_previous_before_stepwise = (
+                self.continue_previous.isChecked()
+            )
+            self.continue_previous.setChecked(True)
+            self.continue_previous.setEnabled(False)
+        else:
+            self.continue_previous.setEnabled(True)
+            self.continue_previous.setChecked(
+                getattr(self, "_continue_previous_before_stepwise", False)
+            )
+
+    def _refresh_stepwise_targets(self):
+        """Rebuild the stepwise target combo from the current workflows.
+
+        Entries carry ``(phase, index)`` as item data -- phase ``"single"``
+        or ``"aggregation"``, matching the runners' ``stop_after``
+        convention. For Investigation workflows (stepwise not supported)
+        the controls are disabled.
+        """
+        combo = getattr(self, "stepwise_target", None)
+        if combo is None:
+            return  # widgets not built yet (early _on_workflow_type_changed)
+        # Identify the previous target by its label (phase + index + module
+        # name), not just (phase, index): inserting/removing/reordering
+        # modules keeps the index but changes which module it names, and we
+        # must not silently re-aim the boundary at a different module.
+        previous = combo.currentData()
+        previous_label = combo.currentText()
+        was_enabled = self.stepwise_enable.isChecked()
+        combo.blockSignals(True)
+        combo.clear()
+        type_index = self.workflow_type.currentIndex()
+        if type_index == 0:
+            for i, (name, _) in enumerate(self.single_workflow_modules):
+                combo.addItem(f"{i:02d}: {name}", ("single", i))
+        elif type_index == 1:
+            for i, (name, _) in enumerate(self.single_workflow_modules):
+                combo.addItem(f"single {i:02d}: {name}", ("single", i))
+            for i, (name, _) in enumerate(self.aggregation_workflow_modules):
+                combo.addItem(
+                    f"aggregation {i:02d}: {name}", ("aggregation", i)
+                )
+        # restore the previous target only if the same module is still at the
+        # same (phase, index) -- matched on both the data and the label
+        restored = False
+        if previous is not None:
+            for row in range(combo.count()):
+                if (
+                    combo.itemData(row) == previous
+                    and combo.itemText(row) == previous_label
+                ):
+                    combo.setCurrentIndex(row)
+                    restored = True
+                    break
+        combo.blockSignals(False)
+        supported = type_index in (0, 1) and combo.count() > 0
+        self.stepwise_enable.setEnabled(supported)
+        if type_index == 2:
+            self.stepwise_enable.setToolTip(
+                "Stepwise runs are not supported for Investigation workflows."
+            )
+        # Drop the stepwise selection rather than stop after the wrong module:
+        # the previously chosen boundary no longer maps to the same module
+        # (edited/removed/reordered), or the workflow type no longer supports
+        # stepping.
+        if self.stepwise_enable.isChecked() and (
+            not supported
+            or (was_enabled and previous is not None and not restored)
+        ):
+            self.stepwise_enable.setChecked(False)
+            if supported:
+                logger.info(
+                    "Stepwise target module no longer exists after the "
+                    "workflow edit; cleared the stepwise boundary -- re-select "
+                    "a module to run up to."
+                )
+
+    def _stepwise_stop_after(self):
+        """The configured stepwise boundary, or None when not stepping.
+
+        Returns
+        -------
+        tuple or None
+            ``(phase, index)`` with phase ``"single"`` or ``"aggregation"``.
+        """
+        if not getattr(self, "stepwise_enable", None):
+            return None
+        if not self.stepwise_enable.isChecked():
+            return None
+        return self.stepwise_target.currentData()
+
+    def _set_stepwise_target(self, phase, index):
+        """Point the stepwise controls at ``(phase, index)`` and enable them."""
+        self.stepwise_enable.setChecked(True)
+        combo = self.stepwise_target
+        for row in range(combo.count()):
+            if combo.itemData(row) == (phase, index):
+                combo.setCurrentIndex(row)
+                return
+
+    def _show_workflow_context_menu(self, list_widget, phase, pos):
+        """Context menu on a workflow module: duplicate it, or run stepwise."""
+        item = list_widget.itemAt(pos)
+        if item is None:
+            return
+        node = item.data(self._WF_NODE_ROLE)
+        if not node or node.get("kind") != "module":
+            return  # branch sub-modules are not duplicable / stepwise targets
+        menu = QtWidgets.QMenu(list_widget)
+        # Duplicate is always available for a top-level module, so a workflow
+        # can hold the same module twice in a row without having to add it
+        # elsewhere and move it.
+        act_duplicate = menu.addAction("Duplicate module")
+        act_local = act_cluster = None
+        if self.stepwise_enable.isEnabled():
+            menu.addSeparator()
+            act_local = menu.addAction("Run up to this module locally")
+            act_cluster = menu.addAction("Run up to this module on cluster")
+            menu.addSeparator()
+            menu.addAction("Set as stepwise run target")
+        action = menu.exec(list_widget.mapToGlobal(pos))
+        if action is None:
+            return
+        if action == act_duplicate:
+            self._duplicate_module(list_widget, phase, node["top"])
+            return
+        # every remaining action points the stepwise controls at this module;
+        # the run actions additionally launch ("set as target" only sets it)
+        self._set_stepwise_target(phase, node["top"])
+        if action == act_local:
+            self.start_locally()
+        elif action == act_cluster:
+            self.start_slurm()
+
+    def _duplicate_module(self, list_widget, phase, top):
+        """Insert a copy of the top-level module at ``top`` right after it.
+
+        The copy carries the same parameters (deep-copied so the two entries
+        are independent) and becomes the new selection, loaded into the editor
+        in "Save module" mode. Mirrors :meth:`add_module`'s insert/renumber
+        bookkeeping.
+        """
+        import copy
+
+        if phase == "single":
+            modules = self.single_workflow_modules
+            scope = wfref.SINGLE
+        elif phase == "aggregation":
+            modules = self.aggregation_workflow_modules
+            scope = wfref.AGGREGATION
+        else:
+            return
+        if not (0 <= top < len(modules)):
+            return
+
+        # Flush any unsaved editor edits first so the copy is faithful.
+        self._update_editing_workflow_item()
+
+        module_name, param_values = modules[top]
+        insert_idx = top + 1
+        old_len = len(modules)
+        modules.insert(insert_idx, (module_name, copy.deepcopy(param_values)))
+
+        # Inserting renumbers later modules, so shift any back-references that
+        # point at them (as add_module does).
+        ref_changes = self._remap_references_after_change(
+            scope, wfref.insertion_index_map(insert_idx, old_len)
+        )
+        if ref_changes:
+            self._populate_stored_parameters(modules[insert_idx][1])
+
+        # Clear the editing pointer before rebuilding: the insert shifted later
+        # indices, so a stale pointer would make the selection handler's
+        # pre-load flush write the editor back to the wrong module. With it
+        # cleared the flush is a no-op and the handler re-derives the state.
+        self.editing_workflow_index = -1
+        self.editing_workflow_tab = -1
+        self.editing_workflow_subnode = None
+
+        # Rebuild the list and select the copy; letting the selection signal
+        # fire loads it into the Current Module editor (in "Save module" mode).
+        self._refresh_workflow_list(list_widget, modules)
+        list_widget.setCurrentRow(
+            self._module_item_row(list_widget, insert_idx)
+        )
+
+        self._log_workflow_config_event(
+            "modules.duplicate",
+            tab=phase,
+            index=insert_idx,
+            module=module_name,
+        )
+        self._refresh_module_palette()
+
     # def on_cluster_use_module_state_change(self, state):
     #     if not self.cluster_use_module.isChecked():
     #         QtWidgets.QMessageBox.warning(
@@ -13478,39 +15535,109 @@ class Window(QtWidgets.QMainWindow):
     #             "Are you very sure?")
 
     def remove_selected(self):
-        """Remove the selected module from the workflow."""
+        """Remove the selected module (or branch sub-module) from the workflow."""
         current_tab_index = self.workflow_tabs.currentIndex()
+        if current_tab_index == 0:
+            list_widget = self.single_workflow_list
+            modules = self.single_workflow_modules
+            tabname = "single"
+        elif current_tab_index == 1:
+            list_widget = self.aggregation_workflow_list
+            modules = self.aggregation_workflow_modules
+            tabname = "aggregation"
+        else:
+            return
 
-        if current_tab_index == 0:  # Single Dataset Workflow
-            current_row = self.single_workflow_list.currentRow()
-            if current_row >= 0:
-                removed = self.single_workflow_modules[current_row][0]
-                self._remove_module(
-                    self.single_workflow_list,
-                    self.single_workflow_modules,
-                    current_row,
-                )
-                self._log_workflow_config_event(
-                    "modules.remove",
-                    tab="single",
-                    index=current_row,
-                    module=removed,
-                )
-        elif current_tab_index == 1:  # Aggregation Workflow
-            current_row = self.aggregation_workflow_list.currentRow()
-            if current_row >= 0:
-                removed = self.aggregation_workflow_modules[current_row][0]
-                self._remove_module(
-                    self.aggregation_workflow_list,
-                    self.aggregation_workflow_modules,
-                    current_row,
-                )
-                self._log_workflow_config_event(
-                    "modules.remove",
-                    tab="aggregation",
-                    index=current_row,
-                    module=removed,
-                )
+        node = self._selected_node(list_widget)
+        # A branch "+ add ..." placeholder is not a real module.
+        if node is not None and node.get("kind") == "sub_add":
+            return
+        # Remove a branch sub-module from its section.
+        if node is not None and node.get("kind") == "sub":
+            self._remove_from_branch(list_widget, modules, node, tabname)
+            return
+
+        top = self._selected_module_index(list_widget)
+        if 0 <= top < len(modules):
+            removed = modules[top][0]
+            self._remove_module(list_widget, modules, top)
+            self._log_workflow_config_event(
+                "modules.remove", tab=tabname, index=top, module=removed
+            )
+
+    def _add_into_branch(
+        self, list_widget, modules, node, module_name, param_values, tabname
+    ):
+        """Insert a new module into a branch's section after the selected sub.
+
+        ``node`` may be a ``"sub_add"`` placeholder (``sub == -1``), in which
+        case the module becomes the section's first sub-module.
+        """
+        top = node["top"]
+        section = node["section"]
+        key = "branch_modules" if section == "branch" else "join_modules"
+        branch_params = modules[top][1]
+        if not isinstance(branch_params, dict):
+            return
+        submods = branch_params.setdefault(key, [])
+        at = node["sub"] + 1
+        submods.insert(at, (module_name, param_values))
+        # No top-level index change -> no reference remap (branch-local
+        # references are not auto-remapped).
+        self.editing_workflow_index = -1
+        self.editing_workflow_tab = -1
+        self.editing_workflow_subnode = None
+        self._clear_branch_context()
+        self._refresh_workflow_list(list_widget, modules)
+        row = self._locate_row(list_widget, ("sub", top, section, at))
+        if row >= 0:
+            list_widget.setCurrentRow(row)
+        self._refresh_module_palette()
+        self._log_workflow_config_event(
+            "modules.branch_sub_add",
+            tab=tabname,
+            index=top,
+            section=section,
+            sub=at,
+            module=module_name,
+            params=param_values,
+        )
+
+    def _remove_from_branch(self, list_widget, modules, node, tabname):
+        """Remove a branch sub-module from its section."""
+        top = node["top"]
+        section = node["section"]
+        j = node["sub"]
+        key = "branch_modules" if section == "branch" else "join_modules"
+        branch_params = modules[top][1]
+        submods = branch_params.get(key)
+        if not (isinstance(submods, list) and 0 <= j < len(submods)):
+            return
+        entry = submods[j]
+        removed = (
+            entry[0]
+            if isinstance(entry, (tuple, list)) and entry
+            else str(entry)
+        )
+        del submods[j]
+        self.editing_workflow_index = -1
+        self.editing_workflow_tab = -1
+        self.editing_workflow_subnode = None
+        self._clear_branch_context()
+        self._refresh_workflow_list(list_widget, modules)
+        # Reselect the branch header so the editor lands somewhere sensible.
+        row = self._module_item_row(list_widget, top)
+        if row >= 0:
+            list_widget.setCurrentRow(row)
+        self._refresh_module_palette()
+        self._log_workflow_config_event(
+            "modules.branch_sub_remove",
+            tab=tabname,
+            index=top,
+            section=section,
+            sub=j,
+            module=removed,
+        )
 
     def _reorder_module(
         self, list_widget, modules, tab_index, from_row, to_row
@@ -13541,16 +15668,18 @@ class Window(QtWidgets.QMainWindow):
             scope, {from_row: to_row, to_row: from_row}
         )
 
-        # Refresh the displayed numbering/labels.
+        # Refresh the displayed numbering/labels (indenting branch subs).
         self._renumber_workflow_items(list_widget, modules)
 
         # The editor widgets still show the moved module; point the editing
-        # state at its new row and move the selection without triggering a
-        # stale save/reload through currentRowChanged.
+        # state at its new index and move the selection to its row without
+        # triggering a stale save/reload through currentRowChanged.
         self.editing_workflow_index = to_row
         self.editing_workflow_tab = tab_index
+        self.editing_workflow_subnode = None
+        self._clear_branch_context()
         list_widget.blockSignals(True)
-        list_widget.setCurrentRow(to_row)
+        list_widget.setCurrentRow(self._module_item_row(list_widget, to_row))
         list_widget.blockSignals(False)
         # If the moved module's own references were renumbered, refresh the
         # editor so a later flush cannot write back the stale locators.
@@ -13559,26 +15688,24 @@ class Window(QtWidgets.QMainWindow):
         # Selection was moved with signals blocked; refresh palette explicitly.
         self._refresh_module_palette()
 
-    def _remove_module(self, list_widget, modules, row):
-        """Remove the module at row, keeping remaining parameters intact.
+    def _remove_module(self, list_widget, modules, index):
+        """Remove the top-level module at ``index``, keeping others intact.
 
-        Clearing the editing state before touching the widget prevents the
-        selection-changed handler (fired by takeItem/setCurrentRow) from
-        flushing the editor widgets onto a now-stale index. The list-widget
-        signal is blocked during the mutation, then a clean selection is
-        restored so the editor reloads the correct module.
+        ``index`` is a module index (not a display row). Clearing the editing
+        state before the rebuild prevents the selection-changed handler from
+        flushing the editor widgets onto a now-stale index. The list is rebuilt
+        (indenting branch subs), then a clean selection is restored so the
+        editor reloads the correct module.
         """
         # We are deleting the item that may currently be in the editor; drop
         # the editing state so no stale save happens during the mutation.
         self.editing_workflow_index = -1
         self.editing_workflow_tab = -1
+        self.editing_workflow_subnode = None
 
         old_len = len(modules)
-        list_widget.blockSignals(True)
-        list_widget.takeItem(row)
-        list_widget.blockSignals(False)
-        del modules[row]
-        self._renumber_workflow_items(list_widget, modules)
+        del modules[index]
+        self._refresh_workflow_list(list_widget, modules)
 
         # Removing renumbers the following modules; shift references to them.
         # References to the removed module itself are left dangling on purpose
@@ -13589,92 +15716,183 @@ class Window(QtWidgets.QMainWindow):
             else wfref.AGGREGATION
         )
         self._remap_references_after_change(
-            scope, wfref.deletion_index_map(row, old_len)
+            scope, wfref.deletion_index_map(index, old_len)
         )
 
         # Restore a valid selection (and reload the editor) if any modules
-        # remain, clamping to the last row when the tail item was removed.
+        # remain, clamping to the last module when the tail was removed.
         if modules:
-            new_row = min(row, len(modules) - 1)
-            list_widget.setCurrentRow(new_row)
+            new_index = min(index, len(modules) - 1)
+            list_widget.setCurrentRow(
+                self._module_item_row(list_widget, new_index)
+            )
         # Cover the now-empty case (no selection event fires to refresh).
         self._refresh_module_palette()
 
     def move_up(self):
-        """Move the selected module up in the workflow order."""
-        current_tab_index = self.workflow_tabs.currentIndex()
-
-        if current_tab_index == 0:  # Single Dataset Workflow
-            current_row = self.single_workflow_list.currentRow()
-            if current_row > 0:  # Can't move first item up
-                self._reorder_module(
-                    self.single_workflow_list,
-                    self.single_workflow_modules,
-                    current_tab_index,
-                    current_row,
-                    current_row - 1,
-                )
-                self._log_workflow_config_event(
-                    "modules.move_up",
-                    tab="single",
-                    from_index=current_row,
-                    to_index=current_row - 1,
-                )
-        elif current_tab_index == 1:  # Aggregation Workflow
-            current_row = self.aggregation_workflow_list.currentRow()
-            if current_row > 0:  # Can't move first item up
-                self._reorder_module(
-                    self.aggregation_workflow_list,
-                    self.aggregation_workflow_modules,
-                    current_tab_index,
-                    current_row,
-                    current_row - 1,
-                )
-                self._log_workflow_config_event(
-                    "modules.move_up",
-                    tab="aggregation",
-                    from_index=current_row,
-                    to_index=current_row - 1,
-                )
+        """Move the selected module (or branch sub-module) up."""
+        self._move_selected(-1)
 
     def move_down(self):
-        """Move the selected module down in the workflow order."""
-        current_tab_index = self.workflow_tabs.currentIndex()
+        """Move the selected module (or branch sub-module) down."""
+        self._move_selected(1)
 
-        if current_tab_index == 0:  # Single Dataset Workflow
-            current_row = self.single_workflow_list.currentRow()
-            max_row = len(self.single_workflow_modules) - 1
-            if 0 <= current_row < max_row:  # Can't move last item down
-                self._reorder_module(
-                    self.single_workflow_list,
-                    self.single_workflow_modules,
-                    current_tab_index,
-                    current_row,
-                    current_row + 1,
-                )
-                self._log_workflow_config_event(
-                    "modules.move_down",
-                    tab="single",
-                    from_index=current_row,
-                    to_index=current_row + 1,
-                )
-        elif current_tab_index == 1:  # Aggregation Workflow
-            current_row = self.aggregation_workflow_list.currentRow()
-            max_row = len(self.aggregation_workflow_modules) - 1
-            if 0 <= current_row < max_row:  # Can't move last item down
-                self._reorder_module(
-                    self.aggregation_workflow_list,
-                    self.aggregation_workflow_modules,
-                    current_tab_index,
-                    current_row,
-                    current_row + 1,
-                )
-                self._log_workflow_config_event(
-                    "modules.move_down",
-                    tab="aggregation",
-                    from_index=current_row,
-                    to_index=current_row + 1,
-                )
+    def _move_selected(self, direction):
+        """Move the current selection up (-1) or down (+1).
+
+        Branch-aware: a top-level module swaps with its neighbour, or moves
+        *into* an adjacent branch as a sub-module. A branch sub-module reorders
+        within its section, or (at the section edge) moves *out* to a top-level
+        module next to the branch. Top-level index changes remap
+        ``$get_prior_result`` back-references; branch-local references are not
+        remapped (the workflow consistency check flags any that break).
+        """
+        tab = self.workflow_tabs.currentIndex()
+        if tab == 0:
+            list_widget = self.single_workflow_list
+            modules = self.single_workflow_modules
+            tabname = "single"
+        elif tab == 1:
+            list_widget = self.aggregation_workflow_list
+            modules = self.aggregation_workflow_modules
+            tabname = "aggregation"
+        else:
+            return
+
+        node = self._selected_node(list_widget)
+        if node is None:
+            return
+        # A branch "+ add ..." placeholder is not a real module.
+        if node.get("kind") == "sub_add":
+            return
+
+        # Flush pending edits before restructuring the data model.
+        self._update_editing_workflow_item()
+        old_len = len(modules)
+        if node["kind"] == "module":
+            result = self._move_top_module(
+                modules, node["top"], direction, old_len
+            )
+        else:
+            result = self._move_branch_sub(modules, node, direction, old_len)
+        if result is None:
+            return
+        selector, index_map = result
+
+        if index_map:
+            scope = wfref.SINGLE if tab == 0 else wfref.AGGREGATION
+            self._remap_references_after_change(scope, index_map)
+
+        # Clear editing state so the reselect reloads the editor cleanly.
+        self.editing_workflow_index = -1
+        self.editing_workflow_tab = -1
+        self.editing_workflow_subnode = None
+        self._clear_branch_context()
+
+        self._refresh_workflow_list(list_widget, modules)
+        row = self._locate_row(list_widget, selector)
+        if row >= 0:
+            list_widget.setCurrentRow(row)  # fires handler -> reload editor
+        self._refresh_module_palette()
+        self._log_workflow_config_event(
+            "modules.move",
+            tab=tabname,
+            direction=direction,
+            selector=list(selector),
+        )
+
+    def _move_top_module(self, modules, top, direction, old_len):
+        """Move a top-level module; may absorb it into an adjacent branch.
+
+        Returns ``(selector, index_map)`` or None if the move is impossible.
+        """
+        target = top + direction
+        if not (0 <= target < len(modules)):
+            return None
+        neighbour = modules[target]
+        if neighbour[0] == "branch" and isinstance(neighbour[1], dict):
+            # Move this module INTO the adjacent branch.
+            bmods = neighbour[1].setdefault("branch_modules", [])
+            jmods = neighbour[1].setdefault("join_modules", [])
+            entry = modules[top]
+            del modules[top]
+            index_map = wfref.deletion_index_map(top, old_len)
+            if direction > 0:
+                # Was above the branch; becomes its first sub-module. After
+                # deleting `top`, the branch now sits at index `top`.
+                bmods.insert(0, entry)
+                return ("sub", top, "branch", 0), index_map
+            # Was below the branch (target = top - 1); enters at the branch's
+            # last position -- the last join module, or the last branch module
+            # if there is no join section.
+            if jmods:
+                jmods.append(entry)
+                return ("sub", target, "join", len(jmods) - 1), index_map
+            bmods.append(entry)
+            return ("sub", target, "branch", len(bmods) - 1), index_map
+        # Plain neighbour: swap.
+        modules[top], modules[target] = modules[target], modules[top]
+        return ("module", target), {top: target, target: top}
+
+    def _move_branch_sub(self, modules, node, direction, old_len):
+        """Move a branch sub-module.
+
+        The branch's rows form a continuous sequence -- ``branch_modules``
+        then ``join_modules`` -- bordered by the top-level modules before and
+        after the branch. Moving crosses those boundaries: a sub-module can
+        reorder within its section, cross between the branch and join sections,
+        or move out to a top-level module next to the branch.
+
+        Returns ``(selector, index_map)`` or None.
+        """
+        top = node["top"]
+        section = node["section"]
+        j = node["sub"]
+        branch_params = modules[top][1]
+        bmods = branch_params.setdefault("branch_modules", [])
+        jmods = branch_params.setdefault("join_modules", [])
+        submods = bmods if section == "branch" else jmods
+        if not (0 <= j < len(submods)):
+            return None
+
+        # Reorder within the same section.
+        new_j = j + direction
+        if 0 <= new_j < len(submods):
+            submods[j], submods[new_j] = submods[new_j], submods[j]
+            return ("sub", top, section, new_j), None
+
+        entry = submods[j]
+        if section == "branch":
+            if direction < 0:
+                # First branch sub, up -> top-level before the branch.
+                del submods[j]
+                modules.insert(top, entry)
+                return ("module", top), wfref.insertion_index_map(top, old_len)
+            # Last branch sub, down.
+            del submods[j]
+            if jmods:
+                # Cross into the join section as its first module.
+                jmods.insert(0, entry)
+                return ("sub", top, "join", 0), None
+            # No join section -> top-level after the branch.
+            modules.insert(top + 1, entry)
+            return (
+                ("module", top + 1),
+                wfref.insertion_index_map(top + 1, old_len),
+            )
+        # Join section.
+        if direction < 0:
+            # First join sub, up -> into the branch section as its last module.
+            del submods[j]
+            bmods.append(entry)
+            return ("sub", top, "branch", len(bmods) - 1), None
+        # Last join sub, down -> top-level after the branch.
+        del submods[j]
+        modules.insert(top + 1, entry)
+        return (
+            ("module", top + 1),
+            wfref.insertion_index_map(top + 1, old_len),
+        )
 
     def create_python_script(
         self, host_cluster, login_node, filename="start_workflow.py"
@@ -13699,6 +15917,23 @@ class Window(QtWidgets.QMainWindow):
             if workflow_type_index < len(workflow_type_names)
             else "Unknown"
         )
+
+        # Investigation workflows cannot currently be generated from the GUI:
+        # the emitted driver is out of sync with InvestigationWorkflowCoordinator
+        # (constructor signature and run entry points differ), so a generated
+        # script would fail at import/run. Refuse here with a clear message
+        # rather than writing a broken script.
+        if workflow_type_index == 2:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Investigation workflow not supported",
+                "Generating a runnable script for Investigation workflows "
+                "from the GUI is not currently supported: the generator is "
+                "out of sync with InvestigationWorkflowCoordinator's API.\n\n"
+                "Use a Single or Aggregation workflow, or drive "
+                "InvestigationWorkflowCoordinator from a hand-written script.",
+            )
+            return None
 
         # Single Workflow input-files mode (combo index): 0 = explicit
         # file list, 1 = auto-detect raw files in the results folder at
@@ -14028,8 +16263,14 @@ class Window(QtWidgets.QMainWindow):
 
         # Add coordinator creation based on workflow type
         always_save = self.always_save.isChecked()
+        continue_previous = self.continue_previous.isChecked()
         document_confluence = self.document_confluence_checkbox.isChecked()
         document_html = self.document_html_checkbox.isChecked()
+        # stepwise development boundary; stepping is a sequence of resumed
+        # runs, so it implies continue_previous (the UI enforces this too)
+        stop_after = self._stepwise_stop_after()
+        if stop_after is not None:
+            continue_previous = True
         if workflow_type_index == 0:  # Single Workflow
             # script_lines.extend([
             #     "    # Create single workflow runner",
@@ -14068,9 +16309,17 @@ class Window(QtWidgets.QMainWindow):
                     "    )",
                     "",
                     "    # Run workflow",
-                    "    coordinator.run_analysis(workflow_modules_sgl)",
+                    "    coordinator.run_analysis(",
+                    "        workflow_modules_sgl,",
+                    f"        continue_previous_runners={continue_previous},",
                 ]
             )
+            if stop_after is not None:
+                script_lines.append(
+                    f"        stop_after={stop_after[1]},"
+                    "  # stepwise run boundary"
+                )
+            script_lines.append("    )")
         elif workflow_type_index == 1:  # Aggregation Workflow
             script_lines.extend(
                 [
@@ -14087,10 +16336,24 @@ class Window(QtWidgets.QMainWindow):
                     "    )",
                     "",
                     "    # Run analysis",
-                    "    coordinator.run_analysis(workflow_modules_sgl, workflow_modules_agg)",
+                    "    coordinator.run_analysis(",
+                    "        workflow_modules_sgl,",
+                    "        workflow_modules_agg,",
+                    f"        continue_previous_runners={continue_previous},",
                 ]
             )
+            if stop_after is not None:
+                script_lines.append(
+                    f"        stop_after=({stop_after[0]!r}, "
+                    f"{stop_after[1]}),  # stepwise run boundary"
+                )
+            script_lines.append("    )")
         elif workflow_type_index == 2:  # Investigation Workflow
+            # NOTE: unreachable - create_python_script returns early for
+            # Investigation workflows (see the guard above). This emitted
+            # driver is stale vs InvestigationWorkflowCoordinator's current
+            # constructor/run API and is kept only as a starting point for a
+            # future fix; update it (and drop the guard) before relying on it.
             script_lines.extend(
                 [
                     "    # Create investigation workflow coordinator",
@@ -14195,6 +16458,258 @@ class Window(QtWidgets.QMainWindow):
             self.cluster_modules_edit.setText(new_default)
         self._cluster_modules_default = new_default
 
+    def _apptainer_config(self, host_cluster):
+        """Resolved Apptainer settings for ``host_cluster``.
+
+        Thin wrapper over :func:`slurm_submit.apptainer_config` (shared with the
+        admin console); returns ``(image_dir, module, bind_paths)``.
+        """
+        return apptainer_config(host_cluster)
+
+    def _open_admin_console(self):
+        """Open the cluster admin console (Apptainer images, queue, usage).
+
+        A separate top-level window (reused across opens), lazy-importing the
+        admin GUI so a PyQt/import problem surfaces a message rather than
+        blocking startup.
+        """
+        try:
+            from picasso_workflow.admin.qt import AdminWindow
+        except Exception as exc:  # noqa: BLE001 - surfaced to the user
+            QtWidgets.QMessageBox.critical(
+                self,
+                "Admin console",
+                f"Could not open the admin console: {exc}",
+            )
+            return
+        win = getattr(self, "_admin_window", None)
+        # A cached window whose underlying C++ object was deleted (e.g. a future
+        # DeleteOnClose) is not None but raises on access -- recreate in that
+        # case rather than crashing.
+        if win is not None:
+            try:
+                win.isVisible()
+            except RuntimeError:
+                win = None
+        if win is None:
+            win = AdminWindow(self)
+            self._admin_window = win
+        win.show()
+        win.raise_()
+        win.activateWindow()
+
+    def _open_manual_to_workflow_wizard(self):
+        """Open the wizard that reconstructs a workflow from a manual analysis.
+
+        Scans a manually-performed analysis folder, maps its saved steps back to
+        workflow modules, and (on Apply) populates the Files tree and module
+        lists here. Opened *non-modally* so the main GUI stays editable while the
+        wizard (and its review notes) remains visible. Lazy-imported so a
+        PyQt/import problem surfaces a message rather than blocking startup.
+        """
+        try:
+            from picasso_workflow.wizard_manual_to_workflow import (
+                ManualToWorkflowWizard,
+            )
+        except Exception as exc:  # noqa: BLE001 - surfaced to the user
+            QtWidgets.QMessageBox.critical(
+                self,
+                "Manual → Workflow",
+                f"Could not open the wizard: {exc}",
+            )
+            return
+        # Keep a reference so the non-modal window is not garbage-collected.
+        wizard = ManualToWorkflowWizard(self)
+        wizard.setModal(False)
+        self._manual_wizard = wizard
+        wizard.show()
+        wizard.raise_()
+        wizard.activateWindow()
+
+    def _populate_cluster_images(self, host_cluster):
+        """Set the Apptainer image field's default for the selected cluster.
+
+        Local only (no SSH): pre-selects ``picasso-workflow-<version>.sif``
+        when a reliable name can be formed, else blank -- but only when the
+        field is untouched (empty, or still the last programmatically applied
+        value), so a manual pick survives a cluster switch. Use the "List"
+        button to fill the dropdown from the shared folder over SSH. The
+        field's tooltip shows the configured ``image_dir``.
+        """
+        image_dir, _module, _binds = self._apptainer_config(host_cluster)
+        default = self._image_version_default
+        self.cluster_image_combo.setToolTip(
+            "Apptainer image to run the workflow inside. Shared folder: "
+            f"{image_dir or '(unset: configure ClusterApptainer.image_dir)'}. "
+            "Editable; click 'List' to see the .sif files actually present."
+        )
+        current = self.cluster_image_combo.currentText().strip()
+        if current == "" or current == self._cluster_image_default:
+            self.cluster_image_combo.setCurrentText(default)
+        self._cluster_image_default = default
+
+    def _maybe_autolist_cluster_images(self):
+        """Lazily populate the image dropdown the first time it is shown.
+
+        Fires once, when the Run tab's "Run on SLURM Cluster" sub-tab first
+        becomes visible, so the user doesn't have to hit "List" to see the
+        shared folder's images. The listing is an SSH round-trip, so it is
+        deferred to actual use (not startup -- that would connect on every
+        launch even for users who never submit to the cluster) and runs
+        off-thread via :meth:`_refresh_cluster_images`.
+
+        The one-shot flag is consumed only once a listing actually launches
+        (in :meth:`_refresh_cluster_images`), so a view that can't attempt
+        yet -- no ``image_dir`` configured, or the connection can't be built
+        -- retries on the next view rather than silently giving up for the
+        session.
+        """
+        if self._cluster_images_autolisted:
+            return
+        # Only when the cluster sub-tab is the one actually on screen.
+        if not self.run_tabs.isVisible() or self.run_tabs.currentIndex() != 0:
+            return
+        self._refresh_cluster_images(auto=True)
+
+    def _refresh_cluster_images(self, auto=False):
+        """List the shared folder's .sif images over SSH into the dropdown.
+
+        Runs the (blocking) SSH listing on a background thread so the GUI
+        never freezes; the dropdown is filled on the GUI thread when it
+        returns (:meth:`_on_cluster_images_listed`).
+
+        Best-effort: on any SSH/listing failure the editable field is left
+        as-is (the user can still type a name by hand). ``auto=False`` (the
+        explicit "List" button) reports failures/emptiness in a dialog;
+        ``auto=True`` (the one-shot lazy populate) stays silent so an
+        offline/misconfigured cluster can't nag on first view.
+        """
+        # Re-entry guard: one listing at a time (the lazy populate and a
+        # button click can race).
+        if getattr(self, "_cluster_image_thread", None) is not None:
+            return
+        host_cluster = str(self.cluster_host_combo.currentText())
+        image_dir, _module, _binds = self._apptainer_config(host_cluster)
+        if not image_dir:
+            if not auto:
+                QtWidgets.QMessageBox.warning(
+                    self,
+                    "No image folder configured",
+                    "ClusterApptainer.image_dir is not set in config.yaml, "
+                    "so there is no shared folder to list. Configure it, or "
+                    "type the image filename by hand.",
+                )
+            return
+        try:
+            comm = self._ensure_slurm_communicator(host_cluster)
+        except Exception as exc:  # noqa: BLE001 - surfaced to the user
+            if not auto:
+                QtWidgets.QMessageBox.warning(
+                    self,
+                    "Could not list images",
+                    f"Connecting to {host_cluster} failed:\n{exc}",
+                )
+            return
+        # List the folder (basenames, one per line) and filter to .sif
+        # client-side off-thread. Listing the directory itself -- rather than
+        # globbing `*.sif` with stderr suppressed -- means a real failure
+        # (missing dir, no read permission) surfaces as a non-zero exit with a
+        # message, instead of looking like an empty folder.
+        try:
+            worker = _ClusterImageListWorker(
+                comm, image_dir, host_cluster, auto
+            )
+            thread = QtCore.QThread(self)
+            worker.moveToThread(thread)
+            # Keep the worker alive for the thread's lifetime (PyQt may GC it
+            # before ``started`` fires otherwise).
+            thread._pw_worker = worker
+            thread.started.connect(worker.run)
+            # Connect the bound method (a QObject slot living in the GUI
+            # thread), NOT a lambda: a context-less functor connection would
+            # run in the worker thread and mutate widgets off the GUI thread.
+            # The worker echoes image_dir/host/auto back through the signal.
+            worker.finished.connect(self._on_cluster_images_listed)
+            worker.finished.connect(thread.quit)
+            worker.finished.connect(worker.deleteLater)
+            thread.finished.connect(thread.deleteLater)
+            thread.finished.connect(self._forget_cluster_image_thread)
+            self._cluster_image_thread = thread
+            if auto:
+                # Consume the one-shot now that a listing has launched, so a
+                # later failure (offline cluster) doesn't re-trigger an SSH
+                # connect on every tab view this session.
+                self._cluster_images_autolisted = True
+            # aboutToQuit->_stop_cluster_image_thread is connected once in
+            # __init__.
+            thread.start()
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug(f"Could not start the image listing: {exc}")
+
+    def _on_cluster_images_listed(
+        self, images, error, image_dir, host_cluster, auto
+    ):
+        """Fill the image dropdown from an off-thread listing (GUI thread).
+
+        ``images`` is ``None`` on failure (``error`` carries the message),
+        else the sorted list of ``.sif`` basenames.
+        """
+        if images is None:
+            if not auto:
+                QtWidgets.QMessageBox.warning(
+                    self,
+                    "Could not list images",
+                    f"Listing {image_dir} on {host_cluster} failed "
+                    f"({error}).",
+                )
+            return
+        if not images:
+            if not auto:
+                QtWidgets.QMessageBox.information(
+                    self,
+                    "No images found",
+                    f"No .sif files found in {image_dir} on {host_cluster}.",
+                )
+            return
+        current = self.cluster_image_combo.currentText().strip()
+        self.cluster_image_combo.blockSignals(True)
+        self.cluster_image_combo.clear()
+        self.cluster_image_combo.addItems(images)
+        # Keep the current pick if still offered, else the version default when
+        # present on the mount, else the first listed image.
+        if current in images:
+            chosen = current
+        elif self._image_version_default in images:
+            chosen = self._image_version_default
+        else:
+            chosen = images[0]
+        self.cluster_image_combo.setCurrentText(chosen)
+        self.cluster_image_combo.blockSignals(False)
+        # Record the programmatically applied value so a later cluster switch
+        # treats it as a default (re-applying that cluster's version default),
+        # not as a hand-typed manual pick.
+        self._cluster_image_default = chosen
+
+    def _forget_cluster_image_thread(self):
+        self._cluster_image_thread = None
+
+    def _stop_cluster_image_thread(self):
+        """Quit/join the image-listing thread on shutdown.
+
+        Destroying a live QThread aborts the process. Clears the reference
+        first (closeEvent and aboutToQuit both call this) and tolerates the
+        C++ object already being torn down after normal completion.
+        """
+        thread = getattr(self, "_cluster_image_thread", None)
+        self._cluster_image_thread = None
+        if thread is None:
+            return
+        try:
+            thread.quit()
+            thread.wait()
+        except RuntimeError:
+            pass
+
     # ------------------------------------------------------------------ #
     # Live progress monitor
     # ------------------------------------------------------------------ #
@@ -14246,6 +16761,9 @@ class Window(QtWidgets.QMainWindow):
         )
         self._monitor_busy = False
         self._local_process = None
+        # wall time of this session's local launch; used to scope progress
+        # states to the current run (None = no launch this session)
+        self._local_run_started_dt = None
 
         box = QtWidgets.QGroupBox("Live progress")
         box_layout = QtWidgets.QVBoxLayout(box)
@@ -14400,7 +16918,12 @@ class Window(QtWidgets.QMainWindow):
         if not results_folder:
             return
         job_id = self.job_id_input.text().strip()
-        if job_id:
+        proc = self._local_process
+        local_alive = proc is not None and proc.poll() is None
+        # While a local run this session is still alive, keep monitoring it:
+        # a stale cluster Job-ID left in the field must not flip the monitor
+        # back to cluster mode and hide the running local run.
+        if job_id and not local_alive:
             host_cluster = str(self.cluster_host_combo.currentText())
             if host_cluster and host_cluster in CONFIG.get(
                 "SlurmLoginNodes", {}
@@ -14414,7 +16937,18 @@ class Window(QtWidgets.QMainWindow):
                 except Exception as e:
                     logger.debug(f"monitor: could not connect cluster: {e}")
         elif os.path.isdir(results_folder):
-            # no job ID: monitor a local results folder directly
+            # no job ID: monitor a local results folder directly. If this is a
+            # different folder than the one launched this session (e.g. the
+            # user re-pointed the field and hit Refresh now), drop the
+            # launch-scoped state so the inspected folder's own runs show --
+            # otherwise launch-time scoping filters them all out and the dead
+            # previous process paints a false "failed" badge.
+            if (
+                not local_alive
+                and results_folder != self._monitor_local_folder
+            ):
+                self._local_run_started_dt = None
+                self._local_process = None
             self._monitor_local_folder = results_folder
 
     def _refresh_monitor(self):
@@ -14440,6 +16974,10 @@ class Window(QtWidgets.QMainWindow):
                 states = pwprogress.read_all_progress(
                     self._monitor_local_folder
                 )
+                # the folder accumulates progress files across runs; scope
+                # to the run launched this session (stale states from an
+                # earlier run otherwise show as e.g. "running" forever)
+                states = self._scope_states_to_local_launch(states)
             else:
                 comm = getattr(self, "slurm_communicator", None)
                 if job_id and comm is not None:
@@ -14456,12 +16994,15 @@ class Window(QtWidgets.QMainWindow):
             # The results folder accumulates one subfolder per run, so a poll
             # returns every past run's progress too. Scope to the current job
             # so a still-PENDING resubmission shows nothing rather than the
-            # previous run's (completed) progress.
-            states = self._scope_states_to_current_run(states, job_id)
+            # previous run's (completed) progress. Cluster runs only: local
+            # states carry no job id (a stale id left in the field would
+            # filter them all away); they are scoped by launch time above.
+            if not self._monitor_local_folder:
+                states = self._scope_states_to_current_run(states, job_id)
             self._update_monitor_display(slurm, states)
             self._maybe_stop_monitor(slurm, states)
         except Exception as e:
-            logger.debug(f"monitor refresh error: {e}")
+            logger.warning(f"monitor refresh error: {e}")
         finally:
             self._monitor_busy = False
 
@@ -14508,6 +17049,50 @@ class Window(QtWidgets.QMainWindow):
 
         return [s for s in states if _belongs(s)]
 
+    def _scope_states_to_local_launch(self, states):
+        """Keep only progress states written by this session's local run.
+
+        The results folder accumulates progress files across runs. States
+        whose last update predates this session's local launch belong to an
+        earlier run and are dropped. Without a launch this session (e.g.
+        inspecting a folder with 'Refresh now'), all states pass.
+
+        Parameters
+        ----------
+        states : list of dict
+            The progress states read from the folder tree.
+
+        Returns
+        -------
+        list of dict
+        """
+        from datetime import datetime, timedelta
+
+        started = getattr(self, "_local_run_started_dt", None)
+        if started is None:
+            return states
+        cutoff = started - timedelta(seconds=5)
+        kept = []
+        for s in states or []:
+            stamp = s.get("updated") or s.get("started")
+            try:
+                if datetime.fromisoformat(stamp) >= cutoff:
+                    kept.append(s)
+            except (TypeError, ValueError):
+                # unparsable timestamp: keep rather than hide
+                kept.append(s)
+        return kept
+
+    # progress-state colors for the local-run chip (palette as _SLURM_COLORS)
+    _LOCAL_STATE_COLORS = {
+        "pending": "#9e9e9e",
+        "running": "#1976d2",
+        "done": "#2e7d32",
+        "failed": "#c62828",
+        "aborted": "#f9a825",
+        "paused": "#1565c0",
+    }
+
     # dataset-state precedence for merging per-rank aggregation views
     _DATASET_STATE_RANK = {
         "pending": 0,
@@ -14516,6 +17101,7 @@ class Window(QtWidgets.QMainWindow):
         "failed": 2,
         "skipped": 3,
         "done": 3,
+        "paused": 3,
     }
 
     def _merged_aggregation_state(self, states):
@@ -14570,14 +17156,58 @@ class Window(QtWidgets.QMainWindow):
             self._stop_monitor()
             return
         if self._monitor_local_folder:
-            top = self._top_state(states)
-            if top and top.get("state") in ("done", "failed", "aborted"):
-                # local process finished (no SLURM authority to consult)
-                if (
-                    self._local_process is None
-                    or self._local_process.poll() is not None
+            proc = self._local_process
+            if proc is not None:
+                # A run we launched this session: its process exit is the
+                # authority on completion. Once it has exited, progress.json
+                # is final (written before exit), so stop polling -- even if
+                # the state is non-terminal because the process was killed or
+                # crashed (e.g. OOM) without writing a terminal state.
+                # Otherwise the monitor would poll forever after a kill.
+                if proc.poll() is not None:
+                    self._stop_monitor()
+            else:
+                # Attached to a folder we did not launch (Refresh now): no
+                # process to consult, so rely on the progress state.
+                top = self._top_state(states)
+                if top is not None and top.get("state") in (
+                    "done",
+                    "failed",
+                    "aborted",
+                    "paused",
                 ):
                     self._stop_monitor()
+
+    def _update_confluence_link(self, top, states):
+        """Show a clickable link to the run's Confluence report page.
+
+        The URL is recorded in each run's ``progress.json`` (``report_url``)
+        by the runner, so no live Confluence connection is needed. Prefers
+        the top-level (aggregation) page, falling back to the first stage
+        that recorded one. Hidden when the run is not documented to
+        Confluence.
+
+        Parameters
+        ----------
+        top : dict or None
+            The run's top-level progress state.
+        states : list of dict
+            All progress states read this refresh.
+        """
+        url = (top or {}).get("report_url")
+        if not url:
+            url = next(
+                (s.get("report_url") for s in states if s.get("report_url")),
+                None,
+            )
+        if url:
+            self.confluence_link_label.setText(
+                f'Confluence report: <a href="{url}">{url}</a>'
+            )
+            self.confluence_link_label.setVisible(True)
+        else:
+            self.confluence_link_label.clear()
+            self.confluence_link_label.setVisible(False)
 
     def _update_monitor_display(self, slurm, states):
         """Render the fused SLURM + multi-stage progress into the widgets."""
@@ -14585,6 +17215,9 @@ class Window(QtWidgets.QMainWindow):
         agg = self._merged_aggregation_state(states)
         singles = [s for s in states if s.get("kind") != "aggregation"]
         top = self._top_state(states)
+
+        # --- Confluence report link ---
+        self._update_confluence_link(top, states)
 
         # --- SLURM state chip (or local run state) ---
         if slurm and slurm.get("success"):
@@ -14606,6 +17239,14 @@ class Window(QtWidgets.QMainWindow):
                     text += "  (" + ", ".join(extra) + ")"
             elif (
                 status == "COMPLETED"
+                and top is not None
+                and top.get("state") == "paused"
+            ):
+                # intentional partial run: the stepwise boundary was reached
+                text = "Job state: COMPLETED (paused at stepwise boundary)"
+                color = "#1565c0"  # blue
+            elif (
+                status == "COMPLETED"
                 and states
                 and (self._overall_progress(agg, singles, states) < 0.999)
             ):
@@ -14624,8 +17265,29 @@ class Window(QtWidgets.QMainWindow):
                 f"background-color: {color};"
             )
         elif self._monitor_local_folder:
+            # fuse like the SLURM chip: the subprocess exit status is the
+            # authority on whether the run is alive; progress.json on where
+            # it got. A dead process with no terminal progress state means
+            # the run died outside module execution (e.g. at startup).
             run_state = (top or {}).get("state", "-")
-            self.monitor_state_label.setText(f"Local run: {run_state}")
+            proc = self._local_process
+            rc = proc.poll() if proc is not None else None
+            terminal = run_state in ("done", "failed", "aborted", "paused")
+            if proc is not None and rc is not None and not terminal:
+                if rc == 0:
+                    text = "Local run: finished"
+                    color = "#2e7d32"  # green
+                else:
+                    text = f"Local run: failed (exit {rc})"
+                    color = "#c62828"  # red
+            else:
+                text = f"Local run: {run_state}"
+                color = self._LOCAL_STATE_COLORS.get(run_state, "#616161")
+            self.monitor_state_label.setText(text)
+            self.monitor_state_label.setStyleSheet(
+                "padding: 2px 8px; border-radius: 4px; color: white; "
+                f"background-color: {color};"
+            )
         else:
             self.monitor_state_label.setText("Job state: -")
 
@@ -14657,6 +17319,173 @@ class Window(QtWidgets.QMainWindow):
             for s in self._sorted_singles(singles):
                 self.module_tree.addTopLevelItem(self._build_stage_item(s))
         self._apply_tree_expansion(prev_expansion)
+
+        # --- error details ---
+        self._update_error_details(states, slurm)
+
+    def _update_error_details(self, states, slurm=None):
+        """Fill the error-details pane with failed modules' tracebacks.
+
+        Error text comes from the progress states (recorded by the runner
+        for local and cluster runs alike). For local runs, a failed module
+        without a recorded error (runs from before the error was propagated
+        into ``progress.json``) falls back to the traceback recorded in the
+        run's ``WorkflowRunner.yaml``, and a run that died without any
+        recorded module failure (import error, config error, ...) falls
+        back to the tail of ``local_run.log``. A cluster job that SLURM
+        ended (OOM kill, timeout, cancel) leaves no Python traceback at
+        all, so the SLURM reason is shown instead.
+        """
+        texts = []
+        for s in states or []:
+            label = self._stage_label(s)
+            report_name = s.get("report_name") or ""
+            for m in s.get("modules") or []:
+                # include branch sub-modules (nested one level)
+                sub_modules = [
+                    x
+                    for g in m.get("subgroups") or []
+                    for x in g.get("modules") or []
+                ]
+                for sub in [m] + sub_modules:
+                    if sub.get("status") != "failed":
+                        continue
+                    header = (
+                        f"[{label}] module {sub.get('i')}: "
+                        f"{sub.get('name', '')}"
+                    )
+                    # isolate per module: one malformed entry (odd yaml,
+                    # unreadable share, ...) must not blank the whole pane
+                    try:
+                        err = sub.get("error")
+                        if not err and self._monitor_local_folder:
+                            err = self._local_yaml_error(
+                                report_name, sub.get("i"), sub.get("name")
+                            )
+                    except Exception as e:
+                        logger.warning(
+                            f"Could not collect error details for "
+                            f"{header}: {e}"
+                        )
+                        err = f"(error details could not be collected: {e})"
+                    if err:
+                        texts.append(f"{header}\n{err}")
+                    else:
+                        texts.append(f"{header} (no error details recorded)")
+        # a job SLURM ended (OOM kill, timeout, cancel) leaves no Python
+        # traceback anywhere -- the kill is uncatchable -- so show the
+        # SLURM reason with the module that was running
+        if (
+            not texts
+            and slurm
+            and slurm.get("success")
+            and slurm.get("status") in self._SLURM_TERMINAL
+            and slurm.get("status") != "COMPLETED"
+        ):
+            status = slurm.get("status")
+            details = slurm.get("details") or {}
+            msg = f"SLURM ended the job: {status}"
+            where = self._active_stage_module_label(states)
+            if where:
+                msg += f" during {where}"
+            extra = [
+                f"{label} {value}"
+                for label, value in (
+                    ("exit", details.get("exit_code")),
+                    ("MaxRSS", details.get("max_rss")),
+                )
+                if value
+            ]
+            if extra:
+                msg += "  (" + ", ".join(extra) + ")"
+            msg += (
+                "\nA killed job leaves no Python traceback; see the SLURM "
+                "error log in the results folder's logs/ directory."
+            )
+            if status == "OUT_OF_MEMORY":
+                msg += (
+                    "\nHint: increase 'Memory' in the cluster settings, or "
+                    "reduce the module's memory footprint."
+                )
+            texts.append(msg)
+        if not texts and self._monitor_local_folder:
+            proc = getattr(self, "_local_process", None)
+            rc = proc.poll() if proc is not None else None
+            died = rc not in (None, 0)
+            top_failed = bool(states) and (
+                (self._top_state(states) or {}).get("state") == "failed"
+            )
+            if died or top_failed:
+                note = ""
+                if rc is not None and rc < 0:
+                    note = (
+                        f"The local run was killed by signal {-rc} "
+                        "(often the operating system's out-of-memory "
+                        "killer).\n"
+                    )
+                tail = self._read_log_tail(self._monitor_local_folder)
+                if tail:
+                    texts.append(
+                        note
+                        + "The run failed without a recorded module error; "
+                        "tail of local_run.log:\n" + tail
+                    )
+                elif note:
+                    texts.append(note.rstrip())
+        text = "\n\n".join(texts)
+        # only rewrite on change, so the user's scroll position survives
+        # the 15 s refreshes
+        if text != self.error_details_display.toPlainText():
+            self.error_details_display.setPlainText(text)
+
+    def _local_yaml_error(self, report_name, module_index, module_name):
+        """A failed module's recorded error from a local WorkflowRunner.yaml.
+
+        Locates the run folder by its report name under the monitored
+        results folder (nested aggregation singles included) and returns the
+        recorded traceback (or ``type: message``), or None.
+        """
+        if module_index is None or not report_name:
+            return None
+        root = self._monitor_local_folder
+        run_dir = os.path.join(root, report_name)
+        if not os.path.isdir(run_dir):
+            run_dir = None
+            for parent, dirs, _files in os.walk(root):
+                if report_name in dirs:
+                    run_dir = os.path.join(parent, report_name)
+                    break
+        if run_dir is None:
+            return None
+        fp = os.path.join(run_dir, "WorkflowRunner.yaml")
+        try:
+            with open(fp) as f:
+                data = yaml.safe_load(f)
+            entry = data["results"][f"{module_index:02d}_{module_name}"]
+            err = entry.get("error")
+            # the structured form records a dict; modules that merely set
+            # success=False may leave a plain string (or only a message)
+            if isinstance(err, dict):
+                return err.get("traceback") or (
+                    f"{err.get('type', 'Error')}: {err.get('message', '')}"
+                )
+            if err:
+                return str(err)
+            msg = entry.get("message")
+            return str(msg) if msg else None
+        except Exception as e:
+            logger.debug(f"Could not read error details from {fp}: {e}")
+            return None
+
+    def _read_log_tail(self, folder, n_lines=40):
+        """The last ``n_lines`` of ``local_run.log`` in ``folder``, or None."""
+        log_path = os.path.join(folder, "local_run.log")
+        try:
+            with open(log_path, "r", errors="replace") as f:
+                lines = f.readlines()
+        except OSError:
+            return None
+        return "".join(lines[-n_lines:]).rstrip()
 
     # -- tree builders ------------------------------------------------------
 
@@ -14712,12 +17541,17 @@ class Window(QtWidgets.QMainWindow):
             walk(self.module_tree.topLevelItem(k))
 
     def _build_module_item(self, m):
-        """A leaf tree item for a single module."""
+        """A tree item for a module.
+
+        A plain module is a leaf; a branch module (whose state carries
+        ``subgroups``) expands into one collapsible group per branch plus a
+        join group, each with its sub-module rows.
+        """
         frac = m.get("fraction")
         pct = f"{frac * 100:.0f}" if isinstance(frac, (int, float)) else "-"
         elapsed = m.get("elapsed")
         el = f"{elapsed:.1f}s" if isinstance(elapsed, (int, float)) else "-"
-        return QtWidgets.QTreeWidgetItem(
+        item = QtWidgets.QTreeWidgetItem(
             [
                 str(m.get("i", "")),
                 str(m.get("name", "")),
@@ -14726,6 +17560,53 @@ class Window(QtWidgets.QMainWindow):
                 el,
             ]
         )
+        subgroups = m.get("subgroups")
+        if subgroups:
+            for g in subgroups:
+                item.addChild(self._build_branch_group_item(m, g))
+            item.setData(
+                0,
+                QtCore.Qt.ItemDataRole.UserRole,
+                f"branch:{m.get('i')}",
+            )
+            item.setExpanded(m.get("status") == "running")
+        return item
+
+    def _build_branch_group_item(self, m, g):
+        """A collapsible item for one branch (or the join) of a branch module."""
+        mods = g.get("modules") or []
+        if mods:
+            gfrac = sum(
+                (
+                    1.0
+                    if x.get("status") in ("done", "skipped")
+                    else (x.get("fraction") or 0.0)
+                )
+                for x in mods
+            ) / len(mods)
+        else:
+            gfrac = 0.0
+        kind = g.get("kind", "branch")
+        label = g.get("label", "")
+        disp = "[join]" if kind == "join" else f"[branch] {label}"
+        group_item = QtWidgets.QTreeWidgetItem(
+            [
+                "",
+                disp,
+                str(g.get("status", "")),
+                f"{gfrac * 100:.0f}",
+                "",
+            ]
+        )
+        for x in mods:
+            group_item.addChild(self._build_module_item(x))
+        group_item.setData(
+            0,
+            QtCore.Qt.ItemDataRole.UserRole,
+            f"branch:{m.get('i')}:{kind}:{label}",
+        )
+        group_item.setExpanded(g.get("status") == "running")
+        return group_item
 
     def _stage_label(self, state):
         """A readable label for a stage, e.g. '[single 02] cell2'."""
@@ -14782,7 +17663,9 @@ class Window(QtWidgets.QMainWindow):
         """Build the aggregation root with one child per stage."""
         datasets = agg.get("datasets") or []
         n_done = sum(
-            1 for d in datasets if d.get("state") in ("done", "skipped")
+            1
+            for d in datasets
+            if d.get("state") in ("done", "skipped", "paused")
         )
         root = QtWidgets.QTreeWidgetItem(
             [
@@ -14863,7 +17746,8 @@ class Window(QtWidgets.QMainWindow):
             st = d.get("state")
             if st in ("done", "skipped"):
                 single_sum += 1.0
-            elif st == "running" and d.get("i") in idx_map:
+            elif st in ("running", "paused") and d.get("i") in idx_map:
+                # paused (stepwise) datasets count their partial fraction
                 single_sum += pwprogress.overall_fraction(idx_map[d["i"]])
         agg_stage = next(
             (s for s in singles if pwprogress.is_aggregation_stage(s)), None
@@ -14930,6 +17814,12 @@ class Window(QtWidgets.QMainWindow):
         python_script_path = self.create_python_script(
             host_cluster, login_node, scriptname
         )
+        if python_script_path is None:
+            # Script generation was refused (validation error, or an
+            # Investigation workflow which the GUI cannot generate yet);
+            # create_python_script already told the user why. Abort rather
+            # than assembling / submitting a job for a missing script.
+            return None, None
 
         # Use the results folder's last directory as a meaningful job name
         # (falls back to "mypwjob" if it cannot be determined). Sanitize to
@@ -14973,12 +17863,62 @@ class Window(QtWidgets.QMainWindow):
         # Modules to `module load` come from the Run tab's field
         # (space-separated); an empty field loads nothing.
         modules = self.cluster_modules_edit.text().split()
+
+        # Resolve the Apptainer image. The GUI cluster path always runs the
+        # workflow INSIDE an image (so the cluster matches the GUI's version),
+        # so an image must be resolvable: a bare filename is joined onto the
+        # configured shared folder; an absolute path is used as-is. Refuse
+        # (rather than silently falling back to the host conda env) when none
+        # can be formed -- e.g. an "unknown" GUI version left the default blank
+        # and the user picked nothing.
+        image_dir, apptainer_module, bind_paths = self._apptainer_config(
+            host_cluster
+        )
+        # Resolve the typed/selected image the same way the admin Test-runs tab
+        # does (shared helper): absolute path as-is, else joined onto image_dir.
+        image_path = resolve_cluster_image_path(
+            self.cluster_image_combo.currentText(), image_dir
+        )
+        if not image_path:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "No Apptainer image selected",
+                "The cluster run needs an Apptainer image (the GUI path runs "
+                "the workflow inside one so the cluster matches the GUI's "
+                "version). Pick one from the 'Apptainer image' dropdown "
+                "(click 'List' to see what is on the shared folder) or type "
+                "its filename, and set ClusterApptainer.image_dir in "
+                "config.yaml.",
+            )
+            return None, None
+
+        # Always bind the results folder: the generated start_workflow.py lives
+        # there, it is the job's CWD, and outputs are written there. Without it
+        # a results folder on a mount not listed in ClusterApptainer.bind_paths
+        # would be invisible inside the container and the job would fail to even
+        # open the script. Skip if an existing bind already covers it. (The
+        # cluster-submit worker guards the same invariant.)
+        results_bind = results_folder_host.rstrip("/")
+        if results_bind and not any(
+            results_bind == b.rstrip("/")
+            or results_bind.startswith(b.rstrip("/") + "/")
+            for b in bind_paths
+        ):
+            bind_paths = bind_paths + [results_bind]
+
+        cpu_only = self.cluster_cpu_only_check.isChecked()
         commands = self.slurm_communicator.assemble_slurm_commands(
             host_cluster,
             scriptname=scriptname,
             modules=modules,
             faulthandler=self.cluster_faulthandler_check.isChecked(),
-            cpu_only=self.cluster_cpu_only_check.isChecked(),
+            cpu_only=cpu_only,
+            image_path=image_path,
+            bind_paths=bind_paths,
+            apptainer_module=apptainer_module,
+            # --nv exposes the host GPU driver; pointless (and contradictory)
+            # when CPU-only hides every GPU via CUDA_VISIBLE_DEVICES="".
+            use_nv=n_gpus > 0 and not cpu_only,
         )
         # scriptname=scriptname, use_pw_module=True)
         # scriptname=scriptname, use_pw_module=False)
@@ -15010,6 +17950,12 @@ class Window(QtWidgets.QMainWindow):
             "results_folder_host": results_folder_host,
             "job_name": job_name,
             "slurm_options": slurm_options,
+            "apptainer": {
+                "image_path": image_path,
+                "module": apptainer_module,
+                "bind_paths": bind_paths,
+                "nv": n_gpus > 0 and not cpu_only,
+            },
             "scriptname": scriptname,
             "python_script_path": python_script_path,
             "slurm_script_path": (
@@ -15058,6 +18004,10 @@ class Window(QtWidgets.QMainWindow):
         """"""
         logger.info("start_slurm: assembling SLURM scripts")
         host_cluster, script_path = self.assemble_slurm_scripts()
+        if script_path is None:
+            # Script assembly was refused (validation / Investigation); the
+            # user was already told. Do not submit a job for a missing script.
+            return
         logger.info(
             f"start_slurm: submitting job to {host_cluster} "
             f"using script {script_path}"
@@ -15075,6 +18025,7 @@ class Window(QtWidgets.QMainWindow):
         # Store and display job ID
         if result["success"] and result["job_id"]:
             self.job_id_input.setText(str(result["job_id"]))
+            self.error_details_display.clear()
             self.job_info_display.append(
                 f"Job submitted successfully!\nJob ID: {result['job_id']}"
             )
@@ -15090,6 +18041,10 @@ class Window(QtWidgets.QMainWindow):
 
     def estimate_start(self):
         host_cluster, script_path = self.assemble_slurm_scripts()
+        if script_path is None:
+            # Script assembly was refused (validation / Investigation); the
+            # user was already told. Nothing to estimate.
+            return
         result = self.slurm_communicator.submit_job(
             script_path, host_cluster, additional_options=["--test-only"]
         )
@@ -15117,6 +18072,16 @@ class Window(QtWidgets.QMainWindow):
         launches it with the current interpreter in the results folder and
         points the live monitor at the local ``progress.json``.
         """
+        # one local run at a time: a second process would race the first on
+        # the same result folder and progress tree
+        proc = getattr(self, "_local_process", None)
+        if proc is not None and proc.poll() is None:
+            self.job_info_display.append(
+                f"A local run is already active (PID {proc.pid}); "
+                "stop or kill it first."
+            )
+            return
+
         results_folder = self.results_folder_display.text().strip()
         for q in ('"', "'"):
             if results_folder[:1] == q and results_folder[-1:] == q:
@@ -15138,9 +18103,22 @@ class Window(QtWidgets.QMainWindow):
             logger.error(traceback.format_exc())
             return
 
+        if script_path is None:
+            # A None return (not an exception) means generation was refused
+            # (validation / Investigation); the user was already told. Do not
+            # create a log or launch a subprocess on a missing script.
+            return
+
         # clear any stale abort flag from a previous run in this folder
         pwprogress.clear_abort(results_folder)
         log_path = os.path.join(results_folder, "local_run.log")
+        # release the previous run's log handle before reusing the file
+        old_logfile = getattr(self, "_local_logfile", None)
+        if old_logfile is not None:
+            try:
+                old_logfile.close()
+            except OSError:
+                pass
         try:
             self._local_logfile = open(log_path, "w")
             self._local_process = subprocess.Popen(
@@ -15155,13 +18133,76 @@ class Window(QtWidgets.QMainWindow):
             logger.error(traceback.format_exc())
             return
 
+        self.error_details_display.clear()
         self.job_info_display.append(
             f"Started local workflow (PID {self._local_process.pid}).\n"
             f"Logging to {log_path}"
         )
-        # local run -> poll the local progress.json tree, not the cluster
+        # local run -> poll the local progress.json tree, not the cluster;
+        # the launch time scopes the polled states to this run. Clear any
+        # stale cluster Job-ID so the next refresh does not flip the monitor
+        # back to cluster mode (the live-process guard in
+        # _resolve_monitor_target also covers the running window).
+        from datetime import datetime
+
+        self.job_id_input.clear()
+        self._local_run_started_dt = datetime.now()
         self._monitor_local_folder = results_folder
         self._start_monitor()
+
+    def on_stop_local_run(self):
+        """Request a graceful stop of the local run (abort flag only).
+
+        The workflow finishes the current module, saves its state and exits
+        cleanly at the next module boundary; the run can then be continued
+        with the resume option.
+        """
+        folder = getattr(self, "_monitor_local_folder", None)
+        if not folder:
+            self.job_info_display.append("No local run to stop.")
+            return
+        pwprogress.request_abort(folder)
+        self.job_info_display.append(
+            "Abort requested; the local run stops cleanly after the "
+            "current module."
+        )
+
+    def on_kill_local_run(self):
+        """Terminate the local workflow subprocess immediately."""
+        proc = getattr(self, "_local_process", None)
+        if proc is None or proc.poll() is not None:
+            self.job_info_display.append("No running local process to kill.")
+            return
+        # drop the abort flag too, so any worker the script spawned also
+        # stops instead of orphaning
+        folder = getattr(self, "_monitor_local_folder", None)
+        if folder:
+            pwprogress.request_abort(folder)
+        proc.terminate()
+        self.job_info_display.append(f"Terminated local run (PID {proc.pid}).")
+        # termination is asynchronous; refresh the badge once it had time
+        # to exit
+        QtCore.QTimer.singleShot(1500, self._refresh_monitor)
+
+    def on_show_local_log(self):
+        """Append the tail of the local run's log to the run information."""
+        folder = getattr(self, "_monitor_local_folder", None)
+        if not folder:
+            folder = self.results_folder_display.text().strip()
+            for q in ('"', "'"):
+                if folder[:1] == q and folder[-1:] == q:
+                    folder = folder[1:-1]
+        if not folder:
+            self.job_info_display.append("No results folder set.")
+            return
+        log_path = os.path.join(folder, "local_run.log")
+        tail = self._read_log_tail(folder)
+        if tail is None:
+            self.job_info_display.append(f"Could not read {log_path}")
+            return
+        self.job_info_display.append(
+            f"--- tail of {log_path} ---\n{tail or '(log is empty)'}"
+        )
 
     def on_cancel_job(self):
         """Cancel the current run (graceful abort, then hard cancel).
@@ -15485,6 +18526,12 @@ class Window(QtWidgets.QMainWindow):
         str or dict or tuple: String representation of the value, dict for nested parameters,
                               or tuple for command references
         """
+        # A parameter left in the "use default" state is omitted from the
+        # workflow so the code default applies (top-level and nested alike).
+        if widget_info is not None and getattr(
+            widget_info, "use_default", False
+        ):
+            return None
         if (
             original_type == "dict"
             and widget_info
@@ -15594,6 +18641,15 @@ class Window(QtWidgets.QMainWindow):
                             sub_widget_info,
                         )
             # If value_data is None or not a dict, leave dict parameter unchecked/empty
+
+        elif value_data is None:
+            # "unset" (implicit None default of an optional parameter):
+            # clear text inputs; number widgets keep their display and are
+            # greyed/disabled by the default state
+            if isinstance(widget, QtWidgets.QLineEdit):
+                widget.setText("")
+            elif isinstance(widget, QtWidgets.QCheckBox):
+                widget.setChecked(False)
 
         elif isinstance(widget, QtWidgets.QLineEdit):
             widget.setText(str(value_data))
@@ -15775,12 +18831,30 @@ class Window(QtWidgets.QMainWindow):
         current_tab_index = self.workflow_tabs.currentIndex()
         if current_tab_index == 0:
             workflow_modules = self.single_workflow_modules
-            curr_module_index = self.single_workflow_list.currentRow()
+            curr_module_index = self._selected_module_index(
+                self.single_workflow_list
+            )
         elif current_tab_index == 1:
             workflow_modules = self.aggregation_workflow_modules
-            curr_module_index = self.aggregation_workflow_list.currentRow()
+            curr_module_index = self._selected_module_index(
+                self.aggregation_workflow_list
+            )
         else:
             return
+
+        # "Previous Module Result" resolves relative to where this module sits
+        # in the workflow. When editing an existing module, that is its own
+        # index. When composing a NEW module (not yet added), it will be
+        # inserted right after the current selection - or appended when nothing
+        # is selected - so point the dialog at that prospective slot (mirroring
+        # add_module's insert math); otherwise it would offer the results of
+        # the module two positions back.
+        if self._editing_existing_module():
+            prev_ref_index = curr_module_index
+        elif curr_module_index >= 0:
+            prev_ref_index = curr_module_index + 1
+        else:
+            prev_ref_index = len(workflow_modules)
 
         # Read the parameter's current value so the dialog can open on an
         # existing command (e.g. to review/edit a per-channel mapping).
@@ -15801,7 +18875,7 @@ class Window(QtWidgets.QMainWindow):
         dialog = ParameterCmdDialog(
             workflow_modules,
             self.module_descriptor,
-            curr_module_index,
+            prev_ref_index,
             self,
             param_name=param_name,
             current_value=current_value,
@@ -15873,6 +18947,11 @@ class Window(QtWidgets.QMainWindow):
         # Update stored reference
         widget_info.widget = new_widget
 
+        # A command value is an explicit override, never the code default:
+        # clear the default state so the value is collected (and the label
+        # un-greys).
+        self._apply_param_default_state(widget_info, False, persist=False)
+
         # The new value may be a per-channel mapping - reflect it below
         # the row.
         self._update_param_summary(widget_info)
@@ -15881,7 +18960,7 @@ class Window(QtWidgets.QMainWindow):
         self._on_parameter_changed()
 
     def _create_parameter_row(
-        self, param_name, param_metadata, indent_level=0
+        self, param_name, param_metadata, indent_level=0, module_name=None
     ):
         """Create a parameter row with widgets, supporting nested dicts.
 
@@ -15890,6 +18969,10 @@ class Window(QtWidgets.QMainWindow):
         param_name: Name of the parameter
         param_metadata: Metadata dict with type, description, default, etc.
         indent_level: Indentation level for nested parameters (0 = top level)
+        module_name: Name of the owning module, used to look up a
+            changed-parameter marker in ``PARAM_CHANGE_FLAGS``. Passed through
+            to recursive nested-param calls so sub-params carry their parent
+            module's name (optional).
 
         Returns
         -------
@@ -15921,8 +19004,11 @@ class Window(QtWidgets.QMainWindow):
         # needs the field row, not the outer layout.
         row_widget.field_layout = row_layout
 
-        # Create label
-        label = QtWidgets.QLabel(param_name)
+        # Create label; a spec-declared unit becomes part of it,
+        # e.g. "radius [px]"
+        unit = param_metadata.get("unit")
+        display_name = f"{param_name} [{unit}]" if unit else param_name
+        label = QtWidgets.QLabel(display_name)
         if param_metadata.get("required", False):
             font = label.font()
             font.setBold(True)
@@ -15958,7 +19044,10 @@ class Window(QtWidgets.QMainWindow):
                 # Create nested parameter rows
                 for sub_param_name, sub_param_metadata in properties.items():
                     sub_widget_info = self._create_parameter_row(
-                        sub_param_name, sub_param_metadata, indent_level + 1
+                        sub_param_name,
+                        sub_param_metadata,
+                        indent_level + 1,
+                        module_name=module_name,
                     )
                     sub_parameters[sub_param_name] = sub_widget_info
                     sub_rows.append(sub_widget_info.row_widget)
@@ -15981,7 +19070,10 @@ class Window(QtWidgets.QMainWindow):
                 # Create nested parameter rows (initially hidden)
                 for sub_param_name, sub_param_metadata in properties.items():
                     sub_widget_info = self._create_parameter_row(
-                        sub_param_name, sub_param_metadata, indent_level + 1
+                        sub_param_name,
+                        sub_param_metadata,
+                        indent_level + 1,
+                        module_name=module_name,
                     )
                     sub_parameters[sub_param_name] = sub_widget_info
                     sub_rows.append(sub_widget_info.row_widget)
@@ -16044,11 +19136,58 @@ class Window(QtWidgets.QMainWindow):
 
             row_layout.addWidget(widget, stretch=2)
 
+            # A parameter whose behaviour/units changed in a recent release
+            # gets an amber "changed" marker (distinct from the main label,
+            # which _apply_param_default_state restyles). It auto-expires a few
+            # releases after ``changed_in`` via _param_flag_active.
+            change_marker = None
+            flag = PARAM_CHANGE_FLAGS.get((module_name, param_name))
+            if flag and _param_flag_active(flag["changed_in"]):
+                change_marker = QtWidgets.QLabel("⚠ changed")
+                change_marker.setStyleSheet(
+                    "color: #B8860B; font-weight: bold;"
+                )
+                change_marker.setToolTip(
+                    flag["message"] + f"  (changed in v{flag['changed_in']})"
+                )
+                row_layout.addWidget(change_marker, stretch=0)
+
             # Create cmd button
             cmd_button = QtWidgets.QPushButton("cmd")
             cmd_button.setFixedWidth(50)
             row_layout.addWidget(cmd_button, stretch=0)
 
+            # Per-branch toggle: hidden unless a branch sub-module is being
+            # edited. Checking it makes this parameter branch-specific,
+            # i.e. ("$branch", [v0, v1, ...]).
+            per_branch_checkbox = QtWidgets.QCheckBox("per-branch")
+            per_branch_checkbox.setToolTip(
+                "Give this parameter a different value for each branch"
+            )
+            per_branch_checkbox.setVisible(False)
+            row_layout.addWidget(per_branch_checkbox, stretch=0)
+
+            # A top-level optional parameter gets a clickable label toggling
+            # default<->override (see _apply_param_default_state). This
+            # includes optional parameters WITHOUT a spec default: their
+            # implicit default is None ("unset" - omitted from the workflow
+            # so the module's own fallback applies), which number widgets
+            # could not express otherwise. Excluded from the toggle:
+            # command-tuple defaults (e.g. ("$$map", "filepath")) are
+            # recommended arguments rather than code defaults - they
+            # pre-fill in override state and are written to the workflow;
+            # optional dict parameters keep their own enable-checkbox;
+            # nested dict sub-parameters, because a module reads its dict
+            # sub-schema as a whole (e.g. load_dataset_movie's
+            # sample_movie["filename"]), so omitting a defaulted sub-key
+            # would leave an incomplete dict and crash.
+            _default = param_metadata.get("default")
+            has_default = (
+                indent_level == 0
+                and not param_metadata.get("required", False)
+                and not self._is_command_value(_default)
+                and (_default is not None or original_type != "dict")
+            )
             widget_info = ParameterWidgetInfo(
                 widget=widget,
                 cmd_button=cmd_button,
@@ -16056,6 +19195,13 @@ class Window(QtWidgets.QMainWindow):
                 metadata=param_metadata,
                 original_type=original_type,
                 summary_label=summary_label,
+                per_branch_checkbox=per_branch_checkbox,
+                label=label,
+                param_name=param_name,
+                has_default=has_default,
+                default_value=param_metadata.get("default"),
+                display_name=display_name,
+                change_marker=change_marker,
             )
 
             # Capture the widget info itself, not just the name: nested
@@ -16066,9 +19212,30 @@ class Window(QtWidgets.QMainWindow):
                     self._on_cmd_button_clicked(pn, wi)
                 )
             )
+            per_branch_checkbox.toggled.connect(
+                lambda checked, pn=param_name: (
+                    self._on_per_branch_toggled(pn, checked)
+                )
+            )
+            if has_default:
+                label.setCursor(
+                    QtGui.QCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+                )
+
+                def _toggle_default(event, wi=widget_info):
+                    self._apply_param_default_state(
+                        wi, not wi.use_default, persist=True
+                    )
+
+                label.mousePressEvent = _toggle_default
+                # start greyed/disabled, using the code default (no save yet;
+                # the form is still being built)
+                self._apply_param_default_state(
+                    widget_info, True, persist=False
+                )
             return widget_info
 
-    def _populate_parameter_widgets(self, module_params):
+    def _populate_parameter_widgets(self, module_params, module_name=None):
         """Create and populate parameter entry widgets from module parameters.
 
         Parameters
@@ -16076,6 +19243,9 @@ class Window(QtWidgets.QMainWindow):
         module_params: Dict of parameter definitions with keys as parameter names
                        and values as dicts containing 'type', 'description', 'default',
                        'required', etc.
+        module_name: Name of the module being rendered, threaded through to
+                     each row so changed-parameter markers can be looked up in
+                     ``PARAM_CHANGE_FLAGS`` (optional).
         """
         if not module_params:
             # Show "No parameters" message if module has no parameters
@@ -16088,7 +19258,10 @@ class Window(QtWidgets.QMainWindow):
         for param_name, param_metadata in module_params.items():
             # Create parameter row (handles nested dicts recursively)
             widget_info = self._create_parameter_row(
-                param_name, param_metadata, indent_level=0
+                param_name,
+                param_metadata,
+                indent_level=0,
+                module_name=module_name,
             )
             self.parameter_widgets[param_name] = widget_info
 
@@ -16214,46 +19387,98 @@ class Window(QtWidgets.QMainWindow):
             if value is not None:
                 param_values[param_name] = value
 
-        # Update the appropriate workflow list
+        # Resolve the workflow list for the editing tab.
         if self.editing_workflow_tab == 0:  # Single Dataset Workflow
-            if self.editing_workflow_index < len(self.single_workflow_modules):
-                module_name, old_params = self.single_workflow_modules[
-                    self.editing_workflow_index
-                ]
-                if old_params != param_values:
-                    # Update parameters while keeping module name
-                    self.single_workflow_modules[
-                        self.editing_workflow_index
-                    ] = (
-                        module_name,
-                        param_values,
-                    )
-                    self._log_workflow_config_event(
-                        "modules.params_changed",
-                        tab="single",
-                        index=self.editing_workflow_index,
-                        module=module_name,
-                        params=param_values,
-                    )
+            modules = self.single_workflow_modules
+            tabname = "single"
         elif self.editing_workflow_tab == 1:  # Aggregation Workflow
-            if self.editing_workflow_index < len(
-                self.aggregation_workflow_modules
-            ):
-                module_name, old_params = self.aggregation_workflow_modules[
-                    self.editing_workflow_index
-                ]
-                if old_params != param_values:
-                    # Update parameters while keeping module name
-                    self.aggregation_workflow_modules[
-                        self.editing_workflow_index
-                    ] = (module_name, param_values)
-                    self._log_workflow_config_event(
-                        "modules.params_changed",
-                        tab="aggregation",
-                        index=self.editing_workflow_index,
-                        module=module_name,
-                        params=param_values,
-                    )
+            modules = self.aggregation_workflow_modules
+            tabname = "aggregation"
+        else:
+            return
+
+        idx = self.editing_workflow_index
+        if not (0 <= idx < len(modules)):
+            return
+
+        # When editing a branch sub-module, write back into the branch's
+        # branch_modules / join_modules list (in place).
+        subnode = self.editing_workflow_subnode
+        if subnode is not None:
+            branch_params = modules[idx][1]
+            if not isinstance(branch_params, dict):
+                return
+            key = (
+                "branch_modules"
+                if subnode["section"] == "branch"
+                else "join_modules"
+            )
+            submods = branch_params.get(key)
+            j = subnode["sub"]
+            if not (isinstance(submods, list) and 0 <= j < len(submods)):
+                return
+            sub = submods[j]
+            if not (isinstance(sub, (tuple, list)) and sub):
+                return
+            sub_name = sub[0]
+            old_sub_params = (
+                sub[1] if len(sub) > 1 and isinstance(sub[1], dict) else {}
+            )
+            # Re-wrap per-branch overrides: an edited scalar is written into
+            # this branch id's slot of ("$branch", [...]), leaving the other
+            # branches' values intact.
+            if self._branch_override_params and self.editing_branch_context:
+                bid = self.editing_branch_context["branch_id"]
+                for pname, per_branch in self._branch_override_params.items():
+                    if pname in param_values:
+                        new_list = list(per_branch)
+                        if bid < len(new_list):
+                            new_list[bid] = param_values[pname]
+                        else:
+                            new_list.append(param_values[pname])
+                        param_values[pname] = ("$branch", new_list)
+                        # keep the in-memory list current for further edits
+                        self._branch_override_params[pname] = new_list
+            if old_sub_params != param_values:
+                submods[j] = (sub_name, param_values)
+                self._log_workflow_config_event(
+                    "modules.branch_sub_params_changed",
+                    tab=tabname,
+                    index=idx,
+                    section=subnode["section"],
+                    sub=j,
+                    module=sub_name,
+                    params=param_values,
+                )
+            return
+
+        # Top-level module (keep the module name, update parameters).
+        module_name, old_params = modules[idx]
+        # A branch module's branch_modules / join_modules are managed by the
+        # inline workflow-list editor, not the parameter form. Never let the
+        # form's text round-trip clobber them: preserve the stored values.
+        if module_name == "branch" and isinstance(old_params, dict):
+            for nested_key in ("branch_modules", "join_modules"):
+                if nested_key in old_params:
+                    param_values[nested_key] = old_params[nested_key]
+                else:
+                    param_values.pop(nested_key, None)
+        # Reserved "#"-prefixed directives (e.g. #run_on_channels) are managed
+        # by their own controls, not the parameter form; carry them through so
+        # the widget-only capture above does not drop them.
+        if isinstance(old_params, dict):
+            for rkey, rval in old_params.items():
+                if isinstance(rkey, str) and rkey.startswith("#"):
+                    param_values[rkey] = rval
+        if old_params != param_values:
+            modules[idx] = (module_name, param_values)
+            self._log_workflow_config_event(
+                "modules.params_changed",
+                tab=tabname,
+                index=idx,
+                module=module_name,
+                params=param_values,
+            )
 
     def _on_parameter_changed(self):
         """Called when a parameter textbox loses focus (editingFinished signal)."""
@@ -16268,6 +19493,8 @@ class Window(QtWidgets.QMainWindow):
         if not self.module_combobox.signalsBlocked():
             self.editing_workflow_index = -1
             self.editing_workflow_tab = -1
+            self.editing_workflow_subnode = None
+            self._clear_branch_context()
             # Manual pick means "compose a new module" -> Add mode.
             self._update_module_button_mode()
 
@@ -16359,15 +19586,108 @@ class Window(QtWidgets.QMainWindow):
             desc_fun = getattr(self.module_descriptor, text)
             module_params, _ = desc_fun()
 
+            # The branch module's sub-workflows (branch_modules / join_modules)
+            # are built as indented rows in the workflow list, not typed as raw
+            # argument text; hide them from the parameter form. The runner
+            # injects parameter_command_executor, so it is never user-set.
+            if text == "branch":
+                module_params = {
+                    k: v
+                    for k, v in module_params.items()
+                    if k
+                    not in (
+                        "branch_modules",
+                        "join_modules",
+                        "parameter_command_executor",
+                    )
+                }
+
             # Clear existing parameter widgets
             self._clear_parameter_layout()
             self.parameter_widgets.clear()
 
             # Populate new parameter widgets
-            self._populate_parameter_widgets(module_params)
+            self._populate_parameter_widgets(module_params, module_name=text)
+
+            # branch: sub-workflows are edited inline as indented rows.
+            if text == "branch":
+                self._add_branch_inline_hint()
+
+            # pick_origami: offer an interactive phase-space preview to set
+            # the localizations-per-frame window from the geometry + kinetics.
+            if text == "pick_origami":
+                self._add_phasespace_preview_button()
 
             # Validate parameters and update button state
             self._validate_parameters()
+
+    def _add_phasespace_preview_button(self):
+        """Add the pick_origami 'Preview phase space' button below its params."""
+        btn = QtWidgets.QPushButton("Preview phase space …")
+        btn.setToolTip(
+            "Simulate the expected origami nlocs/rmsd phase space from the "
+            "geometry + kinetics and set the localizations-per-frame window."
+        )
+        btn.clicked.connect(self._open_phasespace_preview)
+        self.module_parameters_layout.addWidget(btn)
+
+    def _add_branch_inline_hint(self):
+        """Note that branch/join sub-modules are edited as indented rows."""
+        hint = QtWidgets.QLabel(
+            "Branch and join sub-modules are edited as indented rows in the "
+            "workflow list below: select a '+ add ... module' row and pick a "
+            "module to add it, just like a top-level module."
+        )
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color: gray; font-style: italic;")
+        self.module_parameters_layout.addWidget(hint)
+
+    def _current_module_parameter_values(self):
+        """Collect the current parameter values from the entry widgets."""
+        param_values = {}
+        for name, widget_info in self.parameter_widgets.items():
+            try:
+                value = self._get_widget_value(
+                    widget_info.widget,
+                    widget_info.original_type,
+                    widget_info,
+                )
+            except Exception:
+                value = None
+            if value is not None:
+                param_values[name] = value
+        return param_values
+
+    def _open_phasespace_preview(self):
+        """Open the origami phase-space preview dialog."""
+        dialog = PhaseSpacePreviewDialog(
+            self,
+            self._current_module_parameter_values(),
+            self._apply_phasespace_window,
+        )
+        dialog.exec()
+
+    def _apply_phasespace_window(
+        self, min_n_locs_per_frame, max_n_locs_per_frame, min_rmsd, max_rmsd
+    ):
+        """Write the previewed pick window into the parameter widgets."""
+        updates = (
+            ("min_n_locs_per_frame", min_n_locs_per_frame),
+            ("max_n_locs_per_frame", max_n_locs_per_frame),
+            ("min_rmsd", min_rmsd),
+            ("max_rmsd", max_rmsd),
+        )
+        for name, value in updates:
+            widget_info = self.parameter_widgets.get(name)
+            if widget_info is None:
+                continue
+            widget = widget_info.widget
+            if isinstance(widget, QtWidgets.QLineEdit):
+                widget.setText(f"{value:.6g}")
+            elif isinstance(widget, QtWidgets.QDoubleSpinBox):
+                widget.setValue(float(value))
+            elif isinstance(widget, QtWidgets.QSpinBox):
+                widget.setValue(int(round(value)))
 
 
 def _app_icon():

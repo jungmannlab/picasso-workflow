@@ -70,6 +70,55 @@ class AbstractModuleCollection(abc.ABC):
         """
 
     @abc.abstractmethod
+    def plugin(self, i, parameters, results):
+        """Call an installed, enabled picasso API plugin export.
+
+        Generic bridge to the picasso plugin system: looks up a name exported
+        by an enabled plugin's ``PICASSO_API`` mapping
+        (``picasso.plugins.load_api_plugins``) and calls it. Workflow state is
+        passed in as opt-in keyword arguments and a structured return value may
+        update the pipeline. Only plugins already enabled in picasso
+        (``~/.picasso/plugins/``) are available; this module never enables a
+        plugin itself.
+
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters : dict
+            Required keys:
+
+            ``api_name`` : str
+                Name of the ``PICASSO_API`` export to call.
+
+            Optional keys:
+
+            ``kwargs`` : dict
+                Keyword arguments passed verbatim to the plugin callable.
+                Default is ``{}``.
+            ``inject`` : list of str
+                Which workflow state to pass to the callable as extra keyword
+                arguments; allowed values ``"locs"``, ``"info"`` and
+                ``"movie"`` map to ``locs=self.locs`` / ``info=self.info`` /
+                ``movie=self.movie``. Opt-in (default ``[]``) so a callable
+                that does not accept those keywords is not forced to.
+        results : dict
+            Module results (decorator-provided keys only; see class docstring).
+
+        Returns
+        -------
+        parameters : dict
+            Input parameters, unchanged.
+        results : dict
+            Results updated with ``plugin_api_name``, ``plugin_callable`` and
+            ``injected``. If the callable returns a dict, its reserved keys are
+            consumed: ``locs``/``info`` update the pipeline state, ``report``
+            is stored as ``plugin_report``, ``files`` as ``plugin_files`` and
+            any remaining keys as ``plugin_result``. A non-dict return value is
+            stored as ``plugin_result``.
+        """
+
+    @abc.abstractmethod
     def analysis_documentation(self, i, parameters, results):
         """Document where and how the analysis is being performed.
 
@@ -135,6 +184,128 @@ class AbstractModuleCollection(abc.ABC):
             (``"if_true"`` or ``"if_false"``), ``if_branch`` (dict of
             sub-module results) and ``branch_modules`` (dict of flat-indexed
             results).
+        """
+
+    @abc.abstractmethod
+    def branch(self, i, parameters, results):
+        """Fan out into per-branch sub-workflows, then optionally re-join.
+
+        Generalizes :meth:`conditional_branch` from a two-way condition to an
+        N-way fan-out. The shared prefix (all modules before this one) is run
+        once; this module then runs ``branch_modules`` once per branch on a
+        snapshot of the prefix state, and finally runs ``join_modules`` once
+        with the per-branch results pooled back together. Two branch types:
+
+        - ``"explicit"``: a fixed number of branches (``n_branches`` or
+          ``branch_labels``). All branches run the same modules and differ only
+          through per-branch parameter overrides written as
+          ``("$branch", [v0, v1, ...])``, resolved to ``values[branch_id]``
+          (e.g. ``create_mask2`` with ``nth_largest_cell=("$branch",[1,2,3])``
+          to select a different cell per branch).
+        - ``"runtime"``: the number of branches is discovered at run time. A
+          ``branch_over`` value or command resolves to a list ``L``; there is
+          one branch per element and the branch count is ``len(L)``. Each
+          branch's sub-modules read their element ``L[branch_id]`` via the
+          ``("$branch_item",)`` token (``("$branch_item", key)`` indexes into
+          the element). E.g. ``branch_over`` = a list of cell ranks, and each
+          branch's ``create_mask2`` uses ``nth_largest_cell=("$branch_item",)``.
+
+        A branch whose sub-module raises
+        :class:`~picasso_workflow.analyse.SkipBranch` (e.g. the requested cell
+        does not exist) is dropped: it is excluded from ``branches`` /
+        ``labels`` (so the join's ``("$all")`` pooling never sees it) and the
+        overall pipeline is not failed. Both types resolve ``("$branch", [...])``
+        overrides, so either can vary a parameter by branch id.
+
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters : dict
+            Required keys: ``branch_type`` (``"explicit"`` or ``"runtime"``)
+            and ``branch_modules`` (list of ``(module_name, module_parameters)``
+            tuples run once per branch). For ``"explicit"``, ``n_branches`` (or
+            ``branch_labels``). For ``"runtime"``, ``branch_over`` (a value or
+            ``$``/``$$map`` command resolving to a list; optional
+            ``label_template`` with ``{n}`` / ``{item}``). Optional
+            ``join_modules`` (run once after all branches, may pool per-branch
+            results via ``("$get_prior_result", "results, NN_branch, branches,
+            $all, MM_module, key")``) and ``parameter_command_executor``
+            (injected by the runner).
+        results : dict
+            Module results (see class docstring).
+
+        Returns
+        -------
+        parameters : dict
+            Input parameters, possibly updated for consistency.
+        results : dict
+            Results updated with ``branch_type`` (str), ``labels`` (list of the
+            branches that produced results), ``branches`` (list of per-branch
+            result dicts, each keyed ``MM_module``), ``skipped`` (list of
+            ``{"label", "reason"}`` for dropped branches), ``join`` (dict of
+            join-module results) and ``topology`` (the executed module-path
+            tree).
+        """
+
+    @abc.abstractmethod
+    def summarize_branches(self, i, parameters, results):
+        """Summarize per-branch results as a figure.
+
+        A general-purpose plotting/summary module, typically used as a
+        ``branch`` join module: it renders a scalar result collected across
+        branches (via ``("$get_prior_result", "results, NN_branch, branches,
+        $all, MM_module, key")``) into a figure. Two display modes:
+
+        - ``"replicates"``: branches are repeats of the same analysis (e.g.
+          different cells) -- draw a box/strip plot of the metric across
+          branches.
+        - ``"screen"``: branches vary a parameter -- plot the metric against
+          the per-branch argument values (``x``).
+
+        As a branch join module it needs **no arguments**: when ``values`` is
+        omitted the ``branch`` module hands it the per-branch results list, and
+        it auto-summarizes every numeric per-branch metric (one small-multiple
+        subplot each), with ``labels`` defaulting to the branch labels.
+
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters : dict
+            Optional keys:
+
+            ``values`` : list or dict
+                One numeric value per branch (a list), or a dict mapping series
+                names to such lists (several metrics on one figure). Omit it as
+                a branch join module to auto-summarize all numeric per-branch
+                results (the branch module injects its per-branch results
+                list).
+
+            ``labels`` : list
+                Per-branch labels for the x ticks / point annotations.
+            ``x`` : list
+                Per-branch numeric argument values; enables ``"screen"`` mode.
+            ``mode`` : {"auto", "replicates", "screen"}
+                Display mode; ``"auto"`` picks ``"screen"`` when ``x`` is
+                given, else ``"replicates"``.
+            ``plot_type`` : {"box", "violin"}
+                In ``"replicates"`` mode, whether to draw a box plot
+                (default) or a violin plot; both overlay the individual
+                per-branch points. Violin falls back to a box plot when a
+                category has too few points / no spread for a KDE.
+            ``xlabel``, ``ylabel``, ``title``, ``filename`` : str
+                Figure labels and output filename.
+        results : dict
+            Module results (see class docstring).
+
+        Returns
+        -------
+        parameters : dict
+            Input parameters, possibly updated for consistency.
+        results : dict
+            Results updated with ``fp_fig`` (the figure path), ``mode`` and
+            ``stats`` (per-series ``n``/``mean``/``std``/``min``/``max``).
         """
 
     ##########################################################################
@@ -508,70 +679,6 @@ class AbstractModuleCollection(abc.ABC):
         results : dict
             Results updated with ``success``, ``message`` and, only if
             undrifting succeeded, ``filepath_driftfile`` and ``filepath_plot``.
-        """
-
-    @abc.abstractmethod
-    def undrift_rsso(self):
-        """Undrift localized data using iterative RSSO drift correction.
-
-        Applies an iterative RSSO (Redundant Spot Shift Overrepresentation)
-        approach in which each frame is compared against the whole dataset to
-        compute that frame's total drift, repeated on the undrifted dataset to
-        improve accuracy. Includes uncertainty analysis, confidence evaluation,
-        windowing and outlier detection.
-
-        Parameters
-        ----------
-        i : int
-            Index of the module in the workflow.
-        parameters : dict
-            Required keys:
-
-            ``ton`` : float
-                Half-life of a localization in frames (how long a spot stays
-                visible).
-            ``toff`` : float
-                Frames for a spot to reappear after disappearing.
-            ``max_shift`` : float
-                Maximum expected drift per frame in pixels.
-
-            Optional keys (defaults in parentheses):
-
-            ``min_locs_per_frame`` : int
-                Min localizations per frame for reliable estimation (10).
-            ``max_iterations`` : int
-                Max iterative refinement rounds (5).
-            ``convergence_threshold`` : float
-                RMS drift-change convergence threshold in nm (0.1).
-            ``plot_drift`` : bool
-                Whether to save drift plots (True).
-            ``save_locs`` : bool
-                Whether to save undrifted localizations (True).
-            ``n_processes`` : int or None
-                Processes for parallel computation (auto).
-            ``confidence_threshold`` : float
-                Confidence threshold for windowing analysis (0.8).
-            ``outlier_detection_enabled`` : bool
-                Enable RSSO failure and outlier detection (True).
-            ``outlier_z_threshold`` : float
-                Z-score threshold for temporal outlier detection (3.5).
-            ``min_signal_to_noise`` : float
-                Min signal-to-noise ratio for drift measurements (0.5).
-            ``windowing_enabled`` : bool
-                Enable adaptive windowing for low-confidence frames (True).
-            ``window_size_range`` : tuple
-                Min and max window sizes for adaptive windowing ((3, 20)).
-
-        Returns
-        -------
-        parameters : dict
-            Input parameters, possibly updated for consistency.
-        results : dict
-            Results updated with ``success``, ``drift_x``/``drift_y`` (total
-            drift trajectories in nm per frame), ``uncertainty_x``/
-            ``uncertainty_y``, ``drift_quality`` (per-frame confidence),
-            ``n_iterations``, ``convergence_rms`` and ``drift_plots`` (path to
-            the visualization).
         """
 
     @abc.abstractmethod
@@ -1006,42 +1113,44 @@ class AbstractModuleCollection(abc.ABC):
 
     @abc.abstractmethod
     def fit_csr(self, i, parameters, results):
-        """Fit a complete-spatial-randomness model to nearest neighbours.
+        """Fit a complete-spatial-randomness model to the localizations.
 
-        Fits a CSR model to nearest-neighbour distance distributions and
-        evaluates goodness-of-fit with statistical measures and visualization.
+        Estimates the molecule density per channel by edge-corrected
+        maximum likelihood from the distances to the k nearest neighbours
+        of the loaded localizations (picasso's
+        ``postprocess.knn_density``), tests for complete spatial
+        randomness (CSR) by simulation, and visualises the fit.
+
+        .. note::
+            Since the picasso 1.0 migration this module consumes the
+            loaded localizations directly; the legacy ``nneighbors``,
+            ``fit_bkg`` and ``bkg_fraction`` parameters are no longer
+            used.
 
         Parameters
         ----------
         i : int
             Index of the module in the workflow.
         parameters : dict
-            Required keys:
-
-            ``nneighbors`` : str or numpy.ndarray or list
-                A filepath to a nearest-neighbour data file, a 2D ``(N, k)``
-                array of kth nearest-neighbour distances, or a list of
-                multiple datasets / file paths.
-            ``dimensionality`` : int
-                Spatial dimensionality (2 or 3) for the CSR model.
-
             Optional keys:
 
+            ``dimensionality`` : int
+                Spatial dimensionality (2 or 3) for the CSR model. In 3D
+                the ``z`` column is used and densities are per volume.
+                Default 2.
             ``kmin`` : int
-                Minimum kth nearest-neighbour order to fit (default 1).
+                Lowest neighbour order of the pooled fit (default 1).
+            ``kmax`` : int
+                Highest neighbour order considered (default 5).
             ``min_dist`` : float
-                Minimum observable distance in nm due to technical limits.
+                Shortest neighbour distance in nm used in the fit
+                (default 0).
             ``max_dist`` : float
-                Maximum distance for filtering analysis. Bounds the fit
-                only, not the plotting range (see ``plot_max_dist``).
-            ``bkg_fraction`` : float
-                Background fraction for fitting.
-            ``fit_bkg`` : bool
-                Whether to fit the background (default False).
-            ``plot_max_dist`` : float
-                Maximum distance shown on the plot's distance axis, in nm.
-                Only affects display, not the fit. Defaults to the 95th
-                percentile of the largest-k neighbour distances.
+                Upper end in nm of the plotted distance histograms; does
+                not affect the fit.
+            ``n_simulations`` : int
+                Number of CSR simulations for the p-values and standard
+                errors (default 99).
         results : dict
             Module results (see class docstring).
 
@@ -1051,9 +1160,10 @@ class AbstractModuleCollection(abc.ABC):
             Input parameters, unchanged.
         results : dict
             Results updated with ``density`` (fitted spatial density in
-            units^(-d)), ``bkg_fraction``, ``fp_fig`` (CSR fit figure(s)),
-            ``wasserstein_distances_per_k``, ``mean_wasserstein_distance`` and
-            ``ks_pvalues_per_k`` (Kolmogorov-Smirnov p-values per kth order).
+            nm^(-d)), ``fp_fig`` (CSR fit figure(s)),
+            ``wasserstein_distances_per_k``, ``mean_wasserstein_distance``
+            and ``ks_pvalues_per_k`` (CSR-simulation p-values per kth
+            order).
         """
 
     # @abs.abstractmethod
@@ -1121,7 +1231,7 @@ class AbstractModuleCollection(abc.ABC):
                 Previously saved hdf5 files to load and align. If omitted, the
                 last processed data is used.
             ``align_pars`` : dict
-                Kwargs of ``picasso_outpost.align_channels``
+                Kwargs of ``outpost.alignment.channels.align_channels``
                 (``max_iterations``, ``convergence``).
             ``fp_fiducials`` : list of str
                 Previously saved hdf5 files of fiducial markers to load and
@@ -1372,20 +1482,8 @@ class AbstractModuleCollection(abc.ABC):
         """
 
     @abc.abstractmethod
-    def ripleysk(self):
-        """Compute Ripley's K spatial statistics for the dataset."""
-
-    # @abc.abstractmethod
-    # def ripleysk_rafal(self):
-    #     pass
-
-    @abc.abstractmethod
     def ripleysk2(self):
         """Compute Ripley's K statistics (second implementation)."""
-
-    @abc.abstractmethod
-    def ripleysk_average(self):
-        """Average Ripley's K curves across datasets."""
 
     @abc.abstractmethod
     def ripleysk_average2(self):
@@ -1440,7 +1538,8 @@ class AbstractModuleCollection(abc.ABC):
 
         Largely identical to an implementation in spinna that will be
         integrated into picasso; evaluate deprecation (or moving the source
-        from ``outpost_modules/ripleys`` to ``picasso/spinna``) at that time.
+        from ``outpost/spatial_stats/ripleys`` to ``picasso/spinna``) at that
+        time.
         The locs must be protein positions at this stage.
 
         Parameters
@@ -1766,6 +1865,128 @@ class AbstractModuleCollection(abc.ABC):
         """
 
     @abc.abstractmethod
+    def pick_origami(self):
+        """Design-aware picking of origami structures.
+
+        Loads an origami's designed geometry (a picasso design file, a
+        regular grid, or an explicit site list), finds and picks the
+        origami structures automatically, and tolerates a configurable
+        number of missing docking sites. Emits picasso-compatible picks
+        (origami groups and all resolved single docking sites) plus a
+        per-structure geometry table (resolved/missing sites, spacing,
+        RMSE-vs-design, orientation).
+
+        Identification proceeds in stages, cheapest first, so the expensive
+        geometry fit runs only on genuine candidates (stages 2-5 are the
+        design-aware classification enabled by ``cluster_patterns`` for a
+        lattice design):
+
+        1. Coarse pick - ``pick_similar`` finds footprints whose per-frame
+           localization count and RMS spread fall in the pick window
+           (``min/max_n_locs_per_frame``, ``min/max_rmsd``). This alone is a
+           weak filter: most candidates are junk (1-2 spot blobs).
+        2. Pair-score pre-screen - each candidate gets a cheap,
+           registration-free lattice score (the fraction of intra-footprint
+           localization pairs separated by the design spacing); candidates
+           below the score threshold are set aside as off-lattice without a
+           fit. This keys on lattice *periodicity*, not brightness.
+        3. Registration - survivors are sub-clustered into docking sites
+           (DBSCAN; ``pattern_eps_frac`` / ``pattern_min_samples``) and
+           best-fit registered onto the design template (similarity
+           transform, optional mirror).
+        4. On-lattice gate - a pick is accepted only if it matches enough
+           design nodes (``pattern_min_sites_frac``) with a low fit residual,
+           near-design spacing, few off-lattice extras, and uniform per-site
+           localization counts and spread - the checks a genuine origami
+           passes but an aggregate or misregistered blob does not.
+        5. Defect grouping - accepted picks are grouped by
+           ``pattern_defect_grouping`` (completeness or exact defect pattern).
+
+        Non-lattice (<3-node) designs skip registration and fall back to a
+        template-agnostic site-graph / pairwise-distance descriptor. The
+        report's "Lattice filter" panels show each gate's metric distribution
+        and threshold; thresholds beyond the exposed knobs are calibrated
+        defaults, tunable via
+        :func:`picasso_workflow.outpost.origami.origami.cluster_lattice_defects`.
+
+        Parameters
+        ----------
+        i : int
+            Index of the module in the workflow.
+        parameters : dict
+            Required keys (exactly one design source):
+
+            ``design_file`` : str
+                Path to a picasso design ``.yaml`` file, OR
+            ``geometry`` : dict
+                A grid ``{n_rows, n_cols, spacing_nm, angle}`` or an
+                explicit ``{sites_nm: [[x, y], ...]}`` layout.
+
+            The design spacing comes from the ``geometry`` spec itself (the
+            grid ``spacing_nm`` or the explicit site list).
+
+            Optional keys:
+
+            ``min_n_locs_per_frame``, ``max_n_locs_per_frame`` : float or str
+                The nlocs pick window (per-frame, or a quantile string like
+                ``"q0.25"``). The "Preview phase space" GUI dialog simulates
+                the expected origami cloud to suggest these.
+            ``min_rmsd``, ``max_rmsd`` : float
+                The RMSD pick window (camera px), likewise suggested by the
+                preview dialog.
+            ``pick_diameter_factor`` : float
+                Pick diameter as a multiple of the origami size
+                (default 1.5 = 150 %).
+            ``allow_mirror`` : bool
+                Allow a mirrored match when registering to the design
+                (default True).
+            ``n_plot_structures`` : int
+                Number of representative structures to plot.
+            ``display_pixelsize`` : float
+                Pixel size for display in nm (default 1).
+            ``cluster_patterns`` : bool
+                Cluster the accepted structures by their resolved geometry and
+                emit per-cluster picks plus a summary (default False). For a
+                lattice design each pick is registered onto the design and
+                grouped by fit quality + defect occupancy; a non-lattice
+                design falls back to a template-agnostic site-graph descriptor.
+            ``n_pattern_examples`` : int
+                Example structures rendered per cluster for the report
+                (default 8; 0 to skip).
+            ``pattern_eps_frac`` : float
+                Docking-site subclustering neighbourhood as a fraction of the
+                site spacing (default 0.2). Lower if sites are merged /
+                under-counted; raise if a single site splits.
+            ``pattern_min_samples`` : int
+                DBSCAN ``min_samples`` for docking-site subclustering
+                (default 7; a site needs at least this many localizations).
+                A high floor suppresses spurious over-counted sites; drop it
+                only for dim samples with few locs per site.
+            ``pattern_defect_grouping`` : {"completeness", "exact"}
+                Lattice method: group on-lattice picks by number of occupied
+                sites (default, a few robust classes) or by the exact defect
+                pattern.
+            ``pattern_min_sites_frac`` : float
+                Lattice method: min matched sites as a fraction of the design
+                nodes to count as on-lattice (default 0.66). The remaining
+                on-lattice gate thresholds use calibrated defaults (tune via
+                :func:`picasso_workflow.outpost.origami.origami.cluster_lattice_defects`).
+        results : dict
+            Module results (see class docstring). With ``cluster_patterns``
+            also ``n_pattern_clusters``, ``pattern_summary``,
+            ``pattern_method``, ``fp_pattern_table`` (.csv),
+            ``fp_pattern_picks`` (label -> pick .yaml),
+            ``fp_pattern_phasespace``, the lattice-method
+            ``fp_pattern_site_nlocs_hist`` or the pairwise-method
+            ``fp_pattern_feature_space`` / ``fp_pattern_pairdist`` (.png), and
+            ``fp_pattern_renderings`` (label -> list of example renders). The
+            lattice method also exports the resolved single docking sites of
+            the on-lattice structures: ``fp_pattern_site_picks`` (a picasso
+            pick .yaml), ``fp_pattern_sites_table`` (.csv, each site tagged
+            with its design-node index) and ``n_pattern_sites``.
+        """
+
+    @abc.abstractmethod
     def undrift_from_picked(self):
         """Undrift using picked localizations.
 
@@ -1777,8 +1998,10 @@ class AbstractModuleCollection(abc.ABC):
             Required keys:
 
             ``fp_picked_locs`` : str
-                Filepath to the picked locs to undrift from (an hdf5 file of
-                locs with a ``'group'`` column describing the picks).
+                Filepath to the picks to undrift from. Either an hdf5 file of
+                locs with a ``'group'`` column describing the picks, or a
+                picasso pick-region ``.yaml`` (``Centers`` + ``Diameter``),
+                which is applied to ``self.locs`` to build the grouped picks.
         results : dict
             Module results (see class docstring).
         """
@@ -2220,6 +2443,26 @@ class ParameterCommandExecutor(DictSimpleTyper):
             else:
                 cmd = t[0]
                 aritexp = None
+            doubled = self.command_sign * 2
+            if len(self.command_sign) == 1 and cmd[:2] == doubled:
+                # A per-channel command ("$$...") reached the single-dataset
+                # executor; only the aggregation ParameterTiler (command
+                # sign "$$") resolves these. A spec-level default (third
+                # element of $$map / $$index) lets a reusable spec also run
+                # standalone; without one, fail with an actionable message
+                # instead of the generic undefined-command error.
+                if cmd in (f"{doubled}map", f"{doubled}index") and len(t) > 2:
+                    return {
+                        "parsed": t[2],
+                        "original": tuple([t[0][2:], *t[1:]]),
+                    }
+                raise ValueError(
+                    f"The parameter command {t} maps per-channel values "
+                    "and is only resolved by an aggregation workflow's "
+                    "tile parameters. For a single-dataset workflow, "
+                    "replace it with a concrete value (or add a default "
+                    "as the third tuple element)."
+                )
             if cmd == f"{self.command_sign}get_prior_result":
                 logger.debug(f"Getting prior result from {t[1]}.")
                 res = self.get_prior_result(t[1])
@@ -2335,6 +2578,27 @@ class ParameterCommandExecutor(DictSimpleTyper):
                 logger.debug(f"max of {components}.")
                 res = self.max(components)
                 logger.debug(f"Max result is {res}.")
+            elif cmd == f"{self.command_sign}mean":
+                logger.debug(f"mean of {t[1:]}.")
+                components = []
+                for arg in t[1:]:
+                    if isinstance(arg, dict) and "parsed" in arg.keys():
+                        components.append(arg["parsed"])
+                    elif (
+                        isinstance(arg, (tuple, list))
+                        and len(arg) > 1
+                        and isinstance(arg[0], str)
+                        and arg[0][: len(self.command_sign)]
+                        == self.command_sign
+                    ):
+                        sub_res = self.scan_tuple(arg)
+                        components.append(sub_res["parsed"])
+                        originals.append(sub_res["original"])
+                    else:
+                        components.append(arg)
+                logger.debug(f"mean of {components}.")
+                res = self.mean(components)
+                logger.debug(f"Mean result is {res}.")
             else:
                 msg = (
                     "Found undefined command for current command "
@@ -2542,6 +2806,19 @@ class ParameterCommandExecutor(DictSimpleTyper):
             else:
                 components.append(arg)
         return np.min(components)
+
+    def mean(self, *args):
+        """Take the mean of components that may be given as iterables,
+        or separate arguments.
+        """
+        components = []
+        for arg in args:
+            if isinstance(arg, (list, tuple)):
+                for ar in arg:
+                    components.append(ar)
+            else:
+                components.append(arg)
+        return np.mean(components)
 
 
 def is_valid_expression(expression: str) -> bool:
@@ -2760,6 +3037,200 @@ class ParameterTiler:
             tags = [""] * len(result_parameters)
 
         return result_parameters, tags
+
+
+#: Reserved single-dataset module-parameter key naming a per-channel boolean
+#: tile-parameter column. A module carrying it runs only on channels where
+#: that column is truthy (see :func:`compile_channel_restrictions`).
+RUN_ON_CHANNELS_KEY = "#run_on_channels"
+
+#: Parameter keys that hold nested ``(module_name, params)`` sub-workflow lists
+#: (branch / conditional_branch). The compiler recurses into these so a
+#: ``#run_on_channels`` directive is honored wherever a module sits.
+_SUBWORKFLOW_KEYS = ("branch_modules", "join_modules", "if_true", "if_false")
+
+
+def compile_channel_restrictions(modules):
+    """Compile ``#run_on_channels`` directives into ``conditional_branch``.
+
+    A single-dataset module may carry the reserved
+    :data:`RUN_ON_CHANNELS_KEY` key, whose value is the name of a per-channel
+    boolean tile-parameter column. Such a module should run only on the
+    channels where that column is truthy. This rewrites it to a
+    ``conditional_branch`` whose condition reads the column per channel (a
+    ``("$$map", <column>, False)`` command, resolved during tiling so each
+    channel's single-dataset workflow gets a concrete bool) and whose
+    ``if_false`` branch is empty -- a clean no-op on the other channels.
+
+    The compiler recurses into nested sub-workflow lists
+    (``branch_modules`` / ``join_modules`` / ``if_true`` / ``if_false``), so a
+    directive on a module nested inside a ``branch`` / ``conditional_branch``
+    is honored too (e.g. after a module is moved into a branch in the GUI).
+
+    Modules without the key (and non-dict parameter blocks) are returned
+    unchanged. The input is never mutated; a stray empty directive is simply
+    stripped (treated as "no restriction"). The transform is idempotent: an
+    already-compiled ``conditional_branch`` carries no directive and passes
+    through (its sub-lists are still recursed, which is a no-op second time).
+
+    Parameters
+    ----------
+    modules : list of tuple
+        ``(module_name, module_parameters)`` tuples, e.g. a single-dataset
+        module list.
+
+    Returns
+    -------
+    list of tuple
+        The module list with restricted modules wrapped in
+        ``conditional_branch``.
+    """
+    return [_compile_restriction(name, params) for name, params in modules]
+
+
+def _compile_restriction(module_name, params):
+    """Compile one ``(name, params)`` entry (see
+    :func:`compile_channel_restrictions`)."""
+    if not isinstance(params, dict):
+        return (module_name, params)
+
+    nested = [k for k in _SUBWORKFLOW_KEYS if isinstance(params.get(k), list)]
+    # Nothing to do only when the directive key is absent (not merely empty --
+    # an empty directive must still be stripped) and there is no nested
+    # sub-workflow to recurse into.
+    if RUN_ON_CHANNELS_KEY not in params and not nested:
+        return (module_name, params)  # unchanged; reuse the dict
+
+    # Copy so the caller's params are never mutated; recurse into any nested
+    # sub-workflow lists and drop the directive key.
+    new_params = dict(params)
+    for key in nested:
+        new_params[key] = compile_channel_restrictions(new_params[key])
+    column = new_params.pop(RUN_ON_CHANNELS_KEY, None)
+
+    if not column:
+        # No (or empty) restriction -- the key (if any) has been stripped.
+        return (module_name, new_params)
+
+    condition = {
+        "left": ("$$map", column, False),
+        "operator": "==",
+        "right": True,
+    }
+    return (
+        "conditional_branch",
+        {
+            "condition": condition,
+            "if_true": [(module_name, new_params)],
+            "if_false": [],
+        },
+    )
+
+
+def channel_restriction_columns(modules):
+    """Tile-parameter column names referenced by ``#run_on_channels``.
+
+    Recurses into nested sub-workflow lists, mirroring
+    :func:`compile_channel_restrictions`. Used to warn about a directive that
+    names a column absent from ``single_dataset_tileparameters`` (which would
+    silently default to ``False`` and skip the module on every channel).
+    """
+    cols = set()
+    for _name, params in modules:
+        if not isinstance(params, dict):
+            continue
+        column = params.get(RUN_ON_CHANNELS_KEY)
+        if column:
+            cols.add(column)
+        for key in _SUBWORKFLOW_KEYS:
+            sub = params.get(key)
+            if isinstance(sub, list):
+                cols |= channel_restriction_columns(sub)
+    return cols
+
+
+class BranchStateManager:
+    """Snapshot and restore the per-branch analysis state of an analyzer.
+
+    Used by the ``branch`` module (see
+    :meth:`AbstractModuleCollection.branch`) to give each branch a private
+    copy of the localization-level state while sharing the heavy, read-only
+    arrays (the raw ``movie``, the ``results_folder`` and ``analysis_config``)
+    by reference. This is what makes branching *after* the mask cheap: the
+    per-branch cost is O(localizations in that branch), not O(movie).
+
+    Only the attributes in :attr:`PER_BRANCH` are snapshotted. A shallow copy
+    of list containers is taken so that a branch reassigning an element (e.g.
+    ``self.channel_locs[k] = ...``) cannot leak into a sibling branch; the
+    underlying record arrays stay shared until a module replaces them (modules
+    reassign rather than mutate in place).
+    """
+
+    # attributes that diverge per branch -> snapshot/restore
+    PER_BRANCH = (
+        "locs",
+        "info",
+        "identifications",
+        "drift",
+        "channel_locs",
+        "channel_info",
+        "channel_tags",
+    )
+    # attributes shared read-only across branches -> never touched:
+    #   movie, results_folder, analysis_config
+
+    @staticmethod
+    def snapshot(analyzer) -> dict:
+        """Return a shallow snapshot of the analyzer's per-branch state."""
+        snap = {}
+        for attr in BranchStateManager.PER_BRANCH:
+            value = getattr(analyzer, attr, None)
+            snap[attr] = list(value) if isinstance(value, list) else value
+        return snap
+
+    @staticmethod
+    def restore(analyzer, snapshot: dict) -> None:
+        """Restore analyzer state from a :meth:`snapshot`.
+
+        A fresh shallow copy of list containers is installed on each restore
+        so repeated restores from the same snapshot stay independent.
+        """
+        for attr, value in snapshot.items():
+            setattr(
+                analyzer,
+                attr,
+                list(value) if isinstance(value, list) else value,
+            )
+
+
+class ResultsProxy:
+    """Minimal ``parent_object`` for a :class:`ParameterCommandExecutor`.
+
+    Exposes a plain ``results`` dict so that a branch sub-module's ``$``
+    commands (``$get_prior_result`` / ``$get_previous_module_result``) resolve
+    against a *branch-local* results view rather than the trunk runner. The
+    view is built branch-local-first so an index-prefixed previous-module
+    lookup prefers the branch's own preceding sub-module, while explicit
+    ``$get_prior_result`` keys can still reach the shared-prefix (trunk)
+    modules merged in as a fallback.
+    """
+
+    def __init__(self, results: dict):
+        self.results = results
+
+    @staticmethod
+    def merged(branch_local: dict, trunk: dict) -> "ResultsProxy":
+        """Build a proxy whose results are ``branch_local`` over ``trunk``.
+
+        Branch-local keys come first (and win on any collision) so the
+        index-prefix scan in
+        :meth:`ParameterCommandExecutor.get_previous_module_result` resolves
+        to the branch's own preceding sub-module.
+        """
+        view = dict(branch_local)
+        for key, value in (trunk or {}).items():
+            view.setdefault(key, value)
+        return ResultsProxy(view)
 
 
 def correct_path_separators(file_path: str) -> str:

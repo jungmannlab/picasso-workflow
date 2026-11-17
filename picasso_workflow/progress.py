@@ -58,6 +58,9 @@ DONE = "done"
 FAILED = "failed"
 SKIPPED = "skipped"
 ABORTED = "aborted"
+# a stepwise run that stopped cleanly at its stop-after boundary; remaining
+# modules are pending, not failed (see WorkflowRunner.stop_after)
+PAUSED = "paused"
 
 # canonical filenames written into a run's result folder
 PROGRESS_FILENAME = "progress.json"
@@ -184,10 +187,17 @@ class ProgressManager:
         self.size = size
         self._throttle = throttle
         self._module_t0: dict[int, float] = {}
+        # start times for nested branch sub-modules, keyed (i, group, sub)
+        self._sub_t0: dict[tuple, float] = {}
         self._last_progress_emit = 0.0
         self._state = {
             "kind": kind,
             "report_name": report_name,
+            # Browser URL of the Confluence report page, when documenting to
+            # Confluence. Recorded here so the GUI monitor (which only reads
+            # progress.json) can offer a clickable link without a live
+            # Confluence connection. None when not reporting to Confluence.
+            "report_url": None,
             # Identity of the submission that wrote this state. A continued run
             # re-adopts an earlier report_name (whose ``_<id>`` token is
             # deliberately dropped, see metaworkflow), so the monitor cannot
@@ -315,6 +325,116 @@ class ProgressManager:
                 m["error"] = str(error)[:2000]
         self.emit()
 
+    # -- branch (nested sub-module) tracking ---------------------------------
+
+    def branch_init(self, i: int, groups: list) -> None:
+        """Attach a nested branch structure to module ``i``.
+
+        ``groups`` is a list of ``(label, kind, submodule_names)`` tuples --
+        one per branch plus (optionally) the join group. Each becomes a
+        collapsible sub-tree of module rows under the branch module in the
+        monitor. Safe no-op if module ``i`` is unknown.
+        """
+        m = self._get(i)
+        if m is None:
+            return
+        m["subgroups"] = [
+            {
+                "label": str(label),
+                "kind": kind,
+                "status": PENDING,
+                "modules": [
+                    {
+                        "i": j,
+                        "name": str(name),
+                        "status": PENDING,
+                        "fraction": None,
+                        "msg": None,
+                        "elapsed": None,
+                        "error": None,
+                    }
+                    for j, name in enumerate(names)
+                ],
+            }
+            for label, kind, names in groups
+        ]
+        self.emit()
+
+    def _get_sub(self, i: int, g: int, s: int):
+        """Return ``(group, submodule)`` dicts for a nested sub-module."""
+        m = self._get(i)
+        if m is None:
+            return None, None
+        groups = m.get("subgroups") or []
+        if not (0 <= g < len(groups)):
+            return None, None
+        group = groups[g]
+        mods = group.get("modules") or []
+        if not (0 <= s < len(mods)):
+            return group, None
+        return group, mods[s]
+
+    def branch_submodule_start(self, i: int, g: int, s: int) -> None:
+        """Mark nested sub-module ``(g, s)`` of module ``i`` as running."""
+        group, sub = self._get_sub(i, g, s)
+        if sub is None:
+            return
+        self._sub_t0[(i, g, s)] = time.perf_counter()
+        sub["status"] = RUNNING
+        sub["fraction"] = 0.0
+        if group is not None:
+            group["status"] = RUNNING
+        self.emit()
+
+    def branch_submodule_progress(
+        self,
+        i: int,
+        g: int,
+        s: int,
+        fraction: float | None,
+        msg: str | None = None,
+    ) -> None:
+        """Report intra-progress of a nested sub-module (throttled)."""
+        group, sub = self._get_sub(i, g, s)
+        if sub is None:
+            return
+        if fraction is not None:
+            try:
+                sub["fraction"] = max(0.0, min(1.0, float(fraction)))
+            except (TypeError, ValueError):
+                pass
+        changed = False
+        if msg is not None and msg != sub.get("msg"):
+            sub["msg"] = str(msg)
+            changed = True
+        now = time.perf_counter()
+        if changed or (now - self._last_progress_emit) >= self._throttle:
+            self._last_progress_emit = now
+            self.emit()
+
+    def branch_submodule_end(
+        self, i: int, g: int, s: int, status: str
+    ) -> None:
+        """Mark nested sub-module ``(g, s)`` finished and roll up the group."""
+        group, sub = self._get_sub(i, g, s)
+        if sub is None:
+            return
+        t0 = self._sub_t0.pop((i, g, s), None)
+        sub["status"] = status
+        if status == DONE:
+            sub["fraction"] = 1.0
+        if t0 is not None:
+            sub["elapsed"] = round(time.perf_counter() - t0, 3)
+        if group is not None:
+            mods = group.get("modules") or []
+            if any(mo.get("status") == FAILED for mo in mods):
+                group["status"] = FAILED
+            elif mods and all(
+                mo.get("status") in (DONE, SKIPPED) for mo in mods
+            ):
+                group["status"] = DONE
+        self.emit()
+
     # -- aggregation (dataset) tracking --------------------------------------
 
     def datasets_init(self, tags: list) -> None:
@@ -334,6 +454,20 @@ class ProgressManager:
         self._state["current"] = i
         self.emit()
 
+    def set_report_url(self, url: str | None) -> None:
+        """Record the Confluence report-page URL and broadcast it.
+
+        No-op if ``url`` is not a non-empty string (guards against a mock or
+        unresolved value reaching the JSON-serialised state) or is unchanged,
+        so it can be called unconditionally without spurious emits.
+        """
+        if not isinstance(url, str) or not url:
+            return
+        if self._state.get("report_url") == url:
+            return
+        self._state["report_url"] = url
+        self.emit()
+
     def mark_running(self) -> None:
         """Mark the overall run as running (used by aggregation)."""
         self._state["state"] = RUNNING
@@ -342,7 +476,8 @@ class ProgressManager:
         self.emit()
 
     def finish(self, state: str) -> None:
-        """Set the overall run state (``done`` / ``failed`` / ``aborted``)."""
+        """Set the overall run state (``done`` / ``failed`` / ``aborted`` /
+        ``paused``)."""
         self._state["state"] = state
         self.emit()
 
@@ -451,8 +586,11 @@ class PicassoProgressProxy:
 def overall_fraction(state: dict) -> float:
     """Compute an overall 0..1 completion fraction from a progress state.
 
-    Completed and skipped modules count as full; a running module counts by
-    its intra-module fraction. Returns 0.0 for an empty/None state.
+    Completed, skipped and paused modules/datasets count as full; a running
+    module counts by its intra-module fraction. ``paused`` is a terminal
+    stepwise-boundary state (the modules before it are complete), so it
+    counts as done -- otherwise a fully-paused run would read as 0%.
+    Returns 0.0 for an empty/None state.
     """
     if not state:
         return 0.0
@@ -462,11 +600,13 @@ def overall_fraction(state: dict) -> float:
         datasets = state.get("datasets") or []
         if not datasets:
             return 0.0
-        done = sum(1 for d in datasets if d.get("state") in (DONE, SKIPPED))
+        done = sum(
+            1 for d in datasets if d.get("state") in (DONE, SKIPPED, PAUSED)
+        )
         return done / len(datasets)
     total = 0.0
     for m in modules:
-        if m.get("status") in (DONE, SKIPPED):
+        if m.get("status") in (DONE, SKIPPED, PAUSED):
             total += 1.0
         elif m.get("status") == RUNNING:
             total += m.get("fraction") or 0.0

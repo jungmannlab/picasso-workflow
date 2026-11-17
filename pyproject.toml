@@ -7,40 +7,43 @@ dynamic= ["version"]
 name = "picasso_workflow"
 description = "Automation and documentation of DNA-PAINT analysis workflows"
 license = {'file' = "LICENSE"}
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 dependencies = [
-    "matplotlib",
+    # Shared numeric/IO libs pinned to the stack-wide C41 harmonization ranges
+    # (picasso 0.11.3 is the anchor), so picasso-workflow resolves to the same
+    # numpy-2 stack as picasso / PycroFlow / monet when co-installed. These were
+    # previously unpinned.
+    "matplotlib>=3.10.7,<4",
     "seaborn",
-    "numpy",
-    "pandas",
-    "tables",
-    "numba",
+    "numpy>=2.2.6,<3",
+    "pandas>=2.3.3,<3",
+    "tables>=3.10.1,<4",
+    "numba>=0.62.1,<1",
     "openpyxl==3.1.2",
-    "picassosr>=0.11.1",
-    # GUI uses PyQt6 directly; keep in sync with picasso's constraint
-    "PyQt6>=6.10.2,<7",
-    # Embedded HTML report viewer in the GUI Results tab (QWebEngineView);
-    # keep the major/minor in sync with PyQt6.
-    "PyQt6-WebEngine>=6.10,<7",
+    # Upper bound caps at the next picasso major, where the library is allowed
+    # to break its 1.0 stability promise. Bump it deliberately with a green
+    # picasso contract test (tests/test_picasso_contract.py), not automatically.
+    # picasso 1.0 is the first release with a stability promise; the workflow is
+    # migrated to its nm-everywhere / IdentificationParameters / unified-progress
+    # API (see the picasso 1.0 migration).
+    "picassosr>=1.0.0rc1,<2",
+    # The Qt GUI (PyQt6 + the embedded WebEngine report viewer) is a `[gui]`
+    # EXTRA, not a base dep: it is lazy-imported, so headless/cluster/analysis
+    # installs don't need it, and PyQt6 + its Qt6/WebEngine binaries are ~530 MB
+    # (the bulk of the cluster Apptainer image). See the `[gui]` extra below.
     # NVML bindings for GPU CUDA-core count in analysis_documentation
     # (nvidia-smi cannot report cores). Harmless without an NVIDIA driver.
     "nvidia-ml-py>=12.0.0",
     "moviepy==1.0.3",
     "python-dotenv==1.2.3",
-    "pre-commit>=3.5.1",
-    "bandit==1.7.8",
-    # "coverage>=6.5,<6.6",
-    "pytest==9.0.3",
-    "isort==5.13.2",
     "psutil",
     # atlassian-python-api 5.0 restructured the Confluence client (Cloud/Server
     # subclasses, get_page_by_title space -> space_key, methods relocated),
     # which breaks ConfluenceInterface. Pin below it until that migration.
     "atlassian-python-api>=3.41,<5",
-    "memory-profiler>=0.61.0",
     "loguru>=0.7.3",
-    "h5py",
-    "memory_profiler",
+    # C41 anchor range (was unpinned).
+    "h5py>=3.15.1,<4",
     # "mpi4py",
     # "openmpi"
 ]
@@ -48,8 +51,42 @@ keywords = ["picasso"]
 
 [project.scripts]
 picasso-workflow-gui = "picasso_workflow._launcher:main"
+# Cluster admin console: inspect shared-mount Apptainer images, the SLURM
+# queue, and disk usage over SSH (GUI needs the [gui] extra; CLI is headless).
+picasso-workflow-admin-gui = "picasso_workflow.admin.qt:main"
+picasso-workflow-admin-cli = "picasso_workflow.admin.cli:main"
+# WP-7 flat-archive backfill: ingest _locs.hdf5 datasets, import curated
+# taxon + good/bad labels, and learn per-taxon expected-metric ranges.
+picasso-workflow-backfill-locs = "picasso_workflow.backfill.ingest:main"
+picasso-workflow-backfill-labels = "picasso_workflow.backfill.csv_import:main"
+picasso-workflow-backfill-ranges = "picasso_workflow.backfill.ranges:main"
 
 [project.optional-dependencies]
+# Development & test tooling -- NOT needed at runtime, so kept out of the base
+# deps to keep `pip install picasso_workflow` (and every downstream env) lean.
+# CI installs the package with this extra: `pip install -e ".[dev]"`. Versions
+# mirror .pre-commit-config.yaml / the hosted lint job where they overlap.
+dev = [
+    "pytest==9.0.3",
+    # coverage is driven by run-unittests.yml (`python -m coverage run`); keep
+    # it in the dev extra so that workflow's install (`pip install -e ".[dev]"`)
+    # provides it.
+    "coverage>=7,<8",
+    "pre-commit>=3.5.1",
+    "bandit==1.7.8",
+    "isort==5.13.2",
+]
+# Qt desktop GUI (lazy-imported, so NOT a base dep). PyQt6 + its Qt6/WebEngine
+# binaries are ~530 MB -- keeping them out of base makes headless analysis and
+# the cluster Apptainer image lean. `pip install .[gui]` for the desktop app;
+# CI installs `.[dev,gui]` so the GUI tests run (the suite skips test_gui_*.py
+# when PyQt6 is absent -- see tests/conftest.py).
+gui = [
+    # keep the constraint in sync with picasso's.
+    "PyQt6>=6.10.2,<7",
+    # embedded HTML report viewer in the GUI Results tab (QWebEngineView).
+    "PyQt6-WebEngine>=6.10,<7",
+]
 cluster = [
     "mpi4py>=4.0.2",
 ]
@@ -88,9 +125,25 @@ gpu = [
     "numba-cuda",
     "nvidia-cuda-runtime-cu12",
 ]
+# DNA-PAINT binding-event analysis (the ``binding_event_analysis`` workflow
+# module, Steen et al. 2024). Its code lives in
+# ``picasso_workflow/outpost/binding_events/`` and is imported lazily, so these
+# deps are only needed when that module runs. Install with
+# ``pip install -e ".[binding-events]"``.
+binding-events = [
+    "lmfit",
+    "pandarallel",
+]
 
-[tool.setuptools]
-packages = ["picasso_workflow"]
+[tool.setuptools.packages.find]
+# Auto-discover picasso_workflow and all its subpackages so feature folders
+# (e.g. outpost/, outpost/resolution/, outpost/clustering/dbscan_molint/,
+# picasso_set/ ...) ship in
+# a non-editable wheel. The former explicit ``packages = ["picasso_workflow"]``
+# was non-recursive, so subpackages were not declared and a wheel install could
+# miss them. (The test package still ships as data via the setuptools-scm file
+# finder, as before; trimming that is a separate change.)
+include = ["picasso_workflow*"]
 
 [tool.setuptools_scm]
 # Writes the version into a file that is importable at runtime, even when
@@ -101,10 +154,19 @@ write_to = "picasso_workflow/_version.py"
 fallback_version = "0.3.3.dev0"
 
 [tool.setuptools.package-data]
-picasso_workflow = ["picasso-workflow.ico"]
+# config.yaml and .env are gitignored (site-specific / secrets), so they are
+# absent from a clean checkout and cannot be shipped. The tracked *_template
+# files are bundled instead and serve as the built-in defaults for a wheel
+# install (load_config falls back to config_template.yaml when no config.yaml
+# is present -- see picasso_workflow/__init__.py).
+picasso_workflow = [
+    "picasso-workflow.ico",
+    "config_template.yaml",
+    ".env_template",
+]
 
 [tool.black]
-target-version = ["py310"]
+target-version = ["py311"]
 line-length = 79
 include = "\\.pyi?$"
 exclude = '''
@@ -132,9 +194,8 @@ strict = true
 max-line-length = 88  # informational; E501 is ignored
 extend-ignore = "E203,E501,W503"
 # extend-exclude keeps flake8's sensible defaults and additionally skips the
-# generated/snapshot test fixtures and the isolated experimental modules
-# (not imported by the package) that still carry WIP F-codes.
-extend-exclude = "docs,picasso_workflow/_version.py,picasso_workflow/spinna_mle.py,picasso_workflow/spinna_mle_2.py,picasso_workflow/nn_redistribution.py,picasso_workflow/tests/TestData"
+# generated version file and the snapshot/test-data fixtures.
+extend-exclude = "docs,picasso_workflow/_version.py,picasso_workflow/tests/TestData"
 
 [tool.bandit]
 exclude = "/tests"

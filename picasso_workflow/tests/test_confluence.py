@@ -77,6 +77,7 @@ class Test_A_ConfluenceInterface(unittest.TestCase):
                 "confluence",
                 "testimg.png",
             ),
+            return_id=True,
         )
         ci.update_page_content_with_image_attachment(
             pgtitle, pgid, "testimg.png"
@@ -93,6 +94,7 @@ class Test_A_ConfluenceInterface(unittest.TestCase):
                 "confluence",
                 "testmov.mp4",
             ),
+            return_id=True,
         )
         ci.update_page_content_with_movie_attachment(
             pgtitle, pgid, "testmov.mp4"
@@ -253,6 +255,35 @@ class Test_B_ConfluenceReporterModules(unittest.TestCase):
 
     def zfit(self):
         pass
+
+    def plugin(self):
+        parameters = {"api_name": "myfunc", "inject": ["locs"]}
+        results = {
+            "start time": "now",
+            "duration": 3.5,
+            "plugin_api_name": "myfunc",
+            "plugin_callable": "mypkg.myfunc",
+            "injected": ["locs"],
+            "plugin_report": "did a thing <ok>",
+            "plugin_result": {"count": 3},
+            "plugin_files": ["/tmp/out.csv"],
+        }
+        # self.cr.ci is shared across all module tests; isolate our calls.
+        self.cr.ci.upload_attachment.reset_mock()
+        self.cr.ci.update_page_content.reset_mock()
+        self.cr.plugin(0, parameters, results)
+
+        # the report section was posted and the file uploaded
+        self.cr.ci.update_page_content.assert_called()
+        self.cr.ci.upload_attachment.assert_called_once_with(
+            self.cr.report_page_id, "/tmp/out.csv"
+        )
+
+        # clean up
+        pgid, pgtitle = self.cr.ci.get_page_properties(
+            self.cr.report_page_name
+        )
+        self.cr.ci.delete_page(pgid)
 
     # @unittest.skip("")
     def export_brightfield(self):
@@ -690,27 +721,6 @@ class Test_B_ConfluenceReporterModules(unittest.TestCase):
         self.cr.ci.delete_page(pgid)
 
     # @unittest.skip("")
-    def ripleysk(self):
-        parameters = {
-            "ripleys_threshold": 1.2,
-            "atype": "Ripleys",
-        }
-        results = {
-            "start time": "now",
-            "duration": 4.12,
-            "success": True,
-            "ripleys_significant": [("a", "b")],
-            "fp_ripleys_meanval": "bklab",
-        }
-        self.cr.ripleysk(0, parameters, results)
-
-        # clean up
-        pgid, pgtitle = self.cr.ci.get_page_properties(
-            self.cr.report_page_name
-        )
-        self.cr.ci.delete_page(pgid)
-
-    # @unittest.skip("")
     def ripleysk2(self):
         parameters = {
             "ripleys_threshold": 1.2,
@@ -725,29 +735,6 @@ class Test_B_ConfluenceReporterModules(unittest.TestCase):
             "fp_ripleys_meanval": "bklab",
         }
         self.cr.ripleysk2(0, parameters, results)
-
-        # clean up
-        pgid, pgtitle = self.cr.ci.get_page_properties(
-            self.cr.report_page_name
-        )
-        self.cr.ci.delete_page(pgid)
-
-    # @unittest.skip("")
-    def ripleysk_average(self):
-        parameters = {
-            "ripleys_threshold": 1.2,
-            "report_names": ["a", "b", "c"],
-            "fp_workflows": ["/a", "/b", "/c"],
-        }
-        results = {
-            "start time": "now",
-            "duration": 4.12,
-            "success": True,
-            "output_folders": ["/d"],
-            "fp_ripleys_significant": "/e",
-            "ripleys_significant": [("a", "b")],
-        }
-        self.cr.ripleysk_average(0, parameters, results)
 
         # clean up
         pgid, pgtitle = self.cr.ci.get_page_properties(
@@ -850,6 +837,63 @@ class Test_B_ConfluenceReporterModules(unittest.TestCase):
             "n_picks": [412, 501],
         }
         self.cr.find_structures(0, parameters, results)
+
+        # clean up
+        pgid, pgtitle = self.cr.ci.get_page_properties(
+            self.cr.report_page_name
+        )
+        self.cr.ci.delete_page(pgid)
+
+    def pick_origami(self):
+        parameters = {}
+        results = {
+            "start time": "now",
+            "duration": 4.12,
+            "success": True,
+            "n_candidates": 5,
+            "n_registered": 3,
+            "n_accepted": 2,
+            "n_sites_expected": 12,
+            "grid_spacing_nm": 20.0,
+            "funnel": {
+                "n_candidates": 5,
+                "no_locs": 0,
+                "too_few_sites": 1,
+                "rejected_missing_sites": 1,
+                "rejected_rmse": 1,
+                "rejected_spacing": 0,
+                "accepted": 2,
+            },
+            "accepted_overview": {
+                "n_accepted": 2,
+                "n_mirrored": 0,
+                "n_resolved_sites": {
+                    "mean": 12.0,
+                    "std": 0.0,
+                    "min": 12.0,
+                    "max": 12.0,
+                },
+                "mean_spacing_nm": {
+                    "mean": 20.0,
+                    "std": 0.1,
+                    "min": 19.9,
+                    "max": 20.1,
+                },
+                "rmse_nm": {
+                    "mean": 1.2,
+                    "std": 0.2,
+                    "min": 1.0,
+                    "max": 1.4,
+                },
+                "orientation_deg": {
+                    "mean": 35.0,
+                    "std": 1.0,
+                    "min": 34.0,
+                    "max": 36.0,
+                },
+            },
+        }
+        self.cr.pick_origami(0, parameters, results)
 
         # clean up
         pgid, pgtitle = self.cr.ci.get_page_properties(
@@ -1288,6 +1332,68 @@ class Test_B_ConfluenceReporterModules(unittest.TestCase):
         )
         self.cr.ci.delete_page(pgid)
 
+    def branch(self):
+        parameters = {
+            "branch_modules": [("dummy_module", {})],
+            "join_modules": [("dummy_module", {})],
+        }
+        sub = {"start time": "now", "duration": 1.0, "success": True}
+        results = {
+            "start time": "now",
+            "duration": 4.12,
+            "success": True,
+            "branch_type": "screen",
+            "labels": ["a", "b"],
+            "branches": [
+                {"label": "a", "00_dummy_module": dict(sub)},
+                {"label": "b", "00_dummy_module": dict(sub)},
+            ],
+            "join": {"00_dummy_module": dict(sub)},
+            "topology": {
+                "type": "screen",
+                "prefix_index": 0,
+                "labels": ["a", "b"],
+                "branch_modules": ["dummy_module"],
+                "join_modules": ["dummy_module"],
+                "branches": [
+                    {"label": "a", "modules": ["00_dummy_module"]},
+                    {"label": "b", "modules": ["00_dummy_module"]},
+                ],
+            },
+        }
+        self.cr.branch(0, parameters, results)
+
+        # clean up
+        pgid, pgtitle = self.cr.ci.get_page_properties(
+            self.cr.report_page_name
+        )
+        self.cr.ci.delete_page(pgid)
+
+    def summarize_branches(self):
+        parameters = {}
+        results = {
+            "start time": "now",
+            "duration": 4.12,
+            "success": True,
+            "mode": "replicates",
+            "stats": {
+                "labeling efficiency": {
+                    "n": 3,
+                    "mean": 0.6,
+                    "std": 0.16,
+                    "min": 0.4,
+                    "max": 0.8,
+                }
+            },
+        }
+        self.cr.summarize_branches(0, parameters, results)
+
+        # clean up
+        pgid, pgtitle = self.cr.ci.get_page_properties(
+            self.cr.report_page_name
+        )
+        self.cr.ci.delete_page(pgid)
+
     # @unittest.skip("")
     def resolution_analysis(self):
         parameters = {}
@@ -1313,22 +1419,6 @@ class Test_B_ConfluenceReporterModules(unittest.TestCase):
             "success": True,
         }
         self.cr.resolution_frc_spatial(0, parameters, results)
-
-        # clean up
-        pgid, pgtitle = self.cr.ci.get_page_properties(
-            self.cr.report_page_name
-        )
-        self.cr.ci.delete_page(pgid)
-
-    # @unittest.skip("")
-    def undrift_rsso(self):
-        parameters = {}
-        results = {
-            "start time": "now",
-            "duration": 4.12,
-            "success": True,
-        }
-        self.cr.undrift_rsso(0, parameters, results)
 
         # clean up
         pgid, pgtitle = self.cr.ci.get_page_properties(
@@ -1735,6 +1825,272 @@ def _posted_body(cr):
     return cr.ci.update_page_content.call_args[0][2]
 
 
+def test_emit_posts_or_returns():
+    """_emit is the single post-vs-return choke point: deferred -> return the
+    text and don't post; otherwise post to the run page and return None."""
+    cr = _reporter()  # report_page_name="page", report_page_id="1"
+    assert cr._emit("<p>x</p>", True) == "<p>x</p>"
+    assert not cr.ci.update_page_content.called
+    assert cr._emit("<p>y</p>", False) is None
+    cr.ci.update_page_content.assert_called_once_with("page", "1", "<p>y</p>")
+
+
+def test_branch_child_page_title_is_unique_per_branch_module():
+    """Two branch modules that reuse a label get distinct child-page titles
+    (the module index disambiguates), so their content cannot merge onto one
+    Confluence page."""
+    cr = _reporter()
+    assert cr._branch_child_page_title("cell0", 4) == "page - 04 cell0"
+    assert cr._branch_child_page_title("cell0", 7) == "page - 07 cell0"
+    # no index -> bare form (direct/legacy calls)
+    assert cr._branch_child_page_title("cell0") == "page - cell0"
+
+
+def test_strip_layout_wrappers_removes_only_layout_tags():
+    cr = confluence.ConfluenceReporter
+    sample = (
+        '<ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>'
+        "<p>hi</p>"
+        '<ac:image><ri:attachment ri:filename="m.png"/></ac:image>'
+        '<ac:structured-macro ac:name="expand"><ac:rich-text-body>x'
+        "</ac:rich-text-body></ac:structured-macro>"
+        "</ac:layout-cell></ac:layout-section></ac:layout>"
+    )
+    out = cr._strip_layout_wrappers(sample)
+    assert "ac:layout" not in out
+    # inner content (text, image, expand macro) is preserved
+    assert "<p>hi</p>" in out
+    assert "ri:attachment" in out
+    assert "ac:structured-macro" in out
+
+
+def test_branch_submodules_nest_without_layout():
+    """Embedded sub-reports carry no <ac:layout> (which Confluence hoists out
+    of the branch's collapsible expand macro)."""
+    cr = _reporter()
+    branch = {
+        "label": "cell0",
+        "00_dummy_module": {
+            "start time": "now",
+            "duration": 1.0,
+            "success": True,
+        },
+    }
+    out = cr._report_branch_submodules(branch, [("dummy_module", {})])
+    assert "ac:layout" not in out
+    assert "dummy_module" in out
+
+
+def test_fixed_reporters_honor_postpone_report():
+    """A reporter embedded as a branch sub-module must *return* its text and
+    not post to the page. Reporters that ignored ``postpone_report`` posted a
+    stray top-level section (duplicating the copy nested in the branch's
+    collapsible) -- the "does not fit correctly" report layout bug."""
+    cases = [
+        (
+            "create_mask2",
+            {"area": 5.0, "duration": 12.0, "success": True},
+            "Create Density Mask",
+        ),
+        (
+            "refine_mask_by_density",
+            {"area_um^2": 4.0, "duration": 7.0, "success": True},
+            "Refine Mask by Density",
+        ),
+    ]
+    for name, results, title in cases:
+        cr = _reporter()
+        text = getattr(cr, name)(0, {}, results, postpone_report=True)
+        assert text and title in text, name
+        assert (
+            not cr.ci.update_page_content.called
+        ), f"{name} posted to the page despite postpone_report=True"
+        # sanity: with postpone_report=False it still posts exactly once
+        cr2 = _reporter()
+        getattr(cr2, name)(0, {}, results)
+        assert cr2.ci.update_page_content.call_count == 1, name
+
+
+def test_branch_submodules_do_not_leak_to_top_level():
+    """Embedding a real fixed-reporter sub-module (create_mask2) nests its
+    content inside the branch collapsible without posting a stray top-level
+    section."""
+    cr = _reporter()
+    branch = {
+        "label": "cell0",
+        "00_create_mask2": {"area": 5.0, "duration": 12.0, "success": True},
+    }
+    out = cr._report_branch_submodules(branch, [("create_mask2", {})])
+    assert "Create Density Mask" in out
+    assert "ac:layout" not in out
+    assert not cr.ci.update_page_content.called
+
+
+def test_summarize_branches_embeds_figure_when_deferred():
+    """As a branch join module, summarize_branches is rendered deferred
+    (postpone_report=True). Its summary figure must be uploaded and embedded
+    inline in the returned text -- otherwise the graph is dropped from the
+    branch collapsible (the earlier post-then-append-image path was skipped
+    when deferred)."""
+    cr = _reporter()
+    results = {
+        "start time": "now",
+        "duration": 4.12,
+        "success": True,
+        "mode": "replicates",
+        "fp_fig": "/some/dir/branch_summary.png",
+        "stats": {
+            "le": {"n": 3, "mean": 0.6, "std": 0.1, "min": 0.4, "max": 0.8}
+        },
+    }
+    text = cr.summarize_branches(0, {}, results, postpone_report=True)
+    # figure attachment uploaded and referenced inline (survives nesting)
+    cr.ci.upload_attachment.assert_called_once_with(
+        cr.report_page_id, "/some/dir/branch_summary.png"
+    )
+    assert 'ri:filename="branch_summary.png"' in text
+    assert "ac:image" in text
+    # deferred: does not post to the page itself
+    assert not cr.ci.update_page_content.called
+    # embedded copy carries no layout wrapper to be hoisted out of the macro
+    assert "ac:image" in cr._strip_layout_wrappers(text)
+
+
+def test_branch_creates_child_page_per_branch():
+    """Each branch is posted to its own child page nested under the run page;
+    the main page carries links to them, not inline per-branch collapsibles."""
+    cr = _reporter()  # report_page_name="page", report_page_id="1"
+    cr.ci.create_page.side_effect = ["c0", "c1"]
+    parameters = {
+        "branch_modules": [("create_mask2", {})],
+        "join_modules": [],
+    }
+    sub = {"area": 5.0, "duration": 1.0, "success": True}
+    results = {
+        "start time": "now",
+        "duration": 4.0,
+        "success": True,
+        "branch_type": "explicit",
+        "labels": ["cell0", "cell1"],
+        "branches": [
+            {"label": "cell0", "00_create_mask2": dict(sub)},
+            {"label": "cell1", "00_create_mask2": dict(sub)},
+        ],
+        "join": {},
+        "topology": {
+            "type": "explicit",
+            "prefix_index": 0,
+            "labels": ["cell0", "cell1"],
+            "branch_modules": ["create_mask2"],
+            "join_modules": [],
+            "branches": [
+                {"label": "cell0", "modules": ["00_create_mask2"]},
+                {"label": "cell1", "modules": ["00_create_mask2"]},
+            ],
+        },
+    }
+    cr.branch(4, parameters, results)
+
+    # one child page per branch, each nested under the run page ("1"); the
+    # title carries the branch module index (4) so two branch modules can't
+    # collide on a shared label
+    create_calls = cr.ci.create_page.call_args_list
+    assert [c.args[0] for c in create_calls] == [
+        "page - 04 cell0",
+        "page - 04 cell1",
+    ]
+    assert all(c.kwargs.get("parent_id") == "1" for c in create_calls)
+
+    # the create_mask2 sub-report is posted onto each child page (c0/c1)
+    posted_ids = {c.args[1] for c in cr.ci.update_page_content.call_args_list}
+    assert {"c0", "c1"} <= posted_ids
+
+    # the run page gets exactly one section: links to the child pages, and
+    # no inline "Branch: <label>" expand collapsible
+    main_bodies = [
+        c.args[2]
+        for c in cr.ci.update_page_content.call_args_list
+        if c.args[1] == "1"
+    ]
+    assert len(main_bodies) == 1
+    main = main_bodies[0]
+    assert 'ri:content-title="page - 04 cell0"' in main
+    assert 'ri:content-title="page - 04 cell1"' in main
+    assert "Per-branch reports" in main
+    assert "Branch: cell0" not in main
+
+
+def test_branch_streams_to_child_page_then_links_without_reposting():
+    """open_branch_page + report_branch_submodule populate a branch child page
+    live; the final branch() report then only links to it (does not re-create
+    the page or re-post its sub-modules)."""
+    cr = _reporter()  # report_page_name="page", report_page_id="1"
+    cr.ci.create_page.return_value = "cX"
+
+    # live streaming: open the page (with this branch module's index, 4),
+    # then hand it one finished sub-module
+    handle = cr.open_branch_page("cell0", 4)
+    assert handle == ("page - 04 cell0", "cX")
+    cr.ci.create_page.assert_called_once()
+    assert cr.ci.create_page.call_args.kwargs.get("parent_id") == "1"
+    cr.report_branch_submodule(
+        handle,
+        0,
+        "create_mask2",
+        {},
+        {"area": 5.0, "duration": 1.0, "success": True},
+    )
+    # the sub-report landed on the child page (id cX), not the run page
+    posted_ids = {c.args[1] for c in cr.ci.update_page_content.call_args_list}
+    assert "cX" in posted_ids
+
+    # now the module's final report: the streamed branch is only linked
+    cr.ci.create_page.reset_mock()
+    cr.ci.update_page_content.reset_mock()
+    results = {
+        "start time": "now",
+        "duration": 4.0,
+        "success": True,
+        "branch_type": "explicit",
+        "labels": ["cell0"],
+        "branches": [
+            {
+                "label": "cell0",
+                "00_create_mask2": {
+                    "area": 5.0,
+                    "duration": 1.0,
+                    "success": True,
+                },
+            }
+        ],
+        "join": {},
+        "topology": {
+            "type": "explicit",
+            "prefix_index": 0,
+            "labels": ["cell0"],
+            "branch_modules": ["create_mask2"],
+            "join_modules": [],
+            "branches": [{"label": "cell0", "modules": ["00_create_mask2"]}],
+        },
+    }
+    cr.branch(
+        4,
+        {"branch_modules": [("create_mask2", {})], "join_modules": []},
+        results,
+    )
+
+    # no new child page created (already streamed), no sub-report re-posted
+    cr.ci.create_page.assert_not_called()
+    posted_ids = {c.args[1] for c in cr.ci.update_page_content.call_args_list}
+    assert posted_ids == {"1"}  # only the run page got written
+    main = [
+        c.args[2]
+        for c in cr.ci.update_page_content.call_args_list
+        if c.args[1] == "1"
+    ][-1]
+    assert 'ri:content-title="page - 04 cell0"' in main
+
+
 def test_report_error_names_module_index_type_and_parameters():
     cr = _reporter()
     try:
@@ -1850,3 +2206,285 @@ def test_expand_macro_formats_numpy_scalars_and_skips_keys():
 def test_code_macro_escapes_cdata_terminator():
     text = confluence._code_macro("before " + "]]" + "> after")
     assert "]]]]><" + "![CDATA[>" in text
+
+
+# ---------------------------------------------------------------------------
+# Attachment upload: lazy id-lookup + concurrent batch -- no network needed.
+# ---------------------------------------------------------------------------
+
+
+def _make_offline_ci(monkeypatch):
+    """A ConfluenceInterface with a mocked backend client (no network)."""
+    monkeypatch.setattr(
+        confluence.ConfluenceInterface, "connect", lambda self: None
+    )
+    ci = confluence.ConfluenceInterface(
+        "http://example/wiki",
+        "SPC",
+        "Parent",
+        token="tok",
+        parent_page_id="1",
+    )
+    ci.confluence = MagicMock()
+    ci.space_key = "SPC"
+    return ci
+
+
+def test_upload_attachment_skips_id_lookup_by_default(monkeypatch):
+    """Default upload does the single attach call and NOT the extra
+    attachment-listing round-trip (which report code does not need)."""
+    ci = _make_offline_ci(monkeypatch)
+    out = ci.upload_attachment("42", "/tmp/fig.png")
+    ci.confluence.attach_file.assert_called_once()
+    ci.confluence.get_attachments_from_content.assert_not_called()
+    assert out is None
+
+
+def test_upload_attachment_returns_id_when_requested(monkeypatch):
+    """return_id=True still resolves the attachment id via the listing."""
+    ci = _make_offline_ci(monkeypatch)
+    ci.confluence.get_attachments_from_content.return_value = {
+        "results": [{"title": "fig.png", "id": "999"}]
+    }
+    out = ci.upload_attachment("42", "/tmp/fig.png", return_id=True)
+    ci.confluence.attach_file.assert_called_once()
+    ci.confluence.get_attachments_from_content.assert_called_once()
+    assert out == "999"
+
+
+def test_upload_attachments_uploads_all_and_tolerates_failure(monkeypatch):
+    """The batch uploads every file and returns basenames; a file that
+    fails to upload is logged and skipped without aborting the batch."""
+    ci = _make_offline_ci(monkeypatch)
+    fps = [f"/tmp/a{i}.png" for i in range(5)]
+
+    def attach(filename, page_id, space):
+        if filename.endswith("a2.png"):
+            raise ValueError("boom")
+
+    ci.confluence.attach_file.side_effect = attach
+    names = ci.upload_attachments("42", fps, max_workers=3)
+    assert ci.confluence.attach_file.call_count == 5
+    assert set(names) == {"a0.png", "a1.png", "a3.png", "a4.png"}
+
+
+def test_upload_attachments_empty_is_noop(monkeypatch):
+    """No filepaths -> no upload calls, empty result."""
+    ci = _make_offline_ci(monkeypatch)
+    assert ci.upload_attachments("42", [None, ""]) == []
+    ci.confluence.attach_file.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# pick_origami report (offline: build the storage-format text via
+# postpone_report and validate it, no live Confluence needed)
+# ---------------------------------------------------------------------------
+
+
+def _pick_origami_report(results, parameters=None):
+    """Build the pick_origami report text with a mocked interface."""
+    cr = confluence.ConfluenceReporter.__new__(confluence.ConfluenceReporter)
+    cr.ci = MagicMock()
+    cr.report_page_id = "123"
+    cr._emit = lambda text, postpone_report: text  # capture, never post
+    return cr.pick_origami(0, parameters or {}, results, postpone_report=True)
+
+
+def _assert_well_formed(text):
+    """The report is a valid Confluence storage-format fragment (well-formed
+    XHTML once its named entities are declared)."""
+    import xml.etree.ElementTree as ET
+
+    wrapped = (
+        "<!DOCTYPE root ["
+        '<!ENTITY rarr "&#8594;"><!ENTITY nbsp "&#160;">'
+        '<!ENTITY plusmn "&#177;">]>'
+        '<root xmlns:ac="a" xmlns:ri="r">' + text + "</root>"
+    )
+    ET.fromstring(wrapped)  # raises ParseError if malformed
+
+
+def _lattice_results():
+    summary = [
+        {
+            "label": 12,
+            "n_structures": 262,
+            "is_offlattice": False,
+            "occupancy": [1] * 12,
+            "n_sites_occupied": 12,
+            "n_defects": 0,
+            "median_rmse_nm": 2.0,
+            "median_fitted_spacing_nm": 20.0,
+            "median_n_sites": 12.0,
+            "median_nlocs_cv": 0.3,
+            "median_spread_cv": 0.15,
+            "median_nlocs_per_frame": 0.003,
+        },
+        {
+            "label": -1,
+            "n_structures": 890,
+            "is_offlattice": True,
+            "occupancy": [0] * 12,
+            "n_sites_occupied": 0,
+            "n_defects": None,
+            "median_n_sites": 4.0,
+        },
+    ]
+    return {
+        "start time": "now",
+        "duration": 74.3,
+        "success": True,
+        "n_candidates": 15697,
+        "n_accepted": 15697,
+        "n_sites_expected": 12,
+        "grid_spacing_nm": 20.0,
+        "pattern_method": "lattice",
+        "n_pattern_clusters": 1,
+        "pattern_summary": summary,
+        "n_pattern_sites": 7300,
+        "funnel": {"n_candidates": 15697, "accepted": 15697},
+        "accepted_overview": {
+            "n_accepted": 262,
+            "n_mirrored": 3,
+            "n_resolved_sites": {"mean": 11, "std": 1, "min": 8, "max": 12},
+            "mean_spacing_nm": {"mean": 20, "std": 0.2, "min": 19, "max": 21},
+            "rmse_nm": {"mean": 2, "std": 0.5, "min": 1, "max": 4},
+            "orientation_deg": {"mean": 35, "std": 20, "min": 0, "max": 90},
+        },
+        "fp_phasespace": "/x/phase.png",
+        "fp_pattern_phasespace": "/x/pat_phase.png",
+        "fp_pattern_pairscore_space": "/x/pairscore.png",
+        "fp_pattern_fit_space": "/x/fit.png",
+        "fp_pattern_gate_panels": "/x/gates.png",
+        "fp_pattern_site_nlocs_hist": "/x/sitehist.png",
+        "fp_pattern_site_picks": "/x/sitepicks.yaml",
+        "fp_renderings": [["/x/a.png", "/x/b.png"], ["/x/c.png"]],
+        "fp_pattern_renderings": {12: ["/x/e12a.png", "/x/e12b.png"]},
+    }
+
+
+def test_pick_origami_report_lattice_is_well_formed():
+    """The lattice report builds valid storage format with the regrouped
+    headings and every figure embedded."""
+    text = _pick_origami_report(_lattice_results())
+    _assert_well_formed(text)
+    for heading in (
+        "Phase space",
+        "Lattice filter",
+        "Lattice identification",
+        "Example structures",
+    ):
+        assert f"<strong>{heading}</strong>" in text
+    # the gate panels are the "Lattice filter"; renamed from the old title
+    assert "On-lattice gate transparency" not in text
+    # every figure is embedded
+    for fn in (
+        "phase.png",
+        "gates.png",
+        "pairscore.png",
+        "fit.png",
+        "pat_phase.png",
+        "sitehist.png",
+        "e12a.png",
+    ):
+        assert fn in text
+    # per-pattern examples supersede the generic accepted grid
+    assert 'ri:filename="a.png"' not in text
+    # verbose detail is collapsed into expand macros
+    assert 'ac:name="expand"' in text
+    assert "Rejection funnel" in text
+
+
+def test_pick_origami_report_shows_grid_without_pattern_renders():
+    """Without per-pattern renders the generic accepted-structure grid is
+    shown."""
+    results = _lattice_results()
+    del results["fp_pattern_renderings"]
+    text = _pick_origami_report(results)
+    _assert_well_formed(text)
+    assert 'ri:filename="a.png"' in text  # accepted grid now shown
+
+
+def test_pick_origami_report_pairwise_is_well_formed():
+    """The pairwise (non-lattice) path builds valid storage format with its
+    descriptor figures and no lattice-only figures."""
+    results = {
+        "start time": "now",
+        "duration": 5.0,
+        "success": True,
+        "n_candidates": 100,
+        "n_accepted": 40,
+        "n_sites_expected": 2,
+        "grid_spacing_nm": 20.0,
+        "pattern_method": "pairwise",
+        "n_pattern_clusters": 3,
+        "pattern_summary": [
+            {
+                "label": 0,
+                "n_structures": 20,
+                "is_noise": False,
+                "median_n_sites": 2,
+                "median_n_locs": 50,
+                "median_nn_nm": 20.0,
+            }
+        ],
+        "fp_phasespace": "/x/p.png",
+        "fp_pattern_phasespace": "/x/pp.png",
+        "fp_pattern_feature_space": "/x/feat.png",
+        "fp_pattern_pairdist": "/x/pd.png",
+    }
+    text = _pick_origami_report(results)
+    _assert_well_formed(text)
+    assert "feat.png" in text and "pd.png" in text
+    # no lattice filter section when there are no gate panels
+    assert "<strong>Lattice filter</strong>" not in text
+
+
+def test_pick_origami_report_no_clustering_is_well_formed():
+    """With clustering disabled the report still builds (just the pick-window
+    phase space and, if any, the accepted grid)."""
+    results = {
+        "start time": "now",
+        "duration": 5.0,
+        "success": True,
+        "n_candidates": 100,
+        "n_accepted": 40,
+        "n_sites_expected": 12,
+        "grid_spacing_nm": 20.0,
+        "fp_phasespace": "/x/p.png",
+    }
+    text = _pick_origami_report(results)
+    _assert_well_formed(text)
+    assert "p.png" in text
+
+
+class Test_PageUrl(unittest.TestCase):
+    """page_url builds a browser URL from base_url + page id (no network)."""
+
+    def _iface(self, base_url):
+        # bypass __init__/connect: page_url only needs base_url
+        ci = confluence.ConfluenceInterface.__new__(
+            confluence.ConfluenceInterface
+        )
+        ci.base_url = base_url
+        return ci
+
+    def test_cloud_url(self):
+        ci = self._iface("https://miblab.atlassian.net/wiki")
+        self.assertEqual(
+            "https://miblab.atlassian.net/wiki/pages/viewpage.action"
+            "?pageId=12345",
+            ci.page_url("12345"),
+        )
+
+    def test_server_url_trailing_slash(self):
+        ci = self._iface("https://mibwiki.biochem.mpg.de/")
+        self.assertEqual(
+            "https://mibwiki.biochem.mpg.de/pages/viewpage.action?pageId=7",
+            ci.page_url("7"),
+        )
+
+    def test_none_page_id(self):
+        ci = self._iface("https://x/wiki")
+        self.assertIsNone(ci.page_url(None))
+        self.assertIsNone(ci.page_url(""))
