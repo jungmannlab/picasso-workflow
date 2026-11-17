@@ -10,6 +10,16 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ## [Unreleased]
 
+### Fixed
+- **Release auto-triggers the Apptainer image build.** `release.yml` now
+  publishes the GitHub Release with a PAT (`secrets.RELEASE_PAT`) when set, so
+  the `release: published` event actually reaches `build-apptainer.yml` and the
+  `picasso-workflow-[test-]<version>.sif` assets are built + attached
+  automatically. Previously the release was published by the default
+  `GITHUB_TOKEN`, whose events GitHub suppresses from triggering other
+  workflows, so the `.sif` build never fired. Falls back to `GITHUB_TOKEN` (no
+  auto-build) when the secret is absent. (`.github/workflows/release.yml`)
+
 ## [0.7.0] - 2026-11-17
 
 ### Changed
