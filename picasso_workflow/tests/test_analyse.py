@@ -979,7 +979,10 @@ class TestAnalyseModules(unittest.TestCase):
         # clean up
         shutil.rmtree(os.path.join(self.results_folder, "00_align_channels"))
 
-    def test_combine_channels_all(self):
+    def combine_channels(self):
+        # Named for the module (no ``test_`` prefix) so the ``test_modules``
+        # reconciliation invokes it; the ``test_combine_channels_*`` methods
+        # below cover the subset behaviour as standalone tests.
         # Backward compatibility: with no 'channels' subset, all channels are
         # combined into a single channel (the previous behaviour).
         # create locs to be combined
