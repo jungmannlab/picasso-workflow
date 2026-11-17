@@ -11,6 +11,15 @@ This file was started after v0.5.6; earlier history is in the git log.
 ## [Unreleased]
 
 ### Added
+- **picasso-set clusterers run in the aggregation stage.** `picasso_dbscan`,
+  `picasso_hdbscan` and `picasso_g5m` are now both-scope: in an aggregation
+  workflow they cluster each channel in `channel_locs` independently
+  (post-alignment per-channel clustering), mirroring `smlm_clusterer`, and
+  write per-channel outputs plus a `per_channel` results summary. Their
+  single-stage behaviour is unchanged. This lets the Manual → Workflow wizard's
+  `picasso_*` clustering mapping validate when a manual analysis clustered after
+  a cross-channel step.
+
 - **`combine_channels` can combine a subset of channels.** A new optional
   `channels` parameter (a list of channel tags) combines only that subset into
   the new `tag` channel and keeps the other channels untouched, so a RESI

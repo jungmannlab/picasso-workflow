@@ -744,6 +744,50 @@ class PicassoSetCoreMixin:
     # clusterfilter / cluster_combine / cluster_combine_dist)
     # ------------------------------------------------------------------
 
+    def _cluster_each_channel(self, results, cluster_one):
+        """Apply a per-channel clusterer across the aggregation channels.
+
+        The picasso-set clusterers are both-scope: in the single stage they
+        cluster ``self.locs``; in the aggregation stage ``self.locs`` is
+        ``None`` and each channel in ``self.channel_locs`` is clustered
+        independently (post-alignment per-channel clustering), mirroring the
+        aggregation branch of :meth:`AutoPicasso.smlm_clusterer`.
+
+        Parameters
+        ----------
+        results : dict
+            The module's results dict.
+        cluster_one : callable
+            ``cluster_one(tag, locs, info) -> (new_locs, new_info, stats)``:
+            clusters one channel and returns its replacement localizations,
+            the updated info list, and a dict of per-channel result scalars.
+
+        Returns
+        -------
+        dict
+            ``results``, with ``self.channel_locs`` / ``self.channel_info``
+            replaced by the per-channel outputs and the stats aggregated into
+            ``results["per_channel"]`` plus summed numeric totals.
+        """
+        new_locs, new_info, per_channel = [], [], []
+        for tag, info, locs in zip(
+            self.channel_tags, self.channel_info, self.channel_locs
+        ):
+            out_locs, out_info, stats = cluster_one(tag, locs, info)
+            new_locs.append(out_locs)
+            new_info.append(out_info)
+            per_channel.append({"tag": tag, **stats})
+        self.channel_locs = new_locs
+        self.channel_info = new_info
+        results["per_channel"] = per_channel
+        # Sum the per-channel numeric stats into top-level totals (the stats
+        # keys are the same for every channel, so key off the first).
+        if per_channel:
+            for key, val in per_channel[0].items():
+                if key != "tag" and isinstance(val, (int, float)):
+                    results[key] = sum(c[key] for c in per_channel)
+        return results
+
     @module_decorator
     def picasso_dbscan(self, i, parameters, results):
         """Cluster localizations with DBSCAN (native CLI: dbscan).
@@ -786,12 +830,49 @@ class PicassoSetCoreMixin:
         # are in camera pixels, so convert to nm; it returns (locs, info) with
         # the whole info list.
         pixelsize = parameters.get("pixelsize") or self._require_pixelsize_nm()
+        radius_z_nm = (radius_z * pixelsize) if radius_z is not None else None
+
+        if (
+            self.locs is None
+        ):  # aggregation: cluster each channel independently
+
+            def _cluster(tag, locs, info):
+                clustered, cinfo = clusterer.dbscan(
+                    locs,
+                    info,
+                    radius=radius * pixelsize,
+                    min_samples=density,
+                    radius_z=radius_z_nm,
+                )
+                step = dict(cinfo[-1])
+                step["Wrapped by"] = "picasso-workflow : picasso_dbscan"
+                centers, _ = clusterer.find_cluster_centers(clustered, info)
+                out_info = info + [step]
+                io.save_locs(
+                    os.path.join(results["folder"], f"{tag}_locs_dbscan.hdf5"),
+                    clustered,
+                    out_info,
+                )
+                fp_centers = os.path.join(
+                    results["folder"], f"{tag}_locs_dbclusters.hdf5"
+                )
+                io.save_locs(fp_centers, centers, out_info)
+                results[f"filepath_locs_dbclusters_{tag}"] = fp_centers
+                return (
+                    clustered,
+                    out_info,
+                    {"nclusters": len(centers), "nlocs": len(clustered)},
+                )
+
+            self._cluster_each_channel(results, _cluster)
+            return parameters, results
+
         self.locs, _dbscan_info = clusterer.dbscan(
             self.locs,
             self.info,
             radius=radius * pixelsize,
             min_samples=density,
-            radius_z=(radius_z * pixelsize) if radius_z is not None else None,
+            radius_z=radius_z_nm,
         )
         dbscan_info = dict(_dbscan_info[-1])
         clusters, _ = clusterer.find_cluster_centers(self.locs, self.info)
@@ -837,6 +918,42 @@ class PicassoSetCoreMixin:
         min_samples = parameters["min_samples"]
         # min_cluster_size / min_samples are counts (not lengths); picasso 1.0
         # drops the pixelsize argument and returns (locs, info) as a list.
+        if (
+            self.locs is None
+        ):  # aggregation: cluster each channel independently
+
+            def _cluster(tag, locs, info):
+                clustered, cinfo = clusterer.hdbscan(
+                    locs,
+                    info,
+                    min_cluster_size=min_cluster,
+                    min_samples=min_samples,
+                )
+                step = dict(cinfo[-1])
+                step["Wrapped by"] = "picasso-workflow : picasso_hdbscan"
+                centers, _ = clusterer.find_cluster_centers(clustered, info)
+                out_info = info + [step]
+                io.save_locs(
+                    os.path.join(
+                        results["folder"], f"{tag}_locs_hdbscan.hdf5"
+                    ),
+                    clustered,
+                    out_info,
+                )
+                fp_centers = os.path.join(
+                    results["folder"], f"{tag}_locs_hdbclusters.hdf5"
+                )
+                io.save_locs(fp_centers, centers, out_info)
+                results[f"filepath_locs_hdbclusters_{tag}"] = fp_centers
+                return (
+                    clustered,
+                    out_info,
+                    {"nclusters": len(centers), "nlocs": len(clustered)},
+                )
+
+            self._cluster_each_channel(results, _cluster)
+            return parameters, results
+
         self.locs, _hdbscan_info = clusterer.hdbscan(
             self.locs,
             self.info,
@@ -1120,36 +1237,72 @@ class PicassoSetCoreMixin:
         asynch = parameters.get("asynch", True)
         group_column = parameters.get("group_column", "group")
 
-        calib = None
-        # astigmatism 3D data needs a calibration; spline 3D data
-        # recovers z directly and needs none (mirrors the CLI)
-        if "z" in self.locs.columns and mode == "astigmatism":
-            if calibration == "":
-                raise ValueError(
-                    "A calibration file ('calibration') is required for "
-                    "astigmatism 3D data."
+        def _run_g5m(locs, info, calibration_dict):
+            return g5m.g5m(
+                locs,
+                info,
+                min_locs=min_locs,
+                loc_prec_handle=loc_prec_handle,
+                sigma_bounds=(min_sigma, max_sigma),
+                max_rounds_without_best_bic=max_rounds,
+                bootstrap_check=bootstrap_sem,
+                calibration=calibration_dict,
+                mode=mode,
+                covariance_type=covariance_type,
+                postprocess=postprocess_results,
+                max_locs_per_cluster=max_locs,
+                parallel=asynch,
+                group_column=group_column,
+            )
+
+        # The calibration file is the same for every channel; parse it at
+        # most once (per-channel re-reads are wasteful on networked storage).
+        _calib_cache = {}
+
+        def _load_calib(locs, tag=None):
+            # astigmatism 3D data needs a calibration; spline 3D data
+            # recovers z directly and needs none (mirrors the CLI).
+            if "z" in locs.columns and mode == "astigmatism":
+                if calibration == "":
+                    where = f" (channel {tag})" if tag is not None else ""
+                    raise ValueError(
+                        "A calibration file ('calibration') is required for "
+                        f"astigmatism 3D data{where}."
+                    )
+                if "calib" not in _calib_cache:
+                    with open(calibration, "r") as f:
+                        _calib_cache["calib"] = yaml.full_load(f)
+                return _calib_cache["calib"]
+            return None
+
+        if self.locs is None:  # aggregation: map each channel independently
+
+            def _cluster(tag, locs, info):
+                mols, g5m_info, _ = _run_g5m(
+                    locs, info, _load_calib(locs, tag)
                 )
-            with open(calibration, "r") as f:
-                calib = yaml.full_load(f)
+                if mols is None or len(mols) == 0:
+                    raise ValueError(
+                        "picasso_g5m: no molecules passed the filters for "
+                        f"channel {tag}; check the input clustering and "
+                        "'min_locs'."
+                    )
+                g5m_info[-1]["Wrapped by"] = "picasso-workflow : picasso_g5m"
+                fp_molmap = os.path.join(
+                    results["folder"], f"{tag}_locs_molmap.hdf5"
+                )
+                io.save_locs(fp_molmap, mols, g5m_info)
+                results[f"filepath_locs_molmap_{tag}"] = fp_molmap
+                return mols, g5m_info, {"n_molecules": len(mols)}
+
+            self._cluster_each_channel(results, _cluster)
+            return parameters, results
 
         # picasso 1.0 returns (centers, info, clustered_locs) -- info and the
         # clustered locs swapped relative to 0.11 -- and renamed asynch ->
         # parallel.
-        mols, g5m_info, _ = g5m.g5m(
-            self.locs,
-            self.info,
-            min_locs=min_locs,
-            loc_prec_handle=loc_prec_handle,
-            sigma_bounds=(min_sigma, max_sigma),
-            max_rounds_without_best_bic=max_rounds,
-            bootstrap_check=bootstrap_sem,
-            calibration=calib,
-            mode=mode,
-            covariance_type=covariance_type,
-            postprocess=postprocess_results,
-            max_locs_per_cluster=max_locs,
-            parallel=asynch,
-            group_column=group_column,
+        mols, g5m_info, _ = _run_g5m(
+            self.locs, self.info, _load_calib(self.locs)
         )
         # picasso 1.0 g5m returns (None, info, None) when no molecules pass its
         # filters; fail with an actionable message rather than len(None).
