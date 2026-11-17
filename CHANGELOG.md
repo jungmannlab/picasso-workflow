@@ -10,6 +10,8 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-11-17
+
 ### Changed
 - **Hosted unit tests run a Python matrix (3.11–3.14).** `unit-tests-hosted.yml`
   now tests the full declared-supported range instead of only 3.11, mirroring
