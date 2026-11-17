@@ -464,6 +464,19 @@ class SlurmCommunicator:
             if conda_prefix:
                 commands.append(f"export CONDA_PREFIX={conda_prefix}")
 
+        # Provision operational secrets into the job environment: source
+        # ~/.picasso_secrets if present so CONFLUENCE_TOKEN (and any other
+        # exported credentials) are set for the run -- the same mechanism the
+        # admin test chain uses (_node_setup). For a containerized run
+        # Apptainer forwards the host env into the image by default, so the
+        # in-image process sees them too. The token is only sourced at run
+        # time, never written into this script, so it stays out of the
+        # generated sbatch file, the logs and `ps`. A no-op when the file is
+        # absent.
+        commands.append(
+            "[ -f ~/.picasso_secrets ] && source ~/.picasso_secrets"
+        )
+
         # Capture the workflow's exit status. srun propagates the step's
         # failure (e.g. 143 = 128 + SIGTERM when a rank is killed / an MPI
         # teardown cancels the step). create_slurm_script exits the batch
