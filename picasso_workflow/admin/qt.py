@@ -87,6 +87,7 @@ class AdminWindow(QMainWindow):
         )
         root.addWidget(self._build_connection_panel())
         self._test_run_dir = None
+        self._test_run_jobs: list[str] = []
         self.tabs = QTabWidget()
         self.tabs.addTab(self._build_images_tab(), "Images")
         self.tabs.addTab(self._build_testruns_tab(), "Test runs")
@@ -246,8 +247,24 @@ class AdminWindow(QMainWindow):
         submit.clicked.connect(self._submit_test_chain)
         fetch = QPushButton("Fetch SUMMARY")
         fetch.clicked.connect(self._fetch_summary)
+        logs = QPushButton("Fetch logs")
+        logs.setToolTip(
+            "Tail the per-job .log files in the run dir (tiers + summary) so a "
+            "failed tier's error output is visible here. Template workflow logs "
+            "live under each template's own folder."
+        )
+        logs.clicked.connect(self._fetch_logs)
+        cancel = QPushButton("Cancel run")
+        cancel.setToolTip(
+            "scancel every job of the last submitted run -- use to clear the "
+            "tier4 / template jobs left pending when a gating tier fails. Only "
+            "this run's jobs are cancelled, not your whole queue."
+        )
+        cancel.clicked.connect(self._cancel_run)
         bar.addWidget(submit)
         bar.addWidget(fetch)
+        bar.addWidget(logs)
+        bar.addWidget(cancel)
         bar.addStretch(1)
         lay.addLayout(bar)
         self.test_summary = QPlainTextEdit(readOnly=True)
@@ -289,8 +306,21 @@ class AdminWindow(QMainWindow):
 
         def done(result):
             self._test_run_dir = result["run_dir"]
+            # Track every job id of this run so 'Cancel run' scancels exactly
+            # these (not the user's whole queue); drop skipped tiers' None.
+            self._test_run_jobs = [
+                j
+                for j in (
+                    result["tiers_job"],
+                    result["tier4_job"],
+                    result["summary_job"],
+                    *(jid for jid, _ in result["template_jobs"]),
+                )
+                if j
+            ]
             lines = [
                 f"run dir: {result['run_dir']}",
+                f"test data dir: {result['test_data_dir'] or '(none)'}",
                 f"tiers 1-3 job: {result['tiers_job'] or '(skipped)'}",
                 f"tier 4 job: {result['tier4_job'] or '(skipped)'}",
                 f"template jobs: {len(result['template_jobs'])}",
@@ -325,6 +355,54 @@ class AdminWindow(QMainWindow):
             lambda a: a.fetch_summary(run_dir),
             done,
             busy="fetching SUMMARY",
+        )
+
+    def _fetch_logs(self) -> None:
+        if not self._test_run_dir:
+            QMessageBox.information(
+                self, "Fetch logs", "Submit a test chain first."
+            )
+            return
+        run_dir = self._test_run_dir
+
+        def done(text):
+            self.test_summary.setPlainText(
+                text
+                or "(no .log files in the run dir yet — the jobs have not "
+                "started)"
+            )
+
+        self._run(
+            lambda a: a.fetch_logs(run_dir),
+            done,
+            busy="fetching logs",
+        )
+
+    def _cancel_run(self) -> None:
+        if not self._test_run_jobs:
+            QMessageBox.information(
+                self, "Cancel run", "Submit a test chain first."
+            )
+            return
+        jobs = list(self._test_run_jobs)
+        if (
+            QMessageBox.question(
+                self,
+                "Cancel run",
+                f"scancel {len(jobs)} job(s) of this test run?\n"
+                + " ".join(jobs),
+            )
+            != QMessageBox.StandardButton.Yes
+        ):
+            return
+
+        def done(n):
+            self.activity.appendPlainText(f"✓ cancelled {n} job(s)")
+
+        self._run(
+            lambda a: a.cancel_jobs(jobs),
+            done,
+            busy="cancelling run jobs",
         )
 
     # -- jobs & usage tab -------------------------------------------------

@@ -456,6 +456,18 @@ class ClusterAdmin:
         controls the clock). See :class:`testrun.TestChainSubmitter`.
         """
         from picasso_workflow.admin.testrun import TestChainSubmitter
+        from picasso_workflow.util import convert_filepath_for_machine
+
+        # The test-data dir is configured / typed in the GUI machine's layout
+        # (e.g. a Mac "/Volumes/..." mount), but `find` + the apptainer binds
+        # run on the cluster login node. Translate it to the host's layout via
+        # the Drivepaths config (dest_machine = the cluster key) so it resolves
+        # there. A path under no known drive root, or an unmapped host, is
+        # returned unchanged.
+        if test_data_dir:
+            test_data_dir = convert_filepath_for_machine(
+                test_data_dir, dest_machine=self.host
+            )
 
         image_dir, module, bind_paths = apptainer_config(self.host)
         submitter = TestChainSubmitter(
@@ -481,3 +493,42 @@ class ClusterAdmin:
             f"cat {shlex.quote(run_dir)}/SUMMARY.txt 2>/dev/null"
         )
         return result.get("stdout", "") or ""
+
+    def fetch_logs(self, run_dir, tail=400):
+        """Return the per-job ``.log`` files in ``run_dir`` (each tailed).
+
+        The tier/summary jobs write ``<label>_<jobid>.log`` into the run dir;
+        this concatenates them (last ``tail`` lines each, under a ``===== path
+        =====`` header) so a failed tier's error output is visible from the
+        console without hand-SSH. Returns ``""`` when none exist yet (the
+        no-match ``*.log`` glob is skipped rather than catted literally).
+        Template workflow logs live under each template's own ``logs/`` and are
+        not included here.
+        """
+        glob = f"{shlex.quote(run_dir)}/*.log"
+        # `for f in <glob>` iterates the literal pattern when nothing matches,
+        # so guard each entry with `[ -e ]` before tailing.
+        cmd = (
+            f"for f in {glob}; do "
+            '[ -e "$f" ] || continue; '
+            'printf "\\n===== %s =====\\n" "$f"; '
+            f'tail -n {int(tail)} "$f"; '
+            "done"
+        )
+        result = self.comm.execute_ssh_command(cmd)
+        return result.get("stdout", "") or ""
+
+    def cancel_jobs(self, job_ids):
+        """``scancel`` the given job ids; return the number cancelled.
+
+        Filters out blanks / the ``-`` placeholder (so a skipped tier's
+        ``None`` job never reaches ``scancel``) and is a no-op returning ``0``
+        when nothing valid remains. One ``scancel`` call cancels them all --
+        ``scancel`` exits 0 even for already-finished ids, so a stuck run can be
+        cleared after a gating tier fails.
+        """
+        ids = [str(j) for j in job_ids if j and str(j) != "-"]
+        if not ids:
+            return 0
+        self._run("scancel " + " ".join(shlex.quote(i) for i in ids))
+        return len(ids)
