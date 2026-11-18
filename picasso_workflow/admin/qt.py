@@ -34,6 +34,7 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
+    QSplitter,
     QTableWidget,
     QTableWidgetItem,
     QTabWidget,
@@ -49,6 +50,44 @@ def _row_widget(layout) -> QWidget:
     w = QWidget()
     w.setLayout(layout)
     return w
+
+
+def _size_to_bytes(s: str) -> float:
+    """Parse a human size like ``"4.2G"`` back to bytes, for numeric sorting.
+
+    Returns ``-1`` for blank/unparseable input (sorts such rows first).
+    """
+    units = {"B": 1, "K": 1024, "M": 1024**2, "G": 1024**3, "T": 1024**4}
+    s = (s or "").strip()
+    if not s:
+        return -1.0
+    if s[-1] in units:
+        try:
+            return float(s[:-1]) * units[s[-1]]
+        except ValueError:
+            return -1.0
+    try:
+        return float(s)
+    except ValueError:
+        return -1.0
+
+
+class _NumSortItem(QTableWidgetItem):
+    """Table item that displays arbitrary text but sorts by a numeric key.
+
+    Used for the Images 'Size' column so ``900M`` sorts below ``4.2G`` instead
+    of lexicographically.
+    """
+
+    def __init__(self, text: str, sort_key: float):
+        super().__init__(text)
+        self._sort_key = sort_key
+
+    def __lt__(self, other):
+        try:
+            return self._sort_key < other._sort_key
+        except AttributeError:
+            return super().__lt__(other)
 
 
 class _Worker(QThread):
@@ -93,12 +132,23 @@ class AdminWindow(QMainWindow):
         self.tabs.addTab(self._build_images_tab(), "Images")
         self.tabs.addTab(self._build_testruns_tab(), "Test runs")
         self.tabs.addTab(self._build_jobs_tab(), "Jobs & usage")
-        root.addWidget(self.tabs, 1)
-
-        root.addWidget(QLabel("Activity"))
         self.activity = QPlainTextEdit(readOnly=True)
         self.activity.setMaximumBlockCount(5000)
-        root.addWidget(self.activity, 1)
+        activity_box = QWidget()
+        activity_lay = QVBoxLayout(activity_box)
+        activity_lay.setContentsMargins(0, 0, 0, 0)
+        activity_lay.addWidget(QLabel("Activity"))
+        activity_lay.addWidget(self.activity)
+
+        # Draggable vertical split: a plain layout let a window resize mostly
+        # enlarge the Activity log. The splitter lets the user pull the tabs area
+        # taller, and defaults to favouring the tabs 3:1.
+        split = QSplitter(Qt.Orientation.Vertical)
+        split.addWidget(self.tabs)
+        split.addWidget(activity_box)
+        split.setStretchFactor(0, 3)
+        split.setStretchFactor(1, 1)
+        root.addWidget(split, 1)
 
         self.resize(1000, 700)
 
@@ -169,11 +219,66 @@ class AdminWindow(QMainWindow):
             "Click 'Refresh images' (top) to list the shared mount."
         )
         lay.addWidget(self.image_dir_label)
+
+        # Kind filter (client-side): show lean and/or test images.
+        filt = QHBoxLayout()
+        filt.addWidget(QLabel("Show:"))
+        self.img_show_lean = QCheckBox("Lean")
+        self.img_show_lean.setChecked(True)
+        self.img_show_test = QCheckBox("Test")
+        self.img_show_test.setChecked(True)
+        filt.addWidget(self.img_show_lean)
+        filt.addWidget(self.img_show_test)
+        filt.addStretch(1)
+        lay.addLayout(filt)
+
+        self._all_images = []
         self.image_table = self._make_table(
             ["Image", "Version", "Test", "Size", "Modified", "Match"]
         )
+        # Click a header to sort; Size sorts by magnitude (see _NumSortItem).
+        self.image_table.setSortingEnabled(True)
         lay.addWidget(self.image_table, 1)
+        # Connect after the table exists so an early toggle can't outrun it.
+        self.img_show_lean.toggled.connect(self._apply_image_filter)
+        self.img_show_test.toggled.connect(self._apply_image_filter)
         return w
+
+    def _fill_images_table(self, images) -> None:
+        """Render ``images`` into the Images table (sort-aware, numeric Size)."""
+        gui_version = core.this_gui_version()
+        table = self.image_table
+        table.setSortingEnabled(False)  # don't re-sort mid-fill
+        table.setRowCount(len(images))
+        for r, im in enumerate(images):
+            # Match only on a clean release version (im.version); a
+            # develop-<sha> image has version=None so never "matches".
+            match = (
+                "✓ this GUI"
+                if im.version and im.version == gui_version
+                else ""
+            )
+            table.setItem(r, 0, QTableWidgetItem(im.name))
+            table.setItem(r, 1, QTableWidgetItem(im.tag))
+            table.setItem(
+                r, 2, QTableWidgetItem("test" if im.is_test else "lean")
+            )
+            table.setItem(r, 3, _NumSortItem(im.size, _size_to_bytes(im.size)))
+            table.setItem(r, 4, QTableWidgetItem(im.mtime))
+            table.setItem(r, 5, QTableWidgetItem(match))
+        table.resizeColumnsToContents()
+        table.setSortingEnabled(True)  # re-applies the current sort indicator
+
+    def _apply_image_filter(self, *args) -> None:
+        """Re-render the Images table for the Lean/Test checkbox selection."""
+        show_lean = self.img_show_lean.isChecked()
+        show_test = self.img_show_test.isChecked()
+        filtered = [
+            im
+            for im in self._all_images
+            if (im.is_test and show_test) or (not im.is_test and show_lean)
+        ]
+        self._fill_images_table(filtered)
 
     # -- test runs tab ----------------------------------------------------
     def _build_testruns_tab(self) -> QWidget:
@@ -278,8 +383,16 @@ class AdminWindow(QMainWindow):
         bar.addWidget(cancel)
         bar.addStretch(1)
         lay.addLayout(bar)
-        self.test_summary = QPlainTextEdit(readOnly=True)
-        lay.addWidget(self.test_summary, 1)
+        # Separate panes so submit info / SUMMARY / logs don't overwrite each
+        # other -- each button writes (and switches) to its own tab.
+        self.test_output_tabs = QTabWidget()
+        self.test_submit_info = QPlainTextEdit(readOnly=True)
+        self.test_summary_text = QPlainTextEdit(readOnly=True)
+        self.test_logs_text = QPlainTextEdit(readOnly=True)
+        self.test_output_tabs.addTab(self.test_submit_info, "Submit")
+        self.test_output_tabs.addTab(self.test_summary_text, "SUMMARY")
+        self.test_output_tabs.addTab(self.test_logs_text, "Logs")
+        lay.addWidget(self.test_output_tabs, 1)
         return w
 
     def _submit_test_chain(self) -> None:
@@ -345,7 +458,8 @@ class AdminWindow(QMainWindow):
                 "Submitted. Use 'Fetch SUMMARY' once the summary job finishes,"
                 " or watch progress in the Jobs & usage tab.",
             ]
-            self.test_summary.setPlainText("\n".join(lines))
+            self.test_submit_info.setPlainText("\n".join(lines))
+            self.test_output_tabs.setCurrentWidget(self.test_submit_info)
             self.activity.appendPlainText(
                 f"✓ submitted test chain -> {result['run_dir']}"
             )
@@ -361,11 +475,12 @@ class AdminWindow(QMainWindow):
         run_dir = self._test_run_dir
 
         def done(text):
-            self.test_summary.setPlainText(
+            self.test_summary_text.setPlainText(
                 text
                 or "(SUMMARY.txt not present yet — the summary job has "
                 "not finished)"
             )
+            self.test_output_tabs.setCurrentWidget(self.test_summary_text)
 
         self._run(
             lambda a: a.fetch_summary(run_dir),
@@ -382,11 +497,12 @@ class AdminWindow(QMainWindow):
         run_dir = self._test_run_dir
 
         def done(text):
-            self.test_summary.setPlainText(
+            self.test_logs_text.setPlainText(
                 text
                 or "(no .log files in the run dir yet — the jobs have not "
                 "started)"
             )
+            self.test_output_tabs.setCurrentWidget(self.test_logs_text)
 
         self._run(
             lambda a: a.fetch_logs(run_dir),
@@ -564,33 +680,14 @@ class AdminWindow(QMainWindow):
         image; the Test-runs dropdown gets only the TEST images (the chain runs
         pytest inside the image, which a lean image lacks).
         """
-        gui_version = core.this_gui_version()
 
         def done(result):
             image_dir, images = result
             self.image_dir_label.setText(
                 f"Shared folder: {image_dir or '(unset)'}"
             )
-            self.image_table.setRowCount(len(images))
-            for r, im in enumerate(images):
-                # Match only on a clean release version (im.version); a
-                # develop-<sha> image has version=None so never "matches".
-                match = (
-                    "✓ this GUI"
-                    if im.version and im.version == gui_version
-                    else ""
-                )
-                cells = [
-                    im.name,
-                    im.tag,  # "0.9.0" or "develop-<sha>" (always shown)
-                    "test" if im.is_test else "lean",
-                    im.size,
-                    im.mtime,
-                    match,
-                ]
-                for c, text in enumerate(cells):
-                    self.image_table.setItem(r, c, QTableWidgetItem(text))
-            self.image_table.resizeColumnsToContents()
+            self._all_images = images
+            self._apply_image_filter()  # renders the table per the kind filter
             self._fill_test_images(images)
             n_test = sum(1 for im in images if im.is_test)
             self.activity.appendPlainText(
