@@ -282,16 +282,16 @@ def scale_contrast(images):
         Scaled images
     """
 
-    upper = (
-        min(
-            [
-                _.max()
-                for _ in images  # if no locs were clustered
-                if _.max() != 0  # the maximum value in image is 0.0
-            ]
-        )
-        / 40
-    )
+    # Max of each image, dropping the all-zero ones (an all-zero image is an
+    # empty FOV / unclustered locs and must not drag the scale down to 0).
+    # ``.max()`` is evaluated once per image.
+    maxima = [m for m in (_.max() for _ in images) if m != 0]
+    # Every image is all-zero (no localizations rendered in this FOV, e.g. an
+    # upstream filter/picker removed everything): min([]) would raise
+    # "min() arg is an empty sequence". Fall back to a unit scale so the zero
+    # image divides to zero instead of crashing. Keep ``upper`` a numpy scalar
+    # so ``images / upper`` still coerces the input list to an array.
+    upper = (min(maxima) / 40) if maxima else np.float64(1.0)
     # upper = INITIAL_REL_MAXIMUM * max_
 
     images = images / upper
