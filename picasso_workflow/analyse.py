@@ -12816,7 +12816,24 @@ class AutoPicasso(
         else:
             picked_locs, info = io.load_locs(fp_picked)
             if not isinstance(picked_locs, list):
-                # saved as one recarray, with 'group' identifying the pick
+                # saved as one recarray/dataframe, 'group' identifies the pick
+                names = getattr(picked_locs, "columns", None)
+                if names is None:
+                    names = picked_locs.dtype.names or ()
+                if "group" not in names:
+                    # No 'group' column -> the file defines no picks. This
+                    # happens when the upstream picker / find_gold accepted no
+                    # structures (e.g. a dataset with no gold fiducials): the
+                    # saved locs are ungrouped and np.unique(locs["group"])
+                    # would otherwise raise a cryptic KeyError. Fail with an
+                    # actionable message instead.
+                    raise ValueError(
+                        f"undrift_from_picked: '{fp_picked}' has no 'group' "
+                        "column, so it defines no picks. The upstream "
+                        "picker/find_gold likely accepted no structures (e.g. "
+                        "no gold beads in this dataset). Remove this undrift "
+                        "step or point it at a dataset with fiducials."
+                    )
                 groups = np.unique(picked_locs["group"])
                 picked_locs = [
                     picked_locs[picked_locs["group"] == group]

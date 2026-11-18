@@ -3396,6 +3396,44 @@ class TestAnalyseModules(unittest.TestCase):
             os.path.join(self.results_folder, "00_undrift_from_picked")
         )
 
+    @patch("picasso_workflow.analyse.io.save_locs", MagicMock())
+    @patch("picasso_workflow.analyse.io.load_locs")
+    def test_undrift_from_picked_no_group_raises(self, mock_load_locs):
+        """A picked-locs hdf5 with no 'group' column (e.g. find_gold found 0
+        beads) fails with a clear message, not a cryptic KeyError 'group'."""
+        self.ap.locs = pd.DataFrame(
+            np.rec.array(
+                [
+                    (i, 10.0, 10.0, 1000, 1, 1, 100, 0.1, 0.1, 0.5, 50, i)
+                    for i in range(4)
+                ],
+                dtype=self.locs_dtype,
+            )
+        )
+        self.ap.info = [
+            {"Width": 64, "Height": 64, "Frames": 4, "Pixelsize": 130}
+        ]
+        # find_gold found nothing -> saved locs carry NO 'group' column.
+        ungrouped = pd.DataFrame(
+            np.rec.array(
+                [(0, 10.0, 10.0, 1000, 1, 1, 100, 0.1, 0.1, 0.5, 50, 0)],
+                dtype=self.locs_dtype,
+            )
+        )
+        mock_load_locs.return_value = (ungrouped, self.ap.info)
+        parameters = {
+            "fp_picked_locs": os.path.join(temp_folder(), "gold.hdf5")
+        }
+        try:
+            with self.assertRaises(ValueError) as cm:
+                self.ap.undrift_from_picked(0, parameters)
+            assert "group" in str(cm.exception)
+        finally:
+            shutil.rmtree(
+                os.path.join(self.results_folder, "00_undrift_from_picked"),
+                ignore_errors=True,
+            )
+
     @patch("picasso_workflow.analyse.io.save_locs", MagicMock)
     def filter_locs(self):
         parameters = {"field": "photons", "minval": 800, "maxval": 1200}

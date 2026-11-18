@@ -21,6 +21,17 @@ This file was started after v0.5.6; earlier history is in the git log.
   cancelled, not just the current run's. (`admin/qt.py`)
 
 ### Fixed
+- **Workflow modules survive empty/degenerate localization sets.** Three
+  library crashes that aborted whole workflow runs on sparse real data are now
+  handled gracefully: `filter_locs`' heatmap reporting hit `np.ptp([])` /
+  `array.max()` on a field with no finite rows (`plot_1dhist` / `plot_2dhist`
+  now annotate "no finite data" and return); `render`'s contrast scaler raised
+  `min() arg is an empty sequence` when every rendered image was all-zero
+  (`scale_contrast` now falls back to a unit scale, leaving the zero image
+  untouched); and `undrift_from_picked` raised a cryptic `KeyError: 'group'`
+  when handed picks with no `group` column (e.g. `find_gold` found 0 beads) —
+  it now fails with an actionable message pointing at the missing fiducials.
+  (`outpost/reporting/histograms.py`, `outpost/render/render.py`, `analyse.py`)
 - **More cluster-image test fixes (read-only FS + Qt imports).** Follow-up to
   the read-only-`temp` and GUI-skip fixes, catching the stragglers surfaced by a
   full in-image run: `test_analyse`'s `undrift_from_picked` and

@@ -22,9 +22,21 @@ def plot_1dhist(locs, field, fig, ax):
     # pandas Series with a non-RangeIndex. Force a numpy array.
     data = np.asarray(locs[field])
     data = data[np.isfinite(data)]
-    bins = lib.calculate_optimal_bins(data, 1000)
-    # Prepare the figure
     fig.suptitle(field)
+    if data.size == 0:
+        # No finite values to histogram (e.g. an upstream filter removed every
+        # row, or the field is all-NaN). Annotate rather than crashing in
+        # np.ptp([]) / data.max() / calculate_optimal_bins.
+        ax.text(
+            0.5,
+            0.5,
+            f"no finite data ({field})",
+            ha="center",
+            va="center",
+            transform=ax.transAxes,
+        )
+        return
+    bins = lib.calculate_optimal_bins(data, 1000)
     ax.hist(data, bins, rwidth=1, linewidth=0)
     data_range = np.ptp(data)
     ax.set_xlim([bins[0] - 0.05 * data_range, data.max() + 0.05 * data_range])
@@ -39,6 +51,20 @@ def plot_2dhist(locs, field_x, field_y, fig, ax):
     valid = np.isfinite(x) & np.isfinite(y)
     x = x[valid]
     y = y[valid]
+    if x.size == 0 or y.size == 0:
+        # No finite pairs to histogram (e.g. an upstream filter removed every
+        # row). Annotate rather than crashing in hist2d / np.ptp([]) / x.max().
+        ax.get_xaxis().set_label_text(field_x)
+        ax.get_yaxis().set_label_text(field_y)
+        ax.text(
+            0.5,
+            0.5,
+            f"no finite data\n({field_x} vs {field_y})",
+            ha="center",
+            va="center",
+            transform=ax.transAxes,
+        )
+        return
     # Start hist2 version
     bins_x = lib.calculate_optimal_bins(x, 1000)
     bins_y = lib.calculate_optimal_bins(y, 1000)
