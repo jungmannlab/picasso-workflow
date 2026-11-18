@@ -198,6 +198,27 @@ jobs:
         with:
           path: dist
           merge-multiple: true    # flatten every variant's .sif into dist/
+      # For a FULL (non-prerelease) release, also publish fixed-name
+      # picasso-workflow-[test-]latest.sif copies, so
+      #   .../releases/latest/download/picasso-workflow-test-latest.sif
+      # is a permanent URL to the newest release image (GitHub's
+      # `releases/latest` already excludes pre-releases, so alpha/rc tags are
+      # skipped here to keep "-latest" == newest stable). The copies ride the
+      # same single action-gh-release upload below (no extra release-object race).
+      - name: Add -latest aliases (stable releases only)
+        if: github.event.release.prerelease == false
+        run: |
+          cd dist
+          for f in picasso-workflow-*.sif; do
+            case "$f" in
+              *-latest.sif) : ;;                       # never alias an alias
+              picasso-workflow-test-*.sif)
+                cp "$f" picasso-workflow-test-latest.sif ;;
+              picasso-workflow-*.sif)
+                cp "$f" picasso-workflow-latest.sif ;;
+            esac
+          done
+          ls -l
       - uses: softprops/action-gh-release@v2
         with:
           files: dist/*.sif

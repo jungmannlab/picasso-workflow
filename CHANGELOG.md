@@ -11,6 +11,15 @@ This file was started after v0.5.6; earlier history is in the git log.
 ## [Unreleased]
 
 ### Added
+- **Release images get stable `-latest` aliases.** On a full (non-prerelease)
+  release, `build-apptainer.yml` now also attaches fixed-name
+  `picasso-workflow-latest.sif` and `picasso-workflow-test-latest.sif` (copies
+  of the versioned `.sif`s) to the GitHub Release — so
+  `https://github.com/jungmannlab/picasso-workflow/releases/latest/download/picasso-workflow-test-latest.sif`
+  is a permanent URL to the newest **stable** release image (GitHub's
+  `releases/latest` already excludes pre-releases, so alpha/rc tags are skipped).
+  Lets the login node always pull "latest" without tracking the version.
+  (`.github/workflows/build-apptainer.yml`)
 - **Admin console: 'Fetch logs' also pulls the template-run logs.** In addition
   to the run dir's tier/summary `.log` files, it now tails each template run's
   own `<folder>/logs/*<jobid>*`, so a failed end-to-end template workflow's
