@@ -151,6 +151,15 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
+          # Publish with a PAT when available (secret RELEASE_PAT) so the
+          # resulting `release: published` event CAN trigger build-apptainer.yml
+          # to build + attach the .sif images. GitHub deliberately suppresses
+          # workflow triggers for events raised by the default GITHUB_TOKEN, so
+          # a token-published release never fires build-apptainer. Falls back to
+          # GITHUB_TOKEN when the secret is unset: the release still publishes,
+          # but the .sif build must then be kicked off manually (re-publish the
+          # release, or run build-apptainer via workflow_dispatch with the tag).
+          token: ${{ secrets.RELEASE_PAT || github.token }}
           files: release/dist/*
           # Mark pre-release tags (alpha/beta/rc, e.g. v0.7.0a1) as GitHub
           # pre-releases so they do not read as the latest stable release.
