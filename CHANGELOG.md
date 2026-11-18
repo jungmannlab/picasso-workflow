@@ -10,6 +10,16 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ## [Unreleased]
 
+### Fixed
+- **GUI tests skip when Qt can't actually load (cluster Apptainer image).** The
+  test suite guarded `test_gui_*.py` with `find_spec("PyQt6")`, but `picassosr`
+  pulls PyQt6 in as a dependency, so the package is present in the lean cluster
+  image even though its native Qt libraries (`libglib2.0`, …) are not — making
+  `from PyQt6 import QtWidgets` ImportError and erroring all 16 GUI modules at
+  collection (the in-container test chain's `tiers1_3` failed on this). The guard
+  now probes a real import and skips the GUI tests when Qt cannot load; CI (full
+  Qt runtime) still runs them. (`tests/conftest.py`)
+
 ## [0.7.0] - 2026-11-17
 
 ### Changed

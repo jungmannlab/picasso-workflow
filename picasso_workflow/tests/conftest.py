@@ -31,7 +31,6 @@ dummy_reporter_config(report_name) → dict
     them directly without going through pytest's fixture injection.
 """
 
-import importlib.util
 import os
 import shutil
 import time
@@ -40,11 +39,25 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-# The Qt GUI is a `[gui]` extra (PyQt6 is lazy-imported, ~530 MB of binaries kept
-# out of base). On a lean/headless install (cluster, Apptainer) PyQt6 is absent,
-# so skip the GUI tests at collection rather than erroring on `import PyQt6`.
-# CI installs `.[dev,gui]`, so they still run there.
-if importlib.util.find_spec("PyQt6") is None:
+
+# The Qt GUI is a `[gui]` extra (PyQt6 + Qt6 binaries, ~530 MB), kept out of the
+# base so headless analysis stays lean. But `picassosr` pulls PyQt6 in as a
+# dependency, so the *package* is often present even where the GUI isn't wanted
+# -- e.g. the cluster Apptainer image, which installs no `libglib2.0`/etc. There
+# the package imports by name but `from PyQt6 import QtWidgets` ImportErrors on a
+# missing shared object, so a mere `find_spec` check is NOT enough: probe a real
+# import and skip the GUI tests when Qt cannot actually load (otherwise all
+# `test_gui_*` modules error at collection). CI installs the full Qt runtime, so
+# they still run there.
+def _qt_importable() -> bool:
+    try:
+        import PyQt6.QtWidgets  # noqa: F401
+    except Exception:
+        return False
+    return True
+
+
+if not _qt_importable():
     collect_ignore_glob = ["test_gui_*.py"]
 
 
