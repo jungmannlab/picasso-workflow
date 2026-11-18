@@ -11,6 +11,25 @@ This file was started after v0.5.6; earlier history is in the git log.
 ## [Unreleased]
 
 ### Added
+- **Admin console: 'Fetch logs' also pulls the template-run logs.** In addition
+  to the run dir's tier/summary `.log` files, it now tails each template run's
+  own `<folder>/logs/*<jobid>*`, so a failed end-to-end template workflow's
+  error output is visible from the GUI without hand-SSH. The run's template
+  `(folder, job_id)` pairs are tracked at submit and passed to
+  `ClusterAdmin.fetch_logs(run_dir, templates=…)`. (`admin/core.py`, `admin/qt.py`)
+- **Admin console: opt-in auto-refresh.** A *Auto-refresh every N s* checkbox
+  (default off, 20 s) on the Jobs & usage tab polls the **active** tab without
+  clicking — the Jobs tables there, or (on the Test-runs tab) auto-fetches
+  SUMMARY until it appears. It is quiet (no Activity-log spam), preserves scroll,
+  pauses while you have a table selection or a dialog open, and switches itself
+  off on an SSH error. Images stay manual (they rarely change). (`admin/qt.py`)
+- **Admin console UX polish.** The *Images* table is now sortable (click a
+  header; Size sorts by magnitude, not lexically) with *Lean* / *Test* kind
+  checkboxes to filter it. The *Test runs* output is split into **Submit /
+  SUMMARY / Logs** tabs so those no longer overwrite each other (each button
+  writes and switches to its own pane). The tabs area and the Activity log now
+  sit in a **draggable vertical splitter** (favouring the tabs 3:1) so a window
+  resize can grow the upper panel instead of mostly the log. (`admin/qt.py`)
 - **Admin console Jobs & usage: filter + cancel any run's jobs.** The tab gains
   a *Recent window* selector (1/3/7/14/30 days) that re-fetches `sacct` over the
   chosen look-back, an instant client-side *Filter* box (substring match on job

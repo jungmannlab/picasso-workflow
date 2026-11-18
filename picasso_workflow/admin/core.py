@@ -510,22 +510,29 @@ class ClusterAdmin:
         )
         return result.get("stdout", "") or ""
 
-    def fetch_logs(self, run_dir, tail=400):
-        """Return the per-job ``.log`` files in ``run_dir`` (each tailed).
+    def fetch_logs(self, run_dir, templates=None, tail=400):
+        """Return the per-job ``.log`` files for a run (each tailed).
 
-        The tier/summary jobs write ``<label>_<jobid>.log`` into the run dir;
-        this concatenates them (last ``tail`` lines each, under a ``===== path
-        =====`` header) so a failed tier's error output is visible from the
-        console without hand-SSH. Returns ``""`` when none exist yet (the
-        no-match ``*.log`` glob is skipped rather than catted literally).
-        Template workflow logs live under each template's own ``logs/`` and are
-        not included here.
+        The tier/summary jobs write ``<label>_<jobid>.log`` into ``run_dir``;
+        ``templates`` (a list of ``(folder, job_id)`` from a submit's
+        ``template_jobs``) additionally pulls each template's own
+        ``<folder>/logs/*<job_id>*`` -- so a failed end-to-end template run's
+        error output is visible from the console without hand-SSH. Each matched
+        file is tailed to the last ``tail`` lines under a ``===== path =====``
+        header. Returns ``""`` when nothing matches yet (a no-match glob is
+        skipped, not catted literally).
         """
-        glob = f"{shlex.quote(run_dir)}/*.log"
-        # `for f in <glob>` iterates the literal pattern when nothing matches,
+        # Each glob's `*` stays outside the quotes so it still expands; the
+        # fixed parts (run_dir / template folder) are shell-quoted.
+        globs = [f"{shlex.quote(run_dir)}/*.log"]
+        for folder, job_id in templates or []:
+            globs.append(
+                f"{shlex.quote(folder)}/logs/*{shlex.quote(str(job_id))}*"
+            )
+        # `for f in <globs>` iterates the literal pattern when nothing matches,
         # so guard each entry with `[ -e ]` before tailing.
         cmd = (
-            f"for f in {glob}; do "
+            f"for f in {' '.join(globs)}; do "
             '[ -e "$f" ] || continue; '
             'printf "\\n===== %s =====\\n" "$f"; '
             f'tail -n {int(tail)} "$f" 2>/dev/null || true; '
