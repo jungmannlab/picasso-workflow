@@ -21,6 +21,7 @@ import traceback
 
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtWidgets import (
+    QAbstractItemView,
     QApplication,
     QCheckBox,
     QComboBox,
@@ -149,6 +150,16 @@ class AdminWindow(QMainWindow):
         table.horizontalHeader().setStretchLastSection(True)
         table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         return table
+
+    @staticmethod
+    def _make_selectable(table) -> None:
+        """Allow multi-row selection on a jobs table (for 'Cancel selected')."""
+        table.setSelectionBehavior(
+            QAbstractItemView.SelectionBehavior.SelectRows
+        )
+        table.setSelectionMode(
+            QAbstractItemView.SelectionMode.ExtendedSelection
+        )
 
     # -- images tab -------------------------------------------------------
     def _build_images_tab(self) -> QWidget:
@@ -383,6 +394,25 @@ class AdminWindow(QMainWindow):
             busy="fetching logs",
         )
 
+    def _confirm_and_cancel(
+        self, ids, *, title, prompt, busy, note=""
+    ) -> None:
+        """Confirm, then ``scancel`` ``ids`` off the GUI thread; log the count.
+
+        Shared by the Test-runs 'Cancel run' and the Jobs 'Cancel selected'
+        buttons. ``note`` is appended to the success message.
+        """
+        if (
+            QMessageBox.question(self, title, prompt)
+            != QMessageBox.StandardButton.Yes
+        ):
+            return
+
+        def done(n):
+            self.activity.appendPlainText(f"✓ cancelled {n} job(s){note}")
+
+        self._run(lambda a: a.cancel_jobs(ids), done, busy=busy)
+
     def _cancel_run(self) -> None:
         if not self._test_run_jobs:
             QMessageBox.information(
@@ -390,23 +420,11 @@ class AdminWindow(QMainWindow):
             )
             return
         jobs = list(self._test_run_jobs)
-        if (
-            QMessageBox.question(
-                self,
-                "Cancel run",
-                f"scancel {len(jobs)} job(s) of this test run?\n"
-                + " ".join(jobs),
-            )
-            != QMessageBox.StandardButton.Yes
-        ):
-            return
-
-        def done(n):
-            self.activity.appendPlainText(f"✓ cancelled {n} job(s)")
-
-        self._run(
-            lambda a: a.cancel_jobs(jobs),
-            done,
+        self._confirm_and_cancel(
+            jobs,
+            title="Cancel run",
+            prompt=f"scancel {len(jobs)} job(s) of this test run?\n"
+            + " ".join(jobs),
             busy="cancelling run jobs",
         )
 
@@ -414,20 +432,71 @@ class AdminWindow(QMainWindow):
     def _build_jobs_tab(self) -> QWidget:
         w = QWidget()
         lay = QVBoxLayout(w)
+
+        # Row 1: refresh + the sacct look-back window (changing it re-fetches).
+        controls = QHBoxLayout()
         refresh = QPushButton("Refresh jobs & usage")
         refresh.clicked.connect(self._refresh_jobs)
-        lay.addWidget(refresh)
+        controls.addWidget(refresh)
+        controls.addWidget(QLabel("Recent window:"))
+        self.recent_days = QComboBox()
+        for label, days in (
+            ("1 day", 1),
+            ("3 days", 3),
+            ("7 days", 7),
+            ("14 days", 14),
+            ("30 days", 30),
+        ):
+            self.recent_days.addItem(label, days)
+        self.recent_days.setCurrentIndex(1)  # default 3 days
+        self.recent_days.setToolTip(
+            "How far back `sacct` looks for finished jobs. Changing it "
+            "re-fetches the queue + recent list."
+        )
+        self.recent_days.currentIndexChanged.connect(self._refresh_jobs)
+        controls.addWidget(self.recent_days)
+        controls.addStretch(1)
+        lay.addLayout(controls)
+
+        # Row 2: client-side filters (instant, no re-fetch) + cancel selected.
+        filt = QHBoxLayout()
+        filt.addWidget(QLabel("Filter:"))
+        self.jobs_filter = QLineEdit()
+        self.jobs_filter.setPlaceholderText(
+            "substring match on job id / name / state …"
+        )
+        self.jobs_filter.textChanged.connect(self._apply_jobs_filter)
+        filt.addWidget(self.jobs_filter, 1)
+        self.jobs_current_only = QCheckBox("This run only")
+        self.jobs_current_only.setToolTip(
+            "Show only the jobs of the last submitted test run (by job id)."
+        )
+        self.jobs_current_only.toggled.connect(self._apply_jobs_filter)
+        filt.addWidget(self.jobs_current_only)
+        cancel_sel = QPushButton("Cancel selected")
+        cancel_sel.setToolTip(
+            "scancel the selected (and visible) rows in either table — use "
+            "to cancel jobs of runs OTHER than the current one. Select rows "
+            "with click / shift-click / ctrl-click."
+        )
+        cancel_sel.clicked.connect(self._cancel_selected_jobs)
+        filt.addWidget(cancel_sel)
+        lay.addLayout(filt)
+
         self.disk_label = QLabel("")
         lay.addWidget(self.disk_label)
         lay.addWidget(QLabel("Queue (squeue)"))
         self.queue_table = self._make_table(
             ["Job", "Name", "State", "Time", "Partition/Reason"]
         )
+        self._make_selectable(self.queue_table)
         lay.addWidget(self.queue_table, 1)
-        lay.addWidget(QLabel("Recent jobs (sacct, last 3 days)"))
+        self.recent_label = QLabel("Recent jobs (sacct)")
+        lay.addWidget(self.recent_label)
         self.recent_table = self._make_table(
             ["Job", "Name", "State", "Elapsed", "End"]
         )
+        self._make_selectable(self.recent_table)
         lay.addWidget(self.recent_table, 1)
         return w
 
@@ -561,7 +630,11 @@ class AdminWindow(QMainWindow):
             "picasso-workflow-test-<version>.sif (it carries pytest)."
         )
 
-    def _refresh_jobs(self) -> None:
+    def _refresh_jobs(self, *args) -> None:
+        # Snapshot the look-back window on the GUI thread (the worker closure
+        # must not touch widgets). ``*args`` absorbs the combo's signal arg.
+        days = self.recent_days.currentData()
+
         def done(result):
             queue, recent, disk = result
             if disk is not None:
@@ -571,16 +644,71 @@ class AdminWindow(QMainWindow):
                 )
             else:
                 self.disk_label.setText("Disk: (image_dir unset)")
+            self.recent_label.setText(
+                f"Recent jobs (sacct, last {days} day(s))"
+            )
             self._fill_jobs(self.queue_table, queue, queue=True)
             self._fill_jobs(self.recent_table, recent, queue=False)
+            self._apply_jobs_filter()
             self.activity.appendPlainText(
                 f"✓ {len(queue)} queued, {len(recent)} recent"
             )
 
         def action(a):
-            return a.queue(), a.recent_jobs(), a.disk_usage()
+            return a.queue(), a.recent_jobs(days=days), a.disk_usage()
 
         self._run(action, done, busy="fetching jobs & usage")
+
+    def _apply_jobs_filter(self, *args) -> None:
+        """Show/hide rows per the text filter and the 'This run only' toggle.
+
+        Purely client-side (no SSH): both conditions must hold (AND) for a row
+        to stay visible. ``*args`` absorbs the textChanged/toggled signal args.
+        """
+        text = self.jobs_filter.text().strip().lower()
+        current_only = self.jobs_current_only.isChecked()
+        run_ids = set(self._test_run_jobs)
+        for table in (self.queue_table, self.recent_table):
+            for r in range(table.rowCount()):
+                id_item = table.item(r, 0)
+                job_id = id_item.text() if id_item else ""
+                visible = True
+                if current_only and job_id not in run_ids:
+                    visible = False
+                if visible and text:
+                    row_text = " ".join(
+                        table.item(r, c).text() if table.item(r, c) else ""
+                        for c in range(table.columnCount())
+                    ).lower()
+                    visible = text in row_text
+                table.setRowHidden(r, not visible)
+
+    def _cancel_selected_jobs(self) -> None:
+        """``scancel`` the selected (and still-visible) rows in either table."""
+        ids = []
+        for table in (self.queue_table, self.recent_table):
+            for index in table.selectionModel().selectedRows():
+                r = index.row()
+                if table.isRowHidden(r):
+                    continue  # don't act on a row filtered out of view
+                item = table.item(r, 0)
+                if item and item.text():
+                    ids.append(item.text())
+        ids = list(dict.fromkeys(ids))  # de-dup, preserve order
+        if not ids:
+            QMessageBox.information(
+                self,
+                "Cancel selected",
+                "Select one or more jobs (Queue or Recent table) first.",
+            )
+            return
+        self._confirm_and_cancel(
+            ids,
+            title="Cancel selected",
+            prompt=f"scancel {len(ids)} selected job(s)?\n" + " ".join(ids),
+            busy="cancelling selected jobs",
+            note="; click Refresh to update the view.",
+        )
 
     @staticmethod
     def _fill_jobs(table, jobs, *, queue):
