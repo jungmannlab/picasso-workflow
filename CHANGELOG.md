@@ -10,6 +10,16 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ## [Unreleased]
 
+### Added
+- **Admin console Jobs & usage: filter + cancel any run's jobs.** The tab gains
+  a *Recent window* selector (1/3/7/14/30 days) that re-fetches `sacct` over the
+  chosen look-back, an instant client-side *Filter* box (substring match on job
+  id / name / state), and a *This run only* toggle that narrows both tables to
+  the last submitted test run's job ids. The Queue and Recent tables are now
+  row-selectable, and a *Cancel selected* button `scancel`s the selected
+  (visible) rows — so jobs of runs **other than the current one** can be
+  cancelled, not just the current run's. (`admin/qt.py`)
+
 ### Fixed
 - **GUI tests skip when Qt can't actually load (cluster Apptainer image).** The
   test suite guarded `test_gui_*.py` with `find_spec("PyQt6")`, but `picassosr`
