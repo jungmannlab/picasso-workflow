@@ -21,6 +21,15 @@ This file was started after v0.5.6; earlier history is in the git log.
   cancelled, not just the current run's. (`admin/qt.py`)
 
 ### Fixed
+- **More cluster-image test fixes (read-only FS + Qt imports).** Follow-up to
+  the read-only-`temp` and GUI-skip fixes, catching the stragglers surfaced by a
+  full in-image run: `test_analyse`'s `undrift_from_picked` and
+  `test_workflow`'s `Test_D_WorkflowRunnerErrorRecording.setUp` wrote to
+  package-rooted paths (`<pkg>/../../temp`, `<pkg>/TestData/results`) that are
+  read-only in the SIF — both now use the writable `temp_folder()`; and the
+  three `test_manual_to_workflow` tests that import the PyQt6 wizard now
+  `pytest.importorskip` it so they skip (not error) where Qt can't load. CI with
+  the full Qt runtime still runs them. (`tests/`)
 - **GUI tests skip when Qt can't actually load (cluster Apptainer image).** The
   test suite guarded `test_gui_*.py` with `find_spec("PyQt6")`, but `picassosr`
   pulls PyQt6 in as a dependency, so the package is present in the lean cluster
