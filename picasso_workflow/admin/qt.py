@@ -129,6 +129,7 @@ class AdminWindow(QMainWindow):
         root.addWidget(self._build_connection_panel())
         self._test_run_dir = None
         self._test_run_jobs: list[str] = []
+        self._test_run_templates: list[tuple[str, str]] = []
         # Auto-refresh (opt-in): one QTimer polls the ACTIVE tab quietly.
         self._summary_seen = False
         self._auto_timer = QTimer(self)
@@ -373,9 +374,9 @@ class AdminWindow(QMainWindow):
         fetch.clicked.connect(self._fetch_summary)
         logs = QPushButton("Fetch logs")
         logs.setToolTip(
-            "Tail the per-job .log files in the run dir (tiers + summary) so a "
-            "failed tier's error output is visible here. Template workflow logs "
-            "live under each template's own folder."
+            "Tail the per-job .log files: the run dir's tier + summary logs, "
+            "AND each template run's own logs/ dir -- so a failed tier OR a "
+            "failed end-to-end template workflow's error output is visible here."
         )
         logs.clicked.connect(self._fetch_logs)
         cancel = QPushButton("Cancel run")
@@ -410,6 +411,7 @@ class AdminWindow(QMainWindow):
         # logs' / 'Cancel run' pointing at the previous run's dir / job ids.
         self._test_run_dir = None
         self._test_run_jobs = []
+        self._test_run_templates = []
         self._summary_seen = False  # a new run -> a new SUMMARY to wait for
         # Snapshot ALL widget inputs on the GUI thread (widgets aren't
         # thread-safe); the worker closure below touches only these locals.
@@ -455,6 +457,12 @@ class AdminWindow(QMainWindow):
                     *(jid for jid, _ in result["template_jobs"]),
                 )
                 if j
+            ]
+            # (folder, job_id) per template run -> their own logs/ dirs, for
+            # 'Fetch logs' (the folder is the script's parent directory).
+            self._test_run_templates = [
+                (script.rsplit("/", 1)[0] if "/" in script else ".", jid)
+                for jid, script in result["template_jobs"]
             ]
             lines = [
                 f"run dir: {result['run_dir']}",
@@ -504,17 +512,18 @@ class AdminWindow(QMainWindow):
             )
             return
         run_dir = self._test_run_dir
+        templates = list(self._test_run_templates)
 
         def done(text):
             self.test_logs_text.setPlainText(
                 text
-                or "(no .log files in the run dir yet — the jobs have not "
+                or "(no .log files yet — the tier / template jobs have not "
                 "started)"
             )
             self.test_output_tabs.setCurrentWidget(self.test_logs_text)
 
         self._run(
-            lambda a: a.fetch_logs(run_dir),
+            lambda a: a.fetch_logs(run_dir, templates=templates),
             done,
             busy="fetching logs",
         )

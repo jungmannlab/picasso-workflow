@@ -11,6 +11,12 @@ This file was started after v0.5.6; earlier history is in the git log.
 ## [Unreleased]
 
 ### Added
+- **Admin console: 'Fetch logs' also pulls the template-run logs.** In addition
+  to the run dir's tier/summary `.log` files, it now tails each template run's
+  own `<folder>/logs/*<jobid>*`, so a failed end-to-end template workflow's
+  error output is visible from the GUI without hand-SSH. The run's template
+  `(folder, job_id)` pairs are tracked at submit and passed to
+  `ClusterAdmin.fetch_logs(run_dir, templates=…)`. (`admin/core.py`, `admin/qt.py`)
 - **Admin console: opt-in auto-refresh.** A *Auto-refresh every N s* checkbox
   (default off, 20 s) on the Jobs & usage tab polls the **active** tab without
   clicking — the Jobs tables there, or (on the Test-runs tab) auto-fetches

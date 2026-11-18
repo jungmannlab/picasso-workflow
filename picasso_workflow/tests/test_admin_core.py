@@ -250,6 +250,19 @@ def test_fetch_logs_tails_run_dir_logs():
     assert "|| true" in cmd
 
 
+def test_fetch_logs_includes_template_dirs():
+    # templates=(folder, job_id) -> also glob <folder>/logs/*<job_id>*
+    admin = _admin(stdout="x")
+    admin.fetch_logs(
+        "/scratch/run",
+        templates=[("/fs/td/t1", "501"), ("/fs/td/t2", "502")],
+    )
+    (cmd,) = admin.comm.commands
+    assert "/scratch/run/*.log" in cmd
+    assert "/fs/td/t1'/logs/*'501'*" in cmd or "/fs/td/t1/logs/*501*" in cmd
+    assert "502" in cmd and "/fs/td/t2" in cmd
+
+
 def test_fetch_logs_empty_when_none():
     admin = _admin(stdout="")
     assert admin.fetch_logs("/scratch/run") == ""
