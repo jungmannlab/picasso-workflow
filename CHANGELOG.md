@@ -10,6 +10,8 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-11-18
+
 ### Added
 - **Release images get stable `-latest` aliases.** On a full (non-prerelease)
   release, `build-apptainer.yml` now also attaches fixed-name
