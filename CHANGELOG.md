@@ -11,6 +11,12 @@ This file was started after v0.5.6; earlier history is in the git log.
 ## [Unreleased]
 
 ### Added
+- **Admin console: opt-in auto-refresh.** A *Auto-refresh every N s* checkbox
+  (default off, 20 s) on the Jobs & usage tab polls the **active** tab without
+  clicking — the Jobs tables there, or (on the Test-runs tab) auto-fetches
+  SUMMARY until it appears. It is quiet (no Activity-log spam), preserves scroll,
+  pauses while you have a table selection or a dialog open, and switches itself
+  off on an SSH error. Images stay manual (they rarely change). (`admin/qt.py`)
 - **Admin console UX polish.** The *Images* table is now sortable (click a
   header; Size sorts by magnitude, not lexically) with *Lean* / *Test* kind
   checkboxes to filter it. The *Test runs* output is split into **Submit /

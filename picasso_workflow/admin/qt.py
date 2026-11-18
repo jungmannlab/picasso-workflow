@@ -19,7 +19,7 @@ import getpass
 import sys
 import traceback
 
-from PyQt6.QtCore import Qt, QThread, pyqtSignal
+from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSignal
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -34,6 +34,7 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
+    QSpinBox,
     QSplitter,
     QTableWidget,
     QTableWidgetItem,
@@ -128,10 +129,17 @@ class AdminWindow(QMainWindow):
         root.addWidget(self._build_connection_panel())
         self._test_run_dir = None
         self._test_run_jobs: list[str] = []
+        # Auto-refresh (opt-in): one QTimer polls the ACTIVE tab quietly.
+        self._summary_seen = False
+        self._auto_timer = QTimer(self)
+        self._auto_timer.timeout.connect(self._auto_tick)
         self.tabs = QTabWidget()
-        self.tabs.addTab(self._build_images_tab(), "Images")
-        self.tabs.addTab(self._build_testruns_tab(), "Test runs")
-        self.tabs.addTab(self._build_jobs_tab(), "Jobs & usage")
+        self._images_tab = self._build_images_tab()
+        self._testruns_tab = self._build_testruns_tab()
+        self._jobs_tab = self._build_jobs_tab()
+        self.tabs.addTab(self._images_tab, "Images")
+        self.tabs.addTab(self._testruns_tab, "Test runs")
+        self.tabs.addTab(self._jobs_tab, "Jobs & usage")
         self.activity = QPlainTextEdit(readOnly=True)
         self.activity.setMaximumBlockCount(5000)
         activity_box = QWidget()
@@ -402,6 +410,7 @@ class AdminWindow(QMainWindow):
         # logs' / 'Cancel run' pointing at the previous run's dir / job ids.
         self._test_run_dir = None
         self._test_run_jobs = []
+        self._summary_seen = False  # a new run -> a new SUMMARY to wait for
         # Snapshot ALL widget inputs on the GUI thread (widgets aren't
         # thread-safe); the worker closure below touches only these locals.
         ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -572,6 +581,23 @@ class AdminWindow(QMainWindow):
         self.recent_days.currentIndexChanged.connect(self._refresh_jobs)
         controls.addWidget(self.recent_days)
         controls.addStretch(1)
+        # Opt-in auto-refresh: quietly polls the ACTIVE tab (Jobs tables, or
+        # SUMMARY on the Test-runs tab until it appears). Images stay manual.
+        self.auto_refresh = QCheckBox("Auto-refresh every")
+        self.auto_refresh.setToolTip(
+            "Periodically refresh the active tab without clicking: the Jobs "
+            "tables here, or (on the Test-runs tab) fetch SUMMARY until it "
+            "appears. Quiet; pauses while you have a selection or a dialog "
+            "open, and stops on an SSH error."
+        )
+        self.auto_refresh.toggled.connect(self._on_auto_toggled)
+        self.auto_interval = QSpinBox()
+        self.auto_interval.setRange(5, 600)
+        self.auto_interval.setValue(20)
+        self.auto_interval.setSuffix(" s")
+        self.auto_interval.valueChanged.connect(self._on_auto_interval_changed)
+        controls.addWidget(self.auto_refresh)
+        controls.addWidget(self.auto_interval)
         lay.addLayout(controls)
 
         # Row 2: client-side filters (instant, no re-fetch) + cancel selected.
@@ -617,25 +643,35 @@ class AdminWindow(QMainWindow):
         return w
 
     # -- the async runner (single worker, re-entry guarded) ---------------
-    def _run(self, action, on_done, *, busy: str) -> None:
+    def _run(self, action, on_done, *, busy: str, quiet: bool = False) -> None:
         """Run ``action(admin) -> result`` off the UI thread.
 
         The connection fields are snapshotted here, on the GUI thread; the
         worker closure only touches the plain snapshot + the built
         :class:`core.ClusterAdmin`, never a Qt widget (widgets aren't
-        thread-safe).
+        thread-safe). ``quiet`` (used by auto-refresh) suppresses the busy /
+        wait-cursor chrome and routes a failure to a non-modal, auto-stopping
+        handler instead of a dialog.
         """
         if self._worker is not None and self._worker.isRunning():
-            self.activity.appendPlainText("(busy — wait for the current task)")
+            if not quiet:
+                self.activity.appendPlainText(
+                    "(busy — wait for the current task)"
+                )
             return
         host = self.host.currentText().strip()
         user = self.user.text().strip()
         identity = self.identity.text().strip() or None
         if not host:
-            QMessageBox.information(self, "Connect", "Select a cluster first.")
+            if not quiet:
+                QMessageBox.information(
+                    self, "Connect", "Select a cluster first."
+                )
             return
-        self.activity.appendPlainText(f"• {busy}")
-        self.setCursor(Qt.CursorShape.WaitCursor)
+        self._op_quiet = quiet
+        if not quiet:
+            self.activity.appendPlainText(f"• {busy}")
+            self.setCursor(Qt.CursorShape.WaitCursor)
 
         def fn():
             admin = core.build_admin(
@@ -653,6 +689,13 @@ class AdminWindow(QMainWindow):
 
     def _on_failed(self, msg: str) -> None:
         self.conn_status.setText("error")
+        if getattr(self, "_op_quiet", False):
+            # An auto-refresh tick failed: don't pop a modal every interval --
+            # log once and switch auto-refresh off so we stop hammering.
+            self.activity.appendPlainText(f"✗ auto-refresh stopped: {msg}")
+            if self.auto_refresh.isChecked():
+                self.auto_refresh.setChecked(False)
+            return
         self.activity.appendPlainText(f"✗ {msg}")
         QMessageBox.critical(self, "Operation failed", msg)
 
@@ -727,13 +770,17 @@ class AdminWindow(QMainWindow):
             "picasso-workflow-test-<version>.sif (it carries pytest)."
         )
 
-    def _refresh_jobs(self, *args) -> None:
+    def _refresh_jobs(self, *args, quiet: bool = False) -> None:
         # Snapshot the look-back window on the GUI thread (the worker closure
-        # must not touch widgets). ``*args`` absorbs the combo's signal arg.
+        # must not touch widgets). ``*args`` absorbs the combo's signal arg;
+        # ``quiet`` is the auto-refresh path (no log, preserve scroll).
         days = self.recent_days.currentData()
 
         def done(result):
             queue, recent, disk = result
+            # Preserve scroll on a quiet auto-refresh so the view doesn't jump.
+            qv = self.queue_table.verticalScrollBar().value()
+            rv = self.recent_table.verticalScrollBar().value()
             if disk is not None:
                 self.disk_label.setText(
                     f"Disk ({disk.path}): {disk.used} used / {disk.size} "
@@ -747,14 +794,71 @@ class AdminWindow(QMainWindow):
             self._fill_jobs(self.queue_table, queue, queue=True)
             self._fill_jobs(self.recent_table, recent, queue=False)
             self._apply_jobs_filter()
-            self.activity.appendPlainText(
-                f"✓ {len(queue)} queued, {len(recent)} recent"
-            )
+            if quiet:
+                self.queue_table.verticalScrollBar().setValue(qv)
+                self.recent_table.verticalScrollBar().setValue(rv)
+            else:
+                self.activity.appendPlainText(
+                    f"✓ {len(queue)} queued, {len(recent)} recent"
+                )
 
         def action(a):
             return a.queue(), a.recent_jobs(days=days), a.disk_usage()
 
-        self._run(action, done, busy="fetching jobs & usage")
+        self._run(action, done, busy="fetching jobs & usage", quiet=quiet)
+
+    # -- auto-refresh (opt-in; one timer polls the active tab, quietly) ----
+    def _on_auto_toggled(self, on: bool) -> None:
+        if on:
+            self._auto_timer.start(self.auto_interval.value() * 1000)
+        else:
+            self._auto_timer.stop()
+
+    def _on_auto_interval_changed(self, seconds: int) -> None:
+        if self._auto_timer.isActive():
+            self._auto_timer.start(seconds * 1000)
+
+    def _auto_tick(self) -> None:
+        """Quietly refresh the active tab's data; skip when it would intrude."""
+        if self._worker is not None and self._worker.isRunning():
+            return  # an op is in flight; try next tick
+        if QApplication.activeModalWidget() is not None:
+            return  # a dialog is open -- don't fire SSH underneath it
+        if not self.host.currentText().strip():
+            return  # not configured
+        current = self.tabs.currentWidget()
+        if current is self._jobs_tab:
+            # Don't clobber a selection the user is building for Cancel selected.
+            if any(
+                t.selectionModel().selectedRows()
+                for t in (self.queue_table, self.recent_table)
+            ):
+                return
+            self._refresh_jobs(quiet=True)
+        elif (
+            current is self._testruns_tab
+            and self._test_run_dir
+            and not self._summary_seen
+        ):
+            self._auto_fetch_summary()
+
+    def _auto_fetch_summary(self) -> None:
+        run_dir = self._test_run_dir
+
+        def done(text):
+            if text:
+                self.test_summary_text.setPlainText(text)
+                self.test_output_tabs.setCurrentWidget(self.test_summary_text)
+                self._summary_seen = True
+                self.activity.appendPlainText("✓ SUMMARY ready")
+            # empty -> summary job not finished; leave the pane, retry next tick
+
+        self._run(
+            lambda a: a.fetch_summary(run_dir),
+            done,
+            busy="auto-fetching SUMMARY",
+            quiet=True,
+        )
 
     def _apply_jobs_filter(self, *args) -> None:
         """Show/hide rows per the text filter and the 'This run only' toggle.
