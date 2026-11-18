@@ -10,6 +10,73 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-11-18
+
+### Added
+- **Release images get stable `-latest` aliases.** On a full (non-prerelease)
+  release, `build-apptainer.yml` now also attaches fixed-name
+  `picasso-workflow-latest.sif` and `picasso-workflow-test-latest.sif` (copies
+  of the versioned `.sif`s) to the GitHub Release — so
+  `https://github.com/jungmannlab/picasso-workflow/releases/latest/download/picasso-workflow-test-latest.sif`
+  is a permanent URL to the newest **stable** release image (GitHub's
+  `releases/latest` already excludes pre-releases, so alpha/rc tags are skipped).
+  Lets the login node always pull "latest" without tracking the version.
+  (`.github/workflows/build-apptainer.yml`)
+- **Admin console: 'Fetch logs' also pulls the template-run logs.** In addition
+  to the run dir's tier/summary `.log` files, it now tails each template run's
+  own `<folder>/logs/*<jobid>*`, so a failed end-to-end template workflow's
+  error output is visible from the GUI without hand-SSH. The run's template
+  `(folder, job_id)` pairs are tracked at submit and passed to
+  `ClusterAdmin.fetch_logs(run_dir, templates=…)`. (`admin/core.py`, `admin/qt.py`)
+- **Admin console: opt-in auto-refresh.** A *Auto-refresh every N s* checkbox
+  (default off, 20 s) on the Jobs & usage tab polls the **active** tab without
+  clicking — the Jobs tables there, or (on the Test-runs tab) auto-fetches
+  SUMMARY until it appears. It is quiet (no Activity-log spam), preserves scroll,
+  pauses while you have a table selection or a dialog open, and switches itself
+  off on an SSH error. Images stay manual (they rarely change). (`admin/qt.py`)
+- **Admin console UX polish.** The *Images* table is now sortable (click a
+  header; Size sorts by magnitude, not lexically) with *Lean* / *Test* kind
+  checkboxes to filter it. The *Test runs* output is split into **Submit /
+  SUMMARY / Logs** tabs so those no longer overwrite each other (each button
+  writes and switches to its own pane). The tabs area and the Activity log now
+  sit in a **draggable vertical splitter** (favouring the tabs 3:1) so a window
+  resize can grow the upper panel instead of mostly the log. (`admin/qt.py`)
+- **Admin console Jobs & usage: filter + cancel any run's jobs.** The tab gains
+  a *Recent window* selector (1/3/7/14/30 days) that re-fetches `sacct` over the
+  chosen look-back, an instant client-side *Filter* box (substring match on job
+  id / name / state), and a *This run only* toggle that narrows both tables to
+  the last submitted test run's job ids. The Queue and Recent tables are now
+  row-selectable, and a *Cancel selected* button `scancel`s the selected
+  (visible) rows — so jobs of runs **other than the current one** can be
+  cancelled, not just the current run's. (`admin/qt.py`)
+
+### Fixed
+- **More cluster-image test fixes (read-only FS + Qt imports).** Follow-up to
+  the read-only-`temp` and GUI-skip fixes, catching the stragglers surfaced by a
+  full in-image run: `test_analyse`'s `undrift_from_picked` and
+  `test_workflow`'s `Test_D_WorkflowRunnerErrorRecording.setUp` wrote to
+  package-rooted paths (`<pkg>/../../temp`, `<pkg>/TestData/results`) that are
+  read-only in the SIF — both now use the writable `temp_folder()`; and the
+  three `test_manual_to_workflow` tests that import the PyQt6 wizard now
+  `pytest.importorskip` it so they skip (not error) where Qt can't load. CI with
+  the full Qt runtime still runs them. (`tests/`)
+- **GUI tests skip when Qt can't actually load (cluster Apptainer image).** The
+  test suite guarded `test_gui_*.py` with `find_spec("PyQt6")`, but `picassosr`
+  pulls PyQt6 in as a dependency, so the package is present in the lean cluster
+  image even though its native Qt libraries (`libglib2.0`, …) are not — making
+  `from PyQt6 import QtWidgets` ImportError and erroring all 16 GUI modules at
+  collection (the in-container test chain's `tiers1_3` failed on this). The guard
+  now probes a real import and skips the GUI tests when Qt cannot load; CI (full
+  Qt runtime) still runs them. (`tests/conftest.py`)
+- **Release auto-triggers the Apptainer image build.** `release.yml` now
+  publishes the GitHub Release with a PAT (`secrets.RELEASE_PAT`) when set, so
+  the `release: published` event actually reaches `build-apptainer.yml` and the
+  `picasso-workflow-[test-]<version>.sif` assets are built + attached
+  automatically. Previously the release was published by the default
+  `GITHUB_TOKEN`, whose events GitHub suppresses from triggering other
+  workflows, so the `.sif` build never fired. Falls back to `GITHUB_TOKEN` (no
+  auto-build) when the secret is absent. (`.github/workflows/release.yml`)
+
 ## [0.7.0] - 2026-11-17
 
 ### Changed

@@ -3367,13 +3367,7 @@ class TestAnalyseModules(unittest.TestCase):
         self.ap._plot_drift = MagicMock()
 
         # write a picasso pick-region yaml (Centers + Diameter)
-        fp_yaml = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)),
-            "..",
-            "..",
-            "temp",
-            "picks_undrift.yaml",
-        )
+        fp_yaml = os.path.join(temp_folder(), "picks_undrift.yaml")
         os.makedirs(os.path.dirname(fp_yaml), exist_ok=True)
         with open(fp_yaml, "w") as f:
             _yaml.dump(

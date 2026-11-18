@@ -345,10 +345,9 @@ class Test_D_WorkflowRunnerErrorRecording(unittest.TestCase):
     """A failed module must leave a trace on disk and a rich report."""
 
     def setUp(self):
-        self.results_folder = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)), "TestData", "results"
-        )
-        os.makedirs(self.results_folder, exist_ok=True)
+        # Writable results dir (the old <pkg>/TestData/results is read-only in
+        # the Apptainer image); temp_folder() creates it.
+        self.results_folder = temp_folder()
 
     def _runner(self):
         return WorkflowRunner.config_from_dicts(

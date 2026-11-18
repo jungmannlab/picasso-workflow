@@ -1486,6 +1486,16 @@ git push origin v1.2.3
 
 Tag format must be `vMAJOR.MINOR.PATCH` (e.g. `v1.2.3`).
 
+Pushing the tag triggers `release.yml` (installers → GitHub Release), and the
+published release in turn triggers `build-apptainer.yml` to build and attach the
+`picasso-workflow-[test-]<version>.sif` images. **For that chain to fire
+automatically, the repo must have a `RELEASE_PAT` secret** (a fine-grained PAT
+with this repo's *Contents: write*). GitHub suppresses workflow triggers for
+events raised by the default `GITHUB_TOKEN`, so without the PAT the release still
+publishes but the `.sif` build does not start — kick it off by re-publishing the
+release (toggle its draft state) or running `build-apptainer.yml` via
+*workflow_dispatch* with the tag as `pw_ref`.
+
 **4. Sync `develop` back to `master`**
 
 ```bash

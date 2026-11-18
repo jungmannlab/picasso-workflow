@@ -913,7 +913,10 @@ def test_reconstruct_meta_parallel_and_source_file(tmp_path):
 
 
 def test_format_params_resolves_map_per_channel():
-    from picasso_workflow import wizard_manual_to_workflow as wiz
+    # The wizard module imports PyQt6 at top level, so it is un-importable on a
+    # lean/headless install with no Qt runtime (e.g. the cluster Apptainer
+    # image) -- skip rather than error there. CI has the full Qt runtime.
+    wiz = pytest.importorskip("picasso_workflow.wizard_manual_to_workflow")
 
     tree = {
         "tile_params": {
@@ -937,7 +940,10 @@ def test_format_params_resolves_map_per_channel():
 
 
 def test_resplit_to_aggregation():
-    from picasso_workflow import wizard_manual_to_workflow as wiz
+    # The wizard module imports PyQt6 at top level, so it is un-importable on a
+    # lean/headless install with no Qt runtime (e.g. the cluster Apptainer
+    # image) -- skip rather than error there. CI has the full Qt runtime.
+    wiz = pytest.importorskip("picasso_workflow.wizard_manual_to_workflow")
 
     single = [
         ("load_dataset_localizations", {}),
@@ -971,7 +977,10 @@ def test_resplit_to_aggregation():
 
 
 def test_apply_result_to_window(tmp_path):
-    from picasso_workflow import wizard_manual_to_workflow as wiz
+    # The wizard module imports PyQt6 at top level, so it is un-importable on a
+    # lean/headless install with no Qt runtime (e.g. the cluster Apptainer
+    # image) -- skip rather than error there. CI has the full Qt runtime.
+    wiz = pytest.importorskip("picasso_workflow.wizard_manual_to_workflow")
 
     root = _make_dataset(tmp_path, CHANNELS)
     result = m.reconstruct_workflow(_manual(root))
