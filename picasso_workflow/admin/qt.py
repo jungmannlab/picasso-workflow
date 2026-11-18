@@ -394,6 +394,25 @@ class AdminWindow(QMainWindow):
             busy="fetching logs",
         )
 
+    def _confirm_and_cancel(
+        self, ids, *, title, prompt, busy, note=""
+    ) -> None:
+        """Confirm, then ``scancel`` ``ids`` off the GUI thread; log the count.
+
+        Shared by the Test-runs 'Cancel run' and the Jobs 'Cancel selected'
+        buttons. ``note`` is appended to the success message.
+        """
+        if (
+            QMessageBox.question(self, title, prompt)
+            != QMessageBox.StandardButton.Yes
+        ):
+            return
+
+        def done(n):
+            self.activity.appendPlainText(f"✓ cancelled {n} job(s){note}")
+
+        self._run(lambda a: a.cancel_jobs(ids), done, busy=busy)
+
     def _cancel_run(self) -> None:
         if not self._test_run_jobs:
             QMessageBox.information(
@@ -401,23 +420,11 @@ class AdminWindow(QMainWindow):
             )
             return
         jobs = list(self._test_run_jobs)
-        if (
-            QMessageBox.question(
-                self,
-                "Cancel run",
-                f"scancel {len(jobs)} job(s) of this test run?\n"
-                + " ".join(jobs),
-            )
-            != QMessageBox.StandardButton.Yes
-        ):
-            return
-
-        def done(n):
-            self.activity.appendPlainText(f"✓ cancelled {n} job(s)")
-
-        self._run(
-            lambda a: a.cancel_jobs(jobs),
-            done,
+        self._confirm_and_cancel(
+            jobs,
+            title="Cancel run",
+            prompt=f"scancel {len(jobs)} job(s) of this test run?\n"
+            + " ".join(jobs),
             busy="cancelling run jobs",
         )
 
@@ -468,7 +475,7 @@ class AdminWindow(QMainWindow):
         filt.addWidget(self.jobs_current_only)
         cancel_sel = QPushButton("Cancel selected")
         cancel_sel.setToolTip(
-            "scancel the selected (and visible) rows in either table -- use "
+            "scancel the selected (and visible) rows in either table — use "
             "to cancel jobs of runs OTHER than the current one. Select rows "
             "with click / shift-click / ctrl-click."
         )
@@ -695,25 +702,12 @@ class AdminWindow(QMainWindow):
                 "Select one or more jobs (Queue or Recent table) first.",
             )
             return
-        if (
-            QMessageBox.question(
-                self,
-                "Cancel selected",
-                f"scancel {len(ids)} selected job(s)?\n" + " ".join(ids),
-            )
-            != QMessageBox.StandardButton.Yes
-        ):
-            return
-
-        def done(n):
-            self.activity.appendPlainText(
-                f"✓ cancelled {n} job(s); click Refresh to update the view."
-            )
-
-        self._run(
-            lambda a: a.cancel_jobs(ids),
-            done,
+        self._confirm_and_cancel(
+            ids,
+            title="Cancel selected",
+            prompt=f"scancel {len(ids)} selected job(s)?\n" + " ".join(ids),
             busy="cancelling selected jobs",
+            note="; click Refresh to update the view.",
         )
 
     @staticmethod
