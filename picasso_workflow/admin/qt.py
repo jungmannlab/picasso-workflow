@@ -19,7 +19,7 @@ import getpass
 import sys
 import traceback
 
-from PyQt6.QtCore import Qt, QThread, pyqtSignal
+from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSignal
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -34,6 +34,8 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
+    QSpinBox,
+    QSplitter,
     QTableWidget,
     QTableWidgetItem,
     QTabWidget,
@@ -49,6 +51,44 @@ def _row_widget(layout) -> QWidget:
     w = QWidget()
     w.setLayout(layout)
     return w
+
+
+def _size_to_bytes(s: str) -> float:
+    """Parse a human size like ``"4.2G"`` back to bytes, for numeric sorting.
+
+    Returns ``-1`` for blank/unparseable input (sorts such rows first).
+    """
+    units = {"B": 1, "K": 1024, "M": 1024**2, "G": 1024**3, "T": 1024**4}
+    s = (s or "").strip()
+    if not s:
+        return -1.0
+    if s[-1] in units:
+        try:
+            return float(s[:-1]) * units[s[-1]]
+        except ValueError:
+            return -1.0
+    try:
+        return float(s)
+    except ValueError:
+        return -1.0
+
+
+class _NumSortItem(QTableWidgetItem):
+    """Table item that displays arbitrary text but sorts by a numeric key.
+
+    Used for the Images 'Size' column so ``900M`` sorts below ``4.2G`` instead
+    of lexicographically.
+    """
+
+    def __init__(self, text: str, sort_key: float):
+        super().__init__(text)
+        self._sort_key = sort_key
+
+    def __lt__(self, other):
+        try:
+            return self._sort_key < other._sort_key
+        except AttributeError:
+            return super().__lt__(other)
 
 
 class _Worker(QThread):
@@ -89,16 +129,35 @@ class AdminWindow(QMainWindow):
         root.addWidget(self._build_connection_panel())
         self._test_run_dir = None
         self._test_run_jobs: list[str] = []
+        self._test_run_templates: list[tuple[str, str]] = []
+        # Auto-refresh (opt-in): one QTimer polls the ACTIVE tab quietly.
+        self._summary_seen = False
+        self._auto_timer = QTimer(self)
+        self._auto_timer.timeout.connect(self._auto_tick)
         self.tabs = QTabWidget()
-        self.tabs.addTab(self._build_images_tab(), "Images")
-        self.tabs.addTab(self._build_testruns_tab(), "Test runs")
-        self.tabs.addTab(self._build_jobs_tab(), "Jobs & usage")
-        root.addWidget(self.tabs, 1)
-
-        root.addWidget(QLabel("Activity"))
+        self._images_tab = self._build_images_tab()
+        self._testruns_tab = self._build_testruns_tab()
+        self._jobs_tab = self._build_jobs_tab()
+        self.tabs.addTab(self._images_tab, "Images")
+        self.tabs.addTab(self._testruns_tab, "Test runs")
+        self.tabs.addTab(self._jobs_tab, "Jobs & usage")
         self.activity = QPlainTextEdit(readOnly=True)
         self.activity.setMaximumBlockCount(5000)
-        root.addWidget(self.activity, 1)
+        activity_box = QWidget()
+        activity_lay = QVBoxLayout(activity_box)
+        activity_lay.setContentsMargins(0, 0, 0, 0)
+        activity_lay.addWidget(QLabel("Activity"))
+        activity_lay.addWidget(self.activity)
+
+        # Draggable vertical split: a plain layout let a window resize mostly
+        # enlarge the Activity log. The splitter lets the user pull the tabs area
+        # taller, and defaults to favouring the tabs 3:1.
+        split = QSplitter(Qt.Orientation.Vertical)
+        split.addWidget(self.tabs)
+        split.addWidget(activity_box)
+        split.setStretchFactor(0, 3)
+        split.setStretchFactor(1, 1)
+        root.addWidget(split, 1)
 
         self.resize(1000, 700)
 
@@ -169,11 +228,66 @@ class AdminWindow(QMainWindow):
             "Click 'Refresh images' (top) to list the shared mount."
         )
         lay.addWidget(self.image_dir_label)
+
+        # Kind filter (client-side): show lean and/or test images.
+        filt = QHBoxLayout()
+        filt.addWidget(QLabel("Show:"))
+        self.img_show_lean = QCheckBox("Lean")
+        self.img_show_lean.setChecked(True)
+        self.img_show_test = QCheckBox("Test")
+        self.img_show_test.setChecked(True)
+        filt.addWidget(self.img_show_lean)
+        filt.addWidget(self.img_show_test)
+        filt.addStretch(1)
+        lay.addLayout(filt)
+
+        self._all_images = []
         self.image_table = self._make_table(
             ["Image", "Version", "Test", "Size", "Modified", "Match"]
         )
+        # Click a header to sort; Size sorts by magnitude (see _NumSortItem).
+        self.image_table.setSortingEnabled(True)
         lay.addWidget(self.image_table, 1)
+        # Connect after the table exists so an early toggle can't outrun it.
+        self.img_show_lean.toggled.connect(self._apply_image_filter)
+        self.img_show_test.toggled.connect(self._apply_image_filter)
         return w
+
+    def _fill_images_table(self, images) -> None:
+        """Render ``images`` into the Images table (sort-aware, numeric Size)."""
+        gui_version = core.this_gui_version()
+        table = self.image_table
+        table.setSortingEnabled(False)  # don't re-sort mid-fill
+        table.setRowCount(len(images))
+        for r, im in enumerate(images):
+            # Match only on a clean release version (im.version); a
+            # develop-<sha> image has version=None so never "matches".
+            match = (
+                "✓ this GUI"
+                if im.version and im.version == gui_version
+                else ""
+            )
+            table.setItem(r, 0, QTableWidgetItem(im.name))
+            table.setItem(r, 1, QTableWidgetItem(im.tag))
+            table.setItem(
+                r, 2, QTableWidgetItem("test" if im.is_test else "lean")
+            )
+            table.setItem(r, 3, _NumSortItem(im.size, _size_to_bytes(im.size)))
+            table.setItem(r, 4, QTableWidgetItem(im.mtime))
+            table.setItem(r, 5, QTableWidgetItem(match))
+        table.resizeColumnsToContents()
+        table.setSortingEnabled(True)  # re-applies the current sort indicator
+
+    def _apply_image_filter(self, *args) -> None:
+        """Re-render the Images table for the Lean/Test checkbox selection."""
+        show_lean = self.img_show_lean.isChecked()
+        show_test = self.img_show_test.isChecked()
+        filtered = [
+            im
+            for im in self._all_images
+            if (im.is_test and show_test) or (not im.is_test and show_lean)
+        ]
+        self._fill_images_table(filtered)
 
     # -- test runs tab ----------------------------------------------------
     def _build_testruns_tab(self) -> QWidget:
@@ -260,9 +374,9 @@ class AdminWindow(QMainWindow):
         fetch.clicked.connect(self._fetch_summary)
         logs = QPushButton("Fetch logs")
         logs.setToolTip(
-            "Tail the per-job .log files in the run dir (tiers + summary) so a "
-            "failed tier's error output is visible here. Template workflow logs "
-            "live under each template's own folder."
+            "Tail the per-job .log files: the run dir's tier + summary logs, "
+            "AND each template run's own logs/ dir -- so a failed tier OR a "
+            "failed end-to-end template workflow's error output is visible here."
         )
         logs.clicked.connect(self._fetch_logs)
         cancel = QPushButton("Cancel run")
@@ -278,8 +392,16 @@ class AdminWindow(QMainWindow):
         bar.addWidget(cancel)
         bar.addStretch(1)
         lay.addLayout(bar)
-        self.test_summary = QPlainTextEdit(readOnly=True)
-        lay.addWidget(self.test_summary, 1)
+        # Separate panes so submit info / SUMMARY / logs don't overwrite each
+        # other -- each button writes (and switches) to its own tab.
+        self.test_output_tabs = QTabWidget()
+        self.test_submit_info = QPlainTextEdit(readOnly=True)
+        self.test_summary_text = QPlainTextEdit(readOnly=True)
+        self.test_logs_text = QPlainTextEdit(readOnly=True)
+        self.test_output_tabs.addTab(self.test_submit_info, "Submit")
+        self.test_output_tabs.addTab(self.test_summary_text, "SUMMARY")
+        self.test_output_tabs.addTab(self.test_logs_text, "Logs")
+        lay.addWidget(self.test_output_tabs, 1)
         return w
 
     def _submit_test_chain(self) -> None:
@@ -289,6 +411,8 @@ class AdminWindow(QMainWindow):
         # logs' / 'Cancel run' pointing at the previous run's dir / job ids.
         self._test_run_dir = None
         self._test_run_jobs = []
+        self._test_run_templates = []
+        self._summary_seen = False  # a new run -> a new SUMMARY to wait for
         # Snapshot ALL widget inputs on the GUI thread (widgets aren't
         # thread-safe); the worker closure below touches only these locals.
         ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -334,6 +458,12 @@ class AdminWindow(QMainWindow):
                 )
                 if j
             ]
+            # (folder, job_id) per template run -> their own logs/ dirs, for
+            # 'Fetch logs' (the folder is the script's parent directory).
+            self._test_run_templates = [
+                (script.rsplit("/", 1)[0] if "/" in script else ".", jid)
+                for jid, script in result["template_jobs"]
+            ]
             lines = [
                 f"run dir: {result['run_dir']}",
                 f"test data dir: {result['test_data_dir'] or '(none)'}",
@@ -345,7 +475,8 @@ class AdminWindow(QMainWindow):
                 "Submitted. Use 'Fetch SUMMARY' once the summary job finishes,"
                 " or watch progress in the Jobs & usage tab.",
             ]
-            self.test_summary.setPlainText("\n".join(lines))
+            self.test_submit_info.setPlainText("\n".join(lines))
+            self.test_output_tabs.setCurrentWidget(self.test_submit_info)
             self.activity.appendPlainText(
                 f"✓ submitted test chain -> {result['run_dir']}"
             )
@@ -361,11 +492,12 @@ class AdminWindow(QMainWindow):
         run_dir = self._test_run_dir
 
         def done(text):
-            self.test_summary.setPlainText(
+            self.test_summary_text.setPlainText(
                 text
                 or "(SUMMARY.txt not present yet — the summary job has "
                 "not finished)"
             )
+            self.test_output_tabs.setCurrentWidget(self.test_summary_text)
 
         self._run(
             lambda a: a.fetch_summary(run_dir),
@@ -380,16 +512,18 @@ class AdminWindow(QMainWindow):
             )
             return
         run_dir = self._test_run_dir
+        templates = list(self._test_run_templates)
 
         def done(text):
-            self.test_summary.setPlainText(
+            self.test_logs_text.setPlainText(
                 text
-                or "(no .log files in the run dir yet — the jobs have not "
+                or "(no .log files yet — the tier / template jobs have not "
                 "started)"
             )
+            self.test_output_tabs.setCurrentWidget(self.test_logs_text)
 
         self._run(
-            lambda a: a.fetch_logs(run_dir),
+            lambda a: a.fetch_logs(run_dir, templates=templates),
             done,
             busy="fetching logs",
         )
@@ -456,6 +590,23 @@ class AdminWindow(QMainWindow):
         self.recent_days.currentIndexChanged.connect(self._refresh_jobs)
         controls.addWidget(self.recent_days)
         controls.addStretch(1)
+        # Opt-in auto-refresh: quietly polls the ACTIVE tab (Jobs tables, or
+        # SUMMARY on the Test-runs tab until it appears). Images stay manual.
+        self.auto_refresh = QCheckBox("Auto-refresh every")
+        self.auto_refresh.setToolTip(
+            "Periodically refresh the active tab without clicking: the Jobs "
+            "tables here, or (on the Test-runs tab) fetch SUMMARY until it "
+            "appears. Quiet; pauses while you have a selection or a dialog "
+            "open, and stops on an SSH error."
+        )
+        self.auto_refresh.toggled.connect(self._on_auto_toggled)
+        self.auto_interval = QSpinBox()
+        self.auto_interval.setRange(5, 600)
+        self.auto_interval.setValue(20)
+        self.auto_interval.setSuffix(" s")
+        self.auto_interval.valueChanged.connect(self._on_auto_interval_changed)
+        controls.addWidget(self.auto_refresh)
+        controls.addWidget(self.auto_interval)
         lay.addLayout(controls)
 
         # Row 2: client-side filters (instant, no re-fetch) + cancel selected.
@@ -501,25 +652,35 @@ class AdminWindow(QMainWindow):
         return w
 
     # -- the async runner (single worker, re-entry guarded) ---------------
-    def _run(self, action, on_done, *, busy: str) -> None:
+    def _run(self, action, on_done, *, busy: str, quiet: bool = False) -> None:
         """Run ``action(admin) -> result`` off the UI thread.
 
         The connection fields are snapshotted here, on the GUI thread; the
         worker closure only touches the plain snapshot + the built
         :class:`core.ClusterAdmin`, never a Qt widget (widgets aren't
-        thread-safe).
+        thread-safe). ``quiet`` (used by auto-refresh) suppresses the busy /
+        wait-cursor chrome and routes a failure to a non-modal, auto-stopping
+        handler instead of a dialog.
         """
         if self._worker is not None and self._worker.isRunning():
-            self.activity.appendPlainText("(busy — wait for the current task)")
+            if not quiet:
+                self.activity.appendPlainText(
+                    "(busy — wait for the current task)"
+                )
             return
         host = self.host.currentText().strip()
         user = self.user.text().strip()
         identity = self.identity.text().strip() or None
         if not host:
-            QMessageBox.information(self, "Connect", "Select a cluster first.")
+            if not quiet:
+                QMessageBox.information(
+                    self, "Connect", "Select a cluster first."
+                )
             return
-        self.activity.appendPlainText(f"• {busy}")
-        self.setCursor(Qt.CursorShape.WaitCursor)
+        self._op_quiet = quiet
+        if not quiet:
+            self.activity.appendPlainText(f"• {busy}")
+            self.setCursor(Qt.CursorShape.WaitCursor)
 
         def fn():
             admin = core.build_admin(
@@ -537,6 +698,13 @@ class AdminWindow(QMainWindow):
 
     def _on_failed(self, msg: str) -> None:
         self.conn_status.setText("error")
+        if getattr(self, "_op_quiet", False):
+            # An auto-refresh tick failed: don't pop a modal every interval --
+            # log once and switch auto-refresh off so we stop hammering.
+            self.activity.appendPlainText(f"✗ auto-refresh stopped: {msg}")
+            if self.auto_refresh.isChecked():
+                self.auto_refresh.setChecked(False)
+            return
         self.activity.appendPlainText(f"✗ {msg}")
         QMessageBox.critical(self, "Operation failed", msg)
 
@@ -564,33 +732,14 @@ class AdminWindow(QMainWindow):
         image; the Test-runs dropdown gets only the TEST images (the chain runs
         pytest inside the image, which a lean image lacks).
         """
-        gui_version = core.this_gui_version()
 
         def done(result):
             image_dir, images = result
             self.image_dir_label.setText(
                 f"Shared folder: {image_dir or '(unset)'}"
             )
-            self.image_table.setRowCount(len(images))
-            for r, im in enumerate(images):
-                # Match only on a clean release version (im.version); a
-                # develop-<sha> image has version=None so never "matches".
-                match = (
-                    "✓ this GUI"
-                    if im.version and im.version == gui_version
-                    else ""
-                )
-                cells = [
-                    im.name,
-                    im.tag,  # "0.9.0" or "develop-<sha>" (always shown)
-                    "test" if im.is_test else "lean",
-                    im.size,
-                    im.mtime,
-                    match,
-                ]
-                for c, text in enumerate(cells):
-                    self.image_table.setItem(r, c, QTableWidgetItem(text))
-            self.image_table.resizeColumnsToContents()
+            self._all_images = images
+            self._apply_image_filter()  # renders the table per the kind filter
             self._fill_test_images(images)
             n_test = sum(1 for im in images if im.is_test)
             self.activity.appendPlainText(
@@ -630,13 +779,17 @@ class AdminWindow(QMainWindow):
             "picasso-workflow-test-<version>.sif (it carries pytest)."
         )
 
-    def _refresh_jobs(self, *args) -> None:
+    def _refresh_jobs(self, *args, quiet: bool = False) -> None:
         # Snapshot the look-back window on the GUI thread (the worker closure
-        # must not touch widgets). ``*args`` absorbs the combo's signal arg.
+        # must not touch widgets). ``*args`` absorbs the combo's signal arg;
+        # ``quiet`` is the auto-refresh path (no log, preserve scroll).
         days = self.recent_days.currentData()
 
         def done(result):
             queue, recent, disk = result
+            # Preserve scroll on a quiet auto-refresh so the view doesn't jump.
+            qv = self.queue_table.verticalScrollBar().value()
+            rv = self.recent_table.verticalScrollBar().value()
             if disk is not None:
                 self.disk_label.setText(
                     f"Disk ({disk.path}): {disk.used} used / {disk.size} "
@@ -650,14 +803,71 @@ class AdminWindow(QMainWindow):
             self._fill_jobs(self.queue_table, queue, queue=True)
             self._fill_jobs(self.recent_table, recent, queue=False)
             self._apply_jobs_filter()
-            self.activity.appendPlainText(
-                f"✓ {len(queue)} queued, {len(recent)} recent"
-            )
+            if quiet:
+                self.queue_table.verticalScrollBar().setValue(qv)
+                self.recent_table.verticalScrollBar().setValue(rv)
+            else:
+                self.activity.appendPlainText(
+                    f"✓ {len(queue)} queued, {len(recent)} recent"
+                )
 
         def action(a):
             return a.queue(), a.recent_jobs(days=days), a.disk_usage()
 
-        self._run(action, done, busy="fetching jobs & usage")
+        self._run(action, done, busy="fetching jobs & usage", quiet=quiet)
+
+    # -- auto-refresh (opt-in; one timer polls the active tab, quietly) ----
+    def _on_auto_toggled(self, on: bool) -> None:
+        if on:
+            self._auto_timer.start(self.auto_interval.value() * 1000)
+        else:
+            self._auto_timer.stop()
+
+    def _on_auto_interval_changed(self, seconds: int) -> None:
+        if self._auto_timer.isActive():
+            self._auto_timer.start(seconds * 1000)
+
+    def _auto_tick(self) -> None:
+        """Quietly refresh the active tab's data; skip when it would intrude."""
+        if self._worker is not None and self._worker.isRunning():
+            return  # an op is in flight; try next tick
+        if QApplication.activeModalWidget() is not None:
+            return  # a dialog is open -- don't fire SSH underneath it
+        if not self.host.currentText().strip():
+            return  # not configured
+        current = self.tabs.currentWidget()
+        if current is self._jobs_tab:
+            # Don't clobber a selection the user is building for Cancel selected.
+            if any(
+                t.selectionModel().selectedRows()
+                for t in (self.queue_table, self.recent_table)
+            ):
+                return
+            self._refresh_jobs(quiet=True)
+        elif (
+            current is self._testruns_tab
+            and self._test_run_dir
+            and not self._summary_seen
+        ):
+            self._auto_fetch_summary()
+
+    def _auto_fetch_summary(self) -> None:
+        run_dir = self._test_run_dir
+
+        def done(text):
+            if text:
+                self.test_summary_text.setPlainText(text)
+                self.test_output_tabs.setCurrentWidget(self.test_summary_text)
+                self._summary_seen = True
+                self.activity.appendPlainText("✓ SUMMARY ready")
+            # empty -> summary job not finished; leave the pane, retry next tick
+
+        self._run(
+            lambda a: a.fetch_summary(run_dir),
+            done,
+            busy="auto-fetching SUMMARY",
+            quiet=True,
+        )
 
     def _apply_jobs_filter(self, *args) -> None:
         """Show/hide rows per the text filter and the 'This run only' toggle.
