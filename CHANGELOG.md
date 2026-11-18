@@ -10,6 +10,31 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ## [Unreleased]
 
+### Changed
+- **Apptainer cluster image is now a combined CPU+GPU image.** `paint.def` bakes
+  in the GPU fitting stack (`numba-cuda` + the CUDA toolkit wheels
+  `nvidia-cuda-runtime-cu12` + `nvidia-cuda-nvcc-cu12` for libNVVM), so the one
+  `.sif` runs both CPU aggregation and GPU fits (`spline-mle-gpu` /
+  `gaussmle-gpu`) on the cluster's GPU partitions — jobs `apptainer exec --nv`
+  to expose the host driver (the CUDA toolkit lives in the image). Adds ~2–3 GB
+  over a CPU-only build; CPU runs are unaffected (GPU stays gated by the driver
+  / `CUDA_VISIBLE_DEVICES`). The GPU-less CI build only proves the stack
+  imports — smoke-test `spline-mle-gpu` on a GPU node before relying on it.
+  (`deploy/apptainer/paint.def`)
+
+### Fixed
+- **Workflow modules survive empty/degenerate localization sets.** Three
+  library crashes that aborted whole workflow runs on sparse real data are now
+  handled gracefully: `filter_locs`' heatmap reporting hit `np.ptp([])` /
+  `array.max()` on a field with no finite rows (`plot_1dhist` / `plot_2dhist`
+  now annotate "no finite data" and return); `render`'s contrast scaler raised
+  `min() arg is an empty sequence` when every rendered image was all-zero
+  (`scale_contrast` now falls back to a unit scale, leaving the zero image
+  untouched); and `undrift_from_picked` raised a cryptic `KeyError: 'group'`
+  when handed picks with no `group` column (e.g. `find_gold` found 0 beads) —
+  it now fails with an actionable message pointing at the missing fiducials.
+  (`outpost/reporting/histograms.py`, `outpost/render/render.py`, `analyse.py`)
+
 ## [0.7.1] - 2026-11-18
 
 ### Added
