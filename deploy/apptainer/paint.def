@@ -76,13 +76,18 @@ From: python:3.11-slim-bookworm
     # at CUDA-context creation on CUDA-13 drivers. This mirrors picasso-workflow's
     # own `[gpu]` extra (numba-cuda + nvidia-cuda-runtime-cu12, whose libcudart
     # makes `import numba.cuda` safe even on this GPU-less build runner) and ADDS
-    # nvidia-cuda-nvcc-cu12 for libNVVM, which numba-cuda needs to JIT the fit
-    # kernels. CPU-only runs are unaffected: GPU use stays gated by the driver /
-    # --nv / CUDA_VISIBLE_DEVICES. (If upstream folds nvcc into the [gpu] extra,
-    # drop it here.) The CUDA wheels are Linux x86_64/aarch64 only -- which is
-    # why this stays explicit rather than a base dep.
+    # nvidia-cuda-nvcc-cu12 (libNVVM) and nvidia-cuda-nvrtc-cu12 (libnvrtc) --
+    # both of which numba-cuda needs to JIT-compile the fit kernels at runtime
+    # (without libnvrtc the spline-mle-gpu kernel dies with
+    # `libnvrtc.so.12: No such file` the first time a GPU node compiles it; the
+    # GPU-less CI build can't catch this because it never JITs a kernel).
+    # CPU-only runs are unaffected: GPU use stays gated by the driver /
+    # --nv / CUDA_VISIBLE_DEVICES. (If upstream folds these into the [gpu]
+    # extra, drop them here.) The CUDA wheels are Linux x86_64/aarch64 only --
+    # which is why this stays explicit rather than a base dep.
     python -m pip install --no-cache-dir \
-        numba-cuda nvidia-cuda-runtime-cu12 nvidia-cuda-nvcc-cu12
+        numba-cuda nvidia-cuda-runtime-cu12 nvidia-cuda-nvcc-cu12 \
+        nvidia-cuda-nvrtc-cu12
 
     # registry client for the cluster write-back (WP-9). Pinned to v0.7.0 — the
     # first tag carrying the 0005/0005b cohort_metric_range + handoff migrations

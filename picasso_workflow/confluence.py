@@ -5048,6 +5048,13 @@ class ConfluenceReporter(AbstractModuleCollection):
         txtfilt = ""
         for field, minval, maxval in zip(fields, minvals, maxvals):
             txtfilt += f"<li>{field}: {minval} - {maxval}</li>"
+        nlocs_before = results["nlocs_before"]
+        nlocs_after = results["nlocs_after"]
+        pct_removed = (
+            (nlocs_before - nlocs_after) / nlocs_before * 100
+            if nlocs_before
+            else 0.0
+        )
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
         <p><strong>Module {i:02d}: Filter localizations</strong></p>
@@ -5055,10 +5062,9 @@ class ConfluenceReporter(AbstractModuleCollection):
         <li>Start Time: {results['start time']}</li>
         <li>Duration: {results["duration"] // 60:.0f} min
         {(results["duration"] % 60):.02f} s</li>
-        <li>Locs filtered from: {results["nlocs_before"]} to
-        {results["nlocs_after"]} (down
-        {(results["nlocs_before"] - results["nlocs_after"])
-         / results["nlocs_before"] * 100:.1f}%)
+        <li>Locs filtered from: {nlocs_before} to
+        {nlocs_after} (down
+        {pct_removed:.1f}%)
         </li>
         <li>Fields filtered:<ul>{txtfilt}</ul></li>
         </ul>
@@ -5132,6 +5138,13 @@ class ConfluenceReporter(AbstractModuleCollection):
         txtfilt = ""
         for field, minval, maxval in zip(fields, minvals, maxvals):
             txtfilt += f"<li>{field}: {minval} - {maxval}</li>"
+        nlocs_before = results["nlocs_before"]
+        nlocs_after = results["nlocs_after"]
+        pct_removed = (
+            (nlocs_before - nlocs_after) / nlocs_before * 100
+            if nlocs_before
+            else 0.0
+        )
         text = f"""
         <ac:layout><ac:layout-section ac:type="single"><ac:layout-cell>
         <p><strong>Module {i:02d}:
@@ -5140,10 +5153,9 @@ class ConfluenceReporter(AbstractModuleCollection):
         <li>Start Time: {results['start time']}</li>
         <li>Duration: {results["duration"] // 60:.0f} min
         {(results["duration"] % 60):.02f} s</li>
-        <li>Locs filtered from: {results["nlocs_before"]} to
-        {results["nlocs_after"]} (down
-        {(results["nlocs_before"] - results["nlocs_after"])
-         / results["nlocs_before"] * 100:.1f}%)
+        <li>Locs filtered from: {nlocs_before} to
+        {nlocs_after} (down
+        {pct_removed:.1f}%)
         </li>
         <li>Fields filtered:<ul>{txtfilt}</ul></li>
         </ul>
