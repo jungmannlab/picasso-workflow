@@ -28,6 +28,7 @@ from PyQt6.QtWidgets import (
     QFileDialog,
     QFormLayout,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QMainWindow,
@@ -376,6 +377,20 @@ class AdminWindow(QMainWindow):
         toggles.addWidget(self.test_templates)
         toggles.addStretch(1)
         form.addRow("Run", _row_widget(toggles))
+        # Wall-clock cap applied to each template workflow run (sbatch --time
+        # override). Blank = leave each script's own limit. Default 4h so a
+        # hung template is killed well before the partition max (and its
+        # afterany summary job unblocks).
+        self.test_template_time = QLineEdit("04:00:00")
+        self.test_template_time.setMaximumWidth(140)
+        self.test_template_time.setPlaceholderText("blank = no cap")
+        self.test_template_time.setToolTip(
+            "SLURM walltime (e.g. 04:00:00 or 1-00:00:00) capping each template "
+            "workflow run via `sbatch --time`, so a hung run is killed instead "
+            "of blocking the summary. Blank leaves each script's own --time. "
+            "Only applies to template runs, not the tier jobs."
+        )
+        form.addRow("Template time cap", self.test_template_time)
         lay.addLayout(form)
         bar = QHBoxLayout()
         submit = QPushButton("Submit test chain")
@@ -403,11 +418,20 @@ class AdminWindow(QMainWindow):
             "refreshes while 'Auto-refresh' (Jobs & usage tab) is on."
         )
         status.clicked.connect(self._refresh_run_status)
+        attach = QPushButton("Attach to run…")
+        attach.setToolTip(
+            "Re-attach to a previously submitted run (pick a recent run dir). "
+            "The run's job ids are read from its jobs.tsv on the cluster, so "
+            "you can reconnect after a GUI restart or a network drop and use "
+            "'Refresh run status' / 'Fetch logs' / 'Cancel run' again."
+        )
+        attach.clicked.connect(self._attach_run)
         bar.addWidget(submit)
         bar.addWidget(fetch)
         bar.addWidget(logs)
         bar.addWidget(cancel)
         bar.addWidget(status)
+        bar.addWidget(attach)
         bar.addStretch(1)
         lay.addLayout(bar)
 
@@ -458,6 +482,7 @@ class AdminWindow(QMainWindow):
         run_tiers13 = self.test_tiers13.isChecked()
         run_tier4 = self.test_tier4.isChecked()
         run_templates = self.test_templates.isChecked()
+        template_time = self.test_template_time.text().strip() or None
 
         def action(admin):
             from picasso_workflow.slurm_submit import (
@@ -479,6 +504,7 @@ class AdminWindow(QMainWindow):
                 run_tiers13=run_tiers13,
                 run_tier4=run_tier4,
                 run_templates=run_templates,
+                template_time=template_time,
             )
 
         def done(result):
@@ -646,6 +672,62 @@ class AdminWindow(QMainWindow):
             done,
             busy="fetching run status",
             quiet=quiet,
+        )
+
+    def _attach_run(self, *args) -> None:
+        """Re-attach to a previous run (pick a recent run dir, read jobs.tsv).
+
+        Lets the console reconnect to a run after a GUI restart / network drop:
+        its job ids live in ``<run_dir>/jobs.tsv`` on the cluster, so attaching
+        repopulates the tracked run and 'Refresh run status' / 'Fetch logs' /
+        'Cancel run' work again. Two SSH steps (list recent runs, then read the
+        chosen one); the picker modal in between lets the first worker retire,
+        so the second op isn't skipped by the re-entry guard.
+        """
+
+        def picked(runs):
+            if runs:
+                run_dir, ok = QInputDialog.getItem(
+                    self,
+                    "Attach to run",
+                    "Pick a recent run directory (newest first), or type a "
+                    "path:",
+                    runs,
+                    0,
+                    True,
+                )
+            else:
+                run_dir, ok = QInputDialog.getText(
+                    self,
+                    "Attach to run",
+                    "No recent runs found. Enter a run directory on the "
+                    "cluster:",
+                )
+            run_dir = (run_dir or "").strip()
+            if not ok or not run_dir:
+                return
+
+            def attached(result):
+                self._test_run_dir = result["run_dir"]
+                self._test_run_jobs = list(result["job_ids"])
+                self._test_run_templates = [
+                    tuple(t) for t in result["templates"]
+                ]
+                self._summary_seen = False
+                self.activity.appendPlainText(
+                    f"✓ attached to run {result['run_dir']} "
+                    f"({len(self._test_run_jobs)} job(s))"
+                )
+                self._refresh_run_status()
+
+            self._run(
+                lambda a: a.attach_run(run_dir),
+                attached,
+                busy="attaching to run",
+            )
+
+        self._run(
+            lambda a: a.list_test_runs(), picked, busy="listing recent runs"
         )
 
     def _fill_run_status(self, jobs) -> None:
@@ -877,11 +959,13 @@ class AdminWindow(QMainWindow):
     def _on_failed(self, msg: str) -> None:
         self.conn_status.setText("error")
         if getattr(self, "_op_quiet", False):
-            # An auto-refresh tick failed: don't pop a modal every interval --
-            # log once and switch auto-refresh off so we stop hammering.
-            self.activity.appendPlainText(f"✗ auto-refresh stopped: {msg}")
-            if self.auto_refresh.isChecked():
-                self.auto_refresh.setChecked(False)
+            # An auto-refresh tick failed: log it but KEEP auto-refresh on, so a
+            # transient SSH/network blip reconnects on the next tick instead of
+            # making the user re-enable it. No modal; ticks are >=5s apart, so
+            # a persistent outage logs at most once per interval (not a storm).
+            self.activity.appendPlainText(
+                f"✗ auto-refresh error (will retry): {msg}"
+            )
             return
         self.activity.appendPlainText(f"✗ {msg}")
         QMessageBox.critical(self, "Operation failed", msg)

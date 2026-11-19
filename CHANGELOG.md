@@ -23,6 +23,18 @@ This file was started after v0.5.6; earlier history is in the git log.
   `core.jobs_status(job_ids)` (targeted `sacct -j`), `core.job_phase` /
   `core.summarize_phases`, and `core.aggregate_jobs_by_day` (`DayStat`).
   (`picasso_workflow/admin/core.py`, `picasso_workflow/admin/qt.py`)
+- **Admin console: reconnect to a run, cap hung template runs, survive SSH
+  blips.** A **"Attach to run…"** button re-attaches the console to a
+  previously submitted run by reading its `jobs.tsv` off the cluster (pick a
+  recent run dir), so a GUI restart or a network drop no longer loses the run —
+  'Refresh run status' / 'Fetch logs' / 'Cancel run' work again
+  (`core.attach_run` / `list_test_runs` / `parse_jobs_tsv`). A new **"Template
+  time cap"** field (default `04:00:00`, blank = none) applies `sbatch --time`
+  to each template workflow run, so a hung one is killed at the cap instead of
+  running to the partition max and blocking its `afterany` summary job
+  (`testrun`/`core.submit_test_chain` gained `template_time`). And an
+  auto-refresh tick that hits an SSH error now keeps auto-refresh on (logs +
+  retries next tick) instead of switching itself off.
 
 ### Changed
 - **Apptainer cluster image is now a combined CPU+GPU image.** `paint.def` bakes

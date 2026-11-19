@@ -485,3 +485,60 @@ def test_jobs_status_empty_is_noop():
     assert admin.jobs_status([]) == []
     assert admin.jobs_status(["-", "", None]) == []
     assert admin.comm.commands == []  # no SSH for an empty id set
+
+
+# --------------------------------------------------------------------------- #
+# run reconnect: jobs.tsv parse + attach_run + list_test_runs
+# --------------------------------------------------------------------------- #
+def test_parse_jobs_tsv_dedups_ids_and_collects_templates():
+    tsv = (
+        "tier\t101\ttier1_2\t-\n"
+        "tier\t101\ttier3\t-\n"  # same tier job id on two rows
+        "tier\t102\ttier4\t-\n"
+        "template\t103\tt1\t/d/t1\n"
+        "template\t104\tt2\t/d/t2\n"
+    )
+    job_ids, templates = core.parse_jobs_tsv(tsv)
+    assert job_ids == ["101", "102", "103", "104"]  # 101 not duplicated
+    assert templates == [("/d/t1", "103"), ("/d/t2", "104")]
+
+
+def test_parse_jobs_tsv_skips_malformed_lines():
+    job_ids, templates = core.parse_jobs_tsv("garbage\n\ntier\t\tx\t-\n")
+    assert job_ids == []  # blank jobid dropped, short line skipped
+    assert templates == []
+
+
+def test_attach_run_reads_jobs_tsv():
+    admin = _admin("tier\t101\ttier1_2\t-\ntemplate\t103\tt1\t/d/t1\n")
+    result = admin.attach_run("/scratch/tr/run_A")
+    assert result["run_dir"] == "/scratch/tr/run_A"
+    assert result["job_ids"] == ["101", "103"]
+    assert result["templates"] == [("/d/t1", "103")]
+    # reads the run's jobs.tsv
+    assert any("jobs.tsv" in c for c in admin.comm.commands)
+
+
+def test_attach_run_raises_when_no_manifest():
+    admin = _admin("")  # no jobs.tsv content
+    import pytest
+
+    with pytest.raises(RuntimeError):
+        admin.attach_run("/not/a/run")
+
+
+def test_list_test_runs_parses_and_caps(monkeypatch):
+    monkeypatch.setattr(
+        core, "apptainer_test_results_dir", lambda host: "/scratch/tr"
+    )
+    admin = _admin("/scratch/tr/b/\n/scratch/tr/a/\n")
+    runs = admin.list_test_runs(limit=1)
+    assert runs == ["/scratch/tr/b"]  # trailing slash stripped, capped to 1
+    assert any("ls -1dt" in c for c in admin.comm.commands)
+
+
+def test_list_test_runs_empty_without_results_dir(monkeypatch):
+    monkeypatch.setattr(core, "apptainer_test_results_dir", lambda host: "")
+    admin = _admin()
+    assert admin.list_test_runs() == []
+    assert admin.comm.commands == []  # no SSH when the dir is unset

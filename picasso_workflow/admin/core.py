@@ -391,6 +391,34 @@ def parse_sacct(stdout):
     return jobs
 
 
+def parse_jobs_tsv(text):
+    """Parse a run's ``jobs.tsv`` manifest into ``(job_ids, templates)``.
+
+    Each line is ``kind<TAB>jobid<TAB>label<TAB>dir`` (see
+    :func:`testrun.render_jobs_tsv`): ``kind`` is ``tier`` or ``template``.
+    Returns the de-duplicated job ids in first-seen order (a tier job appears
+    on two rows) and the template runs as ``(dir, jobid)`` pairs (matching the
+    GUI's ``_test_run_templates``) — so a run can be re-attached from the
+    cluster after a GUI restart / network drop. The summary job is submitted
+    *after* this manifest is staged, so it is not listed here.
+    """
+    job_ids = []
+    templates = []
+    for line in text.splitlines():
+        parts = line.rstrip("\n").split(_SEP)
+        if len(parts) < 4:
+            continue
+        kind, jobid, _label, directory = parts[:4]
+        jobid = jobid.strip()
+        if not jobid:
+            continue
+        if jobid not in job_ids:
+            job_ids.append(jobid)
+        if kind == "template":
+            templates.append((directory, jobid))
+    return job_ids, templates
+
+
 def parse_df(stdout):
     """Parse ``df -h <path>`` (header + one data line) into ``DiskUsage``.
 
@@ -550,6 +578,54 @@ class ClusterAdmin:
         )
         return parse_sacct(out)
 
+    def list_test_runs(self, limit=30):
+        """Recent test-run directories (newest first), for 'Attach to run'.
+
+        Lists the ``<timestamp>_<version>`` subdirs of the configured
+        ``apptainer_test_results_dir``. Returns full cluster paths (newest
+        first, capped at ``limit``); ``[]`` when the dir is unset or empty.
+        """
+        results_dir = apptainer_test_results_dir(self.host)
+        if not results_dir:
+            return []
+        # The trailing /*/ glob (outside the quotes) expands on the node to the
+        # run subdirs; -1dt lists one per line, newest first. A no-match glob
+        # errors, so swallow it -> an empty list rather than a raised error.
+        out = self._run(
+            "ls -1dt " + shlex.quote(results_dir) + "/*/ 2>/dev/null || true"
+        )
+        runs = [p.rstrip("/") for p in out.splitlines() if p.strip()]
+        return runs[:limit]
+
+    def attach_run(self, run_dir):
+        """Re-attach to a previously submitted run from its ``jobs.tsv``.
+
+        Reads ``<run_dir>/jobs.tsv`` and returns
+        ``{run_dir, job_ids, templates}`` so the GUI can repopulate its tracked
+        run after a restart / network drop — the run's identity lives on the
+        cluster, not only in the GUI's memory.
+
+        Raises
+        ------
+        RuntimeError
+            If no ``jobs.tsv`` is found under ``run_dir`` (not a run directory,
+            or a submit that never staged the manifest).
+        """
+        result = self.comm.execute_ssh_command(
+            f"cat {shlex.quote(run_dir)}/jobs.tsv 2>/dev/null"
+        )
+        job_ids, templates = parse_jobs_tsv(result.get("stdout", "") or "")
+        if not job_ids:
+            raise RuntimeError(
+                f"No jobs.tsv under {run_dir!r} — not a test-run directory "
+                "(or the submit never staged it)."
+            )
+        return {
+            "run_dir": run_dir,
+            "job_ids": job_ids,
+            "templates": templates,
+        }
+
     def disk_usage(self):
         """``df -hP`` for the image directory (or ``None`` if unset).
 
@@ -583,12 +659,17 @@ class ClusterAdmin:
         run_tiers13=True,
         run_tier4=True,
         run_templates=True,
+        template_time=None,
     ):
         """Stage + submit the container test chain; return a summary dict.
 
         ``image_path`` is the (test) ``.sif`` to run pytest inside; ``version``
         labels the run dir; ``timestamp`` tags it (passed in so the caller
-        controls the clock). See :class:`testrun.TestChainSubmitter`.
+        controls the clock). ``template_time`` (a SLURM walltime like
+        ``"04:00:00"``) caps each template workflow run via ``sbatch --time``
+        so a hung one is killed and the summary job unblocks; ``None``/blank
+        leaves each template script's own ``--time`` untouched. See
+        :class:`testrun.TestChainSubmitter`.
         """
         from picasso_workflow.admin.testrun import TestChainSubmitter
         from picasso_workflow.util import convert_filepath_for_machine
@@ -634,6 +715,7 @@ class ClusterAdmin:
             run_tiers13=run_tiers13,
             run_tier4=run_tier4,
             run_templates=run_templates,
+            template_time=template_time,
         )
 
     def fetch_summary(self, run_dir):
