@@ -173,6 +173,117 @@ class DiskUsage:
     use_pct: str
 
 
+@dataclass
+class DayStat:
+    """Per-day job counts, for the Jobs & usage stats graph."""
+
+    date: str  # "YYYY-MM-DD"
+    total: int  # finished jobs that ended on this day (passed + failed)
+    passed: int  # COMPLETED
+    failed: int  # FAILED / CANCELLED / TIMEOUT / ...
+
+    @property
+    def pass_fraction(self):
+        """Fraction of finished jobs that passed (0..1), or ``None`` if none."""
+        return (self.passed / self.total) if self.total else None
+
+
+# ---------------------------------------------------------------------------
+# Job-state categorisation + over-time aggregation (pure, for the GUI)
+# ---------------------------------------------------------------------------
+#: Map a SLURM state word to a coarse phase the console groups jobs by. A state
+#: can carry a suffix (e.g. ``CANCELLED by 1234``), so callers match the first
+#: word. Anything unrecognised falls back to ``"other"``.
+_PHASE_BY_STATE = {
+    "PENDING": "queued",
+    "CONFIGURING": "queued",
+    "REQUEUED": "queued",
+    "RUNNING": "running",
+    "COMPLETING": "running",
+    "RESIZING": "running",
+    "SUSPENDED": "running",
+    "COMPLETED": "completed",
+    "FAILED": "failed",
+    "CANCELLED": "failed",
+    "TIMEOUT": "failed",
+    "OUT_OF_MEMORY": "failed",
+    "NODE_FAIL": "failed",
+    "BOOT_FAIL": "failed",
+    "DEADLINE": "failed",
+    "PREEMPTED": "failed",
+}
+
+#: Coarse phases, in the order the console reports them.
+JOB_PHASES = ("queued", "running", "completed", "failed", "other")
+
+
+def job_phase(state):
+    """Coarse phase (:data:`JOB_PHASES`) for a SLURM ``state`` string.
+
+    The first whitespace-separated word is matched (SLURM appends e.g.
+    ``CANCELLED by <uid>``); an empty or unknown state is ``"other"``.
+    """
+    word = (state or "").split()[0].upper() if (state or "").strip() else ""
+    return _PHASE_BY_STATE.get(word, "other")
+
+
+def summarize_phases(jobs):
+    """Count ``jobs`` (``[JobInfo]``) per :data:`JOB_PHASES`.
+
+    Returns a dict with every phase key present (zero when none), so callers
+    can format a stable "X queued · Y running · …" summary.
+    """
+    counts = {phase: 0 for phase in JOB_PHASES}
+    for job in jobs:
+        counts[job_phase(job.state)] += 1
+    return counts
+
+
+def sacct_end_date(end):
+    """Return the ``YYYY-MM-DD`` day of a ``sacct`` End field, or ``None``.
+
+    ``sacct`` End is ``YYYY-MM-DDTHH:MM:SS`` for a finished job, or a sentinel
+    (``Unknown``, ``None``, blank) for one still queued/running — those yield
+    ``None`` (not counted in the over-time stats).
+    """
+    s = (end or "").strip()
+    if not s or s in ("Unknown", "None"):
+        return None
+    day = s.split("T", 1)[0]
+    parts = day.split("-")
+    if len(parts) == 3 and all(p.isdigit() for p in parts):
+        return day
+    return None
+
+
+def aggregate_jobs_by_day(jobs):
+    """Aggregate finished ``jobs`` into per-day :class:`DayStat` (date-sorted).
+
+    Only jobs that actually finished (a parseable End date and a
+    completed/failed phase) are counted; still queued/running jobs and
+    ``.batch``/other phases are skipped. One row per day the user had finished
+    jobs — the series the Jobs & usage stats graph plots.
+    """
+    by_day = {}
+    for job in jobs:
+        day = sacct_end_date(job.extra)
+        if day is None:
+            continue
+        phase = job_phase(job.state)
+        if phase not in ("completed", "failed"):
+            continue
+        passed, failed = by_day.get(day, (0, 0))
+        if phase == "completed":
+            passed += 1
+        else:
+            failed += 1
+        by_day[day] = (passed, failed)
+    return [
+        DayStat(date=day, total=p + f, passed=p, failed=f)
+        for day, (p, f) in sorted(by_day.items())
+    ]
+
+
 # ---------------------------------------------------------------------------
 # Pure parsers
 # ---------------------------------------------------------------------------
@@ -414,6 +525,28 @@ class ClusterAdmin:
             + shlex.quote(self.username)
             + f" -S now-{int(days)}days "
             + "-o JobID,JobName,State,Elapsed,End"
+        )
+        return parse_sacct(out)
+
+    def jobs_status(self, job_ids):
+        """``sacct`` status of specific ``job_ids`` (the current test run).
+
+        One targeted ``sacct -j <ids>`` call — unlike :meth:`recent_jobs` it
+        needs no look-back window and returns the given jobs in any phase
+        (PENDING/RUNNING as well as finished), so the Test-runs tab can show a
+        run's jobs the moment they are submitted. Blanks / the ``-`` skipped-
+        tier placeholder are dropped; an empty id list is a no-op (``[]``,
+        no SSH).
+        """
+        ids = [str(j) for j in job_ids if j and str(j) != "-"]
+        if not ids:
+            return []
+        out = self._run(
+            "sacct -X -n -P --delimiter="
+            + shlex.quote(_SEP)
+            + " -j "
+            + shlex.quote(",".join(ids))
+            + " -o JobID,JobName,State,Elapsed,End"
         )
         return parse_sacct(out)
 

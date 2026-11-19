@@ -401,3 +401,87 @@ def test_submit_test_chain_guards_conversion_exception(monkeypatch):
     finds = [c for c in admin.comm.commands if c.startswith("find ")]
     assert len(finds) == 1
     assert "/Volumes/pool-miblab1/templates" in finds[0]
+
+
+# --------------------------------------------------------------------------- #
+# job-phase categorisation + over-time aggregation (Jobs & usage stats)
+# --------------------------------------------------------------------------- #
+def test_job_phase_categorises_states():
+    assert core.job_phase("PENDING") == "queued"
+    assert core.job_phase("RUNNING") == "running"
+    assert core.job_phase("COMPLETED") == "completed"
+    assert core.job_phase("FAILED") == "failed"
+    assert core.job_phase("TIMEOUT") == "failed"
+    # SLURM appends a suffix to CANCELLED; the first word still matches.
+    assert core.job_phase("CANCELLED by 1234") == "failed"
+    # unknown / empty -> "other"
+    assert core.job_phase("WEIRD_STATE") == "other"
+    assert core.job_phase("") == "other"
+
+
+def test_summarize_phases_counts_every_phase():
+    jobs = [
+        core.JobInfo("1", "a", "PENDING", "0:00"),
+        core.JobInfo("2", "b", "RUNNING", "0:30"),
+        core.JobInfo("3", "c", "COMPLETED", "1:00"),
+        core.JobInfo("4", "d", "FAILED", "0:10"),
+        core.JobInfo("5", "e", "CANCELLED by 9", "0:05"),
+    ]
+    counts = core.summarize_phases(jobs)
+    assert counts == {
+        "queued": 1,
+        "running": 1,
+        "completed": 1,
+        "failed": 2,
+        "other": 0,
+    }
+
+
+def test_sacct_end_date_parses_or_none():
+    assert core.sacct_end_date("2026-11-18T14:07:03") == "2026-11-18"
+    assert core.sacct_end_date("Unknown") is None
+    assert core.sacct_end_date("None") is None
+    assert core.sacct_end_date("") is None
+    assert core.sacct_end_date("garbage") is None
+
+
+def test_aggregate_jobs_by_day_groups_and_counts():
+    jobs = [
+        core.JobInfo("1", "a", "COMPLETED", "1:00", "2026-11-17T10:00:00"),
+        core.JobInfo("2", "b", "FAILED", "0:10", "2026-11-17T12:00:00"),
+        core.JobInfo("3", "c", "COMPLETED", "1:00", "2026-11-18T09:00:00"),
+        # still running -> no End date -> excluded
+        core.JobInfo("4", "d", "RUNNING", "0:30", "Unknown"),
+        # pending -> excluded
+        core.JobInfo("5", "e", "PENDING", "0:00", ""),
+    ]
+    stats = core.aggregate_jobs_by_day(jobs)
+    assert [(s.date, s.total, s.passed, s.failed) for s in stats] == [
+        ("2026-11-17", 2, 1, 1),
+        ("2026-11-18", 1, 1, 0),
+    ]
+    # pass_fraction is passed/total, or None when empty
+    assert stats[0].pass_fraction == 0.5
+    assert stats[1].pass_fraction == 1.0
+    assert core.DayStat("x", 0, 0, 0).pass_fraction is None
+
+
+def test_jobs_status_targets_specific_ids():
+    admin = _admin(
+        "101\ttier1_3\tCOMPLETED\t0:42\t2026-11-18T14:00:00\n"
+        "102\ttier4\tRUNNING\t0:10\tUnknown"
+    )
+    jobs = admin.jobs_status(["101", "102", "-", ""])
+    # one targeted sacct -j call listing exactly the real ids
+    sacct = [c for c in admin.comm.commands if c.startswith("sacct ")]
+    assert len(sacct) == 1
+    assert "-j" in sacct[0] and "101,102" in sacct[0]
+    assert [j.job_id for j in jobs] == ["101", "102"]
+    assert jobs[1].state == "RUNNING"
+
+
+def test_jobs_status_empty_is_noop():
+    admin = _admin()
+    assert admin.jobs_status([]) == []
+    assert admin.jobs_status(["-", "", None]) == []
+    assert admin.comm.commands == []  # no SSH for an empty id set

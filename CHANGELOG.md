@@ -10,6 +10,20 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ## [Unreleased]
 
+### Added
+- **Admin console: a live run-status table + an over-time job-stats graph.**
+  The **Test runs** tab now shows the current run's jobs in one table
+  (`job`/`name`/`phase`/`state`/`elapsed`/`end`), grouped into queued /
+  running / completed / failed with a one-line summary — populated right after
+  submit, refreshed by "Refresh run status" and (when auto-refresh is on) each
+  tick, and it pulls the SUMMARY once every job has finished. The **Jobs &
+  usage** tab gains a matplotlib graph of finished jobs per day (passed/failed,
+  stacked) with the daily pass fraction overlaid, drawn from the same `sacct`
+  data the Recent table uses (no extra SSH). New GUI-free helpers back them:
+  `core.jobs_status(job_ids)` (targeted `sacct -j`), `core.job_phase` /
+  `core.summarize_phases`, and `core.aggregate_jobs_by_day` (`DayStat`).
+  (`picasso_workflow/admin/core.py`, `picasso_workflow/admin/qt.py`)
+
 ### Changed
 - **Apptainer cluster image is now a combined CPU+GPU image.** `paint.def` bakes
   in the GPU fitting stack (`numba-cuda` + the CUDA toolkit wheels
