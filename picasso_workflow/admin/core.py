@@ -419,6 +419,28 @@ def parse_jobs_tsv(text):
     return job_ids, templates
 
 
+def parse_scontrol_logpaths(text):
+    """Extract ``StdOut`` / ``StdErr`` file paths from ``scontrol -o show job``.
+
+    ``scontrol -o show job <ids>`` prints one line per job of space-separated
+    ``Key=Value`` fields, including ``StdOut=<path>`` / ``StdErr=<path>`` — the
+    *resolved* per-job log files (``%j`` etc. already expanded), authoritative
+    for a queued/running job regardless of where it writes. Returns the
+    de-duplicated paths in first-seen order; the ``(null)`` / ``None`` SLURM
+    emits when a path is unset is dropped. (Paths with spaces can't be
+    recovered from ``-o`` output and are not expected on the cluster scratch.)
+    """
+    paths = []
+    for token in text.split():
+        for key in ("StdOut=", "StdErr="):
+            if token.startswith(key):
+                path = token[len(key) :]
+                if path and path not in ("(null)", "None", "/dev/null"):
+                    if path not in paths:
+                        paths.append(path)
+    return paths
+
+
 def parse_df(stdout):
     """Parse ``df -h <path>`` (header + one data line) into ``DiskUsage``.
 
@@ -725,30 +747,61 @@ class ClusterAdmin:
         )
         return result.get("stdout", "") or ""
 
-    def fetch_logs(self, run_dir, templates=None, tail=400):
-        """Return the per-job ``.log`` files for a run (each tailed).
+    def _scontrol_log_paths(self, job_ids):
+        """Resolved ``StdOut``/``StdErr`` paths of ``job_ids`` (best-effort).
 
-        The tier/summary jobs write ``<label>_<jobid>.log`` into ``run_dir``;
-        ``templates`` (a list of ``(folder, job_id)`` from a submit's
-        ``template_jobs``) additionally pulls each template's own
-        ``<folder>/logs/*<job_id>*`` -- so a failed end-to-end template run's
-        error output is visible from the console without hand-SSH. Each matched
-        file is tailed to the last ``tail`` lines under a ``===== path =====``
-        header. Returns ``""`` when nothing matches yet (a no-match glob is
-        skipped, not catted literally).
+        One ``scontrol -o show job <ids>`` call — authoritative for the
+        queued/running jobs (finished jobs are purged from scontrol, so an
+        error there is fine and ignored). ``[]`` / no SSH for an empty id set.
+        """
+        ids = [str(j) for j in job_ids if j and str(j) != "-"]
+        if not ids:
+            return []
+        # scontrol exits non-zero for a purged/invalid id, so read it directly
+        # (ignore the exit code) and parse whatever StdOut/StdErr it did print.
+        result = self.comm.execute_ssh_command(
+            "scontrol -o show job "
+            + shlex.quote(",".join(ids))
+            + " 2>/dev/null"
+        )
+        return parse_scontrol_logpaths(result.get("stdout", "") or "")
+
+    def fetch_logs(self, run_dir, templates=None, job_ids=None, tail=400):
+        """Return the per-job ``.log`` files for a run (each tailed, LIVE).
+
+        SLURM appends to a job's log *as it runs*, so this shows in-progress
+        output — where a still-running / stuck job last got to — not only a
+        finished log. Three sources, de-duplicated:
+
+        * the tier/summary jobs' ``<label>_<jobid>.log`` in ``run_dir``;
+        * each template's own ``<folder>/logs/*<job_id>*`` (``templates`` is a
+          list of ``(folder, job_id)``);
+        * every ``job_ids`` entry's actual ``StdOut``/``StdErr``, resolved via
+          :meth:`_scontrol_log_paths` — so a *running* job's current log is
+          fetched even if it writes outside the two conventional locations.
+
+        Each matched file is tailed to the last ``tail`` lines under a
+        ``===== path =====`` header; ``""`` when nothing matches yet.
         """
         # Each glob's `*` stays outside the quotes so it still expands; the
-        # fixed parts (run_dir / template folder) are shell-quoted.
+        # fixed parts (run_dir / template folder / scontrol paths) are quoted.
         globs = [f"{shlex.quote(run_dir)}/*.log"]
         for folder, job_id in templates or []:
             globs.append(
                 f"{shlex.quote(folder)}/logs/*{shlex.quote(str(job_id))}*"
             )
+        for path in self._scontrol_log_paths(job_ids or []):
+            globs.append(shlex.quote(path))
         # `for f in <globs>` iterates the literal pattern when nothing matches,
-        # so guard each entry with `[ -e ]` before tailing.
+        # so guard each entry with `[ -e ]`; `$seen` de-dups a file reached by
+        # more than one source (a scontrol StdOut usually coincides with a glob
+        # match) so it is tailed once.
         cmd = (
+            'seen=""; '
             f"for f in {' '.join(globs)}; do "
             '[ -e "$f" ] || continue; '
+            'case " $seen " in *" $f "*) continue ;; esac; '
+            'seen="$seen $f"; '
             'printf "\\n===== %s =====\\n" "$f"; '
             f'tail -n {int(tail)} "$f" 2>/dev/null || true; '
             "done"

@@ -542,3 +542,45 @@ def test_list_test_runs_empty_without_results_dir(monkeypatch):
     admin = _admin()
     assert admin.list_test_runs() == []
     assert admin.comm.commands == []  # no SSH when the dir is unset
+
+
+# --------------------------------------------------------------------------- #
+# fetch_logs: live-log resolution via scontrol
+# --------------------------------------------------------------------------- #
+def test_parse_scontrol_logpaths_dedups_and_skips_null():
+    text = (
+        "JobId=1 StdOut=/a/1.out StdErr=/a/1.err\n"
+        "JobId=2 StdOut=/a/2.out StdErr=(null)\n"
+        "JobId=3 StdOut=/a/1.out StdErr=/dev/null\n"  # dup out, null err
+    )
+    assert core.parse_scontrol_logpaths(text) == [
+        "/a/1.out",
+        "/a/1.err",
+        "/a/2.out",
+    ]
+
+
+def test_fetch_logs_resolves_live_paths_via_scontrol():
+    admin = _admin(
+        stdout=(
+            "JobId=601 JobName=t StdOut=/fs/td/t1/logs/601.log "
+            "StdErr=/fs/td/t1/logs/601_err.log"
+        )
+    )
+    admin.fetch_logs("/scratch/run", job_ids=["601", "-", ""])
+    cmds = admin.comm.commands
+    # one scontrol call, for the real id only
+    scontrol = [c for c in cmds if c.startswith("scontrol")]
+    assert len(scontrol) == 1
+    assert "show job" in scontrol[0] and "601" in scontrol[0]
+    # the resolved StdOut/StdErr are tailed in the final (deduped) loop
+    tail_cmd = [c for c in cmds if "tail -n" in c][-1]
+    assert "/fs/td/t1/logs/601.log" in tail_cmd
+    assert "/fs/td/t1/logs/601_err.log" in tail_cmd
+    assert 'seen=""' in tail_cmd  # dedup guard
+
+
+def test_fetch_logs_no_scontrol_without_job_ids():
+    admin = _admin(stdout="")
+    admin.fetch_logs("/scratch/run")  # job_ids defaults to None
+    assert not any(c.startswith("scontrol") for c in admin.comm.commands)
