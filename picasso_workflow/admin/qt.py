@@ -28,6 +28,7 @@ from PyQt6.QtWidgets import (
     QFileDialog,
     QFormLayout,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QMainWindow,
@@ -50,6 +51,16 @@ def _row_widget(layout) -> QWidget:
     """Wrap a layout in a QWidget (so it can go in a QFormLayout row)."""
     w = QWidget()
     w.setLayout(layout)
+    return w
+
+
+def _titled(label, widget) -> QWidget:
+    """Stack a title ``label`` above ``widget`` (zero margins), for a splitter."""
+    w = QWidget()
+    v = QVBoxLayout(w)
+    v.setContentsMargins(0, 0, 0, 0)
+    v.addWidget(label)
+    v.addWidget(widget, 1)
     return w
 
 
@@ -366,6 +377,20 @@ class AdminWindow(QMainWindow):
         toggles.addWidget(self.test_templates)
         toggles.addStretch(1)
         form.addRow("Run", _row_widget(toggles))
+        # Wall-clock cap applied to each template workflow run (sbatch --time
+        # override). Blank = leave each script's own limit. Default 4h so a
+        # hung template is killed well before the partition max (and its
+        # afterany summary job unblocks).
+        self.test_template_time = QLineEdit("04:00:00")
+        self.test_template_time.setMaximumWidth(140)
+        self.test_template_time.setPlaceholderText("blank = no cap")
+        self.test_template_time.setToolTip(
+            "SLURM walltime (e.g. 04:00:00 or 1-00:00:00) capping each template "
+            "workflow run via `sbatch --time`, so a hung run is killed instead "
+            "of blocking the summary. Blank leaves each script's own --time. "
+            "Only applies to template runs, not the tier jobs."
+        )
+        form.addRow("Template time cap", self.test_template_time)
         lay.addLayout(form)
         bar = QHBoxLayout()
         submit = QPushButton("Submit test chain")
@@ -386,12 +411,38 @@ class AdminWindow(QMainWindow):
             "this run's jobs are cancelled, not your whole queue."
         )
         cancel.clicked.connect(self._cancel_run)
+        status = QPushButton("Refresh run status")
+        status.setToolTip(
+            "sacct the jobs of the last submitted run and show them in the "
+            "table below (queued / running / completed / failed). Auto-"
+            "refreshes while 'Auto-refresh' (Jobs & usage tab) is on."
+        )
+        status.clicked.connect(self._refresh_run_status)
+        attach = QPushButton("Attach to run…")
+        attach.setToolTip(
+            "Re-attach to a previously submitted run (pick a recent run dir). "
+            "The run's job ids are read from its jobs.tsv on the cluster, so "
+            "you can reconnect after a GUI restart or a network drop and use "
+            "'Refresh run status' / 'Fetch logs' / 'Cancel run' again."
+        )
+        attach.clicked.connect(self._attach_run)
         bar.addWidget(submit)
         bar.addWidget(fetch)
         bar.addWidget(logs)
         bar.addWidget(cancel)
+        bar.addWidget(status)
+        bar.addWidget(attach)
         bar.addStretch(1)
         lay.addLayout(bar)
+
+        # Live status of the CURRENT run's jobs (one table; the Jobs & usage
+        # tab's two tables, condensed and filtered to this run's job ids).
+        self.run_status_label = QLabel("No test run submitted yet.")
+        lay.addWidget(self.run_status_label)
+        self.run_status_table = self._make_table(
+            ["Job", "Name", "Phase", "State", "Elapsed", "End"]
+        )
+        lay.addWidget(self.run_status_table, 1)
         # Separate panes so submit info / SUMMARY / logs don't overwrite each
         # other -- each button writes (and switches) to its own tab.
         self.test_output_tabs = QTabWidget()
@@ -405,14 +456,24 @@ class AdminWindow(QMainWindow):
         return w
 
     def _submit_test_chain(self) -> None:
+        # Submitting replaces the tracked run, but only on SUCCESS (in `done`).
+        # A failed submit -- e.g. an accidental double-click while a run is
+        # already live -- must NOT drop the previous run's tracking, or
+        # 'Refresh run status' / 'Fetch logs' / 'Cancel run' would lose the
+        # still-running run. A confirm guards against replacing it by accident.
+        if self._test_run_jobs and (
+            QMessageBox.question(
+                self,
+                "A test run is already tracked",
+                f"A previous test run is tracked ({len(self._test_run_jobs)} "
+                "job(s)). Submit a NEW run and track that one instead?\n\n"
+                "(To just see the current run's status, use 'Refresh run "
+                "status'.)",
+            )
+            != QMessageBox.StandardButton.Yes
+        ):
+            return
         version = core.this_gui_version()
-        # A new submit supersedes any prior run: clear the tracked run up front
-        # so a FAILED submit (which never reaches `done`) can't leave 'Fetch
-        # logs' / 'Cancel run' pointing at the previous run's dir / job ids.
-        self._test_run_dir = None
-        self._test_run_jobs = []
-        self._test_run_templates = []
-        self._summary_seen = False  # a new run -> a new SUMMARY to wait for
         # Snapshot ALL widget inputs on the GUI thread (widgets aren't
         # thread-safe); the worker closure below touches only these locals.
         ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -421,6 +482,7 @@ class AdminWindow(QMainWindow):
         run_tiers13 = self.test_tiers13.isChecked()
         run_tier4 = self.test_tier4.isChecked()
         run_templates = self.test_templates.isChecked()
+        template_time = self.test_template_time.text().strip() or None
 
         def action(admin):
             from picasso_workflow.slurm_submit import (
@@ -442,10 +504,13 @@ class AdminWindow(QMainWindow):
                 run_tiers13=run_tiers13,
                 run_tier4=run_tier4,
                 run_templates=run_templates,
+                template_time=template_time,
             )
 
         def done(result):
+            # Success -> this run replaces any previously tracked one.
             self._test_run_dir = result["run_dir"]
+            self._summary_seen = False  # a new run -> a fresh SUMMARY to await
             # Track every job id of this run so 'Cancel run' scancels exactly
             # these (not the user's whole queue); drop skipped tiers' None.
             self._test_run_jobs = [
@@ -480,6 +545,10 @@ class AdminWindow(QMainWindow):
             self.activity.appendPlainText(
                 f"✓ submitted test chain -> {result['run_dir']}"
             )
+            # Populate the run-status table right away. Deferred so the submit
+            # worker is fully torn down first (its `finished` handler clears
+            # self._worker) -- otherwise the re-entry guard would skip it.
+            QTimer.singleShot(0, lambda: self._refresh_run_status(quiet=True))
 
         self._run(action, done, busy="submitting test chain")
 
@@ -562,6 +631,124 @@ class AdminWindow(QMainWindow):
             busy="cancelling run jobs",
         )
 
+    def _refresh_run_status(self, *args, quiet: bool = False) -> None:
+        """sacct the current run's jobs into the Test-runs status table.
+
+        ``*args`` absorbs the button's ``clicked`` arg; ``quiet`` is the
+        auto-refresh path (no busy chrome / dialog). Once every job has
+        finished it fetches the SUMMARY once -- the live table replaces polling
+        SUMMARY while jobs are still queued/running.
+        """
+        jobs = list(self._test_run_jobs)
+        if not jobs:
+            if not quiet:
+                QMessageBox.information(
+                    self, "Run status", "Submit a test chain first."
+                )
+            return
+
+        def done(infos):
+            counts = core.summarize_phases(infos)
+            text = (
+                f"{len(infos)} job(s): {counts['queued']} queued · "
+                f"{counts['running']} running · {counts['completed']} "
+                f"completed · {counts['failed']} failed"
+            )
+            if counts["other"]:
+                text += f" · {counts['other']} other"
+            self.run_status_label.setText(text)
+            self._fill_run_status(infos)
+            if (
+                quiet
+                and infos
+                and not self._summary_seen
+                and counts["queued"] == 0
+                and counts["running"] == 0
+            ):
+                self._auto_fetch_summary()
+
+        self._run(
+            lambda a: a.jobs_status(jobs),
+            done,
+            busy="fetching run status",
+            quiet=quiet,
+        )
+
+    def _attach_run(self, *args) -> None:
+        """Re-attach to a previous run (pick a recent run dir, read jobs.tsv).
+
+        Lets the console reconnect to a run after a GUI restart / network drop:
+        its job ids live in ``<run_dir>/jobs.tsv`` on the cluster, so attaching
+        repopulates the tracked run and 'Refresh run status' / 'Fetch logs' /
+        'Cancel run' work again. Two SSH steps (list recent runs, then read the
+        chosen one); the picker modal in between lets the first worker retire,
+        so the second op isn't skipped by the re-entry guard.
+        """
+
+        def picked(runs):
+            if runs:
+                run_dir, ok = QInputDialog.getItem(
+                    self,
+                    "Attach to run",
+                    "Pick a recent run directory (newest first), or type a "
+                    "path:",
+                    runs,
+                    0,
+                    True,
+                )
+            else:
+                run_dir, ok = QInputDialog.getText(
+                    self,
+                    "Attach to run",
+                    "No recent runs found. Enter a run directory on the "
+                    "cluster:",
+                )
+            run_dir = (run_dir or "").strip()
+            if not ok or not run_dir:
+                return
+
+            def attached(result):
+                self._test_run_dir = result["run_dir"]
+                self._test_run_jobs = list(result["job_ids"])
+                self._test_run_templates = [
+                    tuple(t) for t in result["templates"]
+                ]
+                self._summary_seen = False
+                self.activity.appendPlainText(
+                    f"✓ attached to run {result['run_dir']} "
+                    f"({len(self._test_run_jobs)} job(s))"
+                )
+                # Deferred so the attach worker tears down first (its `finished`
+                # clears self._worker) -- otherwise the re-entry guard in _run
+                # would skip this status refresh.
+                QTimer.singleShot(
+                    0, lambda: self._refresh_run_status(quiet=True)
+                )
+
+            self._run(
+                lambda a: a.attach_run(run_dir),
+                attached,
+                busy="attaching to run",
+            )
+
+        self._run(
+            lambda a: a.list_test_runs(), picked, busy="listing recent runs"
+        )
+
+    def _fill_run_status(self, jobs) -> None:
+        self.run_status_table.setRowCount(len(jobs))
+        for r, j in enumerate(jobs):
+            cells = [
+                j.job_id,
+                j.name,
+                core.job_phase(j.state),
+                j.state,
+                j.elapsed,
+                j.extra,
+            ]
+            for c, text in enumerate(cells):
+                self.run_status_table.setItem(r, c, QTableWidgetItem(text))
+
     # -- jobs & usage tab -------------------------------------------------
     def _build_jobs_tab(self) -> QWidget:
         w = QWidget()
@@ -636,20 +823,98 @@ class AdminWindow(QMainWindow):
 
         self.disk_label = QLabel("")
         lay.addWidget(self.disk_label)
-        lay.addWidget(QLabel("Queue (squeue)"))
+
+        # Queue / recent tables and the over-time stats graph share a resizable
+        # vertical splitter (the tables are table-heavy; the graph sits below).
         self.queue_table = self._make_table(
             ["Job", "Name", "State", "Time", "Partition/Reason"]
         )
         self._make_selectable(self.queue_table)
-        lay.addWidget(self.queue_table, 1)
         self.recent_label = QLabel("Recent jobs (sacct)")
-        lay.addWidget(self.recent_label)
         self.recent_table = self._make_table(
             ["Job", "Name", "State", "Elapsed", "End"]
         )
         self._make_selectable(self.recent_table)
-        lay.addWidget(self.recent_table, 1)
+        split = QSplitter(Qt.Orientation.Vertical)
+        split.addWidget(_titled(QLabel("Queue (squeue)"), self.queue_table))
+        split.addWidget(_titled(self.recent_label, self.recent_table))
+        split.addWidget(self._build_stats_widget())
+        split.setStretchFactor(0, 2)
+        split.setStretchFactor(1, 2)
+        split.setStretchFactor(2, 3)
+        lay.addWidget(split, 1)
         return w
+
+    def _build_stats_widget(self) -> QWidget:
+        """A titled matplotlib canvas: #jobs/day + pass-fraction over time.
+
+        The figure is fed by :meth:`_update_stats_plot` from the same ``sacct``
+        data the Recent table uses (no extra SSH). matplotlib is imported lazily
+        (it is a heavy dependency, and the console is usable without ever
+        opening this tab)."""
+        from matplotlib.figure import Figure
+        from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
+
+        self._stats_figure = Figure(figsize=(6, 2.6), layout="tight")
+        self._stats_canvas = FigureCanvasQTAgg(self._stats_figure)
+        self._stats_canvas.setMinimumHeight(180)
+        self._update_stats_plot([])  # draw the empty-state placeholder
+        return _titled(
+            QLabel("Job statistics (finished jobs over the recent window)"),
+            self._stats_canvas,
+        )
+
+    def _update_stats_plot(self, jobs) -> None:
+        """Redraw the stats graph from ``jobs`` (the Recent/sacct list).
+
+        Bars = passed/failed jobs per day (stacked); the line = pass fraction
+        (%) on a right-hand axis. Empty when the window has no finished jobs.
+        """
+        stats = core.aggregate_jobs_by_day(jobs)
+        fig = self._stats_figure
+        fig.clear()
+        ax = fig.add_subplot(111)
+        if not stats:
+            ax.text(
+                0.5,
+                0.5,
+                "no finished jobs in the window",
+                ha="center",
+                va="center",
+                transform=ax.transAxes,
+                color="gray",
+            )
+            ax.set_axis_off()
+            self._stats_canvas.draw_idle()
+            return
+        x = list(range(len(stats)))
+        passed = [s.passed for s in stats]
+        failed = [s.failed for s in stats]
+        ax.bar(x, passed, color="#4caf50", label="passed")
+        ax.bar(x, failed, bottom=passed, color="#e53935", label="failed")
+        ax.set_ylabel("jobs")
+        ax.set_xticks(x)
+        ax.set_xticklabels(
+            [s.date[5:] for s in stats], rotation=45, ha="right", fontsize=8
+        )
+        ax.legend(loc="upper left", fontsize=8)
+        ax2 = ax.twinx()
+        frac = [
+            s.pass_fraction * 100 if s.pass_fraction is not None else None
+            for s in stats
+        ]
+        ax2.plot(x, frac, color="#1565c0", marker="o", label="pass %")
+        ax2.set_ylim(0, 105)
+        ax2.set_ylabel("pass %")
+        total = sum(s.total for s in stats)
+        passed_total = sum(s.passed for s in stats)
+        overall = (100 * passed_total / total) if total else 0
+        ax.set_title(
+            f"{total} finished job(s) over {len(stats)} day(s) — "
+            f"{overall:.0f}% passed",
+            fontsize=9,
+        )
+        self._stats_canvas.draw_idle()
 
     # -- the async runner (single worker, re-entry guarded) ---------------
     def _run(self, action, on_done, *, busy: str, quiet: bool = False) -> None:
@@ -689,6 +954,12 @@ class AdminWindow(QMainWindow):
             return action(admin)
 
         worker = _Worker(fn, self)
+        # Mark the connection live again on ANY successful op (fires before the
+        # caller's on_done), so a stale 'error' left by a transient auto-refresh
+        # blip clears once a later tick succeeds -- not just after a manual
+        # 'Test connection'. A test_connection that returns False still ends on
+        # 'unreachable' because _on_test's on_done runs after this and wins.
+        worker.done.connect(self._on_op_ok)
         worker.done.connect(on_done)
         worker.failed.connect(self._on_failed)
         worker.finished.connect(lambda w=worker: self._on_finished(w))
@@ -696,14 +967,20 @@ class AdminWindow(QMainWindow):
         self._worker = worker
         worker.start()
 
+    def _on_op_ok(self, _result=None) -> None:
+        """Any successful op -> the connection is live (clears a stale error)."""
+        self.conn_status.setText("connected")
+
     def _on_failed(self, msg: str) -> None:
         self.conn_status.setText("error")
         if getattr(self, "_op_quiet", False):
-            # An auto-refresh tick failed: don't pop a modal every interval --
-            # log once and switch auto-refresh off so we stop hammering.
-            self.activity.appendPlainText(f"✗ auto-refresh stopped: {msg}")
-            if self.auto_refresh.isChecked():
-                self.auto_refresh.setChecked(False)
+            # An auto-refresh tick failed: log it but KEEP auto-refresh on, so a
+            # transient SSH/network blip reconnects on the next tick instead of
+            # making the user re-enable it. No modal; ticks are >=5s apart, so
+            # a persistent outage logs at most once per interval (not a storm).
+            self.activity.appendPlainText(
+                f"✗ auto-refresh error (will retry): {msg}"
+            )
             return
         self.activity.appendPlainText(f"✗ {msg}")
         QMessageBox.critical(self, "Operation failed", msg)
@@ -802,6 +1079,8 @@ class AdminWindow(QMainWindow):
             )
             self._fill_jobs(self.queue_table, queue, queue=True)
             self._fill_jobs(self.recent_table, recent, queue=False)
+            # The stats graph reuses the same sacct 'recent' data (no extra SSH).
+            self._update_stats_plot(recent)
             self._apply_jobs_filter()
             if quiet:
                 self.queue_table.verticalScrollBar().setValue(qv)
@@ -844,12 +1123,10 @@ class AdminWindow(QMainWindow):
             ):
                 return
             self._refresh_jobs(quiet=True)
-        elif (
-            current is self._testruns_tab
-            and self._test_run_dir
-            and not self._summary_seen
-        ):
-            self._auto_fetch_summary()
+        elif current is self._testruns_tab and self._test_run_jobs:
+            # Refresh the live run-status table; once all jobs finish it pulls
+            # the SUMMARY once (see _refresh_run_status).
+            self._refresh_run_status(quiet=True)
 
     def _auto_fetch_summary(self) -> None:
         run_dir = self._test_run_dir

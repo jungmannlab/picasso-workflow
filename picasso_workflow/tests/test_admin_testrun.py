@@ -248,3 +248,29 @@ def test_submit_aborts_before_queueing_when_discovery_fails():
             version="0.9.0", timestamp="T", test_data_dir="/bad"
         )
     assert not any(c.startswith("sbatch") for c in admin.commands)
+
+
+def test_submit_template_time_cap_applied_only_to_templates():
+    # A template time cap is a `sbatch --time=` override on the template
+    # submits only -- the tier jobs keep their own (script-staged) limits.
+    admin = _FakeAdmin(templates=["/fs/testdata/t1/run_workflow_slurm.sh"])
+    _submitter(admin).submit(
+        version="0.9.0",
+        timestamp="T",
+        test_data_dir="/fs/testdata",
+        template_time="04:00:00",
+    )
+    sbatches = [c for c in admin.commands if c.startswith("sbatch")]
+    # sbatches: [tiers1_3, tier4, template, summary]
+    assert "--time=" not in sbatches[0]  # tiers1_3
+    assert "--time=" not in sbatches[1]  # tier4
+    assert "--time=04:00:00" in sbatches[2]  # template capped
+    assert "--time=" not in sbatches[-1]  # summary
+
+
+def test_submit_no_template_time_cap_by_default():
+    admin = _FakeAdmin(templates=["/fs/testdata/t1/run_workflow_slurm.sh"])
+    _submitter(admin).submit(
+        version="0.9.0", timestamp="T", test_data_dir="/fs/testdata"
+    )
+    assert not any("--time=" in c for c in admin.commands)

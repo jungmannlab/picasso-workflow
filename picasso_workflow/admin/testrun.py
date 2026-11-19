@@ -259,10 +259,15 @@ class TestChainSubmitter:
                 f"{(res.get('stderr', '') or '').strip()}"
             )
 
-    def _submit(self, remote_script, dependency=None):
+    def _submit(self, remote_script, dependency=None, time_limit=None):
         cmd = "sbatch --parsable"
         if dependency:
             cmd += f" --dependency={dependency}"
+        # A CLI --time overrides the script's own #SBATCH --time, so a hung
+        # template workflow is killed at the cap rather than running to the
+        # partition max (and blocking the afterany summary indefinitely).
+        if time_limit:
+            cmd += f" --time={shlex.quote(time_limit)}"
         cmd += f" {shlex.quote(remote_script)}"
         # --parsable prints just "<jobid>" or "<jobid>;<cluster>".
         out = self.admin._run(cmd)
@@ -284,13 +289,17 @@ class TestChainSubmitter:
         run_tiers13=True,
         run_tier4=True,
         run_templates=True,
+        template_time=None,
     ):
         """Stage + submit the selected jobs; return a summary dict.
 
         At least one of ``run_tiers13`` / ``run_tier4`` / ``run_templates``
         (the latter two only with a ``test_data_dir``) must be selected. When
         tiers 1-3 run, tier 4 and the template runs gate on them
-        (``afterok``); when tiers 1-3 are skipped they run ungated. Returns
+        (``afterok``); when tiers 1-3 are skipped they run ungated.
+        ``template_time`` (a SLURM walltime, e.g. ``"04:00:00"``) caps each
+        template run via ``sbatch --time``; ``None``/blank leaves the script's
+        own limit. Returns
         ``{run_dir, tiers_job, tier4_job, template_jobs, summary_job}``.
         """
         if not self.test_results_dir:
@@ -370,7 +379,9 @@ class TestChainSubmitter:
         template_jobs = []
         for script in templates:
             folder = posixpath.dirname(script)
-            jid = self._submit(script, dependency=gate_dep)
+            jid = self._submit(
+                script, dependency=gate_dep, time_limit=template_time
+            )
             template_jobs.append((jid, script))
             # 4th column is the template FOLDER (summarize.py scans
             # <folder>/logs/ for the per-job logs); the label is its basename.
