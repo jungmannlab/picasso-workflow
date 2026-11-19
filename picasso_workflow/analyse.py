@@ -4039,7 +4039,23 @@ class AutoPicasso(
         )  # list of (x_ctr, y_ctr, tile_x_min, tile_x_max, tile_y_min, tile_y_max)
         roi_files = []
 
-        if parameters.get("generate_active_rois", True):
+        # A prior filter (e.g. find_gold on gold-less data) can leave the
+        # render with no finite localization extent; the active-ROI grid below
+        # would then hand np.arange a nan/inf-length axis and crash with
+        # "arange: cannot compute length". Skip ROI generation when the FOV
+        # spans no finite area.
+        fov_is_finite = bool(
+            np.all(np.isfinite([x_min, x_max, y_min, y_max]))
+            and x_max > x_min
+            and y_max > y_min
+        )
+        if parameters.get("generate_active_rois", True) and not fov_is_finite:
+            logger.warning(
+                "render: no finite localization FOV "
+                f"(x {x_min}..{x_max}, y {y_min}..{y_max}); "
+                "skipping active-ROI generation."
+            )
+        if parameters.get("generate_active_rois", True) and fov_is_finite:
             all_x = np.concatenate([lcs["x"] for lcs in locs_list])
             all_y = np.concatenate([lcs["y"] for lcs in locs_list])
 

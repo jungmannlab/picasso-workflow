@@ -63,6 +63,12 @@ This file was started after v0.5.6; earlier history is in the git log.
   (`deploy/apptainer/paint.def`)
 
 ### Fixed
+- **`render` survives a localization set with no finite extent.** When a prior
+  filter (e.g. `find_gold` on gold-less data) left the render with non-finite
+  `x`/`y` bounds, the active-ROI grid asked `np.arange` for a nan/inf-length
+  axis and crashed with `ValueError: arange: cannot compute length`. It now
+  skips active-ROI generation (with a warning) when the FOV spans no finite
+  area. (`analyse.py`)
 - **Workflow modules survive empty/degenerate localization sets.** Three
   library crashes that aborted whole workflow runs on sparse real data are now
   handled gracefully: `filter_locs`' heatmap reporting hit `np.ptp([])` /
