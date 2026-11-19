@@ -13,7 +13,9 @@ This file was started after v0.5.6; earlier history is in the git log.
 ### Changed
 - **Apptainer cluster image is now a combined CPU+GPU image.** `paint.def` bakes
   in the GPU fitting stack (`numba-cuda` + the CUDA toolkit wheels
-  `nvidia-cuda-runtime-cu12` + `nvidia-cuda-nvcc-cu12` for libNVVM), so the one
+  `nvidia-cuda-runtime-cu12` for libcudart, `nvidia-cuda-nvcc-cu12` for
+  libNVVM, and `nvidia-cuda-nvrtc-cu12` for libnvrtc — the last two let
+  numba-cuda JIT the fit kernels on a GPU node), so the one
   `.sif` runs both CPU aggregation and GPU fits (`spline-mle-gpu` /
   `gaussmle-gpu`) on the cluster's GPU partitions — jobs `apptainer exec --nv`
   to expose the host driver (the CUDA toolkit lives in the image). Adds ~2–3 GB
@@ -34,6 +36,12 @@ This file was started after v0.5.6; earlier history is in the git log.
   when handed picks with no `group` column (e.g. `find_gold` found 0 beads) —
   it now fails with an actionable message pointing at the missing fiducials.
   (`outpost/reporting/histograms.py`, `outpost/render/render.py`, `analyse.py`)
+- **`filter_locs` / `filter_transient_binding` Confluence reporting survives a
+  filter that removes everything.** The "% removed" line divided by
+  `nlocs_before`, so a filter step entering with zero localizations (e.g. a
+  prior filter already emptied the set) aborted the whole dataset with
+  `ZeroDivisionError`. Both reporters now report `0.0%` instead of crashing.
+  (`confluence.py`)
 
 ## [0.7.1] - 2026-11-18
 
