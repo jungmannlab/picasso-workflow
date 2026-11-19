@@ -718,7 +718,12 @@ class AdminWindow(QMainWindow):
                     f"✓ attached to run {result['run_dir']} "
                     f"({len(self._test_run_jobs)} job(s))"
                 )
-                self._refresh_run_status()
+                # Deferred so the attach worker tears down first (its `finished`
+                # clears self._worker) -- otherwise the re-entry guard in _run
+                # would skip this status refresh.
+                QTimer.singleShot(
+                    0, lambda: self._refresh_run_status(quiet=True)
+                )
 
             self._run(
                 lambda a: a.attach_run(run_dir),
@@ -949,12 +954,22 @@ class AdminWindow(QMainWindow):
             return action(admin)
 
         worker = _Worker(fn, self)
+        # Mark the connection live again on ANY successful op (fires before the
+        # caller's on_done), so a stale 'error' left by a transient auto-refresh
+        # blip clears once a later tick succeeds -- not just after a manual
+        # 'Test connection'. A test_connection that returns False still ends on
+        # 'unreachable' because _on_test's on_done runs after this and wins.
+        worker.done.connect(self._on_op_ok)
         worker.done.connect(on_done)
         worker.failed.connect(self._on_failed)
         worker.finished.connect(lambda w=worker: self._on_finished(w))
         worker.finished.connect(worker.deleteLater)
         self._worker = worker
         worker.start()
+
+    def _on_op_ok(self, _result=None) -> None:
+        """Any successful op -> the connection is live (clears a stale error)."""
+        self.conn_status.setText("connected")
 
     def _on_failed(self, msg: str) -> None:
         self.conn_status.setText("error")
