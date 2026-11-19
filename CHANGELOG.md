@@ -63,6 +63,14 @@ This file was started after v0.5.6; earlier history is in the git log.
   (`deploy/apptainer/paint.def`)
 
 ### Fixed
+- **`identify` retries through picasso's `settings.yaml` write race under
+  MPI.** picasso's `identify_async` rewrites the shared
+  `~/.picasso/settings.yaml` with `os.replace(tmp, settings)` at startup;
+  parallel MPI ranks race on that rename and one loses with
+  `FileNotFoundError: …/settings.yaml.tmp -> …/settings.yaml`, failing a single
+  dataset mid-aggregation. The `identify` module now retries a few times with a
+  short backoff (the save precedes the heavy work, so a retry is cheap).
+  (`analyse.py`)
 - **`render` survives a localization set with no finite extent.** When a prior
   filter (e.g. `find_gold` on gold-less data) left the render with non-finite
   `x`/`y` bounds, the active-ROI grid asked `np.arange` for a nan/inf-length

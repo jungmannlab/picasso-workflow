@@ -3321,12 +3321,29 @@ class AutoPicasso(
                 identify_kwargs["abort_callback"] = abort
 
         # identify always returns (identifications, info) in picasso 1.0.
-        _id_result = localize.identify(
-            self.movie,
-            parameters=id_parameters,
-            parallel=bool(parameters.get("identify_parallel", True)),
-            **identify_kwargs,
-        )
+        # picasso's identify_async writes the shared ~/.picasso/settings.yaml
+        # via os.replace(tmp, settings) at startup; under MPI several ranks
+        # race on that rename and one loses with a FileNotFoundError on the
+        # .tmp. The save happens before the heavy identification work, so just
+        # retry a few times with a short backoff.
+        _id_result = None
+        for _attempt in range(5):
+            try:
+                _id_result = localize.identify(
+                    self.movie,
+                    parameters=id_parameters,
+                    parallel=bool(parameters.get("identify_parallel", True)),
+                    **identify_kwargs,
+                )
+                break
+            except FileNotFoundError as e:
+                if "settings.yaml" not in str(e) or _attempt == 4:
+                    raise
+                logger.warning(
+                    "identify: transient picasso settings.yaml write race "
+                    f"({e}); retry {_attempt + 1}/4."
+                )
+                time.sleep(0.5 * (_attempt + 1))
         if _id_result is None:
             # picasso returns None when identification was aborted mid-run.
             raise AutoPicassoError(
