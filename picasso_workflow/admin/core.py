@@ -9,9 +9,10 @@ dependency. Connection + image settings come from ``CONFIG`` (``SlurmLoginNodes`
 / ``ClusterApptainer``), the same source the Run tab uses.
 
 The command-output parsers (:func:`parse_image_listing`, :func:`parse_squeue`,
-:func:`parse_sacct`, :func:`parse_df`) are pure functions kept apart from the
-SSH calls so they unit-test without a cluster (mirrors monet's ``parse_status``
-/ ``parse_token_list``).
+:func:`parse_sacct`, :func:`parse_jobs_tsv`, :func:`parse_scontrol_logpaths`,
+:func:`parse_df`) are pure functions kept apart from the SSH calls so they
+unit-test without a cluster (mirrors monet's ``parse_status`` /
+``parse_token_list``).
 """
 
 from __future__ import annotations
@@ -420,15 +421,15 @@ def parse_jobs_tsv(text):
 
 
 def parse_scontrol_logpaths(text):
-    """Extract ``StdOut`` / ``StdErr`` file paths from ``scontrol -o show job``.
+    """Pull ``StdOut`` / ``StdErr`` file paths from ``scontrol -o show job``.
 
     ``scontrol -o show job <ids>`` prints one line per job of space-separated
     ``Key=Value`` fields, including ``StdOut=<path>`` / ``StdErr=<path>`` — the
-    *resolved* per-job log files (``%j`` etc. already expanded), authoritative
-    for a queued/running job regardless of where it writes. Returns the
-    de-duplicated paths in first-seen order; the ``(null)`` / ``None`` SLURM
-    emits when a path is unset is dropped. (Paths with spaces can't be
-    recovered from ``-o`` output and are not expected on the cluster scratch.)
+    *resolved* per-job log files (``%j`` expanded), authoritative for a
+    queued/running job regardless of where it writes. Returns the de-duplicated
+    paths in first-seen order; the ``(null)`` / ``None`` SLURM emits for an
+    unset path is dropped. (A path with spaces can't be recovered from ``-o``
+    output and is not expected on the cluster scratch.)
     """
     paths = []
     for token in text.split():
@@ -757,8 +758,11 @@ class ClusterAdmin:
         ids = [str(j) for j in job_ids if j and str(j) != "-"]
         if not ids:
             return []
-        # scontrol exits non-zero for a purged/invalid id, so read it directly
-        # (ignore the exit code) and parse whatever StdOut/StdErr it did print.
+        # Best-effort: scontrol exits non-zero when ANY id is already purged
+        # (normal for a finished job), so we must NOT raise on that -- read the
+        # output directly and parse whatever StdOut/StdErr it printed. A genuine
+        # SSH outage therefore degrades here to "no scontrol paths" (the globs
+        # still apply), and is surfaced by the subsequent tail `_run` below.
         result = self.comm.execute_ssh_command(
             "scontrol -o show job "
             + shlex.quote(",".join(ids))
