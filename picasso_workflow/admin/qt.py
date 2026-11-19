@@ -582,6 +582,7 @@ class AdminWindow(QMainWindow):
             return
         run_dir = self._test_run_dir
         templates = list(self._test_run_templates)
+        job_ids = list(self._test_run_jobs)
 
         def done(text):
             self.test_logs_text.setPlainText(
@@ -592,7 +593,9 @@ class AdminWindow(QMainWindow):
             self.test_output_tabs.setCurrentWidget(self.test_logs_text)
 
         self._run(
-            lambda a: a.fetch_logs(run_dir, templates=templates),
+            lambda a: a.fetch_logs(
+                run_dir, templates=templates, job_ids=job_ids
+            ),
             done,
             busy="fetching logs",
         )

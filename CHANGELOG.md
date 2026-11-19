@@ -10,6 +10,18 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ## [Unreleased]
 
+### Changed
+- **Admin console: 'Fetch logs' now reliably tails the LIVE log of a running /
+  stuck job.** It already tailed logs as they were written (SLURM appends live,
+  so a stuck job's output showed where it got to — it never waited for
+  completion); it now also resolves each tracked job's actual `StdOut`/`StdErr`
+  via `scontrol -o show job`, so a running job's current log is fetched even if
+  it writes outside the two conventional locations (`<run_dir>/*.log`,
+  `<folder>/logs/*<jobid>*`). Sources are de-duplicated. Backed by
+  `core.parse_scontrol_logpaths` + `ClusterAdmin._scontrol_log_paths`;
+  `fetch_logs` gained a `job_ids` argument (the Test-runs tab passes the run's
+  jobs). (`picasso_workflow/admin/core.py`, `picasso_workflow/admin/qt.py`)
+
 ### Added
 - **Admin console: a live run-status table + an over-time job-stats graph.**
   The **Test runs** tab now shows the current run's jobs in one table
