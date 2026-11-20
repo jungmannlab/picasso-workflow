@@ -63,6 +63,14 @@ This file was started after v0.5.6; earlier history is in the git log.
   (`deploy/apptainer/paint.def`)
 
 ### Fixed
+- **`render` no longer crashes with `UnboundLocalError: plt` when no active
+  ROIs are drawn.** `render` imported `matplotlib.pyplot as plt` locally inside
+  the `if selected_rois:` branch, which made `plt` function-local for the whole
+  method; the unconditional `plt.close(fig_overview)` then raised
+  `UnboundLocalError` whenever `selected_rois` was empty — reachable now that
+  the FOV guard skips active-ROI generation on gold-less/degenerate data. The
+  local import is removed; `plt` resolves to the module-level import.
+  (`analyse.py`)
 - **`identify` retries through picasso's `settings.yaml` write race under
   MPI.** picasso's `identify_async` rewrites the shared
   `~/.picasso/settings.yaml` with `os.replace(tmp, settings)` at startup;

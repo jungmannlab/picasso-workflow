@@ -4221,8 +4221,11 @@ class AutoPicasso(
 
         if selected_rois:
             import matplotlib.patches as patches
-            import matplotlib.pyplot as plt
 
+            # NB: do not import matplotlib.pyplot here. plt is already imported
+            # at module scope; a local import would make plt function-local and
+            # leave the unconditional plt.close(fig_overview) below unbound when
+            # selected_rois is empty (e.g. active-ROI generation was skipped).
             for idx, (_, _, t_xmin, t_xmax, t_ymin, t_ymax) in enumerate(
                 selected_rois
             ):
