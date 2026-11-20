@@ -1523,6 +1523,89 @@ class TestAnalyseModules(unittest.TestCase):
         self.assertIsNotNone(seen[0])
         self.assertIsNone(seen[1])
 
+    @patch("picasso_workflow.analyse.g5m.g5m")
+    def test_gmm_abs_sigma_bounds_scaled_to_nm(self, mock_gmm):
+        """loc_prec_handle='abs' without sigma_bounds scales factors by px.
+
+        picasso 1.0 locs are nm; the 0.8/1.5 factor-default would be ~px too
+        small as nm 'abs' bounds. The module must pass (0.8*px, 1.5*px) nm.
+        """
+        self.ap.info = [
+            {"Width": 1000, "Height": 1000, "Frames": 10000, "Pixelsize": 130}
+        ]
+        self.ap.locs = pd.DataFrame(
+            {
+                "x": [1.0, 2.0],
+                "y": [2.0, 3.0],
+                "group": [0, 0],
+                "lpx": [5.0, 5.0],
+                "lpy": [5.0, 5.0],
+            }
+        )
+        self.ap.channel_locs = None
+        mock_gmm.return_value = (None, None, self.ap.info)
+        folder = os.path.join(
+            self.results_folder, "00_gaussian_mixture_cluster"
+        )
+        try:
+            with self.assertRaises(analyse.AutoPicassoError):
+                self.ap.gaussian_mixture_cluster(
+                    0, {"min_locs": 10, "loc_prec_handle": "abs"}
+                )
+        finally:
+            shutil.rmtree(folder, ignore_errors=True)
+        sb = mock_gmm.call_args.kwargs["sigma_bounds"]
+        self.assertAlmostEqual(sb[0], analyse.g5m.MIN_SIGMA_FACTOR * 130)
+        self.assertAlmostEqual(sb[1], analyse.g5m.MAX_SIGMA_FACTOR * 130)
+
+    @patch("picasso_workflow.analyse.g5m.g5m")
+    def test_gmm_sigma_guard_blocks_subprecision_bounds(self, mock_gmm):
+        """'abs' sigma_bounds below the loc precision fail fast, not hang.
+
+        An upper sigma bound smaller than the median localization precision
+        is the px->nm trap that makes g5m run for hours; the guard raises
+        before g5m is ever called, and an explicit override bypasses it.
+        """
+        self.ap.info = [
+            {"Width": 1000, "Height": 1000, "Frames": 10000, "Pixelsize": 130}
+        ]
+        self.ap.locs = pd.DataFrame(
+            {
+                "x": [1.0, 2.0],
+                "y": [2.0, 3.0],
+                "group": [0, 0],
+                "lpx": [5.0, 5.0],
+                "lpy": [5.0, 5.0],
+            }
+        )
+        self.ap.channel_locs = None
+        mock_gmm.return_value = (None, None, self.ap.info)
+        folder = os.path.join(
+            self.results_folder, "00_gaussian_mixture_cluster"
+        )
+        bad = {
+            "min_locs": 10,
+            "loc_prec_handle": "abs",
+            "sigma_bounds": (0.8, 1.5),
+        }
+        try:
+            with self.assertRaises(analyse.AutoPicassoError) as ctx:
+                self.ap.gaussian_mixture_cluster(0, bad)
+        finally:
+            shutil.rmtree(folder, ignore_errors=True)
+        self.assertIn("localization precision", str(ctx.exception))
+        mock_gmm.assert_not_called()  # guarded before the expensive call
+
+        # the override lets the (sub-precision) run proceed to g5m.
+        try:
+            with self.assertRaises(analyse.AutoPicassoError):
+                self.ap.gaussian_mixture_cluster(
+                    0, {**bad, "gmm_skip_sigma_guard": True}
+                )
+        finally:
+            shutil.rmtree(folder, ignore_errors=True)
+        mock_gmm.assert_called_once()
+
     def test_save_state_on_error_dumps_channel_locs(self):
         """_save_state_on_error dumps aggregation channel_locs too."""
         ch_locs = pd.DataFrame(
