@@ -10,6 +10,22 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ## [Unreleased]
 
+### Fixed
+- **`gaussian_mixture_cluster` no longer runs for hours on picasso-1.0 (nm)
+  data — a px→nm unit regression.** In `loc_prec_handle='abs'` mode g5m clamps
+  every GMM component's sigma to `sigma_bounds`, which picasso 1.0 interprets
+  as **absolute nm** (0.11 used camera pixels). The module's factor-default
+  `(MIN_SIGMA_FACTOR, MAX_SIGMA_FACTOR) = (0.8, 1.5)` — meant for `'local'`
+  mode — was reused as `'abs'` nm bounds, capping components at ≤1.5 nm (well
+  below the data's own ~5 nm precision) and driving g5m's per-cluster
+  component search to `N_COMPONENTS_MAX` (the multi-hour hang; it ran in ~90
+  min pre-nm). Now, when `'abs'` is selected without an explicit
+  `sigma_bounds`, the factor-default is **scaled to nm by the pixel size**
+  `(0.8·px, 1.5·px)`, restoring the pre-nm behaviour. A **guard** also raises a
+  clear `AutoPicassoError` (instead of hanging) whenever the `'abs'`
+  `sigma_bounds` upper bound is below the median localization precision —
+  overridable with `gmm_skip_sigma_guard=True`. (`analyse.py`)
+
 ### Changed
 - **Clustering is now self-diagnosing, and `gaussian_mixture_cluster` avoids a
   GPU deadlock.** Multi-hour "stuck" clustering on the cluster was invisible

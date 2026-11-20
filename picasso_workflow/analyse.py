@@ -7045,9 +7045,12 @@ class AutoPicasso(
                 (the default) these are dimensionless factors multiplying
                 each component's localization precision, i.e.
                 ``[min * loc_prec, max * loc_prec]``; with
-                ``loc_prec_handle="abs"`` they are absolute sigmas in camera
-                pixels. They are not in nm and are not converted here
-                (default ``(g5m.MIN_SIGMA_FACTOR, g5m.MAX_SIGMA_FACTOR)``).
+                ``loc_prec_handle="abs"`` they are **absolute sigmas in nm**
+                (picasso 1.0 locs are nm; picasso 0.11 used camera pixels).
+                The default ``(g5m.MIN_SIGMA_FACTOR, g5m.MAX_SIGMA_FACTOR)``
+                is a *factor* default for ``"local"``; when ``"abs"`` is
+                selected without an explicit ``sigma_bounds`` it is scaled to
+                nm by the pixel size so it stays physically meaningful.
             ``loc_prec_handle`` : {"local", "abs"}
                 How to handle localization precision (default ``"local"``).
         results : dict
@@ -7076,6 +7079,33 @@ class AutoPicasso(
             phase="gaussian_mixture_cluster",
         )
 
+        # px->nm regression fix. picasso 1.0 locs are in nm, and g5m's
+        # loc_prec_handle='abs' sigma_bounds are absolute sigmas in nm (0.11
+        # used camera pixels). The module's factor-default
+        # (MIN/MAX_SIGMA_FACTOR = 0.8/1.5) is meant for 'local' mode; reused
+        # as 'abs' nm bounds it caps every GMM component at <=1.5 nm -- far
+        # below the data's own precision -- which drives g5m's per-cluster
+        # component search to N_COMPONENTS_MAX and makes it run for hours.
+        # When 'abs' is selected without an explicit sigma_bounds, scale the
+        # factor-default to nm by the pixel size, restoring the pre-nm
+        # behaviour.
+        loc_prec_handle = parameters.get("loc_prec_handle", "local")
+        sigma_bounds_default = (g5m.MIN_SIGMA_FACTOR, g5m.MAX_SIGMA_FACTOR)
+        if loc_prec_handle == "abs" and "sigma_bounds" not in parameters:
+            px = self.pixelsize
+            sigma_bounds_default = (
+                g5m.MIN_SIGMA_FACTOR * px,
+                g5m.MAX_SIGMA_FACTOR * px,
+            )
+            logger.warning(
+                "gaussian_mixture_cluster: loc_prec_handle='abs' with no "
+                "explicit sigma_bounds -- scaling the factor-default to nm "
+                f"by pixelsize={px}: {sigma_bounds_default}. (picasso 1.0 "
+                "locs are nm; the unscaled 0.8/1.5 nm default caps GMM "
+                "components far below the data precision and makes g5m run "
+                "for hours.)"
+            )
+
         required_args = ["min_locs"]
         optional_args = [
             ("max_rounds_without_best_bic", g5m.MAX_ROUNDS_WITHOUT_BEST_BIC),
@@ -7088,7 +7118,7 @@ class AutoPicasso(
             # progress instead of a silent 0%.
             ("parallel", parallel_default),
             ("progress", progress_default),
-            ("sigma_bounds", (g5m.MIN_SIGMA_FACTOR, g5m.MAX_SIGMA_FACTOR)),
+            ("sigma_bounds", sigma_bounds_default),
             ("loc_prec_handle", "local"),
         ]
         try:
@@ -7128,6 +7158,44 @@ class AutoPicasso(
                 "visible -- a multiprocessing fork after the CUDA context can "
                 "deadlock. Set 'parallel': False for this module if it hangs."
             )
+
+        # Guard: with loc_prec_handle='abs', g5m clamps every component's
+        # sigma to sigma_bounds (absolute, nm). If the upper bound is below
+        # the data's own median localization precision, no component can ever
+        # match the data, BIC keeps improving as components are added, and the
+        # per-cluster search runs to N_COMPONENTS_MAX -- g5m then takes hours
+        # (the px->nm unit trap). Fail fast with an actionable message instead
+        # of hanging. Overridable with gmm_skip_sigma_guard=True.
+        if kwargs.get("loc_prec_handle") == "abs" and not parameters.get(
+            "gmm_skip_sigma_guard", False
+        ):
+            sb = kwargs.get("sigma_bounds")
+            med_lp = None
+            for col in ("lpx", "lpy"):
+                try:
+                    vals = np.asarray(self.locs[col], dtype=float)
+                    vals = vals[np.isfinite(vals)]
+                    if vals.size:
+                        m = float(np.median(vals))
+                        med_lp = m if med_lp is None else max(med_lp, m)
+                except (KeyError, TypeError, ValueError, IndexError):
+                    pass
+            if med_lp and sb and max(sb) < med_lp:
+                px = self.pixelsize
+                raise AutoPicassoError(
+                    "gaussian_mixture_cluster: sigma_bounds upper bound "
+                    f"({max(sb):.3g}) is below the median localization "
+                    f"precision ({med_lp:.3g} nm) with loc_prec_handle="
+                    "'abs'. In picasso 1.0 these bounds are absolute sigmas "
+                    "in nm; a value this small caps every GMM component "
+                    "below the data's own precision, forcing g5m's "
+                    "component search to its per-cluster maximum and making "
+                    "it run for hours. Set sigma_bounds in nm (e.g. "
+                    f"(~{g5m.MIN_SIGMA_FACTOR * px:.0f}, "
+                    f"~{g5m.MAX_SIGMA_FACTOR * px:.0f})), use "
+                    "loc_prec_handle='local', or pass "
+                    "gmm_skip_sigma_guard=True to override."
+                )
 
         print("G5M arguments")
         print(kwargs)
