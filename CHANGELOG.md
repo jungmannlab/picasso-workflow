@@ -11,6 +11,18 @@ This file was started after v0.5.6; earlier history is in the git log.
 ## [Unreleased]
 
 ### Changed
+- **Clustering is now self-diagnosing, and `gaussian_mixture_cluster` avoids a
+  GPU deadlock.** Multi-hour "stuck" clustering on the cluster was invisible
+  because the modules ran silent. Now: `dbscan` logs its input localization
+  count and the resulting **cluster count** (the dominant cost driver for a
+  downstream per-cluster GMM); `gaussian_mixture_cluster` logs its input
+  size/cluster count and wires the module progress proxy into `g5m` so a long
+  run reports real per-cluster progress instead of a silent `0%` (with a
+  defensive fallback to `progress=None` if a given `g5m` rejects the proxy).
+  Its `parallel` flag now **defaults OFF when a CUDA GPU is visible** — forking
+  a multiprocessing pool after a live CUDA context (e.g. after a
+  `spline-mle-gpu` fit) can deadlock the worker; an explicit `parallel` in the
+  module parameters still wins, and CPU runs are unchanged. (`analyse.py`)
 - **Admin console: 'Fetch logs' now reliably tails the LIVE log of a running /
   stuck job.** It already tailed logs as they were written (SLURM appends live,
   so a stuck job's output showed where it got to — it never waited for

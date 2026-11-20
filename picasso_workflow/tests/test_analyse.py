@@ -1442,6 +1442,87 @@ class TestAnalyseModules(unittest.TestCase):
         finally:
             shutil.rmtree(folder, ignore_errors=True)
 
+    @patch("picasso_workflow.analyse.g5m.g5m")
+    def test_gmm_parallel_defaults_off_under_cuda(self, mock_gmm):
+        """GMM defaults parallel OFF on GPU nodes, ON on CPU, override wins.
+
+        Forking a multiprocessing pool after a live CUDA context can deadlock,
+        so gaussian_mixture_cluster defaults ``parallel`` to the negation of
+        ``_cuda_runtime_available()``. g5m returns ``(None, None, info)`` so the
+        module raises after the call, but its kwargs are still recorded.
+        """
+        self.ap.info = [
+            {"Width": 1000, "Height": 1000, "Frames": 10000, "Pixelsize": 130}
+        ]
+        self.ap.locs = pd.DataFrame({"x": [1.0], "y": [2.0], "group": [0]})
+        self.ap.channel_locs = None
+        mock_gmm.return_value = (None, None, self.ap.info)
+        folder = os.path.join(
+            self.results_folder, "00_gaussian_mixture_cluster"
+        )
+
+        def run(params):
+            try:
+                with self.assertRaises(analyse.AutoPicassoError):
+                    self.ap.gaussian_mixture_cluster(0, params)
+            finally:
+                shutil.rmtree(folder, ignore_errors=True)
+            return mock_gmm.call_args.kwargs["parallel"]
+
+        with patch.object(
+            self.ap, "_cuda_runtime_available", return_value=True
+        ):
+            self.assertFalse(run({"min_locs": 10}))
+        with patch.object(
+            self.ap, "_cuda_runtime_available", return_value=False
+        ):
+            self.assertTrue(run({"min_locs": 10}))
+        # an explicit parallel in the params overrides the CUDA default.
+        with patch.object(
+            self.ap, "_cuda_runtime_available", return_value=True
+        ):
+            self.assertTrue(run({"min_locs": 10, "parallel": True}))
+
+    @patch("picasso_workflow.analyse.g5m.g5m")
+    def test_gmm_progress_proxy_rejection_falls_back(self, mock_gmm):
+        """A progress proxy g5m rejects must not abort GMM -- it retries None.
+
+        Guards the defensive fallback: if g5m's version does not accept the
+        progress object (AttributeError/TypeError), the module retries once
+        with ``progress=None`` rather than failing the fit.
+        """
+        self.ap.info = [
+            {"Width": 1000, "Height": 1000, "Frames": 10000, "Pixelsize": 130}
+        ]
+        self.ap.locs = pd.DataFrame({"x": [1.0], "y": [2.0], "group": [0]})
+        self.ap.channel_locs = None
+        folder = os.path.join(
+            self.results_folder, "00_gaussian_mixture_cluster"
+        )
+
+        seen = []
+
+        def side_effect(locs, info, **kw):
+            seen.append(kw.get("progress"))
+            if kw.get("progress") is not None:
+                raise TypeError("this g5m does not accept a progress object")
+            return (None, None, info)
+
+        mock_gmm.side_effect = side_effect
+
+        with patch.object(
+            self.ap, "_make_progress_proxy", return_value=object()
+        ):
+            try:
+                with self.assertRaises(analyse.AutoPicassoError):
+                    self.ap.gaussian_mixture_cluster(0, {"min_locs": 10})
+            finally:
+                shutil.rmtree(folder, ignore_errors=True)
+
+        self.assertEqual(len(seen), 2)
+        self.assertIsNotNone(seen[0])
+        self.assertIsNone(seen[1])
+
     def test_save_state_on_error_dumps_channel_locs(self):
         """_save_state_on_error dumps aggregation channel_locs too."""
         ch_locs = pd.DataFrame(
