@@ -11,6 +11,7 @@ This file was started after v0.5.6; earlier history is in the git log.
 ## [Unreleased]
 
 ### Fixed
+- **Code-review follow-ups to the clustering diagnostics.** The GMM cluster-count diagnostic was dead on every real run (`self.locs` is a pandas DataFrame, which has no `.dtype.names`), so it logged `in None dbscan cluster(s)`; it now counts groups by indexing `"group"` (works for DataFrame and recarray). The `parallel` default now keys off a *live* CUDA context (`numba.cuda.is_initialized()`) rather than mere GPU visibility, so a CPU-only workflow on a GPU node is no longer serialised. Removed a broad `AttributeError/TypeError` wrapper around the multi-hour `g5m` call that could mislabel a genuine in-fit error as a progress mismatch and silently re-run the whole fit (the proxy is contract-compatible). Deduplicated a double `np.unique` over the cluster labels in `dbscan`. (`analyse.py`)
 - **`gaussian_mixture_cluster` no longer runs for hours on picasso-1.0 (nm)
   data — a px→nm unit regression.** In `loc_prec_handle='abs'` mode g5m clamps
   every GMM component's sigma to `sigma_bounds`, which picasso 1.0 interprets
