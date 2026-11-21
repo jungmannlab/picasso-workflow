@@ -1442,6 +1442,160 @@ class TestAnalyseModules(unittest.TestCase):
         finally:
             shutil.rmtree(folder, ignore_errors=True)
 
+    @patch("picasso_workflow.analyse.g5m.g5m")
+    def test_gmm_parallel_defaults_off_under_live_cuda(self, mock_gmm):
+        """GMM defaults parallel OFF with a live CUDA context, ON otherwise.
+
+        Forking a multiprocessing pool after a live CUDA context can deadlock,
+        so gaussian_mixture_cluster defaults ``parallel`` to the negation of
+        ``_cuda_context_live()``. g5m returns ``(None, None, info)`` so the
+        module raises after the call, but its kwargs are still recorded.
+        """
+        self.ap.info = [
+            {"Width": 1000, "Height": 1000, "Frames": 10000, "Pixelsize": 130}
+        ]
+        self.ap.locs = pd.DataFrame({"x": [1.0], "y": [2.0], "group": [0]})
+        self.ap.channel_locs = None
+        mock_gmm.return_value = (None, None, self.ap.info)
+        folder = os.path.join(
+            self.results_folder, "00_gaussian_mixture_cluster"
+        )
+
+        def run(params):
+            try:
+                with self.assertRaises(analyse.AutoPicassoError):
+                    self.ap.gaussian_mixture_cluster(0, params)
+            finally:
+                shutil.rmtree(folder, ignore_errors=True)
+            return mock_gmm.call_args.kwargs["parallel"]
+
+        with patch.object(self.ap, "_cuda_context_live", return_value=True):
+            self.assertFalse(run({"min_locs": 10}))
+        with patch.object(self.ap, "_cuda_context_live", return_value=False):
+            self.assertTrue(run({"min_locs": 10}))
+        # an explicit parallel in the params overrides the CUDA default.
+        with patch.object(self.ap, "_cuda_context_live", return_value=True):
+            self.assertTrue(run({"min_locs": 10, "parallel": True}))
+
+    @patch("picasso_workflow.analyse.g5m.g5m")
+    def test_gmm_logs_cluster_count_from_dataframe(self, mock_gmm):
+        """The cluster-count diagnostic works on a DataFrame (nm picasso 1.0).
+
+        self.locs is a pandas DataFrame after dbscan; counting groups must not
+        depend on ``.dtype.names`` (which a DataFrame lacks and which silently
+        yielded n_groups=None on every real run). The progress proxy's total
+        is built from the group count, so it must be the real cluster count.
+        """
+        self.ap.info = [
+            {"Width": 1000, "Height": 1000, "Frames": 10000, "Pixelsize": 130}
+        ]
+        self.ap.locs = pd.DataFrame(
+            {"x": [1.0, 2.0, 3.0], "y": [1.0, 2.0, 3.0], "group": [0, 1, 1]}
+        )
+        self.ap.channel_locs = None
+        mock_gmm.return_value = (None, None, self.ap.info)
+        captured = {}
+        folder = os.path.join(
+            self.results_folder, "00_gaussian_mixture_cluster"
+        )
+        orig = self.ap._make_progress_proxy
+
+        def spy(total=None, phase=None):
+            captured["total"] = total
+            return orig(total=total, phase=phase)
+
+        with patch.object(self.ap, "_make_progress_proxy", side_effect=spy):
+            try:
+                with self.assertRaises(analyse.AutoPicassoError):
+                    self.ap.gaussian_mixture_cluster(0, {"min_locs": 10})
+            finally:
+                shutil.rmtree(folder, ignore_errors=True)
+        # two distinct groups -> n_groups=2, not None, and feeds the proxy.
+        self.assertEqual(captured.get("total"), 2)
+
+    @patch("picasso_workflow.analyse.g5m.g5m")
+    def test_gmm_abs_sigma_bounds_scaled_to_nm(self, mock_gmm):
+        """loc_prec_handle='abs' without sigma_bounds scales factors by px.
+
+        picasso 1.0 locs are nm; the 0.8/1.5 factor-default would be ~px too
+        small as nm 'abs' bounds. The module must pass (0.8*px, 1.5*px) nm.
+        """
+        self.ap.info = [
+            {"Width": 1000, "Height": 1000, "Frames": 10000, "Pixelsize": 130}
+        ]
+        self.ap.locs = pd.DataFrame(
+            {
+                "x": [1.0, 2.0],
+                "y": [2.0, 3.0],
+                "group": [0, 0],
+                "lpx": [5.0, 5.0],
+                "lpy": [5.0, 5.0],
+            }
+        )
+        self.ap.channel_locs = None
+        mock_gmm.return_value = (None, None, self.ap.info)
+        folder = os.path.join(
+            self.results_folder, "00_gaussian_mixture_cluster"
+        )
+        try:
+            with self.assertRaises(analyse.AutoPicassoError):
+                self.ap.gaussian_mixture_cluster(
+                    0, {"min_locs": 10, "loc_prec_handle": "abs"}
+                )
+        finally:
+            shutil.rmtree(folder, ignore_errors=True)
+        sb = mock_gmm.call_args.kwargs["sigma_bounds"]
+        self.assertAlmostEqual(sb[0], analyse.g5m.MIN_SIGMA_FACTOR * 130)
+        self.assertAlmostEqual(sb[1], analyse.g5m.MAX_SIGMA_FACTOR * 130)
+
+    @patch("picasso_workflow.analyse.g5m.g5m")
+    def test_gmm_sigma_guard_blocks_subprecision_bounds(self, mock_gmm):
+        """'abs' sigma_bounds below the loc precision fail fast, not hang.
+
+        An upper sigma bound smaller than the median localization precision
+        is the px->nm trap that makes g5m run for hours; the guard raises
+        before g5m is ever called, and an explicit override bypasses it.
+        """
+        self.ap.info = [
+            {"Width": 1000, "Height": 1000, "Frames": 10000, "Pixelsize": 130}
+        ]
+        self.ap.locs = pd.DataFrame(
+            {
+                "x": [1.0, 2.0],
+                "y": [2.0, 3.0],
+                "group": [0, 0],
+                "lpx": [5.0, 5.0],
+                "lpy": [5.0, 5.0],
+            }
+        )
+        self.ap.channel_locs = None
+        mock_gmm.return_value = (None, None, self.ap.info)
+        folder = os.path.join(
+            self.results_folder, "00_gaussian_mixture_cluster"
+        )
+        bad = {
+            "min_locs": 10,
+            "loc_prec_handle": "abs",
+            "sigma_bounds": (0.8, 1.5),
+        }
+        try:
+            with self.assertRaises(analyse.AutoPicassoError) as ctx:
+                self.ap.gaussian_mixture_cluster(0, bad)
+        finally:
+            shutil.rmtree(folder, ignore_errors=True)
+        self.assertIn("localization precision", str(ctx.exception))
+        mock_gmm.assert_not_called()  # guarded before the expensive call
+
+        # the override lets the (sub-precision) run proceed to g5m.
+        try:
+            with self.assertRaises(analyse.AutoPicassoError):
+                self.ap.gaussian_mixture_cluster(
+                    0, {**bad, "gmm_skip_sigma_guard": True}
+                )
+        finally:
+            shutil.rmtree(folder, ignore_errors=True)
+        mock_gmm.assert_called_once()
+
     def test_save_state_on_error_dumps_channel_locs(self):
         """_save_state_on_error dumps aggregation channel_locs too."""
         ch_locs = pd.DataFrame(
@@ -3395,6 +3549,44 @@ class TestAnalyseModules(unittest.TestCase):
         shutil.rmtree(
             os.path.join(self.results_folder, "00_undrift_from_picked")
         )
+
+    @patch("picasso_workflow.analyse.io.save_locs", MagicMock())
+    @patch("picasso_workflow.analyse.io.load_locs")
+    def test_undrift_from_picked_no_group_raises(self, mock_load_locs):
+        """A picked-locs hdf5 with no 'group' column (e.g. find_gold found 0
+        beads) fails with a clear message, not a cryptic KeyError 'group'."""
+        self.ap.locs = pd.DataFrame(
+            np.rec.array(
+                [
+                    (i, 10.0, 10.0, 1000, 1, 1, 100, 0.1, 0.1, 0.5, 50, i)
+                    for i in range(4)
+                ],
+                dtype=self.locs_dtype,
+            )
+        )
+        self.ap.info = [
+            {"Width": 64, "Height": 64, "Frames": 4, "Pixelsize": 130}
+        ]
+        # find_gold found nothing -> saved locs carry NO 'group' column.
+        ungrouped = pd.DataFrame(
+            np.rec.array(
+                [(0, 10.0, 10.0, 1000, 1, 1, 100, 0.1, 0.1, 0.5, 50, 0)],
+                dtype=self.locs_dtype,
+            )
+        )
+        mock_load_locs.return_value = (ungrouped, self.ap.info)
+        parameters = {
+            "fp_picked_locs": os.path.join(temp_folder(), "gold.hdf5")
+        }
+        try:
+            with self.assertRaises(ValueError) as cm:
+                self.ap.undrift_from_picked(0, parameters)
+            assert "group" in str(cm.exception)
+        finally:
+            shutil.rmtree(
+                os.path.join(self.results_folder, "00_undrift_from_picked"),
+                ignore_errors=True,
+            )
 
     @patch("picasso_workflow.analyse.io.save_locs", MagicMock)
     def filter_locs(self):

@@ -401,3 +401,186 @@ def test_submit_test_chain_guards_conversion_exception(monkeypatch):
     finds = [c for c in admin.comm.commands if c.startswith("find ")]
     assert len(finds) == 1
     assert "/Volumes/pool-miblab1/templates" in finds[0]
+
+
+# --------------------------------------------------------------------------- #
+# job-phase categorisation + over-time aggregation (Jobs & usage stats)
+# --------------------------------------------------------------------------- #
+def test_job_phase_categorises_states():
+    assert core.job_phase("PENDING") == "queued"
+    assert core.job_phase("RUNNING") == "running"
+    assert core.job_phase("COMPLETED") == "completed"
+    assert core.job_phase("FAILED") == "failed"
+    assert core.job_phase("TIMEOUT") == "failed"
+    # SLURM appends a suffix to CANCELLED; the first word still matches.
+    assert core.job_phase("CANCELLED by 1234") == "failed"
+    # unknown / empty -> "other"
+    assert core.job_phase("WEIRD_STATE") == "other"
+    assert core.job_phase("") == "other"
+
+
+def test_summarize_phases_counts_every_phase():
+    jobs = [
+        core.JobInfo("1", "a", "PENDING", "0:00"),
+        core.JobInfo("2", "b", "RUNNING", "0:30"),
+        core.JobInfo("3", "c", "COMPLETED", "1:00"),
+        core.JobInfo("4", "d", "FAILED", "0:10"),
+        core.JobInfo("5", "e", "CANCELLED by 9", "0:05"),
+    ]
+    counts = core.summarize_phases(jobs)
+    assert counts == {
+        "queued": 1,
+        "running": 1,
+        "completed": 1,
+        "failed": 2,
+        "other": 0,
+    }
+
+
+def test_sacct_end_date_parses_or_none():
+    assert core.sacct_end_date("2026-11-18T14:07:03") == "2026-11-18"
+    assert core.sacct_end_date("Unknown") is None
+    assert core.sacct_end_date("None") is None
+    assert core.sacct_end_date("") is None
+    assert core.sacct_end_date("garbage") is None
+
+
+def test_aggregate_jobs_by_day_groups_and_counts():
+    jobs = [
+        core.JobInfo("1", "a", "COMPLETED", "1:00", "2026-11-17T10:00:00"),
+        core.JobInfo("2", "b", "FAILED", "0:10", "2026-11-17T12:00:00"),
+        core.JobInfo("3", "c", "COMPLETED", "1:00", "2026-11-18T09:00:00"),
+        # still running -> no End date -> excluded
+        core.JobInfo("4", "d", "RUNNING", "0:30", "Unknown"),
+        # pending -> excluded
+        core.JobInfo("5", "e", "PENDING", "0:00", ""),
+    ]
+    stats = core.aggregate_jobs_by_day(jobs)
+    assert [(s.date, s.total, s.passed, s.failed) for s in stats] == [
+        ("2026-11-17", 2, 1, 1),
+        ("2026-11-18", 1, 1, 0),
+    ]
+    # pass_fraction is passed/total, or None when empty
+    assert stats[0].pass_fraction == 0.5
+    assert stats[1].pass_fraction == 1.0
+    assert core.DayStat("x", 0, 0, 0).pass_fraction is None
+
+
+def test_jobs_status_targets_specific_ids():
+    admin = _admin(
+        "101\ttier1_3\tCOMPLETED\t0:42\t2026-11-18T14:00:00\n"
+        "102\ttier4\tRUNNING\t0:10\tUnknown"
+    )
+    jobs = admin.jobs_status(["101", "102", "-", ""])
+    # one targeted sacct -j call listing exactly the real ids
+    sacct = [c for c in admin.comm.commands if c.startswith("sacct ")]
+    assert len(sacct) == 1
+    assert "-j" in sacct[0] and "101,102" in sacct[0]
+    assert [j.job_id for j in jobs] == ["101", "102"]
+    assert jobs[1].state == "RUNNING"
+
+
+def test_jobs_status_empty_is_noop():
+    admin = _admin()
+    assert admin.jobs_status([]) == []
+    assert admin.jobs_status(["-", "", None]) == []
+    assert admin.comm.commands == []  # no SSH for an empty id set
+
+
+# --------------------------------------------------------------------------- #
+# run reconnect: jobs.tsv parse + attach_run + list_test_runs
+# --------------------------------------------------------------------------- #
+def test_parse_jobs_tsv_dedups_ids_and_collects_templates():
+    tsv = (
+        "tier\t101\ttier1_2\t-\n"
+        "tier\t101\ttier3\t-\n"  # same tier job id on two rows
+        "tier\t102\ttier4\t-\n"
+        "template\t103\tt1\t/d/t1\n"
+        "template\t104\tt2\t/d/t2\n"
+    )
+    job_ids, templates = core.parse_jobs_tsv(tsv)
+    assert job_ids == ["101", "102", "103", "104"]  # 101 not duplicated
+    assert templates == [("/d/t1", "103"), ("/d/t2", "104")]
+
+
+def test_parse_jobs_tsv_skips_malformed_lines():
+    job_ids, templates = core.parse_jobs_tsv("garbage\n\ntier\t\tx\t-\n")
+    assert job_ids == []  # blank jobid dropped, short line skipped
+    assert templates == []
+
+
+def test_attach_run_reads_jobs_tsv():
+    admin = _admin("tier\t101\ttier1_2\t-\ntemplate\t103\tt1\t/d/t1\n")
+    result = admin.attach_run("/scratch/tr/run_A")
+    assert result["run_dir"] == "/scratch/tr/run_A"
+    assert result["job_ids"] == ["101", "103"]
+    assert result["templates"] == [("/d/t1", "103")]
+    # reads the run's jobs.tsv
+    assert any("jobs.tsv" in c for c in admin.comm.commands)
+
+
+def test_attach_run_raises_when_no_manifest():
+    admin = _admin("")  # no jobs.tsv content
+    import pytest
+
+    with pytest.raises(RuntimeError):
+        admin.attach_run("/not/a/run")
+
+
+def test_list_test_runs_parses_and_caps(monkeypatch):
+    monkeypatch.setattr(
+        core, "apptainer_test_results_dir", lambda host: "/scratch/tr"
+    )
+    admin = _admin("/scratch/tr/b/\n/scratch/tr/a/\n")
+    runs = admin.list_test_runs(limit=1)
+    assert runs == ["/scratch/tr/b"]  # trailing slash stripped, capped to 1
+    assert any("ls -1dt" in c for c in admin.comm.commands)
+
+
+def test_list_test_runs_empty_without_results_dir(monkeypatch):
+    monkeypatch.setattr(core, "apptainer_test_results_dir", lambda host: "")
+    admin = _admin()
+    assert admin.list_test_runs() == []
+    assert admin.comm.commands == []  # no SSH when the dir is unset
+
+
+# --------------------------------------------------------------------------- #
+# fetch_logs: live-log resolution via scontrol
+# --------------------------------------------------------------------------- #
+def test_parse_scontrol_logpaths_dedups_and_skips_null():
+    text = (
+        "JobId=1 StdOut=/a/1.out StdErr=/a/1.err\n"
+        "JobId=2 StdOut=/a/2.out StdErr=(null)\n"
+        "JobId=3 StdOut=/a/1.out StdErr=/dev/null\n"  # dup out, null err
+    )
+    assert core.parse_scontrol_logpaths(text) == [
+        "/a/1.out",
+        "/a/1.err",
+        "/a/2.out",
+    ]
+
+
+def test_fetch_logs_resolves_live_paths_via_scontrol():
+    admin = _admin(
+        stdout=(
+            "JobId=601 JobName=t StdOut=/fs/td/t1/logs/601.log "
+            "StdErr=/fs/td/t1/logs/601_err.log"
+        )
+    )
+    admin.fetch_logs("/scratch/run", job_ids=["601", "-", ""])
+    cmds = admin.comm.commands
+    # one scontrol call, for the real id only
+    scontrol = [c for c in cmds if c.startswith("scontrol")]
+    assert len(scontrol) == 1
+    assert "show job" in scontrol[0] and "601" in scontrol[0]
+    # the resolved StdOut/StdErr are tailed in the final (deduped) loop
+    tail_cmd = [c for c in cmds if "tail -n" in c][-1]
+    assert "/fs/td/t1/logs/601.log" in tail_cmd
+    assert "/fs/td/t1/logs/601_err.log" in tail_cmd
+    assert 'seen=""' in tail_cmd  # dedup guard
+
+
+def test_fetch_logs_no_scontrol_without_job_ids():
+    admin = _admin(stdout="")
+    admin.fetch_logs("/scratch/run")  # job_ids defaults to None
+    assert not any(c.startswith("scontrol") for c in admin.comm.commands)

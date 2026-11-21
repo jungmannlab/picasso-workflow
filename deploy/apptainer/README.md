@@ -7,6 +7,17 @@ picasso 1.0 analysis stack baked in (`picassosr` 1.0 + `picasso-workflow` +
 runs inside the image exactly as it does in dev. A single `.sif` also sidesteps
 the inode blow-up a conda env causes on an HPC home quota.
 
+It is a **combined CPU+GPU image**: the GPU fitting stack (`numba-cuda` + the
+CUDA toolkit wheels `nvidia-cuda-runtime-cu12` for libcudart,
+`nvidia-cuda-nvcc-cu12` for libNVVM, and `nvidia-cuda-nvrtc-cu12` for libnvrtc
+— the last two let numba-cuda JIT-compile the fit kernels on a GPU node) is
+baked in unconditionally, so the same image runs CPU aggregation
+*and* GPU fits (`spline-mle-gpu`) on the GPU partitions — jobs just
+`apptainer exec --nv` to expose the host driver (the CUDA toolkit lives in the
+image). Costs ~2–3 GB over a CPU-only build. CPU runs are unaffected. The
+GPU-less CI build only proves the stack **imports**; **smoke-test
+`spline-mle-gpu` on a GPU node after pulling** before relying on it.
+
 ## Build it
 
 - **In CI:** [`.github/workflows/build-apptainer.yml`](../../.github/workflows/build-apptainer.yml)

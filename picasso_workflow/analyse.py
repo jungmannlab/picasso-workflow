@@ -1212,6 +1212,29 @@ class AutoPicasso(
         """The wired abort callback, or None (picasso treats None as no-op)."""
         return self._abort_callback
 
+    def _cuda_context_live(self):
+        """True if a CUDA context has actually been initialised this process.
+
+        Forking a worker pool *after* a live CUDA context (e.g. after a
+        ``spline-mle-gpu`` fit) can deadlock the child, so callers default
+        fork-based multiprocessing OFF when this is True. It keys off context
+        *liveness* (``numba.cuda.is_initialized()``), not mere GPU
+        *visibility*, so a CPU-only workflow that merely runs on a GPU node
+        (or interactively with ``--nv``) is not needlessly serialised.
+        Returns False on CPU-only nodes and whenever the check cannot be made,
+        so CPU behaviour is unchanged.
+
+        Returns
+        -------
+        bool
+        """
+        try:
+            from numba import cuda
+
+            return bool(cuda.is_initialized())
+        except Exception:
+            return False
+
     @property
     def info_mm_entry(self):
         """The first metadata entry (single- or multi-dataset)."""
@@ -3321,12 +3344,29 @@ class AutoPicasso(
                 identify_kwargs["abort_callback"] = abort
 
         # identify always returns (identifications, info) in picasso 1.0.
-        _id_result = localize.identify(
-            self.movie,
-            parameters=id_parameters,
-            parallel=bool(parameters.get("identify_parallel", True)),
-            **identify_kwargs,
-        )
+        # picasso's identify_async writes the shared ~/.picasso/settings.yaml
+        # via os.replace(tmp, settings) at startup; under MPI several ranks
+        # race on that rename and one loses with a FileNotFoundError on the
+        # .tmp. The save happens before the heavy identification work, so just
+        # retry a few times with a short backoff.
+        _id_result = None
+        for _attempt in range(5):
+            try:
+                _id_result = localize.identify(
+                    self.movie,
+                    parameters=id_parameters,
+                    parallel=bool(parameters.get("identify_parallel", True)),
+                    **identify_kwargs,
+                )
+                break
+            except FileNotFoundError as e:
+                if "settings.yaml" not in str(e) or _attempt == 4:
+                    raise
+                logger.warning(
+                    "identify: transient picasso settings.yaml write race "
+                    f"({e}); retry {_attempt + 1}/4."
+                )
+                time.sleep(0.5 * (_attempt + 1))
         if _id_result is None:
             # picasso returns None when identification was aborted mid-run.
             raise AutoPicassoError(
@@ -4039,7 +4079,23 @@ class AutoPicasso(
         )  # list of (x_ctr, y_ctr, tile_x_min, tile_x_max, tile_y_min, tile_y_max)
         roi_files = []
 
-        if parameters.get("generate_active_rois", True):
+        # A prior filter (e.g. find_gold on gold-less data) can leave the
+        # render with no finite localization extent; the active-ROI grid below
+        # would then hand np.arange a nan/inf-length axis and crash with
+        # "arange: cannot compute length". Skip ROI generation when the FOV
+        # spans no finite area.
+        fov_is_finite = bool(
+            np.all(np.isfinite([x_min, x_max, y_min, y_max]))
+            and x_max > x_min
+            and y_max > y_min
+        )
+        if parameters.get("generate_active_rois", True) and not fov_is_finite:
+            logger.warning(
+                "render: no finite localization FOV "
+                f"(x {x_min}..{x_max}, y {y_min}..{y_max}); "
+                "skipping active-ROI generation."
+            )
+        if parameters.get("generate_active_rois", True) and fov_is_finite:
             all_x = np.concatenate([lcs["x"] for lcs in locs_list])
             all_y = np.concatenate([lcs["y"] for lcs in locs_list])
 
@@ -4188,8 +4244,11 @@ class AutoPicasso(
 
         if selected_rois:
             import matplotlib.patches as patches
-            import matplotlib.pyplot as plt
 
+            # NB: do not import matplotlib.pyplot here. plt is already imported
+            # at module scope; a local import would make plt function-local and
+            # leave the unconditional plt.close(fig_overview) below unbound when
+            # selected_rois is empty (e.g. active-ROI generation was skipped).
             for idx, (_, _, t_xmin, t_xmax, t_ymin, t_ymax) in enumerate(
                 selected_rois
             ):
@@ -4917,12 +4976,30 @@ class AutoPicasso(
         # value, already in nm, is passed straight through. It returns
         # (locs, info) with the whole info list; the dbscan step is its last
         # entry.
+        n_locs_in = len(self.locs)
+        logger.info(
+            f"dbscan: clustering {n_locs_in} localizations "
+            f"(radius={parameters['radius']} nm, min_samples={min_samples}, "
+            f"min_locs={min_locs})."
+        )
         self.locs, _dbscan_info = clusterer.dbscan(
             self.locs,
             self.info,
             radius=parameters["radius"],
             min_samples=min_samples,
             min_locs=min_locs,
+        )
+        # The cluster count is the dominant cost driver for a downstream
+        # gaussian_mixture_cluster (g5m fits a GMM per cluster); log it so a
+        # later slow/stuck GMM is diagnosable instead of a silent hang. Reused
+        # below for the cluster-size histogram (one pass over "group").
+        cluster_groups, cluster_counts = np.unique(
+            self.locs["group"], return_counts=True
+        )
+        logger.info(
+            f"dbscan: produced {len(cluster_groups)} clusters from "
+            f"{n_locs_in} localizations (continue_with_centers="
+            f"{parameters.get('continue_with_centers')})."
         )
         dbscan_info = dict(_dbscan_info[-1])
         dbscan_info["Wrapped by"] = "picasso-workflow : dbscan"
@@ -4932,11 +5009,10 @@ class AutoPicasso(
         # )
         # self._save_locs(results["fp_locs"])
 
-        # plot: histogram of cluster sizes
+        # plot: histogram of cluster sizes (reuse the counts from above)
         fig, ax = plt.subplots()
-        uniques, counts = np.unique(self.locs["group"], return_counts=True)
-        maxbin = int(np.quantile(counts, 0.95))
-        ax.hist(counts, bins=np.arange(maxbin))
+        maxbin = int(np.quantile(cluster_counts, 0.95))
+        ax.hist(cluster_counts, bins=np.arange(maxbin))
         ax.set_xlabel("cluster size [locs]")
         ax.set_ylabel("Frequency")
         results["fp_fig_clustersizes"] = os.path.join(
@@ -6975,15 +7051,67 @@ class AutoPicasso(
                 (the default) these are dimensionless factors multiplying
                 each component's localization precision, i.e.
                 ``[min * loc_prec, max * loc_prec]``; with
-                ``loc_prec_handle="abs"`` they are absolute sigmas in camera
-                pixels. They are not in nm and are not converted here
-                (default ``(g5m.MIN_SIGMA_FACTOR, g5m.MAX_SIGMA_FACTOR)``).
+                ``loc_prec_handle="abs"`` they are **absolute sigmas in nm**
+                (picasso 1.0 locs are nm; picasso 0.11 used camera pixels).
+                The default ``(g5m.MIN_SIGMA_FACTOR, g5m.MAX_SIGMA_FACTOR)``
+                is a *factor* default for ``"local"``; when ``"abs"`` is
+                selected without an explicit ``sigma_bounds`` it is scaled to
+                nm by the pixel size so it stays physically meaningful.
             ``loc_prec_handle`` : {"local", "abs"}
                 How to handle localization precision (default ``"local"``).
         results : dict
             Module results (see
             :class:`~picasso_workflow.util.AbstractModuleCollection`).
         """
+        # Diagnostics for the common "GMM looks hung" case: g5m fits a GMM per
+        # dbscan cluster, so the cluster count predicts the runtime, and a
+        # silent progress=None makes a long run indistinguishable from a hang.
+        n_locs_in = len(self.locs)
+        # Count dbscan clusters by indexing "group" (works for both a pandas
+        # DataFrame -- picasso 1.0 -- and a numpy recarray; a DataFrame has no
+        # .dtype.names, which previously made this silently None on every run).
+        try:
+            n_groups = int(len(np.unique(self.locs["group"])))
+        except (KeyError, TypeError, ValueError, IndexError):
+            n_groups = None
+        # Fork-based multiprocessing after a live CUDA context (GPU fitting)
+        # can deadlock; default parallel OFF only when a CUDA context is
+        # actually live. Still overridable via an explicit 'parallel'.
+        cuda_live = self._cuda_context_live()
+        parallel_default = not cuda_live
+        # Surface real intra-module progress instead of a silent 0%.
+        progress_default = self._make_progress_proxy(
+            total=(n_groups or n_locs_in),
+            phase="gaussian_mixture_cluster",
+        )
+
+        # px->nm regression fix. picasso 1.0 locs are in nm, and g5m's
+        # loc_prec_handle='abs' sigma_bounds are absolute sigmas in nm (0.11
+        # used camera pixels). The module's factor-default
+        # (MIN/MAX_SIGMA_FACTOR = 0.8/1.5) is meant for 'local' mode; reused
+        # as 'abs' nm bounds it caps every GMM component at <=1.5 nm -- far
+        # below the data's own precision -- which drives g5m's per-cluster
+        # component search to N_COMPONENTS_MAX and makes it run for hours.
+        # When 'abs' is selected without an explicit sigma_bounds, scale the
+        # factor-default to nm by the pixel size, restoring the pre-nm
+        # behaviour.
+        loc_prec_handle = parameters.get("loc_prec_handle", "local")
+        sigma_bounds_default = (g5m.MIN_SIGMA_FACTOR, g5m.MAX_SIGMA_FACTOR)
+        if loc_prec_handle == "abs" and "sigma_bounds" not in parameters:
+            px = self.pixelsize
+            sigma_bounds_default = (
+                g5m.MIN_SIGMA_FACTOR * px,
+                g5m.MAX_SIGMA_FACTOR * px,
+            )
+            logger.warning(
+                "gaussian_mixture_cluster: loc_prec_handle='abs' with no "
+                "explicit sigma_bounds -- scaling the factor-default to nm "
+                f"by pixelsize={px}: {sigma_bounds_default}. (picasso 1.0 "
+                "locs are nm; the unscaled 0.8/1.5 nm default caps GMM "
+                "components far below the data precision and makes g5m run "
+                "for hours.)"
+            )
+
         required_args = ["min_locs"]
         optional_args = [
             ("max_rounds_without_best_bic", g5m.MAX_ROUNDS_WITHOUT_BEST_BIC),
@@ -6991,9 +7119,12 @@ class AutoPicasso(
             ("calibration", None),
             ("mode", "auto"),
             # picasso 1.0: asynch -> parallel, callback_parent -> progress.
-            ("parallel", True),
-            ("progress", None),  # "silent"),
-            ("sigma_bounds", (g5m.MIN_SIGMA_FACTOR, g5m.MAX_SIGMA_FACTOR)),
+            # parallel defaults OFF on GPU nodes (fork-after-CUDA deadlock);
+            # progress defaults to the module proxy so g5m reports per-cluster
+            # progress instead of a silent 0%.
+            ("parallel", parallel_default),
+            ("progress", progress_default),
+            ("sigma_bounds", sigma_bounds_default),
             ("loc_prec_handle", "local"),
         ]
         try:
@@ -7021,13 +7152,69 @@ class AutoPicasso(
                 setval = self._infer_gmm_mode()
             kwargs[oa] = setval
 
+        logger.info(
+            f"gaussian_mixture_cluster: fitting {n_locs_in} localizations "
+            f"in {n_groups} dbscan cluster(s); CUDA context live={cuda_live}, "
+            f"parallel={kwargs.get('parallel')}, "
+            f"min_locs={kwargs.get('min_locs')}."
+        )
+        if cuda_live and kwargs.get("parallel"):
+            logger.warning(
+                "gaussian_mixture_cluster: parallel=True with a live CUDA "
+                "context -- a multiprocessing fork after the CUDA context can "
+                "deadlock. Set 'parallel': False for this module if it hangs."
+            )
+
+        # Guard: with loc_prec_handle='abs', g5m clamps every component's
+        # sigma to sigma_bounds (absolute, nm). If the upper bound is below
+        # the data's own median localization precision, no component can ever
+        # match the data, BIC keeps improving as components are added, and the
+        # per-cluster search runs to N_COMPONENTS_MAX -- g5m then takes hours
+        # (the px->nm unit trap). Fail fast with an actionable message instead
+        # of hanging. Overridable with gmm_skip_sigma_guard=True.
+        if kwargs.get("loc_prec_handle") == "abs" and not parameters.get(
+            "gmm_skip_sigma_guard", False
+        ):
+            sb = kwargs.get("sigma_bounds")
+            med_lp = None
+            for col in ("lpx", "lpy"):
+                try:
+                    vals = np.asarray(self.locs[col], dtype=float)
+                    vals = vals[np.isfinite(vals)]
+                    if vals.size:
+                        m = float(np.median(vals))
+                        med_lp = m if med_lp is None else max(med_lp, m)
+                except (KeyError, TypeError, ValueError, IndexError):
+                    pass
+            if med_lp and sb and max(sb) < med_lp:
+                px = self.pixelsize
+                raise AutoPicassoError(
+                    "gaussian_mixture_cluster: sigma_bounds upper bound "
+                    f"({max(sb):.3g}) is below the median localization "
+                    f"precision ({med_lp:.3g} nm) with loc_prec_handle="
+                    "'abs'. In picasso 1.0 these bounds are absolute sigmas "
+                    "in nm; a value this small caps every GMM component "
+                    "below the data's own precision, forcing g5m's "
+                    "component search to its per-cluster maximum and making "
+                    "it run for hours. Set sigma_bounds in nm (e.g. "
+                    f"(~{g5m.MIN_SIGMA_FACTOR * px:.0f}, "
+                    f"~{g5m.MAX_SIGMA_FACTOR * px:.0f})), use "
+                    "loc_prec_handle='local', or pass "
+                    "gmm_skip_sigma_guard=True to override."
+                )
+
         print("G5M arguments")
         print(kwargs)
 
         results["g5m_args"] = str(kwargs)
 
         # picasso 1.0 returns (centers, info, clustered_locs) -- the info and
-        # the clustered locs swapped order relative to 0.11.
+        # the clustered locs swapped order relative to 0.11. The progress proxy
+        # satisfies picasso's progress contract (it implements set_value /
+        # setMaximum, which lib.normalize_progress accepts), so it is passed
+        # straight through: wrapping this multi-hour call in a broad
+        # AttributeError/TypeError catch would mislabel a genuine in-fit error
+        # as a progress mismatch and silently re-run the whole fit.
         center_locs, gmm_info, clustered_locs = g5m.g5m(
             self.locs, self.info, **kwargs
         )
@@ -12816,7 +13003,24 @@ class AutoPicasso(
         else:
             picked_locs, info = io.load_locs(fp_picked)
             if not isinstance(picked_locs, list):
-                # saved as one recarray, with 'group' identifying the pick
+                # saved as one recarray/dataframe, 'group' identifies the pick
+                names = getattr(picked_locs, "columns", None)
+                if names is None:
+                    names = picked_locs.dtype.names or ()
+                if "group" not in names:
+                    # No 'group' column -> the file defines no picks. This
+                    # happens when the upstream picker / find_gold accepted no
+                    # structures (e.g. a dataset with no gold fiducials): the
+                    # saved locs are ungrouped and np.unique(locs["group"])
+                    # would otherwise raise a cryptic KeyError. Fail with an
+                    # actionable message instead.
+                    raise ValueError(
+                        f"undrift_from_picked: '{fp_picked}' has no 'group' "
+                        "column, so it defines no picks. The upstream "
+                        "picker/find_gold likely accepted no structures (e.g. "
+                        "no gold beads in this dataset). Remove this undrift "
+                        "step or point it at a dataset with fiducials."
+                    )
                 groups = np.unique(picked_locs["group"])
                 picked_locs = [
                     picked_locs[picked_locs["group"] == group]

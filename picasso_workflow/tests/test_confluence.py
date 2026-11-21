@@ -143,6 +143,40 @@ class Test_B_ConfluenceReporterModules(unittest.TestCase):
     def tearDown(self):
         pass
 
+    def test_filter_locs_zero_before_does_not_divide_by_zero(self):
+        """filter_locs must not crash when a prior filter left zero locs.
+
+        Regression for a ZeroDivisionError when ``nlocs_before == 0`` (the
+        "% removed" line divided by it).
+        """
+        parameters = {"field": ["x", "y"], "minval": [0, 0], "maxval": [1, 1]}
+        results = {
+            "start time": "now",
+            "duration": 1.0,
+            "nlocs_before": 0,
+            "nlocs_after": 0,
+        }
+        text = self.cr.filter_locs(
+            0, parameters, results, postpone_report=True
+        )
+        self.assertIn("0.0%", text)
+
+    def test_filter_transient_binding_zero_before_no_divide_by_zero(self):
+        """filter_transient_binding must survive ``nlocs_before == 0`` too."""
+        results = {
+            "start time": "now",
+            "duration": 1.0,
+            "nlocs_before": 0,
+            "nlocs_after": 0,
+            "fields_filtered": ["x"],
+            "all_xmin": [0],
+            "all_xmax": [1],
+        }
+        text = self.cr.filter_transient_binding(
+            0, {}, results, postpone_report=True
+        )
+        self.assertIn("0.0%", text)
+
     def test_modules(self):
         """Test all modules defined in the ModuleCollection"""
         available_modules = inspect.getmembers(util.AbstractModuleCollection)

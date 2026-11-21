@@ -10,6 +10,130 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-11-21
+
+### Fixed
+- **Code-review follow-ups to the clustering diagnostics.** The GMM cluster-count diagnostic was dead on every real run (`self.locs` is a pandas DataFrame, which has no `.dtype.names`), so it logged `in None dbscan cluster(s)`; it now counts groups by indexing `"group"` (works for DataFrame and recarray). The `parallel` default now keys off a *live* CUDA context (`numba.cuda.is_initialized()`) rather than mere GPU visibility, so a CPU-only workflow on a GPU node is no longer serialised. Removed a broad `AttributeError/TypeError` wrapper around the multi-hour `g5m` call that could mislabel a genuine in-fit error as a progress mismatch and silently re-run the whole fit (the proxy is contract-compatible). Deduplicated a double `np.unique` over the cluster labels in `dbscan`. (`analyse.py`)
+- **`gaussian_mixture_cluster` no longer runs for hours on picasso-1.0 (nm)
+  data — a px→nm unit regression.** In `loc_prec_handle='abs'` mode g5m clamps
+  every GMM component's sigma to `sigma_bounds`, which picasso 1.0 interprets
+  as **absolute nm** (0.11 used camera pixels). The module's factor-default
+  `(MIN_SIGMA_FACTOR, MAX_SIGMA_FACTOR) = (0.8, 1.5)` — meant for `'local'`
+  mode — was reused as `'abs'` nm bounds, capping components at ≤1.5 nm (well
+  below the data's own ~5 nm precision) and driving g5m's per-cluster
+  component search to `N_COMPONENTS_MAX` (the multi-hour hang; it ran in ~90
+  min pre-nm). Now, when `'abs'` is selected without an explicit
+  `sigma_bounds`, the factor-default is **scaled to nm by the pixel size**
+  `(0.8·px, 1.5·px)`, restoring the pre-nm behaviour. A **guard** also raises a
+  clear `AutoPicassoError` (instead of hanging) whenever the `'abs'`
+  `sigma_bounds` upper bound is below the median localization precision —
+  overridable with `gmm_skip_sigma_guard=True`. (`analyse.py`)
+
+### Changed
+- **Clustering is now self-diagnosing, and `gaussian_mixture_cluster` avoids a
+  GPU deadlock.** Multi-hour "stuck" clustering on the cluster was invisible
+  because the modules ran silent. Now: `dbscan` logs its input localization
+  count and the resulting **cluster count** (the dominant cost driver for a
+  downstream per-cluster GMM); `gaussian_mixture_cluster` logs its input
+  size/cluster count and wires the module progress proxy into `g5m` so a long
+  run reports real per-cluster progress instead of a silent `0%` (with a
+  defensive fallback to `progress=None` if a given `g5m` rejects the proxy).
+  Its `parallel` flag now **defaults OFF when a CUDA GPU is visible** — forking
+  a multiprocessing pool after a live CUDA context (e.g. after a
+  `spline-mle-gpu` fit) can deadlock the worker; an explicit `parallel` in the
+  module parameters still wins, and CPU runs are unchanged. (`analyse.py`)
+- **Admin console: 'Fetch logs' now reliably tails the LIVE log of a running /
+  stuck job.** It already tailed logs as they were written (SLURM appends live,
+  so a stuck job's output showed where it got to — it never waited for
+  completion); it now also resolves each tracked job's actual `StdOut`/`StdErr`
+  via `scontrol -o show job`, so a running job's current log is fetched even if
+  it writes outside the two conventional locations (`<run_dir>/*.log`,
+  `<folder>/logs/*<jobid>*`). Sources are de-duplicated. Backed by
+  `core.parse_scontrol_logpaths` + `ClusterAdmin._scontrol_log_paths`;
+  `fetch_logs` gained a `job_ids` argument (the Test-runs tab passes the run's
+  jobs). (`picasso_workflow/admin/core.py`, `picasso_workflow/admin/qt.py`)
+
+### Added
+- **Admin console: a live run-status table + an over-time job-stats graph.**
+  The **Test runs** tab now shows the current run's jobs in one table
+  (`job`/`name`/`phase`/`state`/`elapsed`/`end`), grouped into queued /
+  running / completed / failed with a one-line summary — populated right after
+  submit, refreshed by "Refresh run status" and (when auto-refresh is on) each
+  tick, and it pulls the SUMMARY once every job has finished. The **Jobs &
+  usage** tab gains a matplotlib graph of finished jobs per day (passed/failed,
+  stacked) with the daily pass fraction overlaid, drawn from the same `sacct`
+  data the Recent table uses (no extra SSH). New GUI-free helpers back them:
+  `core.jobs_status(job_ids)` (targeted `sacct -j`), `core.job_phase` /
+  `core.summarize_phases`, and `core.aggregate_jobs_by_day` (`DayStat`).
+  (`picasso_workflow/admin/core.py`, `picasso_workflow/admin/qt.py`)
+- **Admin console: reconnect to a run, cap hung template runs, survive SSH
+  blips.** A **"Attach to run…"** button re-attaches the console to a
+  previously submitted run by reading its `jobs.tsv` off the cluster (pick a
+  recent run dir), so a GUI restart or a network drop no longer loses the run —
+  'Refresh run status' / 'Fetch logs' / 'Cancel run' work again
+  (`core.attach_run` / `list_test_runs` / `parse_jobs_tsv`). A new **"Template
+  time cap"** field (default `04:00:00`, blank = none) applies `sbatch --time`
+  to each template workflow run, so a hung one is killed at the cap instead of
+  running to the partition max and blocking its `afterany` summary job
+  (`testrun`/`core.submit_test_chain` gained `template_time`). And an
+  auto-refresh tick that hits an SSH error now keeps auto-refresh on (logs +
+  retries next tick) instead of switching itself off.
+
+### Changed
+- **Apptainer cluster image is now a combined CPU+GPU image.** `paint.def` bakes
+  in the GPU fitting stack (`numba-cuda` + the CUDA toolkit wheels
+  `nvidia-cuda-runtime-cu12` for libcudart, `nvidia-cuda-nvcc-cu12` for
+  libNVVM, and `nvidia-cuda-nvrtc-cu12` for libnvrtc — the last two let
+  numba-cuda JIT the fit kernels on a GPU node), so the one
+  `.sif` runs both CPU aggregation and GPU fits (`spline-mle-gpu` /
+  `gaussmle-gpu`) on the cluster's GPU partitions — jobs `apptainer exec --nv`
+  to expose the host driver (the CUDA toolkit lives in the image). Adds ~2–3 GB
+  over a CPU-only build; CPU runs are unaffected (GPU stays gated by the driver
+  / `CUDA_VISIBLE_DEVICES`). The GPU-less CI build only proves the stack
+  imports — smoke-test `spline-mle-gpu` on a GPU node before relying on it.
+  (`deploy/apptainer/paint.def`)
+
+### Fixed
+- **`render` no longer crashes with `UnboundLocalError: plt` when no active
+  ROIs are drawn.** `render` imported `matplotlib.pyplot as plt` locally inside
+  the `if selected_rois:` branch, which made `plt` function-local for the whole
+  method; the unconditional `plt.close(fig_overview)` then raised
+  `UnboundLocalError` whenever `selected_rois` was empty — reachable now that
+  the FOV guard skips active-ROI generation on gold-less/degenerate data. The
+  local import is removed; `plt` resolves to the module-level import.
+  (`analyse.py`)
+- **`identify` retries through picasso's `settings.yaml` write race under
+  MPI.** picasso's `identify_async` rewrites the shared
+  `~/.picasso/settings.yaml` with `os.replace(tmp, settings)` at startup;
+  parallel MPI ranks race on that rename and one loses with
+  `FileNotFoundError: …/settings.yaml.tmp -> …/settings.yaml`, failing a single
+  dataset mid-aggregation. The `identify` module now retries a few times with a
+  short backoff (the save precedes the heavy work, so a retry is cheap).
+  (`analyse.py`)
+- **`render` survives a localization set with no finite extent.** When a prior
+  filter (e.g. `find_gold` on gold-less data) left the render with non-finite
+  `x`/`y` bounds, the active-ROI grid asked `np.arange` for a nan/inf-length
+  axis and crashed with `ValueError: arange: cannot compute length`. It now
+  skips active-ROI generation (with a warning) when the FOV spans no finite
+  area. (`analyse.py`)
+- **Workflow modules survive empty/degenerate localization sets.** Three
+  library crashes that aborted whole workflow runs on sparse real data are now
+  handled gracefully: `filter_locs`' heatmap reporting hit `np.ptp([])` /
+  `array.max()` on a field with no finite rows (`plot_1dhist` / `plot_2dhist`
+  now annotate "no finite data" and return); `render`'s contrast scaler raised
+  `min() arg is an empty sequence` when every rendered image was all-zero
+  (`scale_contrast` now falls back to a unit scale, leaving the zero image
+  untouched); and `undrift_from_picked` raised a cryptic `KeyError: 'group'`
+  when handed picks with no `group` column (e.g. `find_gold` found 0 beads) —
+  it now fails with an actionable message pointing at the missing fiducials.
+  (`outpost/reporting/histograms.py`, `outpost/render/render.py`, `analyse.py`)
+- **`filter_locs` / `filter_transient_binding` Confluence reporting survives a
+  filter that removes everything.** The "% removed" line divided by
+  `nlocs_before`, so a filter step entering with zero localizations (e.g. a
+  prior filter already emptied the set) aborted the whole dataset with
+  `ZeroDivisionError`. Both reporters now report `0.0%` instead of crashing.
+  (`confluence.py`)
+
 ## [0.7.1] - 2026-11-18
 
 ### Added
@@ -51,6 +175,17 @@ This file was started after v0.5.6; earlier history is in the git log.
   cancelled, not just the current run's. (`admin/qt.py`)
 
 ### Fixed
+- **Workflow modules survive empty/degenerate localization sets.** Three
+  library crashes that aborted whole workflow runs on sparse real data are now
+  handled gracefully: `filter_locs`' heatmap reporting hit `np.ptp([])` /
+  `array.max()` on a field with no finite rows (`plot_1dhist` / `plot_2dhist`
+  now annotate "no finite data" and return); `render`'s contrast scaler raised
+  `min() arg is an empty sequence` when every rendered image was all-zero
+  (`scale_contrast` now falls back to a unit scale, leaving the zero image
+  untouched); and `undrift_from_picked` raised a cryptic `KeyError: 'group'`
+  when handed picks with no `group` column (e.g. `find_gold` found 0 beads) —
+  it now fails with an actionable message pointing at the missing fiducials.
+  (`outpost/reporting/histograms.py`, `outpost/render/render.py`, `analyse.py`)
 - **More cluster-image test fixes (read-only FS + Qt imports).** Follow-up to
   the read-only-`temp` and GUI-skip fixes, catching the stragglers surfaced by a
   full in-image run: `test_analyse`'s `undrift_from_picked` and

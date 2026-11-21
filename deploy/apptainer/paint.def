@@ -10,6 +10,14 @@ From: python:3.11-slim-bookworm
 # The .sif is a single file -- it avoids the inode blow-up a conda env causes on
 # an HPC home quota.
 #
+# This is a COMBINED CPU+GPU image: the GPU fitting stack (numba-cuda + the CUDA
+# toolkit wheels) is baked in unconditionally, so the one image runs both CPU
+# aggregation and GPU fits (spline-mle-gpu) on the cluster's GPU partitions
+# (jobs exec with `--nv`). It adds ~2-3 GB vs a CPU-only build. CPU-only runs
+# are unaffected -- GPU use stays gated by the driver / CUDA_VISIBLE_DEVICES.
+# NOTE: GPU *execution* cannot be validated by the GPU-less CI build (which only
+# proves the stack imports); smoke-test spline-mle-gpu on a GPU node after pull.
+#
 # ⚠️ BUMP THESE in %post when things move:
 #   PW_REF        -- picasso-workflow git ref. The picasso-1.0 migration (C47)
 #                    landed on `develop` 2026-10-28 (PR #77); PW_REF now tracks
@@ -20,7 +28,7 @@ From: python:3.11-slim-bookworm
 
 %labels
     org.opencontainers.image.title        DNA-PAINT cluster analysis (picasso 1.0)
-    org.opencontainers.image.description  picassosr 1.0 + picasso-workflow + registry client (C10 / WP-9 aggregation)
+    org.opencontainers.image.description  picassosr 1.0 + picasso-workflow + registry client + GPU fitting stack (C10 / WP-9 aggregation)
 
 %post
     set -eux
@@ -59,6 +67,28 @@ From: python:3.11-slim-bookworm
     python -m pip install --no-cache-dir --pre \
         "picasso-workflow${PW_EXTRAS} @ git+https://github.com/jungmannlab/picasso-workflow.git@${PW_REF}"
 
+    # --- GPU fitting stack (baked into this single combined image) ------------
+    # The cluster runs GPU fits (spline-mle-gpu / gaussmle-gpu, and the GPU CRLB
+    # path used even by the CPU spline-mle) on its GPU partitions; jobs
+    # `apptainer exec --nv` to expose the host NVIDIA DRIVER, while the CUDA
+    # TOOLKIT comes from these wheels INSIDE the image. picasso's CUDA code uses
+    # the standalone numba-cuda backend -- numba's bundled numba.cuda segfaults
+    # at CUDA-context creation on CUDA-13 drivers. This mirrors picasso-workflow's
+    # own `[gpu]` extra (numba-cuda + nvidia-cuda-runtime-cu12, whose libcudart
+    # makes `import numba.cuda` safe even on this GPU-less build runner) and ADDS
+    # nvidia-cuda-nvcc-cu12 (libNVVM) and nvidia-cuda-nvrtc-cu12 (libnvrtc) --
+    # both of which numba-cuda needs to JIT-compile the fit kernels at runtime
+    # (without libnvrtc the spline-mle-gpu kernel dies with
+    # `libnvrtc.so.12: No such file` the first time a GPU node compiles it; the
+    # GPU-less CI build can't catch this because it never JITs a kernel).
+    # CPU-only runs are unaffected: GPU use stays gated by the driver /
+    # --nv / CUDA_VISIBLE_DEVICES. (If upstream folds these into the [gpu]
+    # extra, drop them here.) The CUDA wheels are Linux x86_64/aarch64 only --
+    # which is why this stays explicit rather than a base dep.
+    python -m pip install --no-cache-dir \
+        numba-cuda nvidia-cuda-runtime-cu12 nvidia-cuda-nvcc-cu12 \
+        nvidia-cuda-nvrtc-cu12
+
     # registry client for the cluster write-back (WP-9). Pinned to v0.7.0 — the
     # first tag carrying the 0005/0005b cohort_metric_range + handoff migrations
     # Gate-5 needs (WP-7/WP-9). Keep this matched to the deployed service's tag
@@ -75,6 +105,10 @@ From: python:3.11-slim-bookworm
 %environment
     export QT_QPA_PLATFORM=offscreen
     export MPLBACKEND=Agg
+    # numba-cuda: drive the GPU via the NVIDIA python bindings and the
+    # pip-installed CUDA toolkit wheels (libcudart / libNVVM under
+    # site-packages/nvidia/*) rather than a system CUDA install.
+    export NUMBA_CUDA_USE_NVIDIA_BINDING=1
 
 %runscript
     exec python "$@"
@@ -85,3 +119,8 @@ From: python:3.11-slim-bookworm
     python -c "import picasso.version as v; print('picassosr', v.__version__)"
     python -c "from picasso_workflow.analyse import AutoPicasso; print('picasso_workflow import OK')"
     python -c "import picasso_registry.client; print('registry client OK')"
+    # numba-cuda must at least IMPORT cleanly in the built image (the runtime
+    # wheel ships libcudart, so this works on the GPU-less CI runner). Actual
+    # GPU execution (numba.cuda.is_available()) can only be validated on a GPU
+    # node -- run a spline-mle-gpu smoke test there before trusting the image.
+    python -c "from numba import cuda; print('numba.cuda import OK')"
