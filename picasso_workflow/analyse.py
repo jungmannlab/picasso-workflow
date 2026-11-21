@@ -1212,13 +1212,17 @@ class AutoPicasso(
         """The wired abort callback, or None (picasso treats None as no-op)."""
         return self._abort_callback
 
-    def _cuda_runtime_available(self):
-        """True if a CUDA GPU is visible in this process.
+    def _cuda_context_live(self):
+        """True if a CUDA context has actually been initialised this process.
 
-        Used to default fork-based multiprocessing OFF on GPU runs: forking a
-        worker pool after a live CUDA context (e.g. after a ``spline-mle-gpu``
-        fit) can deadlock the child. Returns False on CPU-only nodes and
-        whenever the check cannot be made, so CPU behaviour is unchanged.
+        Forking a worker pool *after* a live CUDA context (e.g. after a
+        ``spline-mle-gpu`` fit) can deadlock the child, so callers default
+        fork-based multiprocessing OFF when this is True. It keys off context
+        *liveness* (``numba.cuda.is_initialized()``), not mere GPU
+        *visibility*, so a CPU-only workflow that merely runs on a GPU node
+        (or interactively with ``--nv``) is not needlessly serialised.
+        Returns False on CPU-only nodes and whenever the check cannot be made,
+        so CPU behaviour is unchanged.
 
         Returns
         -------
@@ -1227,7 +1231,7 @@ class AutoPicasso(
         try:
             from numba import cuda
 
-            return bool(cuda.is_available())
+            return bool(cuda.is_initialized())
         except Exception:
             return False
 
@@ -4987,11 +4991,14 @@ class AutoPicasso(
         )
         # The cluster count is the dominant cost driver for a downstream
         # gaussian_mixture_cluster (g5m fits a GMM per cluster); log it so a
-        # later slow/stuck GMM is diagnosable instead of a silent hang.
-        n_clusters = int(len(np.unique(self.locs["group"])))
+        # later slow/stuck GMM is diagnosable instead of a silent hang. Reused
+        # below for the cluster-size histogram (one pass over "group").
+        cluster_groups, cluster_counts = np.unique(
+            self.locs["group"], return_counts=True
+        )
         logger.info(
-            f"dbscan: produced {n_clusters} clusters from {n_locs_in} "
-            "localizations (continue_with_centers="
+            f"dbscan: produced {len(cluster_groups)} clusters from "
+            f"{n_locs_in} localizations (continue_with_centers="
             f"{parameters.get('continue_with_centers')})."
         )
         dbscan_info = dict(_dbscan_info[-1])
@@ -5002,11 +5009,10 @@ class AutoPicasso(
         # )
         # self._save_locs(results["fp_locs"])
 
-        # plot: histogram of cluster sizes
+        # plot: histogram of cluster sizes (reuse the counts from above)
         fig, ax = plt.subplots()
-        uniques, counts = np.unique(self.locs["group"], return_counts=True)
-        maxbin = int(np.quantile(counts, 0.95))
-        ax.hist(counts, bins=np.arange(maxbin))
+        maxbin = int(np.quantile(cluster_counts, 0.95))
+        ax.hist(cluster_counts, bins=np.arange(maxbin))
         ax.set_xlabel("cluster size [locs]")
         ax.set_ylabel("Frequency")
         results["fp_fig_clustersizes"] = os.path.join(
@@ -7061,18 +7067,18 @@ class AutoPicasso(
         # dbscan cluster, so the cluster count predicts the runtime, and a
         # silent progress=None makes a long run indistinguishable from a hang.
         n_locs_in = len(self.locs)
+        # Count dbscan clusters by indexing "group" (works for both a pandas
+        # DataFrame -- picasso 1.0 -- and a numpy recarray; a DataFrame has no
+        # .dtype.names, which previously made this silently None on every run).
         try:
-            has_groups = "group" in self.locs.dtype.names
-        except (AttributeError, TypeError):
-            has_groups = False
-        n_groups = (
-            int(len(np.unique(self.locs["group"]))) if has_groups else None
-        )
+            n_groups = int(len(np.unique(self.locs["group"])))
+        except (KeyError, TypeError, ValueError, IndexError):
+            n_groups = None
         # Fork-based multiprocessing after a live CUDA context (GPU fitting)
-        # can deadlock; default parallel OFF on GPU runs. Still overridable via
-        # an explicit 'parallel' in the module parameters.
-        gpu_visible = self._cuda_runtime_available()
-        parallel_default = not gpu_visible
+        # can deadlock; default parallel OFF only when a CUDA context is
+        # actually live. Still overridable via an explicit 'parallel'.
+        cuda_live = self._cuda_context_live()
+        parallel_default = not cuda_live
         # Surface real intra-module progress instead of a silent 0%.
         progress_default = self._make_progress_proxy(
             total=(n_groups or n_locs_in),
@@ -7148,14 +7154,14 @@ class AutoPicasso(
 
         logger.info(
             f"gaussian_mixture_cluster: fitting {n_locs_in} localizations "
-            f"in {n_groups} dbscan cluster(s); GPU visible={gpu_visible}, "
+            f"in {n_groups} dbscan cluster(s); CUDA context live={cuda_live}, "
             f"parallel={kwargs.get('parallel')}, "
             f"min_locs={kwargs.get('min_locs')}."
         )
-        if gpu_visible and kwargs.get("parallel"):
+        if cuda_live and kwargs.get("parallel"):
             logger.warning(
-                "gaussian_mixture_cluster: parallel=True while a CUDA GPU is "
-                "visible -- a multiprocessing fork after the CUDA context can "
+                "gaussian_mixture_cluster: parallel=True with a live CUDA "
+                "context -- a multiprocessing fork after the CUDA context can "
                 "deadlock. Set 'parallel': False for this module if it hangs."
             )
 
@@ -7203,24 +7209,15 @@ class AutoPicasso(
         results["g5m_args"] = str(kwargs)
 
         # picasso 1.0 returns (centers, info, clustered_locs) -- the info and
-        # the clustered locs swapped order relative to 0.11. A progress object
-        # that g5m's version does not accept must never abort the fit, so fall
-        # back to no intra-module progress on an interface mismatch.
-        try:
-            center_locs, gmm_info, clustered_locs = g5m.g5m(
-                self.locs, self.info, **kwargs
-            )
-        except (AttributeError, TypeError) as e:
-            if kwargs.get("progress") is None:
-                raise
-            logger.warning(
-                "gaussian_mixture_cluster: g5m did not accept the progress "
-                f"proxy ({e}); retrying without intra-module progress."
-            )
-            kwargs["progress"] = None
-            center_locs, gmm_info, clustered_locs = g5m.g5m(
-                self.locs, self.info, **kwargs
-            )
+        # the clustered locs swapped order relative to 0.11. The progress proxy
+        # satisfies picasso's progress contract (it implements set_value /
+        # setMaximum, which lib.normalize_progress accepts), so it is passed
+        # straight through: wrapping this multi-hour call in a broad
+        # AttributeError/TypeError catch would mislabel a genuine in-fit error
+        # as a progress mismatch and silently re-run the whole fit.
+        center_locs, gmm_info, clustered_locs = g5m.g5m(
+            self.locs, self.info, **kwargs
+        )
 
         # picasso.g5m returns (None, info, None) when no molecules are found,
         # and an empty centers table when its postprocess filters remove them
