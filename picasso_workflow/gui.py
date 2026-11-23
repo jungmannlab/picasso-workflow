@@ -17777,6 +17777,119 @@ class Window(QtWidgets.QMainWindow):
                 )
         return ""
 
+    def _dataset_movie_paths(self):
+        """Local (un-host-converted) movie paths named by the current GUI.
+
+        Collected the same way :meth:`create_python_script` builds the
+        ``datasets`` dict, so the bound directories match the script. Single
+        Workflow auto-detect / no-input modes return an empty list (their
+        inputs are discovered under the already-bound results folder).
+
+        Returns
+        -------
+        list of str
+            Movie file paths, in first-seen order.
+        """
+        if self.workflow_type.currentIndex() == 0:  # Single Workflow
+            if self.files_mode_combo.currentIndex() != 0:
+                return []  # 1 = auto-detect, 2 = no input files
+            paths = []
+            for row in range(self.files_table.rowCount()):
+                path_item = self.files_table.item(row, 1)
+                if path_item and path_item.text():
+                    paths.append(path_item.text())
+            return paths
+        # Aggregation / Investigation: tree file_paths
+        return [
+            fp
+            for dataset in self.tree_data["datasets"]
+            for channel in self.tree_data["channels"]
+            if (fp := self.tree_data["file_paths"][dataset].get(channel, ""))
+        ]
+
+    def _input_data_bind_dirs(self, host_cluster):
+        """Host-side directories of every external input file the run reads.
+
+        A cluster run executes ``start_workflow.py`` INSIDE an Apptainer
+        image, which only sees host paths that are explicitly ``--bind``-ed.
+        Besides the movies, a workflow may read other data files named in
+        module parameters -- a 3D-calibration YAML, a mask, a SPINNA
+        structures file, ... -- all living outside the (already-bound) results
+        folder. Each one's directory must be bound or the containerized module
+        fails with ``FileNotFoundError``. Return the host-converted parent
+        directory of every such input (first-seen order, de-duplicated) so the
+        caller can add them to the ``--bind`` list.
+
+        Movies are always included (they are the primary input, so this also
+        covers data mounted only on the run host). Path-like module-parameter
+        values are included only when they exist on the generating machine, so
+        a relative output filename (e.g. ``locs.hdf5``) or a typo never
+        becomes an ``--bind`` of a non-existent directory (which Apptainer
+        rejects); skipped ones are logged.
+
+        Parameters
+        ----------
+        host_cluster : str or None
+            Passed to the path parser to convert local paths for the run host.
+
+        Returns
+        -------
+        list of str
+            Host-side input directories, in first-seen order, de-duplicated.
+        """
+        exts = (".yaml", ".hdf5", ".h5", ".tif", ".png", ".jpg")
+
+        def collect_path_likes(value, out):
+            """Append path-like string leaves of ``value`` (recursive)."""
+            if isinstance(value, str):
+                if "/" in value or "\\" in value or value.endswith(exts):
+                    out.append(value)
+            elif isinstance(value, dict):
+                for v in value.values():
+                    collect_path_likes(v, out)
+            elif isinstance(value, (list, tuple)):
+                for v in value:
+                    collect_path_likes(v, out)
+
+        def strip_quotes(path):
+            if len(path) >= 2 and path[0] in "'\"" and path[-1] == path[0]:
+                return path[1:-1]
+            return path
+
+        dirs = []
+
+        def add_dir(path):
+            host = self.pathparser.convert_path(path, host_cluster)
+            parent = os.path.dirname(host.rstrip("/"))
+            if parent and parent not in dirs:
+                dirs.append(parent)
+
+        # Movies: bound unconditionally.
+        for path in self._dataset_movie_paths():
+            path = strip_quotes(path)
+            if path:
+                add_dir(path)
+
+        # Other path-like module parameters: bound only if present locally.
+        aux_paths = []
+        for modules in (
+            self.single_workflow_modules,
+            self.aggregation_workflow_modules,
+        ):
+            for _name, params in modules or []:
+                collect_path_likes(params, aux_paths)
+        for path in aux_paths:
+            path = strip_quotes(path)
+            if not path:
+                continue
+            if os.path.exists(path):
+                add_dir(path)
+            else:
+                logger.debug(
+                    f"input path not found locally; not binding: {path}"
+                )
+        return dirs
+
     def assemble_slurm_scripts(self):
         host_cluster = str(self.cluster_host_combo.currentText())  # "hpcl8XXX"
         login_node = CONFIG["SlurmLoginNodes"][host_cluster]  # "hpcl8001"
@@ -17905,6 +18018,21 @@ class Window(QtWidgets.QMainWindow):
             for b in bind_paths
         ):
             bind_paths = bind_paths + [results_bind]
+
+        # Also bind every directory that holds an input the run reads (the
+        # dataset movies plus any data file named in a module parameter, e.g.
+        # a 3D-calibration YAML or a mask). These live outside the results
+        # folder, so without an explicit bind they are invisible inside the
+        # Apptainer container and the module fails with FileNotFoundError. Use
+        # the same "skip if already covered" rule as the results bind.
+        for input_bind in self._input_data_bind_dirs(host_cluster):
+            input_bind = input_bind.rstrip("/")
+            if input_bind and not any(
+                input_bind == b.rstrip("/")
+                or input_bind.startswith(b.rstrip("/") + "/")
+                for b in bind_paths
+            ):
+                bind_paths = bind_paths + [input_bind]
 
         cpu_only = self.cluster_cpu_only_check.isChecked()
         commands = self.slurm_communicator.assemble_slurm_commands(
