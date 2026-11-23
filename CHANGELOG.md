@@ -10,6 +10,8 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-11-23
+
 ### Fixed
 - **Cluster runs no longer fail with `FileNotFoundError` on input data that
   lives outside the results folder.** The GUI's SLURM generator
