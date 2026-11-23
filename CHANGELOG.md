@@ -10,7 +10,25 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ## [Unreleased]
 
-## [0.8.0] - 2026-11-21
+## [0.8.1] - 2026-11-23
+
+### Fixed
+- **Cluster runs no longer fail with `FileNotFoundError` on input data that
+  lives outside the results folder.** The GUI's SLURM generator
+  (`assemble_slurm_scripts`) bound the results folder into the Apptainer image
+  but never the directories holding the run's *inputs*, so a containerized
+  module could not see them. With Micro-Manager data this meant every single
+  dataset failed at module 1 `load_dataset_movie` (the acquisition folders
+  `.../Origami_4plex/<acq>_1/...` were invisible inside the container). The
+  generator now also `--bind`s the host-side parent directory of every input
+  the run reads — the dataset movies (always) plus any path-like
+  module-parameter value that exists locally (a 3D-calibration YAML, a mask, a
+  SPINNA structures file, …) — de-duplicated and skipped when already covered
+  by an existing bind. Movies bind unconditionally so data mounted only on the
+  run host is still covered; a path-like parameter that is not a real local
+  file (a relative output name, a typo) is not bound, so Apptainer never
+  rejects a non-existent `--bind`. New helpers `_input_data_bind_dirs` /
+  `_dataset_movie_paths`. (`gui.py`)
 
 ### Fixed
 - **Code-review follow-ups to the clustering diagnostics.** The GMM cluster-count diagnostic was dead on every real run (`self.locs` is a pandas DataFrame, which has no `.dtype.names`), so it logged `in None dbscan cluster(s)`; it now counts groups by indexing `"group"` (works for DataFrame and recarray). The `parallel` default now keys off a *live* CUDA context (`numba.cuda.is_initialized()`) rather than mere GPU visibility, so a CPU-only workflow on a GPU node is no longer serialised. Removed a broad `AttributeError/TypeError` wrapper around the multi-hour `g5m` call that could mislabel a genuine in-fit error as a progress mismatch and silently re-run the whole fit (the proxy is contract-compatible). Deduplicated a double `np.unique` over the cluster labels in `dbscan`. (`analyse.py`)
