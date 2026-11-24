@@ -441,6 +441,29 @@ class SlurmCommunicator:
         if cpu_only:
             commands.append('export CUDA_VISIBLE_DEVICES=""')
 
+        # Redirect numba's on-disk cache (and matplotlib's config) under the
+        # user's home for containerized runs. picasso compiles
+        # @numba.njit(cache=True) functions whose cache numba writes next to
+        # the package in site-packages by default -- read-only inside the
+        # Apptainer image, so the write fails and the import / first call
+        # errors out. $HOME is mounted into the container; exporting here (and
+        # relying on Apptainer passing the host env through, like the exports
+        # above) puts the value in the environment BEFORE numba is imported.
+        # That ordering matters: start_workflow.py imports picasso -- hence
+        # numba -- before picasso_workflow, so the in-process fallback in
+        # picasso_workflow._env.configure_numba_cache would be too late here.
+        if containerized:
+            commands.append(
+                'mkdir -p "$HOME/.picasso_workflow/numba_cache" '
+                '"$HOME/.picasso_workflow/mpl"'
+            )
+            commands.append(
+                'export NUMBA_CACHE_DIR="$HOME/.picasso_workflow/numba_cache"'
+            )
+            commands.append(
+                'export MPLCONFIGDIR="$HOME/.picasso_workflow/mpl"'
+            )
+
         # Host-conda env wiring (PATH/LD_LIBRARY_PATH/PYTHONPATH + CONDA_*).
         # Skipped for containerized runs: the interpreter and its sys.path come
         # from the image, so these host-env tweaks would be meaningless (or

@@ -10,6 +10,24 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ## [Unreleased]
 
+### Fixed
+- **picasso import / numba no longer fails on a shared or read-only install.**
+  picasso's `@numba.njit(cache=True)` functions write their compiled cache next
+  to the package in `site-packages` by default; where that is not user-writable
+  — an all-users Windows install under `C:\ProgramData` launched by a non-admin
+  user, or the read-only Apptainer image on the cluster — the write fails and
+  import / first call errors out. `picasso_workflow/__init__.py` now redirects
+  `NUMBA_CACHE_DIR` to `~/.picasso_workflow/numba_cache` (per-user writable)
+  *before* picasso/numba is imported, via `_env.configure_numba_cache()`. Only
+  set when unset (an explicit override still wins) and only when the directory
+  can be created, so it never points numba at an unusable path. On the cluster
+  the generated SLURM script also exports `NUMBA_CACHE_DIR` / `MPLCONFIGDIR`
+  under `$HOME` (mounted into the container) before the run, since
+  `start_workflow.py` imports picasso -- and therefore numba -- before
+  `picasso_workflow`, making the in-process fallback too late there.
+  (`picasso_workflow/_env.py`, `picasso_workflow/__init__.py`,
+  `picasso_workflow/slurm_submit.py`)
+
 ## [0.8.1] - 2026-11-23
 
 ### Fixed

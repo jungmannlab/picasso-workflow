@@ -199,6 +199,38 @@ def test_containerized_run_wraps_in_apptainer_exec():
     assert "export PYTHONFAULTHANDLER=1" in cmds
 
 
+def test_containerized_run_redirects_numba_cache():
+    # Inside the read-only image numba cannot write its default cache next to
+    # the package; the run must redirect it (and matplotlib's config) under the
+    # user's home, set BEFORE numba is imported (inherited into the container).
+    cmds = _comm().assemble_slurm_commands(
+        "hpcl8XXX",
+        image_path="/sw/pw/x.sif",
+        bind_paths=["/scratch/paint"],
+    )
+    assert (
+        'export NUMBA_CACHE_DIR="$HOME/.picasso_workflow/numba_cache"' in cmds
+    )
+    assert 'export MPLCONFIGDIR="$HOME/.picasso_workflow/mpl"' in cmds
+    # the dirs are created before use
+    assert any(c.startswith("mkdir -p") and "numba_cache" in c for c in cmds)
+    # and the export precedes the apptainer run (so numba sees it)
+    run_i = next(
+        i for i, c in enumerate(cmds) if c.startswith("srun apptainer exec")
+    )
+    nb_i = cmds.index(
+        'export NUMBA_CACHE_DIR="$HOME/.picasso_workflow/numba_cache"'
+    )
+    assert nb_i < run_i
+
+
+def test_host_conda_run_does_not_redirect_numba_cache():
+    # Host-conda runs use the user's own (writable) env; no redirect needed.
+    cmds = _comm().assemble_slurm_commands("hpcl8XXX", image_path=None)
+    assert not any("NUMBA_CACHE_DIR" in c for c in cmds)
+    assert not any("MPLCONFIGDIR" in c for c in cmds)
+
+
 def test_containerized_run_omits_host_conda_wiring():
     cmds = _comm().assemble_slurm_commands(
         "hpcl8XXX",
