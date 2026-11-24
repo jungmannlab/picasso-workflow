@@ -12,9 +12,23 @@ import sys
 import yaml
 from pathlib import Path
 import importlib.resources
-from picasso_workflow.workflow import WorkflowRunner, AggregationWorkflowRunner
-from picasso_workflow import standard_singledataset_workflows
-from picasso_workflow import standard_aggregation_workflows
+
+# Redirect numba's on-disk cache to a per-user writable directory BEFORE the
+# import below pulls in picasso (and, through it, numba). On a shared/read-only
+# install numba cannot write its default cache next to the package. See
+# picasso_workflow._env.configure_numba_cache.
+from picasso_workflow._env import configure_numba_cache
+
+configure_numba_cache()
+
+# These pull in picasso/numba; kept below configure_numba_cache() on purpose
+# (E402 is expected -- the cache dir must be set first).
+from picasso_workflow.workflow import (  # noqa: E402
+    WorkflowRunner,
+    AggregationWorkflowRunner,
+)
+from picasso_workflow import standard_singledataset_workflows  # noqa: E402
+from picasso_workflow import standard_aggregation_workflows  # noqa: E402
 
 # Runtime diagnostics captured during import (logging destination, .env and
 # config.yaml sources). Populated by config_logger() / _log_dotenv() /

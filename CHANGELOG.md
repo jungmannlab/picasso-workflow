@@ -10,6 +10,57 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ## [Unreleased]
 
+## [0.8.2] - 2026-11-24
+
+### Fixed
+- **Windows multi-user / server install no longer fails with "Failed to run
+  post-install script".** The installer's base environment was pinned to
+  Python 3.10, but the wheel requires `>=3.11` (and `picassosr` is
+  `>=3.11,<3.15`), so the post-install `pip install` aborted with "Package
+  'picasso-workflow' requires a different Python". The base env is now
+  `python=3.12`. Separately, an all-users install (prefix under
+  `%ALLUSERSPROFILE%`, e.g. `C:\ProgramData`) now creates its Start Menu /
+  Desktop shortcuts in the **common** (all-users) folders so every account
+  sees them, instead of only the installing admin's profile.
+  (`release/construct.yaml`, `release/post_install.bat`)
+- **Windows: the app icon now shows on the taskbar and on the installed
+  shortcuts.** Two gaps: (1) the running GUI set `setWindowIcon` but never a
+  Windows *AppUserModelID*, so the taskbar button inherited the launching
+  `wscript.exe`/`pythonw.exe` icon — `gui.main()` now pins an explicit id
+  (`org.jungmannlab.picasso-workflow`, matching the macOS bundle id) before the
+  first window is created. (2) `post_install.bat` set the shortcut
+  `IconLocation` without the `,0` icon index, which `WshShortcut` applies
+  unreliably (silently falling back to the target's icon); it now appends the
+  index. The icon artwork (`picasso-workflow.ico`, multi-size to 256px) was
+  already shipped and wired; these make it actually render.
+  (`gui.py`, `release/post_install.bat`)
+- **picasso import / numba no longer fails on a shared or read-only install.**
+  picasso's `@numba.njit(cache=True)` functions write their compiled cache next
+  to the package in `site-packages` by default; where that is not user-writable
+  — an all-users Windows install under `C:\ProgramData` launched by a non-admin
+  user, or the read-only Apptainer image on the cluster — the write fails and
+  import / first call errors out. `picasso_workflow/__init__.py` now redirects
+  `NUMBA_CACHE_DIR` to `~/.picasso_workflow/numba_cache` (per-user writable)
+  *before* picasso/numba is imported, via `_env.configure_numba_cache()`. Only
+  set when unset (an explicit override still wins) and only when the directory
+  can be created, so it never points numba at an unusable path. On the cluster
+  the generated SLURM script also exports `NUMBA_CACHE_DIR` / `MPLCONFIGDIR`
+  under `$HOME` (mounted into the container) before the run, since
+  `start_workflow.py` imports picasso -- and therefore numba -- before
+  `picasso_workflow`, making the in-process fallback too late there.
+  (`picasso_workflow/_env.py`, `picasso_workflow/__init__.py`,
+  `picasso_workflow/slurm_submit.py`)
+- **Render tab no longer crashes on load with `AttributeError: 'View' object
+  has no attribute 'viewport'`.** picasso's embedded Render `View` (through
+  `picassosr` 1.0.0rc1) sets `self.viewport` only on its first draw, but locs
+  load on a background thread; a `resizeEvent` arriving after the locs populate
+  but before that first draw calls `update_scene` / `update_scene_slicer`,
+  which read the not-yet-set `self.viewport`. `render_tab` now installs an
+  idempotent, version-tolerant guard (`_patch_render_view_viewport`) before any
+  `View` is built: the wrapped methods seed the full field of view
+  (`full_fov_viewport`) when the viewport is still unset. The durable fix is
+  upstream in jungmannlab/picasso. (`render_tab.py`)
+
 ## [0.8.1] - 2026-11-23
 
 ### Fixed
@@ -29,6 +80,8 @@ This file was started after v0.5.6; earlier history is in the git log.
   file (a relative output name, a typo) is not bound, so Apptainer never
   rejects a non-existent `--bind`. New helpers `_input_data_bind_dirs` /
   `_dataset_movie_paths`. (`gui.py`)
+
+## [0.8.0] - 2026-11-21
 
 ### Fixed
 - **Code-review follow-ups to the clustering diagnostics.** The GMM cluster-count diagnostic was dead on every real run (`self.locs` is a pandas DataFrame, which has no `.dtype.names`), so it logged `in None dbscan cluster(s)`; it now counts groups by indexing `"group"` (works for DataFrame and recarray). The `parallel` default now keys off a *live* CUDA context (`numba.cuda.is_initialized()`) rather than mere GPU visibility, so a CPU-only workflow on a GPU node is no longer serialised. Removed a broad `AttributeError/TypeError` wrapper around the multi-hour `g5m` call that could mislabel a genuine in-fit error as a progress mismatch and silently re-run the whole fit (the proxy is contract-compatible). Deduplicated a double `np.unique` over the cluster labels in `dbscan`. (`analyse.py`)
