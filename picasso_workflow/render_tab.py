@@ -21,6 +21,7 @@ Author: Heinrich Grabmayr
 
 from __future__ import annotations
 
+import functools
 import os
 
 from loguru import logger
@@ -98,6 +99,61 @@ def enumerate_locs_files(run_folder: str) -> list[tuple[str, str]]:
             label = os.path.relpath(path, run_folder)
             found.append((label, path))
     return sorted(found)
+
+
+def _patch_render_view_viewport(picasso_render) -> None:
+    """Guard picasso Render's ``View.viewport`` against an early resize.
+
+    picasso's ``View`` (through ``picassosr`` 1.0.0rc1) assigns
+    ``self.viewport`` only during its first full draw, but localizations load
+    on a background thread. A ``resizeEvent`` that arrives after the locs
+    populate (``n_channels`` > 0) yet before that first draw calls
+    ``update_scene`` / ``update_scene_slicer``, which read ``self.viewport``
+    and raise ``AttributeError: 'View' object has no attribute 'viewport'`` --
+    crashing the embedded Render tab right as data is loaded.
+
+    Idempotently wrap those two methods so an unset viewport falls back to the
+    full field of view (``full_fov_viewport``, derived from the loaded locs)
+    before the original runs -- exactly what the first ``fit_in_view`` would
+    have set. Best-effort and version-tolerant: a ``View`` without these
+    methods, or a future picassosr that initialises the attribute itself,
+    makes this a harmless no-op. The durable fix lives upstream in
+    jungmannlab/picasso.
+
+    Parameters
+    ----------
+    picasso_render : module
+        The imported ``picasso.gui.render`` module to patch in place.
+    """
+    View = getattr(picasso_render, "View", None)
+    if View is None or getattr(View, "_pwf_viewport_guarded", False):
+        return
+    # A class-level default means any stray read before the first draw
+    # returns None rather than raising AttributeError.
+    if "viewport" not in vars(View):
+        View.viewport = None
+
+    def _ensure_viewport(view) -> None:
+        if getattr(view, "viewport", None) is None and getattr(
+            view, "n_channels", 0
+        ):
+            try:
+                view.viewport = view.full_fov_viewport()
+            except Exception as e:  # pragma: no cover - defensive
+                logger.debug(f"Could not seed Render viewport: {e}")
+
+    for name in ("update_scene", "update_scene_slicer"):
+        original = getattr(View, name, None)
+        if original is None:
+            continue
+
+        @functools.wraps(original)
+        def guarded(self, *args, _orig=original, **kwargs):
+            _ensure_viewport(self)
+            return _orig(self, *args, **kwargs)
+
+        setattr(View, name, guarded)
+    View._pwf_viewport_guarded = True
 
 
 class RenderTab(QtWidgets.QWidget):
@@ -371,6 +427,9 @@ class RenderTab(QtWidgets.QWidget):
         try:
             from picasso.gui import render as picasso_render
 
+            # Guard against picasso's early-resize viewport crash before any
+            # View is built (see _patch_render_view_viewport).
+            _patch_render_view_viewport(picasso_render)
             self._teardown_render_window()
             window = picasso_render.Window()
             view = window.view

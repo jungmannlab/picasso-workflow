@@ -32,6 +32,32 @@ This file was started after v0.5.6; earlier history is in the git log.
   index. The icon artwork (`picasso-workflow.ico`, multi-size to 256px) was
   already shipped and wired; these make it actually render.
   (`gui.py`, `release/post_install.bat`)
+- **picasso import / numba no longer fails on a shared or read-only install.**
+  picasso's `@numba.njit(cache=True)` functions write their compiled cache next
+  to the package in `site-packages` by default; where that is not user-writable
+  — an all-users Windows install under `C:\ProgramData` launched by a non-admin
+  user, or the read-only Apptainer image on the cluster — the write fails and
+  import / first call errors out. `picasso_workflow/__init__.py` now redirects
+  `NUMBA_CACHE_DIR` to `~/.picasso_workflow/numba_cache` (per-user writable)
+  *before* picasso/numba is imported, via `_env.configure_numba_cache()`. Only
+  set when unset (an explicit override still wins) and only when the directory
+  can be created, so it never points numba at an unusable path. On the cluster
+  the generated SLURM script also exports `NUMBA_CACHE_DIR` / `MPLCONFIGDIR`
+  under `$HOME` (mounted into the container) before the run, since
+  `start_workflow.py` imports picasso -- and therefore numba -- before
+  `picasso_workflow`, making the in-process fallback too late there.
+  (`picasso_workflow/_env.py`, `picasso_workflow/__init__.py`,
+  `picasso_workflow/slurm_submit.py`)
+- **Render tab no longer crashes on load with `AttributeError: 'View' object
+  has no attribute 'viewport'`.** picasso's embedded Render `View` (through
+  `picassosr` 1.0.0rc1) sets `self.viewport` only on its first draw, but locs
+  load on a background thread; a `resizeEvent` arriving after the locs populate
+  but before that first draw calls `update_scene` / `update_scene_slicer`,
+  which read the not-yet-set `self.viewport`. `render_tab` now installs an
+  idempotent, version-tolerant guard (`_patch_render_view_viewport`) before any
+  `View` is built: the wrapped methods seed the full field of view
+  (`full_fov_viewport`) when the viewport is still unset. The durable fix is
+  upstream in jungmannlab/picasso. (`render_tab.py`)
 
 ## [0.8.1] - 2026-11-23
 
