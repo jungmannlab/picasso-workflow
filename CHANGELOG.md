@@ -27,6 +27,16 @@ This file was started after v0.5.6; earlier history is in the git log.
   `picasso_workflow`, making the in-process fallback too late there.
   (`picasso_workflow/_env.py`, `picasso_workflow/__init__.py`,
   `picasso_workflow/slurm_submit.py`)
+- **Render tab no longer crashes on load with `AttributeError: 'View' object
+  has no attribute 'viewport'`.** picasso's embedded Render `View` (through
+  `picassosr` 1.0.0rc1) sets `self.viewport` only on its first draw, but locs
+  load on a background thread; a `resizeEvent` arriving after the locs populate
+  but before that first draw calls `update_scene` / `update_scene_slicer`,
+  which read the not-yet-set `self.viewport`. `render_tab` now installs an
+  idempotent, version-tolerant guard (`_patch_render_view_viewport`) before any
+  `View` is built: the wrapped methods seed the full field of view
+  (`full_fov_viewport`) when the viewport is still unset. The durable fix is
+  upstream in jungmannlab/picasso. (`render_tab.py`)
 
 ## [0.8.1] - 2026-11-23
 
@@ -47,6 +57,8 @@ This file was started after v0.5.6; earlier history is in the git log.
   file (a relative output name, a typo) is not bound, so Apptainer never
   rejects a non-existent `--bind`. New helpers `_input_data_bind_dirs` /
   `_dataset_movie_paths`. (`gui.py`)
+
+## [0.8.0] - 2026-11-21
 
 ### Fixed
 - **Code-review follow-ups to the clustering diagnostics.** The GMM cluster-count diagnostic was dead on every real run (`self.locs` is a pandas DataFrame, which has no `.dtype.names`), so it logged `in None dbscan cluster(s)`; it now counts groups by indexing `"group"` (works for DataFrame and recarray). The `parallel` default now keys off a *live* CUDA context (`numba.cuda.is_initialized()`) rather than mere GPU visibility, so a CPU-only workflow on a GPU node is no longer serialised. Removed a broad `AttributeError/TypeError` wrapper around the multi-hour `g5m` call that could mislabel a genuine in-fit error as a progress mismatch and silently re-run the whole fit (the proxy is contract-compatible). Deduplicated a double `np.unique` over the cluster labels in `dbscan`. (`analyse.py`)
