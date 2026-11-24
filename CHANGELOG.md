@@ -10,6 +10,8 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ## [Unreleased]
 
+## [0.8.2] - 2026-11-24
+
 ### Fixed
 - **Windows multi-user / server install no longer fails with "Failed to run
   post-install script".** The installer's base environment was pinned to
