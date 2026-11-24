@@ -10,7 +10,17 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ## [Unreleased]
 
-## [0.8.1] - 2026-11-23
+### Fixed
+- **Render tab no longer crashes on load with `AttributeError: 'View' object
+  has no attribute 'viewport'`.** picasso's embedded Render `View` (through
+  `picassosr` 1.0.0rc1) sets `self.viewport` only on its first draw, but locs
+  load on a background thread; a `resizeEvent` arriving after the locs populate
+  but before that first draw calls `update_scene` / `update_scene_slicer`,
+  which read the not-yet-set `self.viewport`. `render_tab` now installs an
+  idempotent, version-tolerant guard (`_patch_render_view_viewport`) before any
+  `View` is built: the wrapped methods seed the full field of view
+  (`full_fov_viewport`) when the viewport is still unset. The durable fix is
+  upstream in jungmannlab/picasso. (`render_tab.py`)
 
 ### Fixed
 - **Cluster runs no longer fail with `FileNotFoundError` on input data that
