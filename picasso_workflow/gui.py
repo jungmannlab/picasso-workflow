@@ -19845,6 +19845,21 @@ def _app_icon():
 
 
 def main():
+    # Windows groups taskbar buttons by -- and shows the icon of -- the
+    # process's "AppUserModelID". Launched via the shortcut's wscript/pythonw
+    # host, the app otherwise inherits the host's generic icon on the taskbar
+    # even though setWindowIcon is set. Pin an explicit id BEFORE the first
+    # window is created so our own icon drives the taskbar button too. The id
+    # matches the macOS .app CFBundleIdentifier for consistency.
+    if sys.platform == "win32":
+        try:
+            import ctypes
+
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+                "org.jungmannlab.picasso-workflow"
+            )
+        except Exception:
+            pass
     app = QtWidgets.QApplication(sys.argv)
     app.setWindowIcon(_app_icon())
 

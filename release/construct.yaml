@@ -30,8 +30,12 @@ conda_default_channels:
 channels_remap: []
 
 # Minimal base env; everything else comes from PyPI in post_install.
+# Python MUST satisfy the wheel's `requires-python` (>=3.11) and picassosr
+# (>=3.11,<3.15): a 3.10 base makes the post_install `pip install` fail with
+# "Package 'picasso-workflow' requires a different Python", aborting the
+# install. 3.12 is within range and has wheels for the whole dependency tree.
 specs:
-  - python=3.10
+  - python=3.12
   - pip
 
 # --- Per-user, no-admin install (your Windows requirement) ----------------

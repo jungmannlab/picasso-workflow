@@ -11,6 +11,27 @@ This file was started after v0.5.6; earlier history is in the git log.
 ## [Unreleased]
 
 ### Fixed
+- **Windows multi-user / server install no longer fails with "Failed to run
+  post-install script".** The installer's base environment was pinned to
+  Python 3.10, but the wheel requires `>=3.11` (and `picassosr` is
+  `>=3.11,<3.15`), so the post-install `pip install` aborted with "Package
+  'picasso-workflow' requires a different Python". The base env is now
+  `python=3.12`. Separately, an all-users install (prefix under
+  `%ALLUSERSPROFILE%`, e.g. `C:\ProgramData`) now creates its Start Menu /
+  Desktop shortcuts in the **common** (all-users) folders so every account
+  sees them, instead of only the installing admin's profile.
+  (`release/construct.yaml`, `release/post_install.bat`)
+- **Windows: the app icon now shows on the taskbar and on the installed
+  shortcuts.** Two gaps: (1) the running GUI set `setWindowIcon` but never a
+  Windows *AppUserModelID*, so the taskbar button inherited the launching
+  `wscript.exe`/`pythonw.exe` icon — `gui.main()` now pins an explicit id
+  (`org.jungmannlab.picasso-workflow`, matching the macOS bundle id) before the
+  first window is created. (2) `post_install.bat` set the shortcut
+  `IconLocation` without the `,0` icon index, which `WshShortcut` applies
+  unreliably (silently falling back to the target's icon); it now appends the
+  index. The icon artwork (`picasso-workflow.ico`, multi-size to 256px) was
+  already shipped and wired; these make it actually render.
+  (`gui.py`, `release/post_install.bat`)
 - **picasso import / numba no longer fails on a shared or read-only install.**
   picasso's `@numba.njit(cache=True)` functions write their compiled cache next
   to the package in `site-packages` by default; where that is not user-writable
