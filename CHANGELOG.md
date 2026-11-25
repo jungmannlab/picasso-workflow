@@ -10,6 +10,25 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ## [Unreleased]
 
+### Fixed
+- **Doctor tab no longer falsely reports "no .env file".** The per-user
+  `.env` (`~/.config/picasso_workflow/.env`, where the GUI onboarding saves the
+  Confluence token) is auto-loaded at import, but the Doctor tab's `.env` row
+  was driven only by `find_dotenv()`, which scans upward from the installed
+  package directory and never sees that file. The tab now shows the per-user
+  `.env`'s expected path and whether it was found — so a saved token that *is*
+  loaded is no longer reported as missing — and only lists a separately
+  `find_dotenv()`-scanned file when it differs. (`__init__.py`, `doctor_tab.py`)
+
+### Changed
+- **The onboarding "Save token" step seeds a documented `.env`.** A brand-new
+  per-user `.env` is now written from a template that lists every environment
+  variable the package reads (Confluence operational/test connection vars and
+  the picasso-registry URL and token) grouped and commented out, so users can
+  discover and uncomment what they need. The token is filled in place; an existing `.env` is
+  never overwritten. The onboarding dialog also now shows the exact `.env` file
+  path. (`gui.py`)
+
 ## [0.8.2] - 2026-11-24
 
 ### Fixed

@@ -137,6 +137,7 @@ def collect_diagnostics() -> dict:
         "cluster": {"on_cluster": getattr(pw, "ON_CLUSTER", None)},
         "config_sources": diag.get("config_sources", []),
         "dotenv": diag.get("dotenv", {}),
+        "user_env": diag.get("user_env", {}),
         "logging": diag.get("logging", {}),
         "env": {name: _env_status(name) for name in _ENV_VARS},
         "confluence": {p: _confluence_summary(p) for p in _PROFILES},
@@ -702,11 +703,32 @@ class DoctorTab(QtWidgets.QWidget):
         else:
             parts.append("<i>no config sources recorded</i>")
 
-        dotenv = diag.get("dotenv") or {}
         parts.append("<h3>.env</h3><table>")
-        parts.append(self._row("path", dotenv.get("path") or "none found"))
-        if dotenv.get("keys"):
-            parts.append(self._row("keys defined", ", ".join(dotenv["keys"])))
+
+        def _keys_row(keys):
+            if keys:
+                parts.append(self._row("keys defined", ", ".join(keys)))
+
+        # The per-user .env is the file the GUI writes and the package loads at
+        # import; always show its expected path so the user knows where it
+        # belongs, whether or not it exists yet.
+        user_env = diag.get("user_env") or {}
+        user_path = user_env.get("path")
+        if user_path:
+            status = "found" if user_env.get("exists") else "not found"
+            parts.append(self._row("per-user .env", f"{user_path} [{status}]"))
+            _keys_row(user_env.get("keys"))
+        # find_dotenv() scans upward from the installed package dir; show it only
+        # when it located a *different* .env (e.g. a project-local one), to avoid
+        # a confusing duplicate row for the per-user file.
+        dotenv = diag.get("dotenv") or {}
+        scanned = dotenv.get("path")
+        if scanned and scanned != user_path:
+            parts.append(self._row("also loaded (scanned)", scanned))
+            _keys_row(dotenv.get("keys"))
+        elif not user_path:
+            parts.append(self._row("path", scanned or "none found"))
+            _keys_row(dotenv.get("keys"))
         parts.append("</table>")
 
         log = diag.get("logging") or {}
