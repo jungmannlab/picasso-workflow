@@ -10,6 +10,21 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ## [Unreleased]
 
+### Changed
+- **The wizard re-derives undrift-from-picked's picks in-workflow.** Instead of
+  pointing each reconstructed `undrift_from_picked` at the manual picked-locs
+  file, the wizard now inserts a `find_similar` (pick-similar) module just
+  before it — with the pick diameter and nlocs / rmsd thresholds
+  retro-calculated from that manual pick export — and undrifts from
+  `find_similar`'s own picks (`$get_previous_module_result`). The reconstructed
+  workflow is then self-contained (re-picks with the recovered settings) rather
+  than depending on the manual pick files; it falls back to the file wiring when
+  the thresholds can't be recovered. (`manual_to_workflow.py`)
+- **The wizard window can be sent behind the main GUI.** It opens as an
+  independent top-level window (`Qt.Window`) instead of a parented child dialog
+  that always floats on top, so the reconstructed steps can be tucked behind and
+  kept for comparison once applied. (`gui.py`)
+
 ## [0.8.4] - 2026-11-25
 
 ### Fixed
