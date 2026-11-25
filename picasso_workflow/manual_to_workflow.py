@@ -825,19 +825,15 @@ def _extract_undrift_rcc(step, pixelsize):
 
 
 def _extract_undrift_aim(step, pixelsize):
-    # picasso_undrift_aim takes intersectdist / roiradius in camera pixels;
-    # the info records them in nm.
+    # picasso_undrift_aim takes intersectdist / roiradius in nm, exactly as the
+    # info records them -- pass through directly.
     params = {}
     if "Segmentation" in step:
         params["segmentation"] = step["Segmentation"]
     if "Intersect distance (nm)" in step:
-        params["intersectdist"] = _px(
-            step["Intersect distance (nm)"], pixelsize
-        )
+        params["intersectdist"] = step["Intersect distance (nm)"]
     if "Search regions radius (nm)" in step:
-        params["roiradius"] = _px(
-            step["Search regions radius (nm)"], pixelsize
-        )
+        params["roiradius"] = step["Search regions radius (nm)"]
     return params
 
 
@@ -869,15 +865,15 @@ def _extract_density(step, pixelsize):
 
 
 def _extract_picasso_dbscan(step, pixelsize):
-    # picasso_dbscan config: radius in camera px (the module multiplies by
-    # pixelsize before calling picasso, which records "Radius (nm)"), and
-    # density = picasso's minimum local density (min_samples).
+    # picasso_dbscan config: radius in nm (picasso records "Radius (nm)"); a
+    # legacy px-tagged radius is converted to nm. density = picasso's minimum
+    # local density (min_samples).
     params = {}
     rad = _radius_value(step)
     if rad is not None:
         value, unit = rad
         params["radius"] = (
-            float(value) if unit == "px" else float(value) / pixelsize
+            float(value) if unit == "nm" else float(value) * pixelsize
         )
     if "Minimum local density" in step:
         params["density"] = step["Minimum local density"]

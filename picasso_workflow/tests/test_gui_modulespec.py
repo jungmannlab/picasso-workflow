@@ -321,7 +321,7 @@ def test_optional_param_without_default_starts_unset(window):
 
 def test_parameter_labels_show_units(window):
     """A spec-declared unit renders in the parameter label, e.g.
-    "intersectdist [px]", and survives the use-default label refresh."""
+    "intersectdist [nm]", and survives the use-default label refresh."""
     window.workflow_tabs.setCurrentIndex(0)
     window.single_workflow_modules.clear()
     window.single_workflow_list.clear()
@@ -330,15 +330,15 @@ def test_parameter_labels_show_units(window):
     window.on_module_changed("picasso_undrift_aim")
 
     pw = window.parameter_widgets
-    assert pw["intersectdist"].label.text() == "intersectdist [px]"
-    assert pw["roiradius"].label.text() == "roiradius [px]"
+    assert pw["intersectdist"].label.text() == "intersectdist [nm]"
+    assert pw["roiradius"].label.text() == "roiradius [nm]"
     assert pw["segmentation"].label.text() == "segmentation [frames]"
     # toggling default<->override keeps the unit in the label
     wi = pw["intersectdist"]
     window._apply_param_default_state(wi, False, persist=False)
-    assert wi.label.text() == "intersectdist [px]"
+    assert wi.label.text() == "intersectdist [nm]"
     window._apply_param_default_state(wi, True, persist=False)
-    assert wi.label.text() == "intersectdist [px]"
+    assert wi.label.text() == "intersectdist [nm]"
 
 
 def test_command_defaults_prefill_in_override_state(window):

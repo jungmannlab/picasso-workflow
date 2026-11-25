@@ -499,23 +499,23 @@ PICASSO_SET_PARAMS: dict[str, tuple[dict, dict]] = {
             },
             "intersectdist": {
                 "type": "float",
-                "unit": "px",
+                "unit": "nm",
                 "description": (
-                    "Max. distance (camera pixels) between localizations "
-                    "in consecutive segments to be considered intersecting "
+                    "Max. distance (nm) between localizations in consecutive "
+                    "segments to be considered intersecting "
                     "(CLI: --intersectdist)"
                 ),
-                "default": 20 / 130,
+                "default": 20,
                 "required": False,
             },
             "roiradius": {
                 "type": "float",
-                "unit": "px",
+                "unit": "nm",
                 "description": (
-                    "Max. drift (camera pixels) between two consecutive "
-                    "segments (CLI: --roiradius)"
+                    "Max. drift (nm) between two consecutive segments "
+                    "(CLI: --roiradius)"
                 ),
-                "default": 60 / 130,
+                "default": 60,
                 "required": False,
             },
         },
@@ -541,13 +541,13 @@ PICASSO_SET_PARAMS: dict[str, tuple[dict, dict]] = {
         {
             "distance": {
                 "type": "float",
-                "unit": "px",
+                "unit": "nm",
                 "description": (
-                    "Maximum distance (camera pixels) between "
-                    "localizations to consider them the same binding "
-                    "event (CLI: --distance)"
+                    "Maximum distance (nm) between localizations to "
+                    "consider them the same binding event "
+                    "(CLI: --distance)"
                 ),
-                "default": 1.0,
+                "default": 100,
                 "required": False,
             },
             "tolerance": {
@@ -591,10 +591,10 @@ PICASSO_SET_PARAMS: dict[str, tuple[dict, dict]] = {
         {
             "radius": {
                 "type": "float",
-                "unit": "px",
+                "unit": "nm",
                 "description": (
-                    "Maximum distance (camera pixels) for localizations "
-                    "to count as local (CLI: radius)"
+                    "Maximum distance (nm) for localizations to count "
+                    "as local (CLI: radius)"
                 ),
                 "min": 0.0,
                 "required": True,
@@ -612,19 +612,19 @@ PICASSO_SET_PARAMS: dict[str, tuple[dict, dict]] = {
         {
             "binsize": {
                 "type": "float",
-                "unit": "px",
-                "description": "The bin size in camera pixels (CLI: -b)",
-                "default": 0.1,
+                "unit": "nm",
+                "description": "The bin size in nm (CLI: -b)",
+                "default": 10,
                 "required": False,
             },
             "rmax": {
                 "type": "float",
-                "unit": "px",
+                "unit": "nm",
                 "description": (
-                    "The maximum distance for the pair-correlation "
+                    "The maximum distance (nm) for the pair-correlation "
                     "(CLI: -r)"
                 ),
-                "default": 10,
+                "default": 1000,
                 "required": False,
             },
         },
@@ -637,10 +637,10 @@ PICASSO_SET_PARAMS: dict[str, tuple[dict, dict]] = {
         {
             "radius": {
                 "type": "float",
-                "unit": "px",
+                "unit": "nm",
                 "description": (
-                    "Maximal distance (camera pixels) between two "
-                    "localizations to be considered local (CLI: radius)"
+                    "Maximal distance (nm) between two localizations to "
+                    "be considered local (CLI: radius)"
                 ),
                 "required": True,
             },
@@ -663,10 +663,10 @@ PICASSO_SET_PARAMS: dict[str, tuple[dict, dict]] = {
             },
             "radius_z": {
                 "type": "float",
-                "unit": "px",
+                "unit": "nm",
                 "description": (
-                    "DBSCAN epsilon in z (camera pixels); enables "
-                    "anisotropic 3D clustering (CLI: --radius_z)"
+                    "DBSCAN epsilon in z (nm); enables anisotropic 3D "
+                    "clustering (CLI: --radius_z)"
                 ),
                 "required": False,
             },
@@ -725,8 +725,8 @@ PICASSO_SET_PARAMS: dict[str, tuple[dict, dict]] = {
         {
             "radius": {
                 "type": "float",
-                "unit": "px",
-                "description": "Clustering radius in camera pixels",
+                "unit": "nm",
+                "description": "Clustering radius in nm",
                 "required": True,
             },
             "min_locs": {
@@ -756,10 +756,10 @@ PICASSO_SET_PARAMS: dict[str, tuple[dict, dict]] = {
             },
             "radius_z": {
                 "type": "float",
-                "unit": "px",
+                "unit": "nm",
                 "description": (
-                    "Clustering radius in axial direction (must be set "
-                    "for 3D)"
+                    "Clustering radius in axial direction, nm (must be "
+                    "set for 3D)"
                 ),
                 "required": False,
             },
@@ -993,9 +993,9 @@ PICASSO_SET_PARAMS: dict[str, tuple[dict, dict]] = {
             },
             "min_blur_width": {
                 "type": "float",
-                "unit": "px",
+                "unit": "nm",
                 "description": (
-                    "Minimum blur width if blur is applied "
+                    "Minimum blur width (nm) if blur is applied "
                     "(CLI: --min-blur-width)"
                 ),
                 "default": 0.0,

@@ -10,6 +10,24 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ## [Unreleased]
 
+### Changed
+- **BREAKING: `picasso_*` module spatial parameters are now in nm, matching
+  picasso itself.** picasso 1.0 takes these distances in nm, but the
+  picasso-set wrappers exposed them in camera pixels and converted internally.
+  They now expose nm directly (same units the user sees in picasso):
+  `picasso_undrift_aim.intersectdist`/`roiradius` (defaults 20/60),
+  `picasso_link.distance` (default 100), `picasso_density.radius`,
+  `picasso_pair_correlation.binsize`/`rmax` (defaults 10/1000),
+  `picasso_dbscan.radius`/`radius_z`, `picasso_smlm_cluster.radius`/`radius_z`,
+  and the render `min_blur_width`. **Existing workflow YAMLs that set these in
+  px must be updated to nm** (multiply the old px value by the camera pixel
+  size). The localization fit box (`box_side_length`/`roi`) and the
+  `picasso_mask_locs` `blur` stay in pixels (they are pixel-native in picasso).
+  The manual-to-workflow wizard now carries these through in nm. (The native
+  `link_locs` / `density` / `smlm_clusterer` modules are unchanged.)
+  (`picasso_set/params.py`, `picasso_set/analyse_core.py`,
+  `manual_to_workflow.py`)
+
 ## [0.8.4] - 2026-11-25
 
 ### Fixed
