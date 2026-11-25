@@ -1008,6 +1008,23 @@ def map_chain(chain, pixelsize=130.0, start_from="raw"):
         if s.module_name == "picasso_picked_locs" and chain.picks_path:
             s.params.setdefault("picks_file", chain.picks_path)
             s.confidence = CONF_OK
+        elif s.module_name == "undrift_from_picked":
+            # Undrift-from-picked needs the picks it undrifted by. picasso
+            # bakes only the "Undrift from picked" step into the info-history,
+            # not which picks it used, so point it at the chain's saved picks
+            # file (matched by base-stem name, same one picasso_picked_locs
+            # uses). Without it the required fp_picked_locs would be silently
+            # empty while _extract_none still flags the step green.
+            if chain.picks_path:
+                s.params.setdefault("fp_picked_locs", chain.picks_path)
+                s.confidence = CONF_OK
+            elif "fp_picked_locs" not in s.params:
+                s.confidence = CONF_LOW
+                s.messages.append(
+                    "no picks file found next to the chain; set "
+                    "fp_picked_locs to the saved picks (a pick-region .yaml "
+                    "or a picked-locs .hdf5 with a 'group' column)"
+                )
     chain.steps = steps
     return steps
 
