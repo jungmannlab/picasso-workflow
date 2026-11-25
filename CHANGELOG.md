@@ -10,6 +10,8 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ## [Unreleased]
 
+## [0.8.4] - 2026-11-25
+
 ### Fixed
 - **The wizard now groups branched, NDTiff-named channels correctly.** On a
   manual analysis whose files use the NDTiff acquisition naming
@@ -67,6 +69,8 @@ This file was started after v0.5.6; earlier history is in the git log.
   faster on a 1.2M-loc / 6k-pick dataset: ~80s → ~1s). The sibling
   `retro_calc_from_picked` (grouped picks) likewise replaces its per-group
   boolean-mask loop with a single sort-based group-by. (`manual_to_workflow.py`)
+
+## [0.8.3] - 2026-11-25
 
 ### Fixed
 - **The manual-to-workflow wizard now wires `undrift_from_picked` to its picks
