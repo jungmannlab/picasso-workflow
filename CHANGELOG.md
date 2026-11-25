@@ -10,6 +10,22 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ## [Unreleased]
 
+### Added
+- **Guided SSH-to-SLURM onboarding in the GUI.** A new
+  "Configure / Test connection…" button next to the Run-tab cluster
+  host/username controls opens an `SshSetupDialog` that walks a new user
+  through linking to a SLURM login node: pick or generate an SSH key, set the
+  host and username, and **test the connection before anything is saved**. On
+  an auth/no-key verdict it reveals the exact one-time `ssh-copy-id` command
+  (with a Copy button) to install the public key. After a successful test it
+  can optionally push the locally configured Confluence token to the login
+  node (reusing the Doctor tab's upload worker) so cluster jobs can report,
+  and persists the node (label → hostname + username) to the per-user
+  `config.yaml`. Cluster submission now runs the same connection test as a
+  pre-flight and offers this dialog if the login node is unreachable, instead
+  of failing cryptically later. All SSH logic lives in the headless
+  `picasso_workflow/ssh_setup.py`; the dialog is a thin Qt wrapper.
+
 ## [0.8.5] - 2026-11-25
 
 ### Fixed

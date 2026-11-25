@@ -10012,6 +10012,386 @@ class GettingStartedDialog(QtWidgets.QDialog):
         super().accept()
 
 
+class _SshTestWorker(QtCore.QObject):
+    """Run :func:`ssh_setup.test_ssh` off the GUI thread.
+
+    Emits ``finished(verdict)`` where ``verdict`` is an
+    :class:`picasso_workflow.ssh_setup.SshVerdict`.
+    """
+
+    finished = QtCore.pyqtSignal(object)
+
+    def __init__(self, hostname, username, ssh_key_path):
+        super().__init__()
+        self._hostname = hostname
+        self._username = username
+        self._ssh_key_path = ssh_key_path
+
+    def run(self):
+        from picasso_workflow import ssh_setup
+
+        try:
+            verdict = ssh_setup.test_ssh(
+                self._hostname,
+                self._username,
+                ssh_key_path=self._ssh_key_path,
+            )
+        except Exception as e:  # pragma: no cover - defensive
+            verdict = ssh_setup.SshVerdict(
+                False, ssh_setup.CAT_ERROR, f"SSH test failed: {e}"
+            )
+        self.finished.emit(verdict)
+
+
+class SshSetupDialog(QtWidgets.QDialog):
+    """Configure and test the SSH link to a SLURM login node.
+
+    A thin PyQt wrapper over :mod:`picasso_workflow.ssh_setup` (all logic lives
+    there): detect existing state, probe the connection off-thread ("test
+    before save"), guide the one-time ``ssh-copy-id`` step, optionally push the
+    Confluence token to the node (reusing the Doctor tab's upload worker), and
+    persist the node to the per-user ``config.yaml`` on accept.
+    """
+
+    def __init__(self, parent=None, default_username=None):
+        super().__init__(parent)
+        from picasso_workflow import ssh_setup
+
+        self._ssh_setup = ssh_setup
+        self.setWindowTitle("Configure SSH connection to SLURM login node")
+        self.setMinimumWidth(600)
+
+        self._threads = []
+        self._quit_hook_connected = False
+        self._tested_ok = False
+        # Params of the last successful test (for the token push + persist).
+        self._good_hostname = ""
+        self._good_username = ""
+        self._good_key_path = None
+
+        state = ssh_setup.detect_state()
+        first_host = ""
+        first_username = ""
+        if state.hosts:
+            first_label = next(iter(state.hosts))
+            first_host = state.hosts[first_label]
+            first_username = state.usernames.get(first_label, "")
+
+        layout = QtWidgets.QVBoxLayout(self)
+        intro = QtWidgets.QLabel(
+            "<p>Set up key-based SSH to your SLURM login node. The connection "
+            "is <b>tested before it is saved</b>; your public key is installed "
+            "on the node once with <code>ssh-copy-id</code> (a password prompt "
+            "your terminal handles — this app never sees it).</p>"
+        )
+        intro.setTextFormat(Qt.TextFormat.RichText)
+        intro.setWordWrap(True)
+        layout.addWidget(intro)
+
+        form = QtWidgets.QFormLayout()
+        layout.addLayout(form)
+
+        self.host_edit = QtWidgets.QLineEdit()
+        self.host_edit.setPlaceholderText("e.g., login.cluster.institute.edu")
+        self.host_edit.setText(first_host)
+        form.addRow("Login node (hostname):", self.host_edit)
+
+        self.username_edit = QtWidgets.QLineEdit()
+        self.username_edit.setText(
+            default_username or first_username or "$USER"
+        )
+        form.addRow("Username:", self.username_edit)
+
+        key_row = QtWidgets.QHBoxLayout()
+        self.key_edit = QtWidgets.QLineEdit()
+        self.key_edit.setPlaceholderText("private key, e.g. ~/.ssh/id_ed25519")
+        if state.key_path:
+            self.key_edit.setText(state.key_path)
+        key_row.addWidget(self.key_edit, stretch=1)
+        browse_btn = QtWidgets.QPushButton("Browse…")
+        browse_btn.clicked.connect(self._browse_key)
+        key_row.addWidget(browse_btn)
+        gen_btn = QtWidgets.QPushButton("Generate key")
+        gen_btn.clicked.connect(self._generate_key)
+        key_row.addWidget(gen_btn)
+        key_widget = QtWidgets.QWidget()
+        key_widget.setLayout(key_row)
+        form.addRow("SSH key:", key_widget)
+
+        self.label_edit = QtWidgets.QLineEdit()
+        self.label_edit.setPlaceholderText(
+            "label for this node (defaults to the hostname)"
+        )
+        self.label_edit.setToolTip(
+            "The key under SlurmLoginNodes shown in the Run-tab host "
+            "dropdown. Leave blank to use the hostname."
+        )
+        form.addRow("Label (optional):", self.label_edit)
+
+        # Test + status
+        test_row = QtWidgets.QHBoxLayout()
+        self.test_button = QtWidgets.QPushButton("Test connection")
+        self.test_button.clicked.connect(self._test_connection)
+        test_row.addWidget(self.test_button)
+        test_row.addStretch(1)
+        layout.addLayout(test_row)
+
+        self.status_label = QtWidgets.QLabel("")
+        self.status_label.setWordWrap(True)
+        self.status_label.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
+        layout.addWidget(self.status_label)
+
+        # ssh-copy-id guidance (revealed on auth / no-key verdicts)
+        self.copyid_group = QtWidgets.QGroupBox(
+            "Install your public key on the login node"
+        )
+        copyid_layout = QtWidgets.QVBoxLayout(self.copyid_group)
+        copyid_hint = QtWidgets.QLabel(
+            "Run this once in a terminal (it will ask for your cluster "
+            "password), then press <b>Test connection</b> again:"
+        )
+        copyid_hint.setTextFormat(Qt.TextFormat.RichText)
+        copyid_hint.setWordWrap(True)
+        copyid_layout.addWidget(copyid_hint)
+        copyid_cmd_row = QtWidgets.QHBoxLayout()
+        self.copyid_edit = QtWidgets.QLineEdit()
+        self.copyid_edit.setReadOnly(True)
+        copyid_cmd_row.addWidget(self.copyid_edit, stretch=1)
+        copyid_copy_btn = QtWidgets.QPushButton("Copy")
+        copyid_copy_btn.clicked.connect(self._copy_copyid_command)
+        copyid_cmd_row.addWidget(copyid_copy_btn)
+        copyid_layout.addLayout(copyid_cmd_row)
+        self.copyid_group.setVisible(False)
+        layout.addWidget(self.copyid_group)
+
+        # Confluence-token push (enabled only after a successful test)
+        self.push_token_button = QtWidgets.QPushButton(
+            "Push Confluence token to login node"
+        )
+        self.push_token_button.setToolTip(
+            "Copy your locally configured Confluence token to the login node "
+            "so cluster jobs can report to Confluence. Enabled after a "
+            "successful connection test."
+        )
+        self.push_token_button.setEnabled(False)
+        self.push_token_button.clicked.connect(self._push_token)
+        layout.addWidget(self.push_token_button)
+
+        self.push_status_label = QtWidgets.QLabel("")
+        self.push_status_label.setWordWrap(True)
+        layout.addWidget(self.push_status_label)
+
+        # OK / Cancel (OK only after a successful test)
+        self.button_box = QtWidgets.QDialogButtonBox(
+            QtWidgets.QDialogButtonBox.StandardButton.Ok
+            | QtWidgets.QDialogButtonBox.StandardButton.Cancel
+        )
+        self.button_box.accepted.connect(self._on_accept)
+        self.button_box.rejected.connect(self.reject)
+        self._ok_button = self.button_box.button(
+            QtWidgets.QDialogButtonBox.StandardButton.Ok
+        )
+        self._ok_button.setEnabled(False)
+        layout.addWidget(self.button_box)
+
+    # -- fields ------------------------------------------------------------
+    def _current_label(self):
+        label = self.label_edit.text().strip()
+        return label or self.host_edit.text().strip()
+
+    def _browse_key(self):
+        start = self.key_edit.text().strip() or os.path.join(
+            os.path.expanduser("~"), ".ssh"
+        )
+        path, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self, "Select SSH private key", start
+        )
+        if path:
+            self.key_edit.setText(path)
+
+    def _generate_key(self):
+        path = self.key_edit.text().strip() or None
+        QtWidgets.QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            new_path = self._ssh_setup.generate_ssh_key(key_path=path)
+        except FileExistsError as e:
+            QtWidgets.QApplication.restoreOverrideCursor()
+            existing = str(e)
+            reply = QtWidgets.QMessageBox.question(
+                self,
+                "Key already exists",
+                f"A key already exists at:\n{existing}\n\nUse this existing "
+                "key?",
+                QtWidgets.QMessageBox.StandardButton.Yes
+                | QtWidgets.QMessageBox.StandardButton.No,
+            )
+            if reply == QtWidgets.QMessageBox.StandardButton.Yes:
+                self.key_edit.setText(existing)
+            return
+        except Exception as e:
+            QtWidgets.QApplication.restoreOverrideCursor()
+            QtWidgets.QMessageBox.warning(
+                self, "Could not generate key", str(e)
+            )
+            return
+        QtWidgets.QApplication.restoreOverrideCursor()
+        self.key_edit.setText(new_path)
+        QtWidgets.QMessageBox.information(
+            self,
+            "SSH key generated",
+            f"Created a new SSH key at:\n{new_path}\n\nInstall it on the "
+            "login node (Test connection, then the ssh-copy-id step).",
+        )
+
+    def _copy_copyid_command(self):
+        QtWidgets.QApplication.clipboard().setText(self.copyid_edit.text())
+
+    # -- connection test (off-thread) --------------------------------------
+    def _test_connection(self):
+        hostname = self.host_edit.text().strip()
+        username = self.username_edit.text().strip()
+        key_path = self.key_edit.text().strip() or None
+        if not hostname or not username:
+            self._set_status(
+                "A host and a username are both required.", ok=False
+            )
+            return
+        # New test invalidates the previous good state.
+        self._tested_ok = False
+        self._ok_button.setEnabled(False)
+        self.push_token_button.setEnabled(False)
+        self.test_button.setEnabled(False)
+        self._set_status("Testing connection…", ok=None)
+        worker = _SshTestWorker(hostname, username, key_path)
+        self._start_worker(worker, self._on_test_result)
+
+    def _on_test_result(self, verdict):
+        self.test_button.setEnabled(True)
+        self._set_status(verdict.message, ok=verdict.ok)
+        cats = self._ssh_setup
+        if verdict.category in (cats.CAT_AUTH, cats.CAT_NO_KEY):
+            cmd = self._ssh_setup.ssh_copy_id_command(
+                self.host_edit.text().strip(),
+                self.username_edit.text().strip(),
+                key_path=self.key_edit.text().strip() or None,
+            )
+            self.copyid_edit.setText(cmd)
+            self.copyid_group.setVisible(True)
+        else:
+            self.copyid_group.setVisible(False)
+        if verdict.ok:
+            self._tested_ok = True
+            self._good_hostname = self.host_edit.text().strip()
+            self._good_username = self.username_edit.text().strip()
+            self._good_key_path = self.key_edit.text().strip() or None
+            self._ok_button.setEnabled(True)
+            self.push_token_button.setEnabled(True)
+
+    def _set_status(self, message, ok):
+        if ok is True:
+            color = "#2e7d32"
+        elif ok is False:
+            color = "#c62828"
+        else:
+            color = ""
+        self.status_label.setText(message)
+        self.status_label.setStyleSheet(f"color: {color};" if color else "")
+
+    # -- Confluence-token push (reuses the Doctor tab's worker) ------------
+    def _push_token(self):
+        from picasso_workflow.doctor_tab import (
+            _ClusterSecretsUploadWorker,
+            _local_tokens,
+        )
+
+        op, test = _local_tokens()
+        if not op and not test:
+            QtWidgets.QMessageBox.information(
+                self,
+                "No Confluence token configured",
+                "No Confluence token is set locally, so there is nothing to "
+                "push. Set one first via Getting Started or the Doctor tab's "
+                "token step, then retry.",
+            )
+            return
+        comm = SlurmCommunicator(
+            self._good_hostname,
+            self._good_username,
+            port=22,
+            ssh_key_path=self._good_key_path,
+        )
+        self.push_token_button.setEnabled(False)
+        self.push_status_label.setText("Pushing token to the login node…")
+        self.push_status_label.setStyleSheet("")
+        worker = _ClusterSecretsUploadWorker(comm, op or "", test or "")
+        self._start_worker(worker, self._on_push_result)
+
+    def _on_push_result(self, ok, message):
+        self.push_token_button.setEnabled(True)
+        color = "#2e7d32" if ok else "#c62828"
+        self.push_status_label.setText(message)
+        self.push_status_label.setStyleSheet(f"color: {color};")
+
+    # -- accept / persist --------------------------------------------------
+    def _on_accept(self):
+        if not self._tested_ok:
+            return
+        label = self._current_label()
+        try:
+            path = self._ssh_setup.persist_cluster_ssh(
+                label, self._good_hostname, self._good_username
+            )
+        except Exception as e:
+            QtWidgets.QMessageBox.warning(
+                self, "Could not save settings", str(e)
+            )
+            return
+        self.saved_label = label
+        self.saved_hostname = self._good_hostname
+        self.saved_username = self._good_username
+        QtWidgets.QMessageBox.information(
+            self,
+            "SSH connection saved",
+            f"Saved login node '{label}' ({self._good_hostname}) to:\n{path}",
+        )
+        self.accept()
+
+    # -- worker lifecycle (mirrors doctor_tab._start_cluster_worker) -------
+    def _start_worker(self, worker, on_done):
+        thread = QtCore.QThread(self)
+        worker.moveToThread(thread)
+        thread._pw_worker = worker
+        thread.started.connect(worker.run)
+        worker.finished.connect(on_done)
+        worker.finished.connect(thread.quit)
+        worker.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(lambda t=thread: self._forget_thread(t))
+        self._threads.append(thread)
+        self._connect_quit_hook()
+        thread.start()
+
+    def _forget_thread(self, thread):
+        if thread in self._threads:
+            self._threads.remove(thread)
+
+    def _connect_quit_hook(self):
+        if self._quit_hook_connected:
+            return
+        app = QtWidgets.QApplication.instance()
+        if app is not None:
+            app.aboutToQuit.connect(self._stop_threads)
+            self._quit_hook_connected = True
+
+    def _stop_threads(self):
+        for thread in list(self._threads):
+            thread.quit()
+            thread.wait()
+        self._threads.clear()
+
+
 class _UpdateCheckWorker(QtCore.QObject):
     """Runs the GitHub "is there a newer release?" check off the GUI thread."""
 
@@ -10585,6 +10965,20 @@ class Window(QtWidgets.QMainWindow):
         self.cluster_username_edit.setText(defaulttext)
         # self.cluster_username_edit.setMaximumWidth(100)
         cluster_settings_layout.addWidget(self.cluster_username_edit)
+
+        # Guided SSH onboarding: generate/select a key, test the connection
+        # before saving, run the one-time ssh-copy-id step, optionally push the
+        # Confluence token, and persist the node to the per-user config.yaml.
+        self.cluster_ssh_setup_button = QtWidgets.QPushButton(
+            "Configure / Test connection…"
+        )
+        self.cluster_ssh_setup_button.setToolTip(
+            "Set up and test key-based SSH to the login node, then save it. "
+            "Tests the connection before saving; guides you through "
+            "ssh-copy-id if the key is not yet installed."
+        )
+        self.cluster_ssh_setup_button.clicked.connect(self.on_configure_ssh)
+        cluster_settings_layout.addWidget(self.cluster_ssh_setup_button)
 
         self.slurm_email_edit = QtWidgets.QLineEdit()
         self.slurm_email_edit.setPlaceholderText("e.g., you@institute.edu")
@@ -16980,6 +17374,43 @@ class Window(QtWidgets.QMainWindow):
         """Stop the polling timer."""
         self.monitor_timer.stop()
 
+    def on_configure_ssh(self):
+        """Open the SSH-setup dialog; refresh the Run-tab cluster fields.
+
+        On accept, the dialog has persisted the node to the per-user
+        ``config.yaml`` and reloaded ``CONFIG``; mirror that into the host
+        combo (add/select the saved label) and the username field.
+        """
+        default_username = self.cluster_username_edit.text().strip() or None
+        dialog = SshSetupDialog(self, default_username=default_username)
+        if dialog.exec() != QtWidgets.QDialog.DialogCode.Accepted:
+            return
+        label = getattr(dialog, "saved_label", None)
+        if not label:
+            return
+        # Rebuild the host combo from the reloaded CONFIG and select the saved
+        # node. The combo is editable, so an addItem is safe even if present.
+        existing = {
+            self.cluster_host_combo.itemText(i)
+            for i in range(self.cluster_host_combo.count())
+        }
+        for host in CONFIG.get("SlurmLoginNodes", {}):
+            if host not in existing:
+                self.cluster_host_combo.addItem(host)
+                existing.add(host)
+        idx = self.cluster_host_combo.findText(label)
+        if idx >= 0:
+            self.cluster_host_combo.setCurrentIndex(idx)
+        else:
+            self.cluster_host_combo.setCurrentText(label)
+        self.cluster_username_edit.setText(
+            getattr(dialog, "saved_username", "")
+            or self.cluster_username_edit.text()
+        )
+        # Drop any cached communicator so the next op uses the new settings.
+        self.slurm_communicator = None
+        self._slurm_comm_host = None
+
     def _ensure_slurm_communicator(self, host_cluster):
         """Return a :class:`SlurmCommunicator` for ``host_cluster``.
 
@@ -18044,7 +18475,36 @@ class Window(QtWidgets.QMainWindow):
         self._monitor_local_folder = None
 
         self.slurm_communicator = self._ensure_slurm_communicator(host_cluster)
-        self.slurm_communicator.test_connection()
+        # Pre-flight: verify SSH works before assembling/submitting, so a
+        # bad connection fails here with guidance rather than cryptically
+        # later. On failure, offer the SSH-setup dialog and re-test; abort if
+        # it still does not work.
+        if not self.slurm_communicator.test_connection():
+            reply = QtWidgets.QMessageBox.question(
+                self,
+                "Cannot reach the login node",
+                f"Could not connect to '{host_cluster}' over SSH. Open the "
+                "SSH setup dialog to configure and test the connection?",
+                QtWidgets.QMessageBox.StandardButton.Yes
+                | QtWidgets.QMessageBox.StandardButton.No,
+            )
+            if reply == QtWidgets.QMessageBox.StandardButton.Yes:
+                self.on_configure_ssh()
+                host_cluster = str(self.cluster_host_combo.currentText())
+                login_node = CONFIG["SlurmLoginNodes"].get(
+                    host_cluster, login_node
+                )
+                self.slurm_communicator = self._ensure_slurm_communicator(
+                    host_cluster
+                )
+            if not self.slurm_communicator.test_connection():
+                QtWidgets.QMessageBox.warning(
+                    self,
+                    "SSH connection failed",
+                    "The SSH connection to the login node still fails. "
+                    "Submission aborted.",
+                )
+                return None, None
         # exposed for the submission summary / log below
         username = self.slurm_communicator.username
         ssh_key_path = self.slurm_communicator.ssh_key_path
