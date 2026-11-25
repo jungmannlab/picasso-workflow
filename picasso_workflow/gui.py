@@ -11099,18 +11099,35 @@ class Window(QtWidgets.QMainWindow):
         _roc_layout = QtWidgets.QHBoxLayout(self.run_on_channels_container)
         _roc_layout.setContentsMargins(0, 0, 0, 0)
         self.run_on_channels_checkbox = QtWidgets.QCheckBox(
-            "Run only on channels where column:"
+            "Run only on channels where"
         )
         self.run_on_channels_checkbox.setToolTip(
-            "Restrict this single-dataset module to channels where the chosen "
-            "per-channel boolean column is set (e.g. cluster only RESI "
-            "channels); other channels skip it, while the aggregation "
-            "workflow still runs on all of them. Tick which channels in "
-            "'Per-Channel Params…'. Downstream modules must tolerate the "
-            "channels that skip this one."
+            "Restrict this single-dataset module to a subset of channels; the "
+            "others skip it while the aggregation workflow still runs on all "
+            "of them. Downstream modules must tolerate the skipped channels."
         )
         self.run_on_channels_checkbox.toggled.connect(
             self._on_run_on_channels_toggled
+        )
+        # Mode: match channels by a name substring (the common case) or by a
+        # per-channel boolean column (advanced).
+        self.run_on_channels_mode = QtWidgets.QComboBox()
+        self.run_on_channels_mode.addItems(["name contains", "column is set"])
+        self.run_on_channels_mode.setToolTip(
+            "name contains: run on channels whose name includes the text "
+            "(e.g. 'GFP'). column is set: run where a per-channel boolean "
+            "column (ticked in 'Per-Channel Params…') is true."
+        )
+        self.run_on_channels_mode.currentIndexChanged.connect(
+            self._on_run_on_channels_mode_changed
+        )
+        self.run_on_channels_name = QtWidgets.QLineEdit()
+        self.run_on_channels_name.setPlaceholderText("e.g. GFP")
+        self.run_on_channels_name.setToolTip(
+            "Run only on channels whose name (tag) contains this text."
+        )
+        self.run_on_channels_name.textEdited.connect(
+            self._on_run_on_channels_name_changed
         )
         self.run_on_channels_combo = QtWidgets.QComboBox()
         self.run_on_channels_combo.setToolTip(
@@ -11119,8 +11136,13 @@ class Window(QtWidgets.QMainWindow):
         self.run_on_channels_combo.currentIndexChanged.connect(
             self._on_run_on_channels_column_changed
         )
+        # Stack the name field and the column dropdown; the mode selects which.
+        self.run_on_channels_stack = QtWidgets.QStackedWidget()
+        self.run_on_channels_stack.addWidget(self.run_on_channels_name)
+        self.run_on_channels_stack.addWidget(self.run_on_channels_combo)
         _roc_layout.addWidget(self.run_on_channels_checkbox)
-        _roc_layout.addWidget(self.run_on_channels_combo, 1)
+        _roc_layout.addWidget(self.run_on_channels_mode)
+        _roc_layout.addWidget(self.run_on_channels_stack, 1)
         self.run_on_channels_container.setVisible(False)
         current_layout.addWidget(self.run_on_channels_container)
         # label describing the module selected. Rendered as word-wrapped
@@ -15052,31 +15074,59 @@ class Window(QtWidgets.QMainWindow):
             container.setVisible(False)
             return
 
-        current = params.get(util.RUN_ON_CHANNELS_KEY)
+        column = params.get(util.RUN_ON_CHANNELS_KEY)
+        name_contains = params.get(util.RUN_ON_CHANNELS_NAME_KEY)
         columns = self._channel_scope_columns()
         # Keep an orphaned reference (its column was later removed) visible.
-        if current and current not in columns:
-            columns = columns + [current]
+        if column and column not in columns:
+            columns = columns + [column]
 
-        self.run_on_channels_combo.blockSignals(True)
+        widgets = (
+            self.run_on_channels_checkbox,
+            self.run_on_channels_mode,
+            self.run_on_channels_name,
+            self.run_on_channels_combo,
+        )
+        for w in widgets:
+            w.blockSignals(True)
         self.run_on_channels_combo.clear()
         self.run_on_channels_combo.addItems(columns)
-        if current:
-            self.run_on_channels_combo.setCurrentText(current)
-        self.run_on_channels_combo.blockSignals(False)
-
-        self.run_on_channels_checkbox.blockSignals(True)
-        self.run_on_channels_checkbox.setChecked(bool(current))
-        self.run_on_channels_checkbox.blockSignals(False)
-        self.run_on_channels_combo.setEnabled(bool(current))
+        if column:
+            self.run_on_channels_mode.setCurrentIndex(1)
+            self.run_on_channels_stack.setCurrentIndex(1)
+            self.run_on_channels_combo.setCurrentText(column)
+        else:
+            # Default to (and reflect) the name-contains mode.
+            self.run_on_channels_mode.setCurrentIndex(0)
+            self.run_on_channels_stack.setCurrentIndex(0)
+            self.run_on_channels_name.setText(name_contains or "")
+        active = bool(column or name_contains)
+        self.run_on_channels_checkbox.setChecked(active)
+        for w in widgets:
+            w.blockSignals(False)
+        self.run_on_channels_mode.setEnabled(active)
+        self.run_on_channels_stack.setEnabled(active)
         container.setVisible(True)
 
-    def _on_run_on_channels_toggled(self, checked):
-        """Enable/disable the per-channel restriction for the edited module."""
-        params = self._editing_single_module_params()
-        if params is None:
-            return
-        if checked:
+    def _store_run_on_channels_directive(self, params):
+        """Write the active restriction (name substring or column) onto params.
+
+        Clears both directive keys first, then sets the one for the current
+        mode. Name mode stores the channel-tag substring; column mode stores a
+        per-channel boolean column (auto-creating one if none is chosen).
+        """
+        params.pop(util.RUN_ON_CHANNELS_KEY, None)
+        params.pop(util.RUN_ON_CHANNELS_NAME_KEY, None)
+        if self.run_on_channels_mode.currentIndex() == 0:  # name contains
+            text = self.run_on_channels_name.text().strip()
+            if text:
+                params[util.RUN_ON_CHANNELS_NAME_KEY] = text
+                self._log_workflow_config_event(
+                    "modules.run_on_channels_set",
+                    index=self.editing_workflow_index,
+                    name_contains=text,
+                )
+        else:  # column is set
             col = self.run_on_channels_combo.currentText().strip()
             if not col:
                 # Auto-create a per-channel boolean column named after the
@@ -15092,23 +15142,57 @@ class Window(QtWidgets.QMainWindow):
                 index=self.editing_workflow_index,
                 column=col,
             )
+
+    def _on_run_on_channels_toggled(self, checked):
+        """Enable/disable the per-channel restriction for the edited module."""
+        params = self._editing_single_module_params()
+        if params is None:
+            return
+        if checked:
+            self._store_run_on_channels_directive(params)
         else:
             params.pop(util.RUN_ON_CHANNELS_KEY, None)
+            params.pop(util.RUN_ON_CHANNELS_NAME_KEY, None)
             self._log_workflow_config_event(
                 "modules.run_on_channels_cleared",
                 index=self.editing_workflow_index,
             )
         self._sync_run_on_channels_control()
 
+    def _on_run_on_channels_mode_changed(self, idx):
+        """Switch between the name-contains and column restriction modes."""
+        self.run_on_channels_stack.setCurrentIndex(idx)
+        if self.run_on_channels_checkbox.isChecked():
+            params = self._editing_single_module_params()
+            if params is not None:
+                self._store_run_on_channels_directive(params)
+
+    def _on_run_on_channels_name_changed(self, _text):
+        """Store the channel-name substring for the edited module."""
+        if not self.run_on_channels_checkbox.isChecked():
+            return
+        params = self._editing_single_module_params()
+        if params is None:
+            return
+        text = self.run_on_channels_name.text().strip()
+        params.pop(util.RUN_ON_CHANNELS_KEY, None)
+        if text:
+            params[util.RUN_ON_CHANNELS_NAME_KEY] = text
+        else:
+            params.pop(util.RUN_ON_CHANNELS_NAME_KEY, None)
+
     def _on_run_on_channels_column_changed(self, _idx):
         """Point the edited module's restriction at the chosen column."""
         if not self.run_on_channels_checkbox.isChecked():
+            return
+        if self.run_on_channels_mode.currentIndex() != 1:
             return
         params = self._editing_single_module_params()
         if params is None:
             return
         col = self.run_on_channels_combo.currentText().strip()
         if col:
+            params.pop(util.RUN_ON_CHANNELS_NAME_KEY, None)
             params[util.RUN_ON_CHANNELS_KEY] = col
 
     def _on_per_branch_toggled(self, param_name, checked):
