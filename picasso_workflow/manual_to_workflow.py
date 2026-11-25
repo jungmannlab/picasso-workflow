@@ -130,6 +130,7 @@ class MappedStep:
     messages: list[str] = field(default_factory=list)
     source_file: str | None = None  # manual .hdf5 that first saved this step
     info_dict: dict | None = None  # the raw info step dict it was mapped from
+    info_index: int | None = None  # absolute index in chain.info_steps
 
 
 @dataclass
@@ -142,6 +143,10 @@ class ChannelChain:
     deepest_hdf5: str  # longest-chain file (authoritative info source)
     raw_filepath: str | None  # resolved raw movie (.ome.tif)
     picks_path: str | None  # *_picks*.yaml if present
+    # {divergence_depth: picked-locs hdf5}: a pick-export side branch shares the
+    # deepest chain up to <depth> then adds a pick, so it is the picks the
+    # undrift_from_picked step at info index <depth> undrifted by.
+    pick_exports: dict = field(default_factory=dict)
     info_steps: list[dict] = field(default_factory=list)
     # number of info steps baked into base_hdf5 (the downstream-mode start)
     base_info_len: int = 0
@@ -302,15 +307,44 @@ def _check_cancel(should_cancel):
 # ---------------------------------------------------------------------------
 # 1. Folder scan.
 # ---------------------------------------------------------------------------
-def _group_by_base_stem(hdf5s):
-    """Group localization files into per-channel chains by prefix family.
+# Acquisition-format markers. A channel's movie is named ``<root>_MMStack...``
+# (MicroManager) or ``<root>_NDTiffStack...`` (NDTiff); every processing output
+# keeps ``<root>`` as its prefix. Detecting the marker is the most robust way to
+# recover the channel, because ``<root>`` is shared by the channel's whole file
+# tree -- including branches (e.g. a ``_picked`` pick export vs the main
+# ``_undriftbypicked`` chain) that do not prefix one another.
+_FORMAT_MARKERS = ("_mmstack", "_ndtiffstack")
 
-    A channel's base file (e.g. ``"Cell 1_ALFA-L1.hdf5"``) is a prefix of every
-    deeper file in its chain (``"Cell 1_ALFA-L1_cents_filter...hdf5"``). Each
-    file is assigned to the *shortest* stem present that is a prefix of it
-    (itself, or followed by ``_``). This is robust to unknown suffix tokens.
-    When no shorter prefix exists in the set, known suffixes are peeled as a
-    fallback so a lone deepest file still yields a sensible base.
+
+def _channel_root(stem):
+    """Return the acquisition root (through the format marker), or ``None``.
+
+    ``'..._img-0-R2_NDTiffStack_locs_render_AIM_picked'`` ->
+    ``'..._img-0-R2_NDTiffStack'``. ``None`` when no marker is present (the stem
+    then follows the ``<dataset>_<channel>`` convention handled below).
+    """
+    low = stem.lower()
+    for marker in _FORMAT_MARKERS:
+        i = low.find(marker)
+        if i > 0:
+            return stem[: i + len(marker)]
+    return None
+
+
+def _group_by_base_stem(hdf5s):
+    """Group localization files into per-channel chains.
+
+    When an acquisition marker (``_MMStack`` / ``_NDTiffStack``) is present, the
+    channel key is the acquisition root (:func:`_channel_root`): it is shared by
+    every processing output of the channel, including branches (a ``_picked``
+    pick export vs the main ``_undriftbypicked`` chain) that do not prefix one
+    another and would otherwise scatter into separate groups when no bare base
+    file is present (e.g. a minimal export of only the final + picked files).
+
+    Otherwise each file is assigned to the *shortest* stem present that is a
+    prefix of it (``"Cell 1_ALFA-L1.hdf5"`` anchors ``"Cell 1_ALFA-L1_cents
+    ...hdf5"``); failing that, known suffixes are peeled so a lone deepest file
+    still yields a sensible base.
 
     Returns
     -------
@@ -321,11 +355,12 @@ def _group_by_base_stem(hdf5s):
     groups: dict[str, list[str]] = {}
     for name in hdf5s:
         stem = name[: -len(".hdf5")]
-        base = None
-        for cand in stems:  # shortest first
-            if cand == stem or stem.startswith(cand + "_"):
-                base = cand
-                break
+        base = _channel_root(stem)
+        if base is None:
+            for cand in stems:  # shortest first
+                if cand == stem or stem.startswith(cand + "_"):
+                    base = cand
+                    break
         if base is None:
             base = _strip_suffixes(stem)
         groups.setdefault(base, []).append(name)
@@ -358,14 +393,18 @@ def _split_dataset_channel(base_stem):
     * Raw-acquisition-based, e.g.
       ``"08_ALFA_L1_100pM_1_MMStack_Pos0.ome_locs_undrift_render_ali"`` -- the
       processing suffixes make the last underscore-group meaningless, so the
-      channel is the acquisition root *before* ``_MMStack`` (``08_ALFA_L1_
-      100pM_1``), unique and human-recognizable. Rename channels later if wanted.
+      channel is the acquisition root *before* the format marker (``_MMStack`` /
+      ``_NDTiffStack``), e.g. ``08_ALFA_L1_100pM_1`` or
+      ``prtclstep0_round_img-0-R2``, unique and human-recognizable. Rename
+      channels later if wanted.
     * picasso manual exports named ``"<dataset>_<channel>"`` (e.g.
       ``"Cell 1_ALFA-L1"``) -- the channel is the last underscore-group.
     """
-    marker = base_stem.lower().find("_mmstack")
-    if marker > 0:
-        return "dataset", base_stem[:marker].strip()
+    low = base_stem.lower()
+    for mk in _FORMAT_MARKERS:
+        marker = low.find(mk)
+        if marker > 0:
+            return "dataset", base_stem[:marker].strip()
     if "_" in base_stem:
         dataset, channel = base_stem.rsplit("_", 1)
         return dataset.strip(), channel.strip()
@@ -397,13 +436,18 @@ def _channel_basename(chain):
 
 
 def _acq_folder_from_basename(basename):
-    """MicroManager acquisition-folder name for a raw basename, or ``None``.
+    """Acquisition-folder name for a raw basename, or ``None``.
 
-    MicroManager saves ``<acq>/<acq>_MMStack_PosN...ome.tif``, so the folder is
-    the basename up to ``_MMStack``.
+    MicroManager / NDTiff save ``<acq>/<acq>_MMStack_PosN...ome.tif`` (or
+    ``<acq>_NDTiffStack...``), so the folder is the basename up to the format
+    marker.
     """
-    marker = basename.lower().find("_mmstack")
-    return basename[:marker] if marker > 0 else None
+    low = basename.lower()
+    for mk in _FORMAT_MARKERS:
+        marker = low.find(mk)
+        if marker > 0:
+            return basename[:marker]
+    return None
 
 
 def _raw_in_root(root, basename):
@@ -477,6 +521,48 @@ def detect_raw_root(manual_dir, max_up=5):
     return None
 
 
+def _localize_prefix_len(info_steps):
+    """Number of leading info docs that are the header or localization steps.
+
+    Downstream mode loads already-localized data, so it reconstructs everything
+    *after* localization (AIM, undrift, align, ...). The leading run is the
+    movie header plus the Identify / Fit (= localize) steps; it ends at the
+    first processing step. Used as ``base_info_len`` so downstream starts right
+    after localization regardless of which intermediate files are present (a
+    minimal export may keep only post-processing branch files, whose own depth
+    would otherwise skip AIM and the undrift steps).
+    """
+    n = 0
+    for step in info_steps:
+        if _is_movie_header(step):
+            n += 1
+            continue
+        if map_step(step).module_name == "picasso_localize":
+            n += 1
+            continue
+        break
+    return n
+
+
+def _is_info_prefix(short_info, long_info):
+    """True if ``short_info`` is a leading prefix of ``long_info``.
+
+    Steps are compared by generator identity (:func:`_source_string`); the
+    movie-header docs are treated as equal (a channel's files share one source
+    movie). A pick side-branch (``..._picked`` export) diverges from the main
+    chain at its pick step, so it is not a prefix -- which is how the scanner
+    tells a clean localized checkpoint apart from a branch.
+    """
+    if len(short_info) > len(long_info):
+        return False
+    for a, b in zip(short_info, long_info):
+        a_id = "" if _is_movie_header(a) else _source_string(a)
+        b_id = "" if _is_movie_header(b) else _source_string(b)
+        if a_id != b_id:
+            return False
+    return True
+
+
 def scan_folder(manual_dir, progress=None, should_cancel=None):
     """Discover per-channel manual-analysis chains in ``manual_dir``.
 
@@ -536,14 +622,47 @@ def scan_folder(manual_dir, progress=None, should_cancel=None):
         # Fall back to filename length when no sidecars are present.
         deepest = file_lengths[-1][1] if file_lengths else max(files, key=len)
         shortest = min(files, key=len)
-        base_path = os.path.join(manual_dir, shortest)
         deepest_path = os.path.join(manual_dir, deepest)
         info_path = deepest_path[: -len(".hdf5")] + ".yaml"
         info_steps = _load_info(info_path) if os.path.exists(info_path) else []
-        # base_info_len is the step count baked into base_hdf5 (the shortest
-        # file, the downstream-mode start) specifically.
-        counts_by_name = {name: count for count, name in file_lengths}
-        base_info_len = counts_by_name.get(shortest, 0)
+        # Pick the downstream-start file and how many of the deepest chain's
+        # leading steps it already contains (base_info_len). Prefer a present
+        # file whose history is a true prefix of the deepest chain -- a clean
+        # localized checkpoint on the main branch (the deepest such ancestor
+        # skips the most work). A pick side-branch is NOT a prefix, so it is
+        # never chosen. When no ancestor exists (a minimal export of only the
+        # final + pick-branch files), load the shortest file and reconstruct
+        # everything after localization (header + Identify/Fit), so AIM and the
+        # undrift steps are not skipped.
+        ancestors = []
+        pick_exports = {}
+        for cnt, name in file_lengths:
+            if name == deepest:
+                continue
+            cand_yaml = os.path.join(
+                manual_dir, name[: -len(".hdf5")] + ".yaml"
+            )
+            cand_info = _load_info(cand_yaml)
+            if _is_info_prefix(cand_info, info_steps):
+                ancestors.append((cnt, name))
+            elif (
+                cand_info
+                and map_step(cand_info[-1]).module_name
+                == "picasso_picked_locs"
+                and _is_info_prefix(cand_info[:-1], info_steps)
+            ):
+                # A pick-export side branch: its history is the deepest chain up
+                # to <depth> plus a trailing pick, so it is the picks the
+                # undrift_from_picked step at info index <depth> undrifted by.
+                pick_exports[len(cand_info) - 1] = os.path.join(
+                    manual_dir, name
+                )
+        if ancestors:
+            base_info_len, base_name = max(ancestors)
+            base_path = os.path.join(manual_dir, base_name)
+        else:
+            base_path = os.path.join(manual_dir, shortest)
+            base_info_len = _localize_prefix_len(info_steps)
         dataset, channel = _split_dataset_channel(base_stem)
         picks_path = _find_picks_file(manual_dir, base_stem)
         chains.append(
@@ -554,6 +673,7 @@ def scan_folder(manual_dir, progress=None, should_cancel=None):
                 deepest_hdf5=deepest_path,
                 raw_filepath=None,
                 picks_path=picks_path,
+                pick_exports=pick_exports,
                 info_steps=info_steps,
                 base_info_len=base_info_len,
                 file_lengths=file_lengths,
@@ -851,7 +971,10 @@ STEP_MAP = [
     ("link", "link_locs", _extract_link),
     ("density", "density", _extract_density),
     ("filter", "filter_locs", _extract_none),
-    ("align", "picasso_align", _extract_none),
+    # picasso's Render-window "Align" (the "_alignedRCC" step) aligns the loaded
+    # channels to one another, so it is the cross-channel align_channels
+    # (aggregation), not picasso_align (which aligns one file to another).
+    ("align", "align_channels", _extract_none),
     # Plain "Render" (not "Render : Pick", matched above; "Render : NeNA"
     # matched by "nena" at the top) renders a display image and does not
     # transform the localizations -> skip it.
@@ -992,6 +1115,7 @@ def map_chain(chain, pixelsize=130.0, start_from="raw"):
         for j, step in enumerate(chain.info_steps[start:], start=start):
             mapped = map_step(step, pixelsize)
             mapped.source_file = _file_for_index(chain.file_lengths, j)
+            mapped.info_index = j
             steps.append(mapped)
     else:
         saw_header = False
@@ -1002,6 +1126,7 @@ def map_chain(chain, pixelsize=130.0, start_from="raw"):
                 continue
             mapped = map_step(step, pixelsize)
             mapped.source_file = _file_for_index(chain.file_lengths, j)
+            mapped.info_index = j
             steps.append(mapped)
     steps = _collapse_localize(steps)
     for s in steps:
@@ -1009,13 +1134,19 @@ def map_chain(chain, pixelsize=130.0, start_from="raw"):
             s.params.setdefault("picks_file", chain.picks_path)
             s.confidence = CONF_OK
         elif s.module_name == "undrift_from_picked":
-            # Undrift-from-picked needs the picks it undrifted by. picasso
-            # bakes only the "Undrift from picked" step into the info-history,
-            # not which picks it used, so point it at the chain's saved picks
-            # file (matched by base-stem name, same one picasso_picked_locs
-            # uses). Without it the required fp_picked_locs would be silently
-            # empty while _extract_none still flags the step green.
-            if chain.picks_path:
+            # Undrift-from-picked needs the picks it undrifted by. picasso bakes
+            # only the "Undrift from picked" step into the info-history, not
+            # which picks it used. Prefer the pick-export side branch that
+            # diverges at this step's index (a picked-locs hdf5 saved just
+            # before this undrift); otherwise fall back to a standalone
+            # *_picks.yaml. Without either, flag it rather than leave the
+            # required fp_picked_locs silently empty (which _extract_none would
+            # still mark green).
+            pick_hdf5 = chain.pick_exports.get(s.info_index)
+            if pick_hdf5:
+                s.params.setdefault("fp_picked_locs", pick_hdf5)
+                s.confidence = CONF_OK
+            elif chain.picks_path:
                 s.params.setdefault("fp_picked_locs", chain.picks_path)
                 s.confidence = CONF_OK
             elif "fp_picked_locs" not in s.params:
@@ -1051,8 +1182,10 @@ def _collapse_localize(steps):
             prev.messages = list(dict.fromkeys(prev.messages + step.messages))
             if CONF_OK in (prev.confidence, step.confidence):
                 prev.confidence = CONF_OK
-            # the fit completes the localization: attribute to its file
+            # the fit completes the localization: attribute to its file and
+            # info index, keeping both fields consistent on the merged step.
             prev.source_file = step.source_file or prev.source_file
+            prev.info_index = step.info_index
             continue
         collapsed.append(step)
     return collapsed
@@ -1097,10 +1230,26 @@ def _localizations_loader_step():
 # ---------------------------------------------------------------------------
 # 3. find_similar parameter retro-calculation.
 # ---------------------------------------------------------------------------
-# Note: retro_calc_find_similar and retro_calc_from_picked have similar numeric
-# logic (looping over picks/groups, computing fracs and rmsds from enclosed locs,
-# deriving min/max with margin). A future refactoring could extract a shared
-# _retro_calc_thresholds_core(x_nm, y_nm, centers_or_groups, ...) helper.
+# Upper bound on the number of pick centres evaluated in retro_calc_find_similar.
+# The thresholds are just the min/max of the per-pick nlocs / rmsd distributions
+# (padded by a margin), so a representative, evenly-spaced sample of a few
+# thousand picks reproduces them; evaluating every one of (potentially tens of
+# thousands of) picks is what made the retro-calc slow. Deterministic sampling
+# (no RNG) keeps the result reproducible.
+_RETRO_MAX_PICKS = 5000
+
+
+def _subsample_rows(arr, k):
+    """Return at most ``k`` evenly-spaced rows of ``arr`` (all rows if ``<= k``).
+
+    Deterministic (linspace, not random) so the retro-calc is reproducible.
+    """
+    if len(arr) <= k:
+        return arr
+    sel = np.unique(np.linspace(0, len(arr) - 1, k).round().astype(int))
+    return arr[sel]
+
+
 def retro_calc_find_similar(
     locs, centers_nm, diameter_nm, pixelsize, n_frames, margin=0.1
 ):
@@ -1110,6 +1259,12 @@ def retro_calc_find_similar(
     they are reconstructed: for each saved pick centre, count the enclosed
     localizations and their RMS distance from the centre, then set the min/max
     bounds to span the observed distributions (with a relative ``margin``).
+
+    The enclosed-localization lookup uses a :class:`scipy.spatial.cKDTree` radius
+    query instead of scanning every localization per pick, turning the cost from
+    ``O(picks x locs)`` into ``O(locs log locs)`` build plus cheap queries. Only
+    up to :data:`_RETRO_MAX_PICKS` evenly-spaced picks are evaluated, since the
+    min/max thresholds converge well before every pick is seen.
 
     Parameters
     ----------
@@ -1133,24 +1288,38 @@ def retro_calc_find_similar(
         ``max_n_locs_per_frame`` / ``min_rmsd`` / ``max_rmsd``. Empty when no
         pick encloses any localization.
     """
-    x_nm = np.asarray(locs["x"], dtype=float) * pixelsize
-    y_nm = np.asarray(locs["y"], dtype=float) * pixelsize
+    from scipy.spatial import cKDTree
+
+    centers = np.asarray(centers_nm, dtype=float)
+    if centers.ndim != 2 or len(centers) == 0:
+        return {}
+    centers = _subsample_rows(centers, _RETRO_MAX_PICKS)
+
+    pts = np.column_stack(
+        [
+            np.asarray(locs["x"], dtype=float) * pixelsize,
+            np.asarray(locs["y"], dtype=float) * pixelsize,
+        ]
+    )
+    if len(pts) == 0:
+        return {}
     radius = float(diameter_nm) / 2.0
     n_frames = max(int(n_frames or 1), 1)
 
+    tree = cKDTree(pts)
+    neighborhoods = tree.query_ball_point(centers, radius, workers=-1)
+
     fracs = []
     rmsds = []
-    for cx, cy in centers_nm:
-        dx = x_nm - cx
-        dy = y_nm - cy
-        inside = (dx * dx + dy * dy) <= radius * radius
-        n = int(np.count_nonzero(inside))
+    for (cx, cy), idx in zip(centers, neighborhoods):
+        n = len(idx)
         if n == 0:
             continue
+        enc = pts[idx]
+        dx = enc[:, 0] - cx
+        dy = enc[:, 1] - cy
         fracs.append(n / n_frames)
-        rmsds.append(
-            float(np.sqrt(np.mean(dx[inside] ** 2 + dy[inside] ** 2)))
-        )
+        rmsds.append(float(np.sqrt(np.mean(dx * dx + dy * dy))))
 
     if not fracs:
         return {}
@@ -1239,23 +1408,24 @@ def retro_calc_from_picked(
     except (KeyError, ValueError, TypeError, IndexError):
         return {}
     n_frames = max(int(n_frames or 1), 1)
-    fracs = []
-    rmsds = []
-    for g in np.unique(groups):
-        mask = groups == g
-        n = int(np.count_nonzero(mask))
-        if n == 0:
-            continue
-        gx = x[mask]
-        gy = y[mask]
-        cx = gx.mean()
-        cy = gy.mean()
-        fracs.append(n / n_frames)
-        rmsds.append(float(np.sqrt(np.mean((gx - cx) ** 2 + (gy - cy) ** 2))))
-    if not fracs:
+    if len(groups) == 0:
         return {}
-    fracs = np.asarray(fracs)
-    rmsds = np.asarray(rmsds)
+
+    # Group-by via one sort + segment reductions (np.add.reduceat) rather than a
+    # boolean mask per group, which rescans all picked locs for every group
+    # (O(groups x locs)). Sorting is O(locs log locs) and each group's count,
+    # centroid and RMSD then come from contiguous segments.
+    order = np.argsort(groups, kind="stable")
+    xs = x[order]
+    ys = y[order]
+    _, starts = np.unique(groups[order], return_index=True)
+    counts = np.diff(np.append(starts, len(order)))
+    cx = np.add.reduceat(xs, starts) / counts
+    cy = np.add.reduceat(ys, starts) / counts
+    sq = (xs - np.repeat(cx, counts)) ** 2 + (ys - np.repeat(cy, counts)) ** 2
+    rmsds = np.sqrt(np.add.reduceat(sq, starts) / counts)
+    fracs = counts / n_frames
+
     return {
         "diameter": float(diameter_nm),
         "min_n_locs_per_frame": float(fracs.min() * (1 - margin)),

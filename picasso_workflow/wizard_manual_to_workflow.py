@@ -272,6 +272,29 @@ class _SelectFolderPage(QtWidgets.QWizardPage):
         )
         layout = QtWidgets.QFormLayout(self)
 
+        help_label = QtWidgets.QLabel(
+            "<b>What the wizard needs</b> in the manual-analysis folder:"
+            "<ul>"
+            "<li>The saved <b>.hdf5</b> localization files and their <b>.yaml</b>"
+            " info sidecars. For each channel it reads the <i>deepest</i> "
+            "file's full step history, so the final result file per channel is "
+            "enough &mdash; the intermediate step files are optional.</li>"
+            "<li><b>Channels</b> are detected from the acquisition root before "
+            "<code>_MMStack</code> / <code>_NDTiffStack</code>.</li>"
+            "<li>The <b>picks</b> used by pick-based steps "
+            "(undrift-from-picked, pick-similar), as <i>either</i> a picasso "
+            "pick-region <code>…_picks.yaml</code> <i>or</i> a picked-locs "
+            "<code>.hdf5</code> with a <code>group</code> column (e.g. "
+            "<code>…_picked.hdf5</code>).</li>"
+            "</ul>"
+            "Tick <i>re-localize from the raw movies</i> below to also "
+            "reconstruct the localization step; otherwise the workflow starts "
+            "from the localized data (everything after localization)."
+        )
+        help_label.setTextFormat(Qt.TextFormat.RichText)
+        help_label.setWordWrap(True)
+        layout.addRow(help_label)
+
         self.manual_edit = _DragDropLineEdit()
         manual_browse = QtWidgets.QPushButton("Browse…")
         manual_browse.clicked.connect(self._browse_manual)
@@ -359,6 +382,84 @@ class _SelectFolderPage(QtWidgets.QWizardPage):
             self.raw_edit.setText(folder)
 
 
+class _WrapAnywhereDelegate(QtWidgets.QStyledItemDelegate):
+    """Draw cell text wrapping at word boundaries *or anywhere*.
+
+    ``QTableWidget.setWordWrap(True)`` only breaks on whitespace, so a long
+    token with no spaces -- a file path, a ``$get_prior_result`` parameter
+    string -- cannot wrap and overflows into the neighbouring column. This
+    delegate lays the text out with ``WrapAtWordBoundaryOrAnywhere`` so such
+    tokens wrap inside their own column, and reports the wrapped height from
+    :meth:`sizeHint` so ``resizeRowsToContents`` grows the row to fit. The
+    item's own foreground colour (the confidence tint) and the selection
+    highlight are preserved.
+    """
+
+    def __init__(self, table, parent=None):
+        super().__init__(parent)
+        self._table = table
+
+    def _document(self, option, index):
+        doc = QtGui.QTextDocument()
+        doc.setDefaultFont(option.font)
+        doc.setDocumentMargin(2)
+        text_option = QtGui.QTextOption()
+        text_option.setWrapMode(
+            QtGui.QTextOption.WrapMode.WrapAtWordBoundaryOrAnywhere
+        )
+        doc.setDefaultTextOption(text_option)
+        doc.setPlainText(str(index.data(Qt.ItemDataRole.DisplayRole) or ""))
+        return doc
+
+    def paint(self, painter, option, index):
+        self.initStyleOption(option, index)
+        style = (
+            option.widget.style()
+            if option.widget
+            else QtWidgets.QApplication.style()
+        )
+        # Let the style paint the background (selection / alternating rows /
+        # focus) but not the text -- we draw the wrapped text ourselves.
+        option.text = ""
+        style.drawControl(
+            QtWidgets.QStyle.ControlElement.CE_ItemViewItem,
+            option,
+            painter,
+            option.widget,
+        )
+        doc = self._document(option, index)
+        doc.setTextWidth(option.rect.width())
+        if option.state & QtWidgets.QStyle.StateFlag.State_Selected:
+            color = option.palette.color(
+                QtGui.QPalette.ColorRole.HighlightedText
+            )
+        else:
+            fg = index.data(Qt.ItemDataRole.ForegroundRole)
+            if isinstance(fg, QtGui.QBrush):
+                color = fg.color()
+            elif fg is not None:
+                color = QtGui.QColor(fg)
+            else:
+                color = option.palette.color(QtGui.QPalette.ColorRole.Text)
+        ctx = QtGui.QAbstractTextDocumentLayout.PaintContext()
+        ctx.palette.setColor(QtGui.QPalette.ColorRole.Text, color)
+        painter.save()
+        painter.translate(option.rect.topLeft())
+        painter.setClipRect(
+            QtCore.QRectF(0, 0, option.rect.width(), option.rect.height())
+        )
+        doc.documentLayout().draw(painter, ctx)
+        painter.restore()
+
+    def sizeHint(self, option, index):
+        self.initStyleOption(option, index)
+        doc = self._document(option, index)
+        doc.setTextWidth(self._table.columnWidth(index.column()))
+        return QtCore.QSize(
+            int(doc.idealWidth()), int(doc.size().height()) + 2
+        )
+
+
 class _ReviewPage(QtWidgets.QWizardPage):
     """Page 2: run the engine and review the reconstructed workflow."""
 
@@ -403,6 +504,12 @@ class _ReviewPage(QtWidgets.QWizardPage):
         channel_row = QtWidgets.QHBoxLayout()
         channel_row.addWidget(QtWidgets.QLabel("Show parameters for channel:"))
         self.channel_combo = QtWidgets.QComboBox()
+        # Grow to fit the channel name (they can be long, e.g.
+        # "prtclstep0_round_img-0-R2") instead of truncating to a default width.
+        self.channel_combo.setSizeAdjustPolicy(
+            QtWidgets.QComboBox.SizeAdjustPolicy.AdjustToContents
+        )
+        self.channel_combo.setMinimumWidth(220)
         self.channel_combo.currentIndexChanged.connect(
             lambda _i: self._rebuild_table()
         )
@@ -446,8 +553,14 @@ class _ReviewPage(QtWidgets.QWizardPage):
         # stretch the column to fit), and rows auto-grow to fit the wrapped
         # lines. resizeColumnsToContents() is deliberately NOT used -- it sizes
         # every column to its widest cell, which prevents wrapping entirely.
+        # A custom delegate wraps *within* long spaceless tokens (paths,
+        # parameter strings); the built-in word-wrap only breaks on whitespace
+        # and would let such a token overflow into the next column.
         self.table.setWordWrap(True)
         self.table.setTextElideMode(Qt.TextElideMode.ElideNone)
+        self.table.setItemDelegate(
+            _WrapAnywhereDelegate(self.table, self.table)
+        )
         header = self.table.horizontalHeader()
         header.setStretchLastSection(False)
         header.setSectionResizeMode(
