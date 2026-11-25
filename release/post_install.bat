@@ -27,28 +27,15 @@ set "VBS=%PREFIX%\picasso-workflow-launcher.vbs"
 >> "%VBS%" echo sh.Environment("PROCESS").Item("PYTHONNOUSERSITE") = "1"
 >> "%VBS%" echo sh.Run """%GUI_EXE%""", 0, False
 
-rem Start Menu + Desktop shortcuts pointing at the VBScript launcher via
-rem wscript. An all-users install (%PREFIX% under %ALLUSERSPROFILE%, e.g.
-rem C:\ProgramData -- chosen by an elevated installer) writes the COMMON
-rem (all-users) folders so every account sees the shortcuts; a per-user
-rem install writes that user's own folders. The icon ships as package-data,
-rem so it lands in site-packages.
-set "ICON=%PREFIX%\Lib\site-packages\picasso_workflow\picasso-workflow.ico"
-powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-  "$ws = New-Object -ComObject WScript.Shell;" ^
-  "$allUsers = '%PREFIX%'.StartsWith($env:ALLUSERSPROFILE, [System.StringComparison]::OrdinalIgnoreCase);" ^
-  "$menuName = if ($allUsers) { 'CommonPrograms' } else { 'Programs' };" ^
-  "$deskName = if ($allUsers) { 'CommonDesktopDirectory' } else { 'Desktop' };" ^
-  "$startMenu = [Environment]::GetFolderPath($menuName);" ^
-  "$desktop = [Environment]::GetFolderPath($deskName);" ^
-  "foreach ($dir in @($startMenu, $desktop)) {" ^
-  "  $lnk = $ws.CreateShortcut((Join-Path $dir 'picasso-workflow.lnk'));" ^
-  "  $lnk.TargetPath = 'wscript.exe';" ^
-  "  $lnk.Arguments = '\"%VBS%\"';" ^
-  "  $lnk.WorkingDirectory = '%PREFIX%';" ^
-  "  if (Test-Path '%ICON%') { $lnk.IconLocation = '%ICON%,0' }" ^
-  "  $lnk.Save();" ^
-  "}"
+rem Start Menu + Desktop shortcuts pointing at the VBScript launcher. The logic
+rem lives in a standalone PowerShell script (create_shortcuts.ps1, copied flat
+rem into %PREFIX% via extra_files) invoked with `-File` -- the previous inline
+rem one-liner relied on fragile cmd<->PowerShell quote-escaping that silently
+rem created no shortcut on some installs. Shortcuts are best-effort: the script
+rem logs and swallows its own errors (and we ignore its exit code) so a shortcut
+rem hiccup never fails an otherwise-working install.
+powershell -NoProfile -ExecutionPolicy Bypass -File ^
+  "%PREFIX%\create_shortcuts.ps1" -Prefix "%PREFIX%"
 
 endlocal
 exit /b 0
