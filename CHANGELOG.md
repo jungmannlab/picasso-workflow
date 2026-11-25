@@ -10,6 +10,8 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ## [Unreleased]
 
+## [0.8.6] - 2026-11-25
+
 ### Added
 - **Guided SSH-to-SLURM onboarding in the GUI.** A new
   "Configure / Test connection…" button next to the Run-tab cluster
