@@ -12,6 +12,7 @@ pytest.importorskip("PyQt6", reason="PyQt6 required for the GUI tests")
 from PyQt6 import QtGui, QtWidgets  # noqa: E402
 
 from picasso_workflow.wizard_manual_to_workflow import (  # noqa: E402
+    ManualToWorkflowWizard,
     _WrapAnywhereDelegate,
 )
 
@@ -50,6 +51,27 @@ def test_long_spaceless_token_wraps_to_multiple_lines(qapp):
 
     assert short <= 2 * line  # a short label stays ~one line
     assert long_token >= 4 * line  # the long token wrapped onto many lines
+
+
+def test_wizard_opens_without_qt_parent_but_keeps_main_window(qapp):
+    # Opened with NO Qt parent (so it can be stacked behind the main GUI) yet
+    # still retains the main window to apply results into.
+    main = QtWidgets.QWidget()
+    wiz = ManualToWorkflowWizard(parent=None, main_window=main)
+    assert wiz.parent() is None
+    assert wiz._main_window is main
+    wiz.deleteLater()
+    main.deleteLater()
+
+
+def test_wizard_main_window_falls_back_to_parent(qapp):
+    # Back-compat: the old positional ManualToWorkflowWizard(window) form still
+    # applies results to that window.
+    parent = QtWidgets.QWidget()
+    wiz = ManualToWorkflowWizard(parent)
+    assert wiz._main_window is parent
+    wiz.deleteLater()
+    parent.deleteLater()
 
 
 def test_delegate_uses_wrap_anywhere_mode(qapp):

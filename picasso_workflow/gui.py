@@ -17078,12 +17078,14 @@ class Window(QtWidgets.QMainWindow):
                 f"Could not open the wizard: {exc}",
             )
             return
+        # Open with NO Qt parent so the wizard is a fully independent top-level
+        # window that can be stacked *behind* the main GUI (a parented window
+        # gets a transient-parent hint that most window managers force to float
+        # above its parent, even with the Qt.Window flag). The main window is
+        # passed separately so the wizard can still apply its result back to it.
         # Keep a reference so the non-modal window is not garbage-collected.
-        wizard = ManualToWorkflowWizard(self)
+        wizard = ManualToWorkflowWizard(parent=None, main_window=self)
         wizard.setModal(False)
-        # Independent top-level window (own taskbar entry), so it is not forced
-        # to float above its parent and can be sent behind the main GUI.
-        wizard.setWindowFlag(QtCore.Qt.WindowType.Window, True)
         self._manual_wizard = wizard
         wizard.show()
         wizard.raise_()

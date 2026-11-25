@@ -27,6 +27,13 @@ This file was started after v0.5.6; earlier history is in the git log.
   `picasso_workflow/ssh_setup.py`; the dialog is a thin Qt wrapper.
 
 ### Fixed
+- **The Manual → Workflow wizard can now be sent behind the main GUI.** It was
+  parented to the main window, and Qt gives a parented top-level a
+  transient-parent hint that most window managers keep floating above its
+  parent (even with the `Qt.Window` flag). It now opens with no Qt parent (a
+  fully independent top-level window), while still applying its reconstruction
+  back to the main window via an explicit `main_window` reference.
+  (`picasso_workflow/wizard_manual_to_workflow.py`, `picasso_workflow/gui.py`)
 - **Windows installer now reliably creates the Start Menu / Desktop shortcut.**
   The shortcut was built by a PowerShell one-liner embedded in `post_install.bat`
   whose `cmd`↔PowerShell quote-escaping silently failed on some installs, so no
