@@ -10,7 +10,17 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ## [Unreleased]
 
-## [0.8.3] - 2026-11-25
+### Changed
+- **The wizard's pick-similar retro-calculation is dramatically faster.**
+  Recovering `find_similar` nlocs/rmsd thresholds from saved picks scanned every
+  localization once per pick (`O(picks x locs)`), which took minutes on real
+  datasets. It now uses a `scipy.spatial.cKDTree` radius query (build once, cheap
+  per-pick lookups) and evaluates a representative, evenly-spaced sample of at
+  most `_RETRO_MAX_PICKS` (5000) picks — the min/max thresholds converge well
+  before every pick is seen. Results are unchanged below the sample cap (~70x
+  faster on a 1.2M-loc / 6k-pick dataset: ~80s → ~1s). The sibling
+  `retro_calc_from_picked` (grouped picks) likewise replaces its per-group
+  boolean-mask loop with a single sort-based group-by. (`manual_to_workflow.py`)
 
 ### Fixed
 - **The manual-to-workflow wizard now wires `undrift_from_picked` to its picks
