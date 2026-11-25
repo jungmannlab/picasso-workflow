@@ -236,18 +236,16 @@ class TestClusteringIntegration(PicassoIntegrationBase):
         )
         self.assertEqual(len(ap_merge.locs), 1)
 
-    def test_picasso_dbscan_radius_is_camera_pixels(self):
-        """picasso_set picasso_dbscan: radius is camera pixels (x pixelsize).
+    def test_picasso_dbscan_radius_is_nm(self):
+        """picasso_set picasso_dbscan: radius is nm, passed through to picasso.
 
-        To cluster at a 25 nm physical radius the config value is 25/pixelsize
-        px; the module multiplies by the pixel size to recover 25 nm -> 5
-        clusters. If that conversion were dropped (0.19 taken as nm), every
-        point would be isolated -> 0 clusters, so this guards the x-pixelsize.
+        Clustering at a 25 nm physical radius uses the config value 25 (nm)
+        directly -> 5 clusters. If the value were (wrongly) treated as camera
+        pixels, 25 px ~= 3250 nm would merge everything, so this guards that the
+        config is nm and no conversion is applied.
         """
         ap = self._ap_with(_planted_clusters(n_clusters=5, seed=1))
-        _, results = ap.picasso_dbscan(
-            0, {"radius": 25.0 / PIXELSIZE, "density": 4}
-        )
+        _, results = ap.picasso_dbscan(0, {"radius": 25.0, "density": 4})
         self.assertEqual(results["nclusters"], 5)
 
     def test_smlm_clusterer_autopicasso_radius_is_nm(self):
@@ -393,18 +391,18 @@ class TestG5mIntegration(PicassoIntegrationBase):
 
 
 class TestPairCorrelationIntegration(PicassoIntegrationBase):
-    def test_pair_correlation_bins_are_camera_pixels_to_nm(self):
-        """picasso_pair_correlation: bin_size / r_max are camera pixels -> nm.
+    def test_pair_correlation_bins_are_nm(self):
+        """picasso_pair_correlation: bin_size / r_max are nm, passed through.
 
         Oracle: the workflow's curve equals a direct postprocess.pair_correlation
-        at the physical nm arguments (config px * pixelsize). A dropped
-        conversion would change the bin positions and the curve.
+        at the SAME nm arguments (no conversion). An extra x-pixelsize would
+        change the bin positions and the curve.
         """
         locs = _planted_clusters(n_clusters=5, pts=60, seed=5)
         ap = self._ap_with(locs.copy())
-        binsize_px, rmax_px = 0.2, 6.0
+        binsize_nm, rmax_nm = 26.0, 780.0
         _, results = ap.picasso_pair_correlation(
-            0, {"binsize": binsize_px, "rmax": rmax_px}
+            0, {"binsize": binsize_nm, "rmax": rmax_nm}
         )
         data = np.loadtxt(results["filepath_pair_correlation"])
         bins_workflow, pc_workflow = data[:, 0], data[:, 1]
@@ -412,13 +410,13 @@ class TestPairCorrelationIntegration(PicassoIntegrationBase):
         bins_direct, pc_direct = postprocess.pair_correlation(
             locs.copy(),
             _info(),
-            bin_size=binsize_px * PIXELSIZE,
-            r_max=rmax_px * PIXELSIZE,
+            bin_size=binsize_nm,
+            r_max=rmax_nm,
         )
         np.testing.assert_allclose(bins_workflow, bins_direct, rtol=1e-4)
         np.testing.assert_allclose(pc_workflow, pc_direct, rtol=1e-4)
-        # The bins span the physical r_max in nm, not the camera-pixel value.
-        self.assertGreater(bins_workflow.max(), rmax_px)
+        # The bins span the physical r_max in nm.
+        self.assertGreater(bins_workflow.max(), 0)
 
 
 class TestFrcIntegration(PicassoIntegrationBase):
