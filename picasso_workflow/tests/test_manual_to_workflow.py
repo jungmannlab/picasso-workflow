@@ -171,14 +171,39 @@ def test_scan_groups_branched_ndtiff_channels(tmp_path):
     for c in chains:
         # Deepest = the fully-processed alignedRCC (most info docs).
         assert c.deepest_hdf5.endswith("_alignedRCC.hdf5")
-        # The base is a pick side-branch, so base_info_len is the common-ancestor
-        # depth (localize+AIM = 4), NOT the base's own 5 docs -- otherwise the
-        # second undrift_from_picked would be skipped.
-        assert c.base_info_len == 4
-        mods = [
-            s.module_name for s in m.map_chain(c, start_from="localizations")
-        ]
+        # Only pick side-branch files are present (no clean localized ancestor),
+        # so base_info_len falls back to the localization prefix (header +
+        # Identify + Fit = 3); AIM and both undrift_from_picked are then
+        # reconstructed downstream rather than skipped.
+        assert c.base_info_len == 3
+        # The two pick-export side branches feed the two undrift steps by
+        # divergence depth (shares the chain up to <depth> then a pick).
+        assert set(c.pick_exports) == {4, 5}
+        steps = m.map_chain(c, start_from="localizations")
+        mods = [s.module_name for s in steps]
+        assert "picasso_undrift_aim" in mods
         assert mods.count("undrift_from_picked") == 2
+        # Both undrift_from_picked steps are auto-wired to their picked-locs
+        # hdf5 (idx 4 -> _picked, idx 5 -> _pickedSingle) with full confidence.
+        undrifts = [s for s in steps if s.module_name == "undrift_from_picked"]
+        assert undrifts[0].params["fp_picked_locs"].endswith("_picked.hdf5")
+        assert (
+            undrifts[1].params["fp_picked_locs"].endswith("_pickedSingle.hdf5")
+        )
+        assert all(s.confidence == m.CONF_OK for s in undrifts)
+
+
+def test_branched_ndtiff_align_is_aggregation(tmp_path):
+    # The final "Align" is cross-channel, so reconstruct_workflow must split it
+    # into the aggregation stage (align_channels), leaving a non-empty agg list.
+    man = tmp_path / "analysis_manual_minimal"
+    man.mkdir()
+    for root in ("prtclstep0_round_img-0-R2", "prtclstep6_round_img-1-R1"):
+        _write_branched_ndtiff_channel(man, root)
+    res = m.reconstruct_workflow(str(man), start_from="localizations")
+    agg = [n for n, _ in res.agg_modules]
+    assert "align_channels" in agg
+    assert "picasso_align" not in [n for n, _ in res.single_modules]
 
 
 def _manual(root, sub="analysis_manual"):
@@ -374,7 +399,9 @@ PICASSO_SOURCES = [
     ("Picasso v0.12.0a3 Filter", "filter_locs"),
     # cross-channel / alignment
     ("Picasso v0.12.0a3 Channel registration", "register_channels"),
-    ("Picasso v0.12.0a3 Align", "picasso_align"),
+    # picasso's Render-window "Align" aligns the loaded channels to each other,
+    # so it is the cross-channel align_channels (aggregation).
+    ("Picasso v0.12.0a3 Align", "align_channels"),
     # picasso-workflow-native strings
     ("picasso-workflow : identify", "picasso_localize"),
     ("picasso-workflow : undrift_rcc", "picasso_undrift_rcc"),

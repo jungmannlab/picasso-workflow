@@ -487,8 +487,12 @@ _SPECS = [
         summary="Undrift localized data using the AIM algorithm.",
     ),
     _s(
+        # Picks enter via the fp_picked_locs parameter (an external picked-locs
+        # file or pick-region yaml), so -- like picasso_picked_locs -- the picks
+        # capability is optional, not a required upstream dependency.
         "undrift_from_picked",
-        requires=["locs", "picks"],
+        requires=["locs"],
+        optional=["picks"],
         provides=["locs_undrifted", "drift"],
         role="undrift",
         relation=E,
