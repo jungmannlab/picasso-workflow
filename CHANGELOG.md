@@ -11,6 +11,43 @@ This file was started after v0.5.6; earlier history is in the git log.
 ## [Unreleased]
 
 ### Fixed
+- **The wizard now groups branched, NDTiff-named channels correctly.** On a
+  manual analysis whose files use the NDTiff acquisition naming
+  (`<root>_NDTiffStack_...`) and branch (a `_picked` pick export vs the main
+  `_undriftbypicked` chain), with no bare `_locs` base file present (a minimal
+  export), the scanner split each suffix tail into its own bogus "channel"
+  (`picked`, `pickedOri`, `alignedRCC`, …) instead of the real channels. Channel
+  grouping now keys on the acquisition root before the format marker
+  (`_MMStack` / `_NDTiffStack`), which every processing output of a channel
+  shares, so branched files group together and the channel is named by its root
+  (e.g. `prtclstep0_round_img-0-R2`). (`manual_to_workflow.py`)
+- **The wizard no longer undercounts steps / skips AIM in downstream mode.**
+  The downstream start (how much of the deepest chain is "already loaded") was
+  taken from whichever intermediate file happened to be present; a `_picked`
+  side branch made it skip main-branch steps (AIM, an `undrift_from_picked`).
+  It now prefers a present file whose history is a true prefix of the deepest
+  chain (a clean localized checkpoint); when none exists (a minimal export of
+  only final + pick-branch files) it falls back to the localization prefix, so
+  downstream reconstructs everything after localization (AIM, undrift, align).
+  (`manual_to_workflow.py`)
+- **The wizard maps picasso's "Align" to the cross-channel `align_channels`.**
+  It previously mapped to the single-dataset `picasso_align` (align one file to
+  another), so a multi-channel merge/align left the aggregation stage empty. The
+  Render-window "Align" aligns the loaded channels to each other, so it is now
+  the `align_channels` aggregation step and the single/aggregation split forms
+  correctly. (`manual_to_workflow.py`)
+- **The wizard auto-wires `undrift_from_picked` to picked-locs `.hdf5` files.**
+  Picks saved as picked-locs hdf5 exports (e.g. `_picked.hdf5`,
+  `_pickedSingle.hdf5`) are now matched to their undrift step by divergence
+  depth (the pick branch shares the chain up to the undrift it fed), in addition
+  to the existing `_picks.yaml` region files. `undrift_from_picked` also no
+  longer reports a spurious "missing required inputs: picks" — like
+  `picasso_picked_locs`, its picks are an optional capability supplied by the
+  `fp_picked_locs` parameter. (`manual_to_workflow.py`, `modulespec.py`)
+- **The wizard's channel dropdown widened to fit its contents, and the
+  folder-selection page gained a "what the wizard needs" help section** (the
+  per-channel localization files, how channels are detected, and that picks may
+  be a `_picks.yaml` or a picked-locs `.hdf5`). (`wizard_manual_to_workflow.py`)
 - **The wizard's review table now wraps long words instead of overflowing.** A
   long spaceless token in a cell (a file path, a `$get_prior_result` parameter
   string) overran into the neighbouring column, because `QTableWidget`'s
