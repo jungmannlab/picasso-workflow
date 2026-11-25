@@ -10,6 +10,8 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ## [Unreleased]
 
+## [0.8.3] - 2026-11-25
+
 ### Fixed
 - **The manual-to-workflow wizard now wires `undrift_from_picked` to its picks
   file.** A reconstructed "Undrift from picked" step mapped to the
