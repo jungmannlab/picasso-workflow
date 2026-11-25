@@ -10,6 +10,18 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ## [Unreleased]
 
+### Fixed
+- **Windows installs no longer pile up versioned `C:\Program Files` folders.**
+  `installer_type: all` also emitted a Windows **`.msi`**, which — unlike the
+  NSIS `.exe` — ignores `default_prefix*` and installs to a *versioned*
+  `C:\Program Files\picasso-workflow <version>` directory (its ProductName and
+  Directory table carry the version), so each release landed in its own folder
+  and they accumulated instead of upgrading in place. Windows now builds only
+  the NSIS `.exe` (`installer_type: exe # [win]`), which installs to the
+  unversioned `%LOCALAPPDATA%\picasso-workflow` (or `%ALLUSERSPROFILE%\…` for an
+  all-users install) and replaces the previous version. macOS still builds the
+  `.pkg` + `.sh`. (`release/construct.yaml`)
+
 ## [0.8.4] - 2026-11-25
 
 ### Fixed

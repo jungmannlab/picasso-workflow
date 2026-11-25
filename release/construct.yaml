@@ -50,8 +50,16 @@ default_prefix_all_users: '%ALLUSERSPROFILE%\picasso-workflow'  # [win]
 # fallback if the `.pkg` ever prompts for admin -- verify on the first CI run.
 default_location_pkg: picasso-workflow                      # [osx]
 
-# Build the friendly graphical installer plus a shell installer on macOS.
-installer_type: all
+# Windows: build ONLY the NSIS `.exe`, NOT the `.msi`. `installer_type: all`
+# also emits an MSI, but constructor's MSI ignores `default_prefix*` and installs
+# to a VERSIONED `C:\Program Files\picasso-workflow <version>` folder (its
+# ProductName/Directory carry the version), so each release lands in its own
+# folder and they accumulate instead of upgrading in place. The NSIS `.exe`
+# honours the unversioned prefixes above (one folder, replaced on upgrade) and
+# is the installer the post_install shortcuts/launcher target.
+installer_type: exe    # [win]
+# macOS: the friendly `.pkg` plus the per-user `.sh` fallback.
+installer_type: all    # [osx]
 
 # Don't touch the user's shell rc / global conda -- this is a self-contained app.
 initialize_by_default: false
