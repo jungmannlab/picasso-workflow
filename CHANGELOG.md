@@ -10,6 +10,15 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ## [Unreleased]
 
+### Fixed
+- **The wizard's review table now wraps long words instead of overflowing.** A
+  long spaceless token in a cell (a file path, a `$get_prior_result` parameter
+  string) overran into the neighbouring column, because `QTableWidget`'s
+  built-in word-wrap only breaks on whitespace. A new item delegate lays the
+  text out with `WrapAtWordBoundaryOrAnywhere` so such tokens wrap inside their
+  own column and the row grows to fit, preserving the confidence colour and the
+  selection highlight. (`wizard_manual_to_workflow.py`)
+
 ### Changed
 - **The wizard's pick-similar retro-calculation is dramatically faster.**
   Recovering `find_similar` nlocs/rmsd thresholds from saved picks scanned every
