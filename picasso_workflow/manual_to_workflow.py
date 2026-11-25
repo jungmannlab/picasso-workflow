@@ -628,10 +628,13 @@ def scan_folder(manual_dir, progress=None, should_cancel=None):
         # Pick the downstream-start file and how many of the deepest chain's
         # leading steps it already contains (base_info_len). Prefer a present
         # file whose history is a true prefix of the deepest chain -- a clean
-        # localized checkpoint on the main branch (the deepest such ancestor
-        # skips the most work). A pick side-branch is NOT a prefix, so it is
-        # never chosen. When no ancestor exists (a minimal export of only the
-        # final + pick-branch files), load the shortest file and reconstruct
+        # localized checkpoint on the main branch -- and take the EARLIEST
+        # (shallowest) such ancestor, so downstream reconstructs the full
+        # per-channel pipeline that follows it rather than collapsing to just the
+        # last step (when every intermediate file is present, the deepest
+        # ancestor would skip everything). A pick side-branch is NOT a prefix, so
+        # it is never chosen. When no ancestor exists (a minimal export of only
+        # the final + pick-branch files), load the shortest file and reconstruct
         # everything after localization (header + Identify/Fit), so AIM and the
         # undrift steps are not skipped.
         ancestors = []
@@ -658,7 +661,7 @@ def scan_folder(manual_dir, progress=None, should_cancel=None):
                     manual_dir, name
                 )
         if ancestors:
-            base_info_len, base_name = max(ancestors)
+            base_info_len, base_name = min(ancestors)
             base_path = os.path.join(manual_dir, base_name)
         else:
             base_path = os.path.join(manual_dir, shortest)
