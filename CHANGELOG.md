@@ -10,6 +10,69 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ## [Unreleased]
 
+## [0.8.5] - 2026-11-25
+
+### Fixed
+- **Windows installs no longer pile up versioned `C:\Program Files` folders.**
+  `installer_type: all` also emitted a Windows **`.msi`**, which — unlike the
+  NSIS `.exe` — ignores `default_prefix*` and installs to a *versioned*
+  `C:\Program Files\picasso-workflow <version>` directory (its ProductName and
+  Directory table carry the version), so each release landed in its own folder
+  and they accumulated instead of upgrading in place. Windows now builds only
+  the NSIS `.exe` (`installer_type: exe # [win]`), which installs to the
+  unversioned `%LOCALAPPDATA%\picasso-workflow` (or `%ALLUSERSPROFILE%\…` for an
+  all-users install) and replaces the previous version. macOS still builds the
+  `.pkg` + `.sh`. (`release/construct.yaml`)
+- **The wizard again reconstructs the full per-channel pipeline when every
+  intermediate file is present** (e.g. a RESI run saved at each step). The
+  downstream-start selection introduced in 0.8.4 chose the *deepest* ancestor
+  file, so with all intermediates present it loaded the near-final file and the
+  single stage collapsed to just `[load, save]` — the per-channel processing
+  (pick, filter, DBSCAN, G5M, …) that feeds `combine_channels` was dropped. It
+  now starts from the *earliest* localized checkpoint and reconstructs the whole
+  pipeline forward. (`manual_to_workflow.py`)
+
+### Changed
+- **The wizard re-derives undrift-from-picked's picks in-workflow.** Instead of
+  pointing each reconstructed `undrift_from_picked` at the manual picked-locs
+  file, the wizard now inserts a `find_similar` (pick-similar) module just
+  before it — with the pick diameter and nlocs / rmsd thresholds
+  retro-calculated from that manual pick export — and undrifts from
+  `find_similar`'s own picks (`$get_previous_module_result`). The reconstructed
+  workflow is then self-contained (re-picks with the recovered settings) rather
+  than depending on the manual pick files; it falls back to the file wiring when
+  the thresholds can't be recovered. (`manual_to_workflow.py`)
+- **The wizard window can be sent behind the main GUI.** It opens as an
+  independent top-level window (`Qt.Window`) instead of a parented child dialog
+  that always floats on top, so the reconstructed steps can be tucked behind and
+  kept for comparison once applied. (`gui.py`)
+- **BREAKING: `picasso_*` module spatial parameters are now in nm, matching
+  picasso itself.** picasso 1.0 takes these distances in nm, but the
+  picasso-set wrappers exposed them in camera pixels and converted internally.
+  They now expose nm directly (same units the user sees in picasso):
+  `picasso_undrift_aim.intersectdist`/`roiradius` (defaults 20/60),
+  `picasso_link.distance` (default 100), `picasso_density.radius`,
+  `picasso_pair_correlation.binsize`/`rmax` (defaults 10/1000),
+  `picasso_dbscan.radius`/`radius_z`, `picasso_smlm_cluster.radius`/`radius_z`,
+  and the render `min_blur_width`. **Existing workflow YAMLs that set these in
+  px must be updated to nm** (multiply the old px value by the camera pixel
+  size). The localization fit box (`box_side_length`/`roi`) and the
+  `picasso_mask_locs` `blur` stay in pixels (they are pixel-native in picasso).
+  The manual-to-workflow wizard now carries these through in nm. (The native
+  `link_locs` / `density` / `smlm_clusterer` modules are unchanged.)
+  (`picasso_set/params.py`, `picasso_set/analyse_core.py`,
+  `manual_to_workflow.py`)
+
+### Added
+- **Restrict a single-dataset module to channels by name.** The "Run only on
+  channels where" control gains a **name-contains** mode (a text field): a module
+  can run only on channels whose name/tag contains a substring (e.g. type `GFP`
+  to run on the GFP channels), which is the common case and more discoverable
+  than defining a per-channel boolean column. The boolean-column mode is kept as
+  the advanced option. Compiles to a `conditional_branch` whose condition tests
+  the channel tag with a new `contains` operator (`#run_on_channels_name`
+  directive). (`gui.py`, `util.py`)
+
 ## [0.8.4] - 2026-11-25
 
 ### Fixed

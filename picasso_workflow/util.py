@@ -2853,6 +2853,9 @@ class ConditionEvaluator:
         "<=": lambda a, b: a <= b,
         "==": lambda a, b: a == b,
         "!=": lambda a, b: a != b,
+        # substring test (``b in a``); used by the per-channel "name contains"
+        # restriction, where ``a`` is the channel tag and ``b`` the substring.
+        "contains": lambda a, b: str(b) in str(a),
     }
 
     def __init__(self, parameter_command_executor=None):
@@ -3044,6 +3047,12 @@ class ParameterTiler:
 #: that column is truthy (see :func:`compile_channel_restrictions`).
 RUN_ON_CHANNELS_KEY = "#run_on_channels"
 
+#: Reserved key naming a channel-tag substring. A module carrying it runs only
+#: on channels whose tag contains that substring (e.g. ``"GFP"`` -> the GFP
+#: channels). The name-based counterpart of :data:`RUN_ON_CHANNELS_KEY`; needs
+#: no declared tile-parameter column (see :func:`compile_channel_restrictions`).
+RUN_ON_CHANNELS_NAME_KEY = "#run_on_channels_name"
+
 #: Parameter keys that hold nested ``(module_name, params)`` sub-workflow lists
 #: (branch / conditional_branch). The compiler recurses into these so a
 #: ``#run_on_channels`` directive is honored wherever a module sits.
@@ -3095,28 +3104,41 @@ def _compile_restriction(module_name, params):
         return (module_name, params)
 
     nested = [k for k in _SUBWORKFLOW_KEYS if isinstance(params.get(k), list)]
-    # Nothing to do only when the directive key is absent (not merely empty --
-    # an empty directive must still be stripped) and there is no nested
+    # Nothing to do only when neither directive key is present (not merely empty
+    # -- an empty directive must still be stripped) and there is no nested
     # sub-workflow to recurse into.
-    if RUN_ON_CHANNELS_KEY not in params and not nested:
+    has_directive = (
+        RUN_ON_CHANNELS_KEY in params or RUN_ON_CHANNELS_NAME_KEY in params
+    )
+    if not has_directive and not nested:
         return (module_name, params)  # unchanged; reuse the dict
 
     # Copy so the caller's params are never mutated; recurse into any nested
-    # sub-workflow lists and drop the directive key.
+    # sub-workflow lists and drop the directive key(s).
     new_params = dict(params)
     for key in nested:
         new_params[key] = compile_channel_restrictions(new_params[key])
     column = new_params.pop(RUN_ON_CHANNELS_KEY, None)
+    name_contains = new_params.pop(RUN_ON_CHANNELS_NAME_KEY, None)
 
-    if not column:
-        # No (or empty) restriction -- the key (if any) has been stripped.
+    if column:
+        # Run where the per-channel boolean column is truthy.
+        condition = {
+            "left": ("$$map", column, False),
+            "operator": "==",
+            "right": True,
+        }
+    elif name_contains:
+        # Run where the channel tag contains the given substring.
+        condition = {
+            "left": ("$$map", "#tags"),
+            "operator": "contains",
+            "right": name_contains,
+        }
+    else:
+        # No (or empty) restriction -- the key(s) have been stripped.
         return (module_name, new_params)
 
-    condition = {
-        "left": ("$$map", column, False),
-        "operator": "==",
-        "right": True,
-    }
     return (
         "conditional_branch",
         {

@@ -628,10 +628,13 @@ def scan_folder(manual_dir, progress=None, should_cancel=None):
         # Pick the downstream-start file and how many of the deepest chain's
         # leading steps it already contains (base_info_len). Prefer a present
         # file whose history is a true prefix of the deepest chain -- a clean
-        # localized checkpoint on the main branch (the deepest such ancestor
-        # skips the most work). A pick side-branch is NOT a prefix, so it is
-        # never chosen. When no ancestor exists (a minimal export of only the
-        # final + pick-branch files), load the shortest file and reconstruct
+        # localized checkpoint on the main branch -- and take the EARLIEST
+        # (shallowest) such ancestor, so downstream reconstructs the full
+        # per-channel pipeline that follows it rather than collapsing to just the
+        # last step (when every intermediate file is present, the deepest
+        # ancestor would skip everything). A pick side-branch is NOT a prefix, so
+        # it is never chosen. When no ancestor exists (a minimal export of only
+        # the final + pick-branch files), load the shortest file and reconstruct
         # everything after localization (header + Identify/Fit), so AIM and the
         # undrift steps are not skipped.
         ancestors = []
@@ -658,7 +661,7 @@ def scan_folder(manual_dir, progress=None, should_cancel=None):
                     manual_dir, name
                 )
         if ancestors:
-            base_info_len, base_name = max(ancestors)
+            base_info_len, base_name = min(ancestors)
             base_path = os.path.join(manual_dir, base_name)
         else:
             base_path = os.path.join(manual_dir, shortest)
@@ -825,19 +828,15 @@ def _extract_undrift_rcc(step, pixelsize):
 
 
 def _extract_undrift_aim(step, pixelsize):
-    # picasso_undrift_aim takes intersectdist / roiradius in camera pixels;
-    # the info records them in nm.
+    # picasso_undrift_aim takes intersectdist / roiradius in nm, exactly as the
+    # info records them -- pass through directly.
     params = {}
     if "Segmentation" in step:
         params["segmentation"] = step["Segmentation"]
     if "Intersect distance (nm)" in step:
-        params["intersectdist"] = _px(
-            step["Intersect distance (nm)"], pixelsize
-        )
+        params["intersectdist"] = step["Intersect distance (nm)"]
     if "Search regions radius (nm)" in step:
-        params["roiradius"] = _px(
-            step["Search regions radius (nm)"], pixelsize
-        )
+        params["roiradius"] = step["Search regions radius (nm)"]
     return params
 
 
@@ -869,15 +868,15 @@ def _extract_density(step, pixelsize):
 
 
 def _extract_picasso_dbscan(step, pixelsize):
-    # picasso_dbscan config: radius in camera px (the module multiplies by
-    # pixelsize before calling picasso, which records "Radius (nm)"), and
-    # density = picasso's minimum local density (min_samples).
+    # picasso_dbscan config: radius in nm (picasso records "Radius (nm)"); a
+    # legacy px-tagged radius is converted to nm. density = picasso's minimum
+    # local density (min_samples).
     params = {}
     rad = _radius_value(step)
     if rad is not None:
         value, unit = rad
         params["radius"] = (
-            float(value) if unit == "px" else float(value) / pixelsize
+            float(value) if unit == "nm" else float(value) * pixelsize
         )
     if "Minimum local density" in step:
         params["density"] = step["Minimum local density"]
@@ -1485,6 +1484,80 @@ def _n_frames_from_info(info):
     return 1
 
 
+def _find_similar_params_from_export(pick_hdf5, pixelsize):
+    """``find_similar`` thresholds retro-calculated from a pick export.
+
+    Loads the manual picked-locs file, reads its pick diameter from the trailing
+    ``Render : Pick`` info step, and recovers the nlocs / rmsd thresholds from
+    the grouped picks (:func:`retro_calc_from_picked`). Returns the
+    ``find_similar`` parameter dict, or ``None`` if it cannot be recovered.
+    """
+    try:
+        picked, info = _load_locs(pick_hdf5)
+    except Exception:  # pragma: no cover - depends on picasso/data
+        return None
+    diameter = None
+    for step in reversed(info or []):
+        if isinstance(step, dict) and step.get("Pick Diameter (nm)"):
+            diameter = step["Pick Diameter (nm)"]
+            break
+    if not diameter:
+        return None
+    n_frames = _n_frames_from_info(info)
+    return (
+        retro_calc_from_picked(picked, diameter, pixelsize, n_frames) or None
+    )
+
+
+def apply_pick_similar_for_undrift(chain, pixelsize=130.0):
+    """Reconstruct each manual undrift-from-picked as ``find_similar`` + undrift.
+
+    Instead of pointing ``undrift_from_picked`` at the manual pick-export file,
+    insert a ``find_similar`` module -- with nlocs / rmsd / diameter thresholds
+    retro-calculated from that export -- immediately before it, and undrift from
+    ``find_similar``'s own picks (``$get_previous_module_result``). The workflow
+    then re-derives its picks in-run rather than depending on the manual
+    picked-locs files. Steps whose thresholds cannot be recovered keep the
+    file-based wiring from :func:`map_chain`.
+    """
+    new_steps = []
+    for s in chain.steps:
+        if s.module_name == "undrift_from_picked":
+            pick_hdf5 = chain.pick_exports.get(s.info_index)
+            params = (
+                _find_similar_params_from_export(pick_hdf5, pixelsize)
+                if pick_hdf5
+                else None
+            )
+            if params:
+                new_steps.append(
+                    MappedStep(
+                        source=s.source,
+                        module_name="find_similar",
+                        params=params,
+                        confidence=CONF_RETRO,
+                        messages=[
+                            "pick-similar thresholds retro-calculated from the "
+                            "manual picks; re-derives the picks in-workflow"
+                        ],
+                        info_index=s.info_index,
+                    )
+                )
+                s.params["fp_picked_locs"] = (
+                    "$get_previous_module_result",
+                    "fp_picked_locs",
+                )
+                s.confidence = CONF_RETRO
+                s.messages = [
+                    m for m in s.messages if "no picks file" not in m
+                ]
+                s.messages.append(
+                    "undrifts from the find_similar picks inserted above"
+                )
+        new_steps.append(s)
+    chain.steps = new_steps
+
+
 # ---------------------------------------------------------------------------
 # 4. Single <-> aggregation split.
 # ---------------------------------------------------------------------------
@@ -1749,8 +1822,10 @@ def reconstruct_workflow(
             frac,
         )
         map_chain(chain, pixelsize=pixelsize, start_from=start_from)
-        needs_locs = chain.picks_path or any(
-            s.module_name == "picasso_picked_locs" for s in chain.steps
+        needs_locs = (
+            chain.picks_path
+            or chain.pick_exports
+            or any(s.module_name == "picasso_picked_locs" for s in chain.steps)
         )
         if needs_locs:
             _report(
@@ -1761,6 +1836,9 @@ def reconstruct_workflow(
             )
         apply_find_similar_retrocalc(chain, pixelsize=pixelsize)
         apply_pick_similar_retrocalc(chain, manual_dir, pixelsize=pixelsize)
+        # Re-derive undrift-from-picked's picks in-workflow (find_similar with
+        # the recovered thresholds) instead of loading the manual pick files.
+        apply_pick_similar_for_undrift(chain, pixelsize=pixelsize)
 
     _report(progress, "Folding and validating the workflow…", 0.95)
 

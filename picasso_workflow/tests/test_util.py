@@ -322,6 +322,30 @@ class TestUtil(unittest.TestCase):
         # input not mutated
         assert modules[1][1] == {"radius": 5, key: "is_resi"}
 
+    def test_05_compile_channel_restrictions_name_contains(self):
+        """``#run_on_channels_name`` wraps the module in a conditional_branch
+        whose condition is the channel tag CONTAINS the substring."""
+        key = util.RUN_ON_CHANNELS_NAME_KEY
+        modules = [("cluster", {"radius": 5, key: "GFP"})]
+        out = util.compile_channel_restrictions(modules)
+        assert out[0][0] == "conditional_branch"
+        cb = out[0][1]
+        assert cb["condition"] == {
+            "left": ("$$map", "#tags"),
+            "operator": "contains",
+            "right": "GFP",
+        }
+        assert cb["if_true"] == [("cluster", {"radius": 5})]
+        assert cb["if_false"] == []
+        # input not mutated
+        assert modules[0][1] == {"radius": 5, key: "GFP"}
+
+    def test_05_contains_operator(self):
+        """The condition evaluator supports a substring ``contains`` test."""
+        op = util.ConditionEvaluator.COMPARISON_OPERATORS["contains"]
+        assert op("02_GFP_L3", "GFP") is True
+        assert op("08_ALFA_L1", "GFP") is False
+
     def test_05_compile_channel_restrictions_tiled(self):
         """Compiled restriction + tiling resolves the condition per channel:
         the ``$$map`` column becomes a concrete bool per tile, so channel A
