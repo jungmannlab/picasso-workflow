@@ -111,13 +111,12 @@ def test_save_token_seeds_commented_template_for_new_env(
     # the user can discover and uncomment them.
     for commented in (
         "# CONFLUENCE_URL=",
-        "# TEST_CONFLUENCE_TOKEN=",
-        # the test-profile page var is TEST_CONFLUENCE_PAGE (not ...BASE_PAGE);
-        # see confluence._CONFLUENCE_PROFILES
-        "# TEST_CONFLUENCE_PAGE=",
         "# PAINT_REGISTRY_TOKEN=",
     ):
         assert commented in text
+    # the pytest-only Confluence target (TEST_*) is not advertised to the
+    # typical user -- those vars are for the test suite, set via the shell.
+    assert "TEST_CONFLUENCE" not in text
     # only variables the package actually reads are advertised: DRIVEPATHS is
     # sourced from config.yaml (CONFIG["Drivepaths"]), never the environment.
     assert "DRIVEPATHS" not in text

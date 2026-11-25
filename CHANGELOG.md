@@ -22,12 +22,23 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ### Changed
 - **The onboarding "Save token" step seeds a documented `.env`.** A brand-new
-  per-user `.env` is now written from a template that lists every environment
-  variable the package reads (Confluence operational/test connection vars and
+  per-user `.env` is now written from a template that lists the environment
+  variables a typical user needs (Confluence operational connection vars and
   the picasso-registry URL and token) grouped and commented out, so users can
   discover and uncomment what they need. The token is filled in place; an existing `.env` is
   never overwritten. The onboarding dialog also now shows the exact `.env` file
   path. (`gui.py`)
+- **Test-only config no longer ships in the user-facing templates.** The
+  bundled `config_template.yaml`, the `.env_template`, and the onboarding-
+  generated `.env` no longer advertise the pytest Confluence target
+  (`ConfluenceTest` / `TEST_CONFLUENCE_*`) or the integration-test `TestData`
+  directory — these are for the test suite, not the typical user, who was only
+  confused by them. The intro examples now read the operational
+  `CONFLUENCE_*` env vars (matching the trimmed `.env_template`) instead of the
+  `TEST_CONFLUENCE_*` ones. The pytest suite is unaffected: its credentials
+  still resolve from a per-user `config.yaml` / `TEST_CONFLUENCE_*` env, and
+  the `ConfluenceTest` profile remains defined in `confluence.py`.
+  (`config_template.yaml`, `.env_template`, `gui.py`, `examples/`)
 
 ## [0.8.2] - 2026-11-24
 
