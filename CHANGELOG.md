@@ -10,6 +10,17 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ## [Unreleased]
 
+### Fixed
+- **Windows installer now reliably creates the Start Menu / Desktop shortcut.**
+  The shortcut was built by a PowerShell one-liner embedded in `post_install.bat`
+  whose `cmd`↔PowerShell quote-escaping silently failed on some installs, so no
+  shortcut appeared even though the app installed fine. The logic moved to a
+  standalone `create_shortcuts.ps1` (shipped via `extra_files`, invoked with
+  `-File`), which also logs to `<prefix>\shortcut-install.log` and swallows its
+  own errors so a shortcut hiccup never aborts an otherwise-working install.
+  (`release/create_shortcuts.ps1`, `release/post_install.bat`,
+  `release/construct.yaml`)
+
 ## [0.8.5] - 2026-11-25
 
 ### Fixed
