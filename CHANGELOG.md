@@ -10,6 +10,16 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ## [Unreleased]
 
+### Fixed
+- **The wizard again reconstructs the full per-channel pipeline when every
+  intermediate file is present** (e.g. a RESI run saved at each step). The
+  downstream-start selection introduced in 0.8.4 chose the *deepest* ancestor
+  file, so with all intermediates present it loaded the near-final file and the
+  single stage collapsed to just `[load, save]` — the per-channel processing
+  (pick, filter, DBSCAN, G5M, …) that feeds `combine_channels` was dropped. It
+  now starts from the *earliest* localized checkpoint and reconstructs the whole
+  pipeline forward. (`manual_to_workflow.py`)
+
 ## [0.8.4] - 2026-11-25
 
 ### Fixed
