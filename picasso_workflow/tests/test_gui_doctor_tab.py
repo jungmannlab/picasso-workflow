@@ -46,6 +46,7 @@ def test_collect_diagnostics_shape():
         "cluster",
         "config_sources",
         "dotenv",
+        "user_env",
         "logging",
         "env",
         "confluence",
@@ -172,6 +173,39 @@ def test_doctor_tab_builds_and_renders(qapp):
     # a connection row per profile
     assert set(tab._conn_buttons) == {"Confluence", "ConfluenceTest"}
     assert tab._conn_results["Confluence"].text() == "not tested"
+    tab.deleteLater()
+
+
+def test_render_html_shows_per_user_env_path(qapp):
+    tab = DoctorTab()
+    diag = collect_diagnostics()
+    diag["user_env"] = {
+        "path": "/home/me/.config/picasso_workflow/.env",
+        "exists": False,
+        "keys": [],
+    }
+    diag["dotenv"] = {}
+    html = tab._render_html(diag)
+    # the expected per-user path is shown even when the file is absent
+    assert "/home/me/.config/picasso_workflow/.env" in html
+    assert "not found" in html
+    tab.deleteLater()
+
+
+def test_render_html_lists_per_user_env_keys(qapp):
+    tab = DoctorTab()
+    diag = collect_diagnostics()
+    path = "/home/me/.config/picasso_workflow/.env"
+    diag["user_env"] = {
+        "path": path,
+        "exists": True,
+        "keys": ["CONFLUENCE_TOKEN"],
+    }
+    # find_dotenv located the same file: no duplicate "scanned" row
+    diag["dotenv"] = {"path": path}
+    html = tab._render_html(diag)
+    assert "found" in html and "CONFLUENCE_TOKEN" in html
+    assert "also loaded (scanned)" not in html
     tab.deleteLater()
 
 

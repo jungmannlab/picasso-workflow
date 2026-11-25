@@ -10,6 +10,46 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ## [Unreleased]
 
+## [0.8.3] - 2026-11-25
+
+### Fixed
+- **The manual-to-workflow wizard now wires `undrift_from_picked` to its picks
+  file.** A reconstructed "Undrift from picked" step mapped to the
+  `undrift_from_picked` module but left its required `fp_picked_locs` empty,
+  while the `_extract_none` path still flagged the step green. The wizard now
+  points `fp_picked_locs` at the chain's saved picks file (matched by base-stem
+  name, the same source `picasso_picked_locs` uses); when no picks file is
+  found the step is flagged `CONF_LOW` with a message to set it manually.
+  (`manual_to_workflow.py`)
+- **Doctor tab no longer falsely reports "no .env file".** The per-user
+  `.env` (`~/.config/picasso_workflow/.env`, where the GUI onboarding saves the
+  Confluence token) is auto-loaded at import, but the Doctor tab's `.env` row
+  was driven only by `find_dotenv()`, which scans upward from the installed
+  package directory and never sees that file. The tab now shows the per-user
+  `.env`'s expected path and whether it was found — so a saved token that *is*
+  loaded is no longer reported as missing — and only lists a separately
+  `find_dotenv()`-scanned file when it differs. (`__init__.py`, `doctor_tab.py`)
+
+### Changed
+- **The onboarding "Save token" step seeds a documented `.env`.** A brand-new
+  per-user `.env` is now written from a template that lists the environment
+  variables a typical user needs (Confluence operational connection vars and
+  the picasso-registry URL and token) grouped and commented out, so users can
+  discover and uncomment what they need. The token is filled in place; an existing `.env` is
+  never overwritten. The onboarding dialog also now shows the exact `.env` file
+  path. (`gui.py`)
+- **Test-only config no longer ships in the user-facing templates.** The
+  bundled `config_template.yaml`, the `.env_template`, and the onboarding-
+  generated `.env` no longer advertise the pytest Confluence target
+  (`ConfluenceTest` / `TEST_CONFLUENCE_*`) or the integration-test `TestData`
+  directory — these are for the test suite, not the typical user, who was only
+  confused by them. The intro examples now read the operational
+  `CONFLUENCE_*` env vars (matching the trimmed `.env_template`) instead of the
+  `TEST_CONFLUENCE_*` ones. The pytest suite is unaffected: its credentials
+  still resolve from a per-user `config.yaml` / `TEST_CONFLUENCE_*` env, and
+  the `ConfluenceTest` profile remains defined in `confluence.py`.
+  (`config_template.yaml`, `.env_template`, `gui.py`, `examples/`)
+
 ## [0.8.2] - 2026-11-24
 
 ### Fixed

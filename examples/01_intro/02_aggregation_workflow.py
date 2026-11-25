@@ -64,10 +64,10 @@ data_location = os.path.join(
 
 # # if you have the .env file set up (copy from .env_template),
 # # you can use its information instead of manually inputting it here
-confluence_url = os.getenv("TEST_CONFLUENCE_URL")
-confluence_token = os.getenv("TEST_CONFLUENCE_TOKEN")
-confluence_space = os.getenv("TEST_CONFLUENCE_SPACE")
-parent_page_title = os.getenv("TEST_CONFLUENCE_PAGE")
+confluence_url = os.getenv("CONFLUENCE_URL")
+confluence_token = os.getenv("CONFLUENCE_TOKEN")
+confluence_space = os.getenv("CONFLUENCE_SPACE")
+parent_page_title = os.getenv("CONFLUENCE_BASE_PAGE")
 
 
 reporter_config = {

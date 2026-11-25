@@ -9833,6 +9833,7 @@ class GettingStartedDialog(QtWidgets.QDialog):
             "token, and paste it below.<br>"
             "It is saved to your per-user <code>.env</code> and loaded on every "
             "launch — never written to <code>config.yaml</code> or the logs."
+            f"<br>File location: <code>{self.env_path()}</code>"
         )
         info.setTextFormat(Qt.TextFormat.RichText)
         info.setWordWrap(True)
@@ -9911,13 +9912,45 @@ class GettingStartedDialog(QtWidgets.QDialog):
         return GettingStartedDialog._config_dir() / ".env"
 
     @staticmethod
+    def _env_template():
+        """Starter body for a fresh per-user ``.env``.
+
+        Seeds the variables a typical user needs, grouped and commented out, so
+        they can discover and uncomment what they need by editing the file. The
+        operational Confluence token line is left live (empty) for
+        :meth:`save_confluence_token` to fill in place. The pytest-only
+        Confluence target (``TEST_CONFLUENCE_*``) is intentionally omitted --
+        it is for the test suite, not day-to-day use.
+        """
+        canonical = GettingStartedDialog._token_env_names()[0]
+        return (
+            "# picasso-workflow per-user environment -- auto-loaded at import.\n"
+            "# Secrets live here (never in config.yaml or the logs); keep "
+            "chmod 600.\n"
+            "# Uncomment and set the variables you need; delete the rest.\n"
+            "\n"
+            "# --- Confluence (operational reporting target) ---\n"
+            f"{canonical}=\n"
+            "# CONFLUENCE_URL=https://your.site/wiki\n"
+            "# CONFLUENCE_SPACE=SPACEKEY\n"
+            "# CONFLUENCE_BASE_PAGE=Landing Page\n"
+            "# CONFLUENCE_USERNAME=you@example.com\n"
+            "\n"
+            "# --- picasso-registry (provenance/metrics service) ---\n"
+            "# PAINT_REGISTRY_SERVICE_URL=http://host:port\n"
+            "# PAINT_REGISTRY_TOKEN=\n"
+        )
+
+    @staticmethod
     def save_confluence_token(token):
         """Persist ``token`` as the Confluence token in the per-user .env.
 
         Writes to ``~/.config/picasso_workflow/.env`` (loaded at every launch),
         tightens its permissions, and sets the variable in the current process
-        so it takes effect immediately. The token value is never logged.
-        Returns ``(ok, message)``.
+        so it takes effect immediately. A brand-new file is seeded from
+        :meth:`_env_template` so the other recognised variables are discoverable
+        (commented out). The token value is never logged. Returns
+        ``(ok, message)``.
         """
         from dotenv import set_key
 
@@ -9925,7 +9958,10 @@ class GettingStartedDialog(QtWidgets.QDialog):
         try:
             env = GettingStartedDialog.env_path()
             env.parent.mkdir(parents=True, exist_ok=True)
-            env.touch(exist_ok=True)
+            if not env.exists():
+                env.write_text(
+                    GettingStartedDialog._env_template(), encoding="utf-8"
+                )
             try:
                 os.chmod(env, 0o600)
             except OSError:

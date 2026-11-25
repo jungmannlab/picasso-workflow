@@ -9,23 +9,13 @@
 # Each file only needs to specify the keys it wants to override.
 Templates:
   TemplateName: "/local/path/to/template"
-TestData:
-  # Path to a directory of real acquired datasets used by integration tests.
-  # Override in ~/.config/picasso_workflow/config.yaml (not here).
-  # Alternatively set the environment variable PW_TEST_DATA_DIR.
-  directory: null
 # Non-secret Confluence connection settings only. The token is supplied via an
-# environment variable, never stored here (operational: CONFLUENCE_TOKEN,
-# legacy alias CONFLUENCE_BEARER; tests: TEST_CONFLUENCE_TOKEN).
+# environment variable, never stored here (CONFLUENCE_TOKEN, legacy alias
+# CONFLUENCE_BEARER).
 Confluence: # operational target
   URL: ""
   Space: "~user"
   DefaultPage: ""
-ConfluenceTest: # target for the pytest suite
-  URL: ""
-  Space: "~user"
-  DefaultPage: ""
-  Username: ""
 # The cluster admin console (shared-mount Apptainer images, SLURM queue, test
 # runs) is HIDDEN from the main GUI by default -- it is cluster-admin tooling,
 # not for every user. Set enabled: true in your site/user config.yaml to show
