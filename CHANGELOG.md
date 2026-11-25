@@ -27,6 +27,12 @@ This file was started after v0.5.6; earlier history is in the git log.
   `picasso_workflow/ssh_setup.py`; the dialog is a thin Qt wrapper.
 
 ### Fixed
+- **Onboarding no longer overrides site-wide settings.** Seeding the per-user
+  `config.yaml` from the template now comments out any top-level section the
+  site-wide (all-users) config already sets (with an "uncomment to override"
+  banner). The per-user layer is deep-merged on top of the site layer, so an
+  uncommented template placeholder would otherwise silently clobber the admin's
+  value. (`picasso_workflow/__init__.py`, `picasso_workflow/gui.py`)
 - **The Manual → Workflow wizard can now be sent behind the main GUI.** It was
   parented to the main window, and Qt gives a parented top-level a
   transient-parent hint that most window managers keep floating above its

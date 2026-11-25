@@ -8,6 +8,7 @@ except ImportError:
 # import logging
 from loguru import logger
 import os
+import re
 import sys
 import yaml
 from pathlib import Path
@@ -144,6 +145,59 @@ def _user_config_dir() -> Path:
 def _load_yaml(path) -> dict:
     with open(path, "r") as f:
         return yaml.safe_load(f) or {}
+
+
+def _comment_out_template_keys(text: str, keys) -> str:
+    """Comment out the top-level YAML blocks for ``keys`` in a config template.
+
+    Used when seeding the per-user ``config.yaml``: a top-level key already set
+    by the site-wide (all-users) config is commented out (with an
+    "uncomment to override" banner) so the freshly-seeded per-user file -- which
+    is deep-merged ON TOP of the site config -- does not silently clobber the
+    admin's value. A block is the key line plus its indented continuation (blank
+    lines preserved), up to the next top-level key.
+    """
+    keyset = set(keys or ())
+    if not keyset:
+        return text
+    key_re = re.compile(r"^([A-Za-z_][\w-]*):")
+    lines = text.split("\n")
+    out: list[str] = []
+    i, n = 0, len(lines)
+    while i < n:
+        m = key_re.match(lines[i])
+        if m and m.group(1) in keyset:
+            out.append(
+                "# --- set by the site-wide (all-users) config; "
+                "uncomment to override ---"
+            )
+            out.append("# " + lines[i])
+            i += 1
+            while i < n:
+                ln = lines[i]
+                if ln.strip() == "":
+                    out.append(ln)  # preserve blank lines
+                elif ln[0].isspace():
+                    out.append("# " + ln)  # indented block body
+                else:
+                    break  # next top-level line ends the block
+                i += 1
+            continue
+        out.append(lines[i])
+        i += 1
+    return "\n".join(out)
+
+
+def _site_config_keys() -> set:
+    """Top-level keys set by the site-wide config (empty if none/unreadable)."""
+    path = _site_config_path()
+    if not path.exists():
+        return set()
+    try:
+        data = _load_yaml(path)
+    except Exception:  # pragma: no cover - defensive against a bad file
+        return set()
+    return set(data) if isinstance(data, dict) else set()
 
 
 def _load_layer(path):
