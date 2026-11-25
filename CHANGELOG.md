@@ -11,6 +11,14 @@ This file was started after v0.5.6; earlier history is in the git log.
 ## [Unreleased]
 
 ### Fixed
+- **The manual-to-workflow wizard now wires `undrift_from_picked` to its picks
+  file.** A reconstructed "Undrift from picked" step mapped to the
+  `undrift_from_picked` module but left its required `fp_picked_locs` empty,
+  while the `_extract_none` path still flagged the step green. The wizard now
+  points `fp_picked_locs` at the chain's saved picks file (matched by base-stem
+  name, the same source `picasso_picked_locs` uses); when no picks file is
+  found the step is flagged `CONF_LOW` with a message to set it manually.
+  (`manual_to_workflow.py`)
 - **Doctor tab no longer falsely reports "no .env file".** The per-user
   `.env` (`~/.config/picasso_workflow/.env`, where the GUI onboarding saves the
   Confluence token) is auto-loaded at import, but the Doctor tab's `.env` row
