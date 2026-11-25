@@ -317,11 +317,25 @@ load_dotenv()
 # treat an empty `CONFLUENCE_TOKEN=` as "already set" and never apply the saved
 # token. Secrets live here -- never in config.yaml or logs.
 _user_env = _user_config_dir() / ".env"
+_user_env_keys: list[str] = []
 if _user_env.exists():
-    for _k, _v in dotenv_values(_user_env).items():
+    _user_env_values = dotenv_values(_user_env)
+    for _k, _v in _user_env_values.items():
         if _v is not None and not os.environ.get(_k):
             os.environ[_k] = _v
+    _user_env_keys = sorted(k for k in _user_env_values if k)
     logger.info(f"Loaded per-user .env from: {_user_env}")
+else:
+    logger.info(f"No per-user .env found at: {_user_env}")
+# Record the per-user .env for the Doctor tab. find_dotenv() (see _log_dotenv)
+# only scans upward from the installed package dir, so it never sees this file;
+# surface the expected path + whether it exists so the tab reflects the .env the
+# package actually loads here (keys only -- never the secret values).
+DIAGNOSTICS["user_env"] = {
+    "path": str(_user_env),
+    "exists": _user_env.exists(),
+    "keys": _user_env_keys,
+}
 
 if os.getenv("SLURM_JOB_ID") is None:
     # keep ON_CLUSTER in sync; original assignment above also reflects this,

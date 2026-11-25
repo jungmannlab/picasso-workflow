@@ -94,6 +94,52 @@ def test_save_confluence_token_persists_and_sets_env(
         assert (env.stat().st_mode & 0o777) == 0o600
 
 
+def test_save_token_seeds_commented_template_for_new_env(
+    qapp, fake_home, monkeypatch
+):
+    monkeypatch.delenv("CONFLUENCE_TOKEN", raising=False)
+    monkeypatch.delenv("CONFLUENCE_BEARER", raising=False)
+    env = GettingStartedDialog.env_path()
+    assert not env.exists()
+    ok, _ = GettingStartedDialog.save_confluence_token("secret-xyz")
+    assert ok
+    text = env.read_text()
+    # the live token is filled in place...
+    assert os.environ["CONFLUENCE_TOKEN"] == "secret-xyz"
+    assert "secret-xyz" in text
+    # ...and the other recognised variables are present but commented out, so
+    # the user can discover and uncomment them.
+    for commented in (
+        "# CONFLUENCE_URL=",
+        "# TEST_CONFLUENCE_TOKEN=",
+        # the test-profile page var is TEST_CONFLUENCE_PAGE (not ...BASE_PAGE);
+        # see confluence._CONFLUENCE_PROFILES
+        "# TEST_CONFLUENCE_PAGE=",
+        "# PAINT_REGISTRY_TOKEN=",
+    ):
+        assert commented in text
+    # only variables the package actually reads are advertised: DRIVEPATHS is
+    # sourced from config.yaml (CONFIG["Drivepaths"]), never the environment.
+    assert "DRIVEPATHS" not in text
+
+
+def test_save_token_does_not_clobber_existing_env(
+    qapp, fake_home, monkeypatch
+):
+    monkeypatch.delenv("CONFLUENCE_TOKEN", raising=False)
+    env = GettingStartedDialog.env_path()
+    env.parent.mkdir(parents=True, exist_ok=True)
+    env.write_text("# my notes\nCONFLUENCE_URL=https://mine/wiki\n")
+    ok, _ = GettingStartedDialog.save_confluence_token("tok2")
+    assert ok
+    text = env.read_text()
+    # existing content preserved; template is NOT re-seeded over it
+    assert "# my notes" in text
+    assert "https://mine/wiki" in text
+    assert "# PAINT_REGISTRY_TOKEN=" not in text
+    assert os.environ["CONFLUENCE_TOKEN"] == "tok2"
+
+
 def test_token_status_reflects_environment(qapp, fake_home, monkeypatch):
     monkeypatch.setenv("CONFLUENCE_TOKEN", "present")
     d = GettingStartedDialog()
