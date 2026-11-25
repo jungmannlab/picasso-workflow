@@ -986,8 +986,15 @@ class _ReviewPage(QtWidgets.QWizardPage):
 class ManualToWorkflowWizard(QtWidgets.QWizard):
     """Wizard that reconstructs a workflow from a manual analysis folder."""
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, main_window=None):
         super().__init__(parent)
+        # The window to apply the reconstruction into. Kept separate from the
+        # Qt parent so the GUI can open the wizard with NO parent (a fully
+        # independent top-level window that can be stacked *behind* the main
+        # GUI) while still writing results back to it. Falls back to the Qt
+        # parent so existing ``ManualToWorkflowWizard(window)`` callers/tests
+        # keep working.
+        self._main_window = main_window if main_window is not None else parent
         self.setWindowTitle("Manual → Workflow")
         self.setWizardStyle(QtWidgets.QWizard.WizardStyle.ModernStyle)
         self.resize(760, 560)
@@ -1008,10 +1015,10 @@ class ManualToWorkflowWizard(QtWidgets.QWizard):
 
     def accept(self):
         review = self.page(self._review_page_id)
-        parent = self.parent()
-        if review.result is not None and parent is not None:
+        target = self._main_window
+        if review.result is not None and target is not None:
             try:
-                apply_result_to_window(parent, review.current_result())
+                apply_result_to_window(target, review.current_result())
             except Exception as exc:  # noqa: BLE001 - surfaced to the user
                 QtWidgets.QMessageBox.critical(
                     self,

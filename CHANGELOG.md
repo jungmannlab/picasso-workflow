@@ -10,6 +10,56 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ## [Unreleased]
 
+## [0.8.6] - 2026-11-25
+
+### Added
+- **Guided SSH-to-SLURM onboarding in the GUI.** A new
+  "Configure / Test connection…" button next to the Run-tab cluster
+  host/username controls opens an `SshSetupDialog` that walks a new user
+  through linking to a SLURM login node: pick or generate an SSH key, set the
+  host and username, and **test the connection before anything is saved**. On
+  an auth/no-key verdict it reveals the exact one-time `ssh-copy-id` command
+  (with a Copy button) to install the public key. After a successful test it
+  can optionally push the locally configured Confluence token to the login
+  node (reusing the Doctor tab's upload worker) so cluster jobs can report,
+  and persists the node (label → hostname + username) to the per-user
+  `config.yaml`. Cluster submission now runs the same connection test as a
+  pre-flight and offers this dialog if the login node is unreachable, instead
+  of failing cryptically later. All SSH logic lives in the headless
+  `picasso_workflow/ssh_setup.py`; the dialog is a thin Qt wrapper.
+
+### Fixed
+- **Onboarding no longer overrides site-wide settings.** Seeding the per-user
+  `config.yaml` from the template now comments out any top-level section the
+  site-wide (all-users) config already sets (with an "uncomment to override"
+  banner). The per-user layer is deep-merged on top of the site layer, so an
+  uncommented template placeholder would otherwise silently clobber the admin's
+  value. (`picasso_workflow/__init__.py`, `picasso_workflow/gui.py`)
+- **The Manual → Workflow wizard can now be sent behind the main GUI.** It was
+  parented to the main window, and Qt gives a parented top-level a
+  transient-parent hint that most window managers keep floating above its
+  parent (even with the `Qt.Window` flag). It now opens with no Qt parent (a
+  fully independent top-level window), while still applying its reconstruction
+  back to the main window via an explicit `main_window` reference.
+  (`picasso_workflow/wizard_manual_to_workflow.py`, `picasso_workflow/gui.py`)
+- **Windows installer now reliably creates the Start Menu / Desktop shortcut.**
+  The shortcut was built by a PowerShell one-liner embedded in `post_install.bat`
+  whose `cmd`↔PowerShell quote-escaping silently failed on some installs, so no
+  shortcut appeared even though the app installed fine. The logic moved to a
+  standalone `create_shortcuts.ps1` (shipped via `extra_files`, invoked with
+  `-File`), which also logs to `<prefix>\shortcut-install.log` and swallows its
+  own errors so a shortcut hiccup never aborts an otherwise-working install.
+  (`release/create_shortcuts.ps1`, `release/post_install.bat`,
+  `release/construct.yaml`)
+- **Correct app icon on the Windows taskbar.** The GUI pins an explicit
+  AppUserModelID so its taskbar button is grouped apart from the
+  `wscript`/launcher host, but Windows then sources that button's icon from the
+  shortcut carrying the same id — which the shortcut didn't set, so the taskbar
+  showed the generic Windows logo (while the title bar / shortcut looked right).
+  `create_shortcuts.ps1` now stamps `System.AppUserModel.ID` on the shortcut via
+  the shell `IPropertyStore` so the taskbar resolves the real icon.
+  (`release/create_shortcuts.ps1`)
+
 ## [0.8.5] - 2026-11-25
 
 ### Fixed
