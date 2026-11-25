@@ -403,6 +403,12 @@ class _ReviewPage(QtWidgets.QWizardPage):
         channel_row = QtWidgets.QHBoxLayout()
         channel_row.addWidget(QtWidgets.QLabel("Show parameters for channel:"))
         self.channel_combo = QtWidgets.QComboBox()
+        # Grow to fit the channel name (they can be long, e.g.
+        # "prtclstep0_round_img-0-R2") instead of truncating to a default width.
+        self.channel_combo.setSizeAdjustPolicy(
+            QtWidgets.QComboBox.SizeAdjustPolicy.AdjustToContents
+        )
+        self.channel_combo.setMinimumWidth(220)
         self.channel_combo.currentIndexChanged.connect(
             lambda _i: self._rebuild_table()
         )

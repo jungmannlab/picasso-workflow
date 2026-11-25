@@ -10,6 +10,28 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ## [Unreleased]
 
+### Fixed
+- **The wizard now groups branched, NDTiff-named channels correctly.** On a
+  manual analysis whose files use the NDTiff acquisition naming
+  (`<root>_NDTiffStack_...`) and branch (a `_picked` pick export vs the main
+  `_undriftbypicked` chain), with no bare `_locs` base file present (a minimal
+  export), the scanner split each suffix tail into its own bogus "channel"
+  (`picked`, `pickedOri`, `alignedRCC`, …) instead of the real channels. Channel
+  grouping now keys on the acquisition root before the format marker
+  (`_MMStack` / `_NDTiffStack`), which every processing output of a channel
+  shares, so branched files group together and the channel is named by its root
+  (e.g. `prtclstep0_round_img-0-R2`). (`manual_to_workflow.py`)
+- **The wizard no longer undercounts steps when the base file is a branch.**
+  `base_info_len` (how much of the deepest chain the downstream-start file
+  already contains) was the base file's own length; for a `_picked` side branch
+  that over-counts the shared history and skipped the main-branch steps after
+  the divergence point (e.g. one of two `undrift_from_picked` steps). It is now
+  the common-ancestor depth between the base and the deepest chain — identical
+  for a true linear ancestor, correct for a branch. (`manual_to_workflow.py`)
+- **The wizard's channel dropdown widened to fit its contents.** Channel names
+  can be long (e.g. `prtclstep0_round_img-0-R2`); the combo now sizes to its
+  contents instead of truncating. (`wizard_manual_to_workflow.py`)
+
 ### Changed
 - **The wizard's pick-similar retro-calculation is dramatically faster.**
   Recovering `find_similar` nlocs/rmsd thresholds from saved picks scanned every

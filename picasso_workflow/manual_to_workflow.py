@@ -302,15 +302,44 @@ def _check_cancel(should_cancel):
 # ---------------------------------------------------------------------------
 # 1. Folder scan.
 # ---------------------------------------------------------------------------
-def _group_by_base_stem(hdf5s):
-    """Group localization files into per-channel chains by prefix family.
+# Acquisition-format markers. A channel's movie is named ``<root>_MMStack...``
+# (MicroManager) or ``<root>_NDTiffStack...`` (NDTiff); every processing output
+# keeps ``<root>`` as its prefix. Detecting the marker is the most robust way to
+# recover the channel, because ``<root>`` is shared by the channel's whole file
+# tree -- including branches (e.g. a ``_picked`` pick export vs the main
+# ``_undriftbypicked`` chain) that do not prefix one another.
+_FORMAT_MARKERS = ("_mmstack", "_ndtiffstack")
 
-    A channel's base file (e.g. ``"Cell 1_ALFA-L1.hdf5"``) is a prefix of every
-    deeper file in its chain (``"Cell 1_ALFA-L1_cents_filter...hdf5"``). Each
-    file is assigned to the *shortest* stem present that is a prefix of it
-    (itself, or followed by ``_``). This is robust to unknown suffix tokens.
-    When no shorter prefix exists in the set, known suffixes are peeled as a
-    fallback so a lone deepest file still yields a sensible base.
+
+def _channel_root(stem):
+    """Return the acquisition root (through the format marker), or ``None``.
+
+    ``'..._img-0-R2_NDTiffStack_locs_render_AIM_picked'`` ->
+    ``'..._img-0-R2_NDTiffStack'``. ``None`` when no marker is present (the stem
+    then follows the ``<dataset>_<channel>`` convention handled below).
+    """
+    low = stem.lower()
+    for marker in _FORMAT_MARKERS:
+        i = low.find(marker)
+        if i > 0:
+            return stem[: i + len(marker)]
+    return None
+
+
+def _group_by_base_stem(hdf5s):
+    """Group localization files into per-channel chains.
+
+    When an acquisition marker (``_MMStack`` / ``_NDTiffStack``) is present, the
+    channel key is the acquisition root (:func:`_channel_root`): it is shared by
+    every processing output of the channel, including branches (a ``_picked``
+    pick export vs the main ``_undriftbypicked`` chain) that do not prefix one
+    another and would otherwise scatter into separate groups when no bare base
+    file is present (e.g. a minimal export of only the final + picked files).
+
+    Otherwise each file is assigned to the *shortest* stem present that is a
+    prefix of it (``"Cell 1_ALFA-L1.hdf5"`` anchors ``"Cell 1_ALFA-L1_cents
+    ...hdf5"``); failing that, known suffixes are peeled so a lone deepest file
+    still yields a sensible base.
 
     Returns
     -------
@@ -321,11 +350,12 @@ def _group_by_base_stem(hdf5s):
     groups: dict[str, list[str]] = {}
     for name in hdf5s:
         stem = name[: -len(".hdf5")]
-        base = None
-        for cand in stems:  # shortest first
-            if cand == stem or stem.startswith(cand + "_"):
-                base = cand
-                break
+        base = _channel_root(stem)
+        if base is None:
+            for cand in stems:  # shortest first
+                if cand == stem or stem.startswith(cand + "_"):
+                    base = cand
+                    break
         if base is None:
             base = _strip_suffixes(stem)
         groups.setdefault(base, []).append(name)
@@ -358,14 +388,18 @@ def _split_dataset_channel(base_stem):
     * Raw-acquisition-based, e.g.
       ``"08_ALFA_L1_100pM_1_MMStack_Pos0.ome_locs_undrift_render_ali"`` -- the
       processing suffixes make the last underscore-group meaningless, so the
-      channel is the acquisition root *before* ``_MMStack`` (``08_ALFA_L1_
-      100pM_1``), unique and human-recognizable. Rename channels later if wanted.
+      channel is the acquisition root *before* the format marker (``_MMStack`` /
+      ``_NDTiffStack``), e.g. ``08_ALFA_L1_100pM_1`` or
+      ``prtclstep0_round_img-0-R2``, unique and human-recognizable. Rename
+      channels later if wanted.
     * picasso manual exports named ``"<dataset>_<channel>"`` (e.g.
       ``"Cell 1_ALFA-L1"``) -- the channel is the last underscore-group.
     """
-    marker = base_stem.lower().find("_mmstack")
-    if marker > 0:
-        return "dataset", base_stem[:marker].strip()
+    low = base_stem.lower()
+    for mk in _FORMAT_MARKERS:
+        marker = low.find(mk)
+        if marker > 0:
+            return "dataset", base_stem[:marker].strip()
     if "_" in base_stem:
         dataset, channel = base_stem.rsplit("_", 1)
         return dataset.strip(), channel.strip()
@@ -397,13 +431,18 @@ def _channel_basename(chain):
 
 
 def _acq_folder_from_basename(basename):
-    """MicroManager acquisition-folder name for a raw basename, or ``None``.
+    """Acquisition-folder name for a raw basename, or ``None``.
 
-    MicroManager saves ``<acq>/<acq>_MMStack_PosN...ome.tif``, so the folder is
-    the basename up to ``_MMStack``.
+    MicroManager / NDTiff save ``<acq>/<acq>_MMStack_PosN...ome.tif`` (or
+    ``<acq>_NDTiffStack...``), so the folder is the basename up to the format
+    marker.
     """
-    marker = basename.lower().find("_mmstack")
-    return basename[:marker] if marker > 0 else None
+    low = basename.lower()
+    for mk in _FORMAT_MARKERS:
+        marker = low.find(mk)
+        if marker > 0:
+            return basename[:marker]
+    return None
 
 
 def _raw_in_root(root, basename):
@@ -477,6 +516,26 @@ def detect_raw_root(manual_dir, max_up=5):
     return None
 
 
+def _common_info_prefix_len(info_a, info_b):
+    """Length of the shared leading run of two info-step lists.
+
+    Steps are compared by generator identity (:func:`_source_string`); the
+    movie-header docs (the first dict, no ``Generated by``) are treated as
+    equal because a channel's files share one source movie. Used to find where
+    a downstream-start file's history diverges from the deepest chain, so a
+    branch file (a ``_picked`` export sharing only localize+undrift with the
+    main chain) does not make us skip the steps after the divergence point.
+    """
+    n = 0
+    for a, b in zip(info_a, info_b):
+        a_id = "" if _is_movie_header(a) else _source_string(a)
+        b_id = "" if _is_movie_header(b) else _source_string(b)
+        if a_id != b_id:
+            break
+        n += 1
+    return n
+
+
 def scan_folder(manual_dir, progress=None, should_cancel=None):
     """Discover per-channel manual-analysis chains in ``manual_dir``.
 
@@ -540,10 +599,19 @@ def scan_folder(manual_dir, progress=None, should_cancel=None):
         deepest_path = os.path.join(manual_dir, deepest)
         info_path = deepest_path[: -len(".hdf5")] + ".yaml"
         info_steps = _load_info(info_path) if os.path.exists(info_path) else []
-        # base_info_len is the step count baked into base_hdf5 (the shortest
-        # file, the downstream-mode start) specifically.
-        counts_by_name = {name: count for count, name in file_lengths}
-        base_info_len = counts_by_name.get(shortest, 0)
+        # base_info_len = how many of the deepest chain's leading steps the
+        # downstream-start file already contains. Use the COMMON-PREFIX depth
+        # with the deepest chain, not the base file's own length: for a linear
+        # ancestor the two are equal, but for a branch file (e.g. a "_picked"
+        # pick export that shares only localize+undrift with the main chain)
+        # the base's own length over-counts and would skip the main-branch
+        # steps after the divergence point.
+        base_info = (
+            _load_info(base_path[: -len(".hdf5")] + ".yaml")
+            if os.path.exists(base_path[: -len(".hdf5")] + ".yaml")
+            else []
+        )
+        base_info_len = _common_info_prefix_len(base_info, info_steps)
         dataset, channel = _split_dataset_channel(base_stem)
         picks_path = _find_picks_file(manual_dir, base_stem)
         chains.append(
