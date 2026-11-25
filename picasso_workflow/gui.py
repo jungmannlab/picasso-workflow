@@ -9915,10 +9915,12 @@ class GettingStartedDialog(QtWidgets.QDialog):
     def _env_template():
         """Starter body for a fresh per-user ``.env``.
 
-        Seeds every variable the package recognises, grouped and commented out,
-        so a user can discover and uncomment what they need by editing the file.
-        The operational Confluence token line is left live (empty) for
-        :meth:`save_confluence_token` to fill in place.
+        Seeds the variables a typical user needs, grouped and commented out, so
+        they can discover and uncomment what they need by editing the file. The
+        operational Confluence token line is left live (empty) for
+        :meth:`save_confluence_token` to fill in place. The pytest-only
+        Confluence target (``TEST_CONFLUENCE_*``) is intentionally omitted --
+        it is for the test suite, not day-to-day use.
         """
         canonical = GettingStartedDialog._token_env_names()[0]
         return (
@@ -9933,13 +9935,6 @@ class GettingStartedDialog(QtWidgets.QDialog):
             "# CONFLUENCE_SPACE=SPACEKEY\n"
             "# CONFLUENCE_BASE_PAGE=Landing Page\n"
             "# CONFLUENCE_USERNAME=you@example.com\n"
-            "\n"
-            "# --- Confluence (pytest target; TEST_* overrides) ---\n"
-            "# TEST_CONFLUENCE_TOKEN=\n"
-            "# TEST_CONFLUENCE_URL=https://your.site/wiki\n"
-            "# TEST_CONFLUENCE_SPACE=SPACEKEY\n"
-            "# TEST_CONFLUENCE_PAGE=Test Landing Page\n"
-            "# TEST_CONFLUENCE_USERNAME=you@example.com\n"
             "\n"
             "# --- picasso-registry (provenance/metrics service) ---\n"
             "# PAINT_REGISTRY_SERVICE_URL=http://host:port\n"
