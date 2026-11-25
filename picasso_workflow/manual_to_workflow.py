@@ -1182,8 +1182,10 @@ def _collapse_localize(steps):
             prev.messages = list(dict.fromkeys(prev.messages + step.messages))
             if CONF_OK in (prev.confidence, step.confidence):
                 prev.confidence = CONF_OK
-            # the fit completes the localization: attribute to its file
+            # the fit completes the localization: attribute to its file and
+            # info index, keeping both fields consistent on the merged step.
             prev.source_file = step.source_file or prev.source_file
+            prev.info_index = step.info_index
             continue
         collapsed.append(step)
     return collapsed
