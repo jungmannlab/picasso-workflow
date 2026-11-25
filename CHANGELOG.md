@@ -20,6 +20,14 @@ This file was started after v0.5.6; earlier history is in the git log.
   own errors so a shortcut hiccup never aborts an otherwise-working install.
   (`release/create_shortcuts.ps1`, `release/post_install.bat`,
   `release/construct.yaml`)
+- **Correct app icon on the Windows taskbar.** The GUI pins an explicit
+  AppUserModelID so its taskbar button is grouped apart from the
+  `wscript`/launcher host, but Windows then sources that button's icon from the
+  shortcut carrying the same id — which the shortcut didn't set, so the taskbar
+  showed the generic Windows logo (while the title bar / shortcut looked right).
+  `create_shortcuts.ps1` now stamps `System.AppUserModel.ID` on the shortcut via
+  the shell `IPropertyStore` so the taskbar resolves the real icon.
+  (`release/create_shortcuts.ps1`)
 
 ## [0.8.5] - 2026-11-25
 
