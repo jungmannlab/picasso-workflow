@@ -10068,6 +10068,8 @@ class SshSetupDialog(QtWidgets.QDialog):
         self._good_hostname = ""
         self._good_username = ""
         self._good_key_path = None
+        # (hostname, resolved-username, key) the in-flight probe is testing.
+        self._probed = None
 
         state = ssh_setup.detect_state()
         first_host = ""
@@ -10196,7 +10198,24 @@ class SshSetupDialog(QtWidgets.QDialog):
         self._ok_button.setEnabled(False)
         layout.addWidget(self.button_box)
 
+        # Any change to the connection parameters invalidates a prior passing
+        # test, so OK (and the token push) cannot persist stale host/user/key.
+        # Connected last so the initial setText() calls above do not fire it.
+        for edit in (self.host_edit, self.username_edit, self.key_edit):
+            edit.textChanged.connect(self._invalidate_test)
+
     # -- fields ------------------------------------------------------------
+    def _invalidate_test(self, *args):
+        self.copyid_group.setVisible(False)
+        if not self._tested_ok:
+            return
+        self._tested_ok = False
+        self._ok_button.setEnabled(False)
+        self.push_token_button.setEnabled(False)
+        self._set_status(
+            "Settings changed — test the connection again.", ok=None
+        )
+
     def _current_label(self):
         label = self.label_edit.text().strip()
         return label or self.host_edit.text().strip()
@@ -10249,15 +10268,25 @@ class SshSetupDialog(QtWidgets.QDialog):
         QtWidgets.QApplication.clipboard().setText(self.copyid_edit.text())
 
     # -- connection test (off-thread) --------------------------------------
+    def _current_params(self):
+        """(hostname, resolved-username, key) from the live fields."""
+        return (
+            self.host_edit.text().strip(),
+            self._ssh_setup.resolve_username(self.username_edit.text()),
+            self.key_edit.text().strip() or None,
+        )
+
     def _test_connection(self):
-        hostname = self.host_edit.text().strip()
-        username = self.username_edit.text().strip()
-        key_path = self.key_edit.text().strip() or None
+        hostname, username, key_path = self._current_params()
         if not hostname or not username:
             self._set_status(
                 "A host and a username are both required.", ok=False
             )
             return
+        # Capture exactly what we probe (with $USER expanded), so the saved
+        # values are the tested ones -- not whatever the fields hold when the
+        # async result returns.
+        self._probed = (hostname, username, key_path)
         # New test invalidates the previous good state.
         self._tested_ok = False
         self._ok_button.setEnabled(False)
@@ -10269,13 +10298,20 @@ class SshSetupDialog(QtWidgets.QDialog):
 
     def _on_test_result(self, verdict):
         self.test_button.setEnabled(True)
+        # If the user edited a connection field while the probe was in flight,
+        # the verdict is for stale params -- require a fresh test.
+        if self._current_params() != self._probed:
+            self.copyid_group.setVisible(False)
+            self._set_status(
+                "Settings changed — test the connection again.", ok=None
+            )
+            return
+        hostname, username, key_path = self._probed
         self._set_status(verdict.message, ok=verdict.ok)
         cats = self._ssh_setup
         if verdict.category in (cats.CAT_AUTH, cats.CAT_NO_KEY):
-            cmd = self._ssh_setup.ssh_copy_id_command(
-                self.host_edit.text().strip(),
-                self.username_edit.text().strip(),
-                key_path=self.key_edit.text().strip() or None,
+            cmd = cats.ssh_copy_id_command(
+                hostname, username, key_path=key_path
             )
             self.copyid_edit.setText(cmd)
             self.copyid_group.setVisible(True)
@@ -10283,9 +10319,9 @@ class SshSetupDialog(QtWidgets.QDialog):
             self.copyid_group.setVisible(False)
         if verdict.ok:
             self._tested_ok = True
-            self._good_hostname = self.host_edit.text().strip()
-            self._good_username = self.username_edit.text().strip()
-            self._good_key_path = self.key_edit.text().strip() or None
+            self._good_hostname = hostname
+            self._good_username = username
+            self._good_key_path = key_path
             self._ok_button.setEnabled(True)
             self.push_token_button.setEnabled(True)
 
@@ -10390,6 +10426,13 @@ class SshSetupDialog(QtWidgets.QDialog):
             thread.quit()
             thread.wait()
         self._threads.clear()
+
+    def done(self, result):
+        # Unlike the persistent Doctor tab, this dialog is short-lived: stop
+        # and join any in-flight worker (e.g. a token upload) before it is
+        # destroyed, or Qt tears down a running QThread and aborts the process.
+        self._stop_threads()
+        super().done(result)
 
 
 class _UpdateCheckWorker(QtCore.QObject):
@@ -18467,18 +18510,11 @@ class Window(QtWidgets.QMainWindow):
         # lost. The results folder is on the cluster-shared filesystem, so
         # creating it here makes it exist for the job.
         os.makedirs(os.path.join(results_folder_local, "logs"), exist_ok=True)
-        results_folder_host = self.pathparser.convert_path(
-            results_folder_local, host_cluster
-        )
-        # remember where to poll progress.json / drop the abort flag
-        self._monitor_remote_folder = results_folder_host
-        self._monitor_local_folder = None
-
         self.slurm_communicator = self._ensure_slurm_communicator(host_cluster)
         # Pre-flight: verify SSH works before assembling/submitting, so a
         # bad connection fails here with guidance rather than cryptically
         # later. On failure, offer the SSH-setup dialog and re-test; abort if
-        # it still does not work.
+        # the user declines or it still does not work.
         if not self.slurm_communicator.test_connection():
             reply = QtWidgets.QMessageBox.question(
                 self,
@@ -18488,15 +18524,22 @@ class Window(QtWidgets.QMainWindow):
                 QtWidgets.QMessageBox.StandardButton.Yes
                 | QtWidgets.QMessageBox.StandardButton.No,
             )
-            if reply == QtWidgets.QMessageBox.StandardButton.Yes:
-                self.on_configure_ssh()
-                host_cluster = str(self.cluster_host_combo.currentText())
-                login_node = CONFIG["SlurmLoginNodes"].get(
-                    host_cluster, login_node
+            if reply != QtWidgets.QMessageBox.StandardButton.Yes:
+                return None, None  # declined -- abort without re-probing
+            self.on_configure_ssh()
+            host_cluster = str(self.cluster_host_combo.currentText())
+            if host_cluster not in CONFIG.get("SlurmLoginNodes", {}):
+                QtWidgets.QMessageBox.warning(
+                    self,
+                    "SSH connection failed",
+                    "No reachable login node is configured. "
+                    "Submission aborted.",
                 )
-                self.slurm_communicator = self._ensure_slurm_communicator(
-                    host_cluster
-                )
+                return None, None
+            login_node = CONFIG["SlurmLoginNodes"][host_cluster]
+            self.slurm_communicator = self._ensure_slurm_communicator(
+                host_cluster
+            )
             if not self.slurm_communicator.test_connection():
                 QtWidgets.QMessageBox.warning(
                     self,
@@ -18505,6 +18548,14 @@ class Window(QtWidgets.QMainWindow):
                     "Submission aborted.",
                 )
                 return None, None
+        # Host-dependent remote paths: computed AFTER the pre-flight, which may
+        # have switched host_cluster, so the monitor polls the right folder.
+        results_folder_host = self.pathparser.convert_path(
+            results_folder_local, host_cluster
+        )
+        # remember where to poll progress.json / drop the abort flag
+        self._monitor_remote_folder = results_folder_host
+        self._monitor_local_folder = None
         # exposed for the submission summary / log below
         username = self.slurm_communicator.username
         ssh_key_path = self.slurm_communicator.ssh_key_path

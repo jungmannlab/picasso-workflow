@@ -15,6 +15,7 @@ real connection probe before anything is persisted ("test before save").
 
 from __future__ import annotations
 
+import getpass
 import os
 import shutil
 import subprocess
@@ -53,6 +54,27 @@ class ClusterState:
     usernames: dict = field(default_factory=dict)  # {label: username}
     key_path: str | None = None
     has_key: bool = False
+
+
+def resolve_username(username):
+    """Expand a literal ``$USER`` (or empty) to the local login name.
+
+    Matches ``gui._ensure_slurm_communicator``, which expands ``$USER`` with
+    :func:`getpass.getuser` before building the connection -- so a probe and a
+    later submission authenticate as the same real user.
+    """
+    name = (username or "").strip()
+    if not name or name == "$USER":
+        return getpass.getuser()
+    return name
+
+
+def _as_port(port):
+    """Coerce ``port`` to an int, defaulting to 22 on anything non-numeric."""
+    try:
+        return int(port)
+    except (TypeError, ValueError):
+        return 22
 
 
 # --------------------------------------------------------------------------- #
@@ -254,8 +276,8 @@ def generate_ssh_key(
 def ssh_copy_id_command(hostname, username, port=22, key_path=None):
     """The exact one-time command to install the public key on the node."""
     parts = ["ssh-copy-id"]
-    if port and int(port) != 22:
-        parts += ["-p", str(port)]
+    if _as_port(port) != 22:
+        parts += ["-p", str(_as_port(port))]
     if key_path:
         parts += ["-i", public_key_path(key_path)]
     parts.append(f"{username}@{hostname}")
@@ -265,7 +287,7 @@ def ssh_copy_id_command(hostname, username, port=22, key_path=None):
 def manual_install_command(hostname, username, port=22, key_path=None):
     """POSIX fallback when ``ssh-copy-id`` is unavailable (pipes the .pub)."""
     pub = public_key_path(key_path) if key_path else "<your-key>.pub"
-    p = f" -p {port}" if port and int(port) != 22 else ""
+    p = f" -p {_as_port(port)}" if _as_port(port) != 22 else ""
     return (
         f'cat "{pub}" | ssh{p} {username}@{hostname} '
         '"mkdir -p ~/.ssh && chmod 700 ~/.ssh && '

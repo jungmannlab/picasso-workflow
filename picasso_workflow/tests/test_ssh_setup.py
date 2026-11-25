@@ -188,6 +188,27 @@ def test_manual_install_command_pipes_pub():
     assert "authorized_keys" in cmd
 
 
+def test_resolve_username_expands_dollar_user(monkeypatch):
+    monkeypatch.setattr(ssh_setup.getpass, "getuser", lambda: "realuser")
+    assert ssh_setup.resolve_username("$USER") == "realuser"
+    assert ssh_setup.resolve_username("") == "realuser"
+    assert ssh_setup.resolve_username("   ") == "realuser"
+    assert ssh_setup.resolve_username(None) == "realuser"
+    assert ssh_setup.resolve_username("alice") == "alice"
+    assert ssh_setup.resolve_username("  alice  ") == "alice"
+
+
+def test_ssh_copy_id_command_string_port():
+    # A string port must not break the "!= 22" comparison, and a non-numeric
+    # port degrades to the default (no -p) instead of raising.
+    assert ssh_setup.ssh_copy_id_command("h", "u", port="2222") == (
+        "ssh-copy-id -p 2222 u@h"
+    )
+    assert ssh_setup.ssh_copy_id_command("h", "u", port="bad") == (
+        "ssh-copy-id u@h"
+    )
+
+
 # --------------------------------------------------------------------------- #
 # state detection
 # --------------------------------------------------------------------------- #
