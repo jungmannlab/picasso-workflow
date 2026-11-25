@@ -633,6 +633,102 @@ def test_retro_calc_from_picked_grouped():
     )
 
 
+def _bruteforce_find_similar(locs, centers, diameter_nm, px, n_frames, m=0.1):
+    """Reference O(picks x locs) implementation to check the KDTree path."""
+    x = np.asarray(locs["x"], float) * px
+    y = np.asarray(locs["y"], float) * px
+    r = diameter_nm / 2.0
+    nf = max(int(n_frames or 1), 1)
+    fracs, rmsds = [], []
+    for cx, cy in centers:
+        dx = x - cx
+        dy = y - cy
+        inside = (dx * dx + dy * dy) <= r * r
+        n = int(np.count_nonzero(inside))
+        if n == 0:
+            continue
+        fracs.append(n / nf)
+        rmsds.append(
+            float(np.sqrt(np.mean(dx[inside] ** 2 + dy[inside] ** 2)))
+        )
+    if not fracs:
+        return {}
+    fracs, rmsds = np.asarray(fracs), np.asarray(rmsds)
+    return {
+        "diameter": float(diameter_nm),
+        "min_n_locs_per_frame": float(fracs.min() * (1 - m)),
+        "max_n_locs_per_frame": float(fracs.max() * (1 + m)),
+        "min_rmsd": float(rmsds.min() * (1 - m)),
+        "max_rmsd": float(rmsds.max() * (1 + m)),
+    }
+
+
+def test_retro_calc_find_similar_matches_bruteforce():
+    # The KDTree radius query must reproduce the brute-force containment result
+    # exactly for a moderate random dataset (pick count below the subsample cap).
+    rng = np.random.default_rng(1)
+    px = 130.0
+    locs = np.rec.fromarrays(
+        [rng.uniform(0, 500, 4000), rng.uniform(0, 500, 4000)], names="x,y"
+    )
+    centers = list(
+        zip(rng.uniform(0, 500 * px, 300), rng.uniform(0, 500 * px, 300))
+    )
+    got = m.retro_calc_find_similar(locs, centers, 600.0, px, 2000)
+    ref = _bruteforce_find_similar(locs, centers, 600.0, px, 2000)
+    assert got.keys() == ref.keys()
+    for k in ref:
+        assert got[k] == pytest.approx(ref[k], rel=1e-9, abs=1e-9)
+
+
+def test_retro_calc_find_similar_subsamples_many_picks(monkeypatch):
+    # With more picks than the cap, only a sample is evaluated, but the recovered
+    # thresholds must still lie within the true (full-population) min/max band.
+    monkeypatch.setattr(m, "_RETRO_MAX_PICKS", 50)
+    rng = np.random.default_rng(2)
+    px = 130.0
+    locs = np.rec.fromarrays(
+        [rng.uniform(0, 500, 3000), rng.uniform(0, 500, 3000)], names="x,y"
+    )
+    centers = list(
+        zip(rng.uniform(0, 500 * px, 2000), rng.uniform(0, 500 * px, 2000))
+    )
+    got = m.retro_calc_find_similar(locs, centers, 800.0, px, 1000)
+    full = _bruteforce_find_similar(locs, centers, 800.0, px, 1000)
+    # Sample-based extremes sit inside the full-population extremes (margin aside).
+    assert got["min_n_locs_per_frame"] >= full["min_n_locs_per_frame"] - 1e-9
+    assert got["max_n_locs_per_frame"] <= full["max_n_locs_per_frame"] + 1e-9
+    assert got["min_rmsd"] >= full["min_rmsd"] - 1e-9
+    assert got["max_rmsd"] <= full["max_rmsd"] + 1e-9
+
+
+def test_retro_calc_from_picked_matches_reference():
+    # The sort-based group-by must match a per-group reference on random groups.
+    rng = np.random.default_rng(3)
+    px = 130.0
+    n = 5000
+    x = rng.uniform(0, 500, n)
+    y = rng.uniform(0, 500, n)
+    grp = rng.integers(0, 400, n)
+    picked = np.rec.fromarrays([x, y, grp], names="x,y,group")
+    got = m.retro_calc_from_picked(picked, 700.0, px, 1500)
+    # reference: explicit per-group loop
+    xn, yn = x * px, y * px
+    fracs, rmsds = [], []
+    for g in np.unique(grp):
+        mask = grp == g
+        gx, gy = xn[mask], yn[mask]
+        fracs.append(mask.sum() / 1500)
+        rmsds.append(
+            np.sqrt(np.mean((gx - gx.mean()) ** 2 + (gy - gy.mean()) ** 2))
+        )
+    fracs, rmsds = np.asarray(fracs), np.asarray(rmsds)
+    assert got["min_n_locs_per_frame"] == pytest.approx(fracs.min() * 0.9)
+    assert got["max_n_locs_per_frame"] == pytest.approx(fracs.max() * 1.1)
+    assert got["min_rmsd"] == pytest.approx(rmsds.min() * 0.9)
+    assert got["max_rmsd"] == pytest.approx(rmsds.max() * 1.1)
+
+
 def test_apply_pick_similar_retrocalc_notes(tmp_path, monkeypatch):
     chain = m.ChannelChain(
         tag="ALFA-L1",

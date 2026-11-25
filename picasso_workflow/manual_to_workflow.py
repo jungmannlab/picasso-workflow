@@ -1097,10 +1097,26 @@ def _localizations_loader_step():
 # ---------------------------------------------------------------------------
 # 3. find_similar parameter retro-calculation.
 # ---------------------------------------------------------------------------
-# Note: retro_calc_find_similar and retro_calc_from_picked have similar numeric
-# logic (looping over picks/groups, computing fracs and rmsds from enclosed locs,
-# deriving min/max with margin). A future refactoring could extract a shared
-# _retro_calc_thresholds_core(x_nm, y_nm, centers_or_groups, ...) helper.
+# Upper bound on the number of pick centres evaluated in retro_calc_find_similar.
+# The thresholds are just the min/max of the per-pick nlocs / rmsd distributions
+# (padded by a margin), so a representative, evenly-spaced sample of a few
+# thousand picks reproduces them; evaluating every one of (potentially tens of
+# thousands of) picks is what made the retro-calc slow. Deterministic sampling
+# (no RNG) keeps the result reproducible.
+_RETRO_MAX_PICKS = 5000
+
+
+def _subsample_rows(arr, k):
+    """Return at most ``k`` evenly-spaced rows of ``arr`` (all rows if ``<= k``).
+
+    Deterministic (linspace, not random) so the retro-calc is reproducible.
+    """
+    if len(arr) <= k:
+        return arr
+    sel = np.unique(np.linspace(0, len(arr) - 1, k).round().astype(int))
+    return arr[sel]
+
+
 def retro_calc_find_similar(
     locs, centers_nm, diameter_nm, pixelsize, n_frames, margin=0.1
 ):
@@ -1110,6 +1126,12 @@ def retro_calc_find_similar(
     they are reconstructed: for each saved pick centre, count the enclosed
     localizations and their RMS distance from the centre, then set the min/max
     bounds to span the observed distributions (with a relative ``margin``).
+
+    The enclosed-localization lookup uses a :class:`scipy.spatial.cKDTree` radius
+    query instead of scanning every localization per pick, turning the cost from
+    ``O(picks x locs)`` into ``O(locs log locs)`` build plus cheap queries. Only
+    up to :data:`_RETRO_MAX_PICKS` evenly-spaced picks are evaluated, since the
+    min/max thresholds converge well before every pick is seen.
 
     Parameters
     ----------
@@ -1133,24 +1155,38 @@ def retro_calc_find_similar(
         ``max_n_locs_per_frame`` / ``min_rmsd`` / ``max_rmsd``. Empty when no
         pick encloses any localization.
     """
-    x_nm = np.asarray(locs["x"], dtype=float) * pixelsize
-    y_nm = np.asarray(locs["y"], dtype=float) * pixelsize
+    from scipy.spatial import cKDTree
+
+    centers = np.asarray(centers_nm, dtype=float)
+    if centers.ndim != 2 or len(centers) == 0:
+        return {}
+    centers = _subsample_rows(centers, _RETRO_MAX_PICKS)
+
+    pts = np.column_stack(
+        [
+            np.asarray(locs["x"], dtype=float) * pixelsize,
+            np.asarray(locs["y"], dtype=float) * pixelsize,
+        ]
+    )
+    if len(pts) == 0:
+        return {}
     radius = float(diameter_nm) / 2.0
     n_frames = max(int(n_frames or 1), 1)
 
+    tree = cKDTree(pts)
+    neighborhoods = tree.query_ball_point(centers, radius, workers=-1)
+
     fracs = []
     rmsds = []
-    for cx, cy in centers_nm:
-        dx = x_nm - cx
-        dy = y_nm - cy
-        inside = (dx * dx + dy * dy) <= radius * radius
-        n = int(np.count_nonzero(inside))
+    for (cx, cy), idx in zip(centers, neighborhoods):
+        n = len(idx)
         if n == 0:
             continue
+        enc = pts[idx]
+        dx = enc[:, 0] - cx
+        dy = enc[:, 1] - cy
         fracs.append(n / n_frames)
-        rmsds.append(
-            float(np.sqrt(np.mean(dx[inside] ** 2 + dy[inside] ** 2)))
-        )
+        rmsds.append(float(np.sqrt(np.mean(dx * dx + dy * dy))))
 
     if not fracs:
         return {}
@@ -1239,23 +1275,24 @@ def retro_calc_from_picked(
     except (KeyError, ValueError, TypeError, IndexError):
         return {}
     n_frames = max(int(n_frames or 1), 1)
-    fracs = []
-    rmsds = []
-    for g in np.unique(groups):
-        mask = groups == g
-        n = int(np.count_nonzero(mask))
-        if n == 0:
-            continue
-        gx = x[mask]
-        gy = y[mask]
-        cx = gx.mean()
-        cy = gy.mean()
-        fracs.append(n / n_frames)
-        rmsds.append(float(np.sqrt(np.mean((gx - cx) ** 2 + (gy - cy) ** 2))))
-    if not fracs:
+    if len(groups) == 0:
         return {}
-    fracs = np.asarray(fracs)
-    rmsds = np.asarray(rmsds)
+
+    # Group-by via one sort + segment reductions (np.add.reduceat) rather than a
+    # boolean mask per group, which rescans all picked locs for every group
+    # (O(groups x locs)). Sorting is O(locs log locs) and each group's count,
+    # centroid and RMSD then come from contiguous segments.
+    order = np.argsort(groups, kind="stable")
+    xs = x[order]
+    ys = y[order]
+    _, starts = np.unique(groups[order], return_index=True)
+    counts = np.diff(np.append(starts, len(order)))
+    cx = np.add.reduceat(xs, starts) / counts
+    cy = np.add.reduceat(ys, starts) / counts
+    sq = (xs - np.repeat(cx, counts)) ** 2 + (ys - np.repeat(cy, counts)) ** 2
+    rmsds = np.sqrt(np.add.reduceat(sq, starts) / counts)
+    fracs = counts / n_frames
+
     return {
         "diameter": float(diameter_nm),
         "min_n_locs_per_frame": float(fracs.min() * (1 - margin)),
