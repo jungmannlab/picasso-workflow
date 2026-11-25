@@ -11,6 +11,12 @@ This file was started after v0.5.6; earlier history is in the git log.
 ## [Unreleased]
 
 ### Fixed
+- **Onboarding no longer overrides site-wide settings.** Seeding the per-user
+  `config.yaml` from the template now comments out any top-level section the
+  site-wide (all-users) config already sets (with an "uncomment to override"
+  banner). The per-user layer is deep-merged on top of the site layer, so an
+  uncommented template placeholder would otherwise silently clobber the admin's
+  value. (`picasso_workflow/__init__.py`, `picasso_workflow/gui.py`)
 - **Windows installer now reliably creates the Start Menu / Desktop shortcut.**
   The shortcut was built by a PowerShell one-liner embedded in `post_install.bat`
   whose `cmd`↔PowerShell quote-escaping silently failed on some installs, so no

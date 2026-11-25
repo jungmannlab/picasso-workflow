@@ -9989,12 +9989,20 @@ class GettingStartedDialog(QtWidgets.QDialog):
         try:
             cfg.parent.mkdir(parents=True, exist_ok=True)
             if not cfg.exists():
+                from picasso_workflow import (
+                    _comment_out_template_keys,
+                    _site_config_keys,
+                )
+
                 tmpl = importlib.resources.files("picasso_workflow").joinpath(
                     "config_template.yaml"
                 )
-                cfg.write_text(
-                    tmpl.read_text(encoding="utf-8"), encoding="utf-8"
-                )
+                text = tmpl.read_text(encoding="utf-8")
+                # Anything the site-wide (all-users) config already sets is
+                # commented out here, so the per-user file -- merged on top --
+                # doesn't silently override the admin's settings.
+                text = _comment_out_template_keys(text, _site_config_keys())
+                cfg.write_text(text, encoding="utf-8")
             QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(str(cfg)))
         except Exception as e:
             QtWidgets.QMessageBox.warning(
