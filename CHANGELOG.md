@@ -10,6 +10,16 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ## [Unreleased]
 
+### Added
+- **Restrict a single-dataset module to channels by name.** The "Run only on
+  channels where" control gains a **name-contains** mode (a text field): a module
+  can run only on channels whose name/tag contains a substring (e.g. type `GFP`
+  to run on the GFP channels), which is the common case and more discoverable
+  than defining a per-channel boolean column. The boolean-column mode is kept as
+  the advanced option. Compiles to a `conditional_branch` whose condition tests
+  the channel tag with a new `contains` operator (`#run_on_channels_name`
+  directive). (`gui.py`, `util.py`)
+
 ## [0.8.4] - 2026-11-25
 
 ### Fixed
