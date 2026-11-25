@@ -74,6 +74,9 @@ register_python_default: false
 # build time (CI builds it into release/wheels/) -- see release.yml.
 extra_files:
   - wheels/@WHEEL@
+  # Windows shortcut-creation script, run by post_install.bat (-File). Copied
+  # flat into $PREFIX. [win] only.
+  - create_shortcuts.ps1       # [win]
   # macOS app-bundle icon (CI builds it from the GUI .ico). [osx] only so the
   # Windows build -- which never generates it -- doesn't look for it.
   - picasso-workflow.icns      # [osx]
