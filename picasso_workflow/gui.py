@@ -16539,9 +16539,12 @@ class Window(QtWidgets.QMainWindow):
 
         Scans a manually-performed analysis folder, maps its saved steps back to
         workflow modules, and (on Apply) populates the Files tree and module
-        lists here. Opened *non-modally* so the main GUI stays editable while the
-        wizard (and its review notes) remains visible. Lazy-imported so a
-        PyQt/import problem surfaces a message rather than blocking startup.
+        lists here. Opened *non-modally*, and as an independent top-level window
+        (``Qt.Window``) rather than a parented child dialog, so it can be stacked
+        *behind* the main GUI -- useful for keeping the reconstructed steps
+        visible to compare against once they have been applied to the GUI.
+        Lazy-imported so a PyQt/import problem surfaces a message rather than
+        blocking startup.
         """
         try:
             from picasso_workflow.wizard_manual_to_workflow import (
@@ -16557,6 +16560,9 @@ class Window(QtWidgets.QMainWindow):
         # Keep a reference so the non-modal window is not garbage-collected.
         wizard = ManualToWorkflowWizard(self)
         wizard.setModal(False)
+        # Independent top-level window (own taskbar entry), so it is not forced
+        # to float above its parent and can be sent behind the main GUI.
+        wizard.setWindowFlag(QtCore.Qt.WindowType.Window, True)
         self._manual_wizard = wizard
         wizard.show()
         wizard.raise_()

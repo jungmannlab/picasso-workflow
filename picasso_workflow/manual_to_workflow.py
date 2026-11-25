@@ -1488,6 +1488,80 @@ def _n_frames_from_info(info):
     return 1
 
 
+def _find_similar_params_from_export(pick_hdf5, pixelsize):
+    """``find_similar`` thresholds retro-calculated from a pick export.
+
+    Loads the manual picked-locs file, reads its pick diameter from the trailing
+    ``Render : Pick`` info step, and recovers the nlocs / rmsd thresholds from
+    the grouped picks (:func:`retro_calc_from_picked`). Returns the
+    ``find_similar`` parameter dict, or ``None`` if it cannot be recovered.
+    """
+    try:
+        picked, info = _load_locs(pick_hdf5)
+    except Exception:  # pragma: no cover - depends on picasso/data
+        return None
+    diameter = None
+    for step in reversed(info or []):
+        if isinstance(step, dict) and step.get("Pick Diameter (nm)"):
+            diameter = step["Pick Diameter (nm)"]
+            break
+    if not diameter:
+        return None
+    n_frames = _n_frames_from_info(info)
+    return (
+        retro_calc_from_picked(picked, diameter, pixelsize, n_frames) or None
+    )
+
+
+def apply_pick_similar_for_undrift(chain, pixelsize=130.0):
+    """Reconstruct each manual undrift-from-picked as ``find_similar`` + undrift.
+
+    Instead of pointing ``undrift_from_picked`` at the manual pick-export file,
+    insert a ``find_similar`` module -- with nlocs / rmsd / diameter thresholds
+    retro-calculated from that export -- immediately before it, and undrift from
+    ``find_similar``'s own picks (``$get_previous_module_result``). The workflow
+    then re-derives its picks in-run rather than depending on the manual
+    picked-locs files. Steps whose thresholds cannot be recovered keep the
+    file-based wiring from :func:`map_chain`.
+    """
+    new_steps = []
+    for s in chain.steps:
+        if s.module_name == "undrift_from_picked":
+            pick_hdf5 = chain.pick_exports.get(s.info_index)
+            params = (
+                _find_similar_params_from_export(pick_hdf5, pixelsize)
+                if pick_hdf5
+                else None
+            )
+            if params:
+                new_steps.append(
+                    MappedStep(
+                        source=s.source,
+                        module_name="find_similar",
+                        params=params,
+                        confidence=CONF_RETRO,
+                        messages=[
+                            "pick-similar thresholds retro-calculated from the "
+                            "manual picks; re-derives the picks in-workflow"
+                        ],
+                        info_index=s.info_index,
+                    )
+                )
+                s.params["fp_picked_locs"] = (
+                    "$get_previous_module_result",
+                    "fp_picked_locs",
+                )
+                s.confidence = CONF_RETRO
+                s.messages = [
+                    m for m in s.messages if "no picks file" not in m
+                ]
+                s.messages.append(
+                    "undrifts from the find_similar picks inserted above"
+                )
+        new_steps.append(s)
+    chain.steps = new_steps
+
+
 # ---------------------------------------------------------------------------
 # 4. Single <-> aggregation split.
 # ---------------------------------------------------------------------------
@@ -1752,8 +1826,10 @@ def reconstruct_workflow(
             frac,
         )
         map_chain(chain, pixelsize=pixelsize, start_from=start_from)
-        needs_locs = chain.picks_path or any(
-            s.module_name == "picasso_picked_locs" for s in chain.steps
+        needs_locs = (
+            chain.picks_path
+            or chain.pick_exports
+            or any(s.module_name == "picasso_picked_locs" for s in chain.steps)
         )
         if needs_locs:
             _report(
@@ -1764,6 +1840,9 @@ def reconstruct_workflow(
             )
         apply_find_similar_retrocalc(chain, pixelsize=pixelsize)
         apply_pick_similar_retrocalc(chain, manual_dir, pixelsize=pixelsize)
+        # Re-derive undrift-from-picked's picks in-workflow (find_similar with
+        # the recovered thresholds) instead of loading the manual pick files.
+        apply_pick_similar_for_undrift(chain, pixelsize=pixelsize)
 
     _report(progress, "Folding and validating the workflow…", 0.95)
 
