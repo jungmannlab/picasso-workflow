@@ -24,12 +24,14 @@ jobs:
         include:
           - os: windows-latest
             label: windows
-          # Apple Silicon only. GitHub's Intel macOS runners (macos-13) hang
-          # queued (effectively retired), and cross-building the osx-64
-          # installer on arm64 proved unreliable -- Intel Macs are a shrinking
-          # minority, so the installer targets Apple Silicon. Intel users can
-          # still `pip install` into a conda env the classic way.
-          - os: macos-14
+          # Apple Silicon only (all GitHub-hosted macOS runners are ARM64).
+          # Pin a CURRENT image: GitHub retired macos-13 (Intel) and then
+          # macos-14 (retired 2026-11-02, with job-failing brownouts from
+          # 2026-10-05) -- a retired label cancels the job at dispatch (~1s, no
+          # steps), which is why no macOS installer attached across 0.8.4-0.8.7.
+          # macos-15 is GitHub's recommended step-up and stays ARM64. Intel
+          # users can still `pip install` into a conda env the classic way.
+          - os: macos-15
             label: macos-apple-silicon
 
     steps:
