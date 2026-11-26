@@ -296,3 +296,26 @@ def test_setup_cluster_ssh_targets_selected_login_node(qapp, monkeypatch):
     tab._setup_cluster_ssh()
     assert calls["host"] == "login01"
     tab.deleteLater()
+
+
+def test_setup_cluster_ssh_selects_newly_saved_node(qapp, monkeypatch):
+    """After the dialog saves a (possibly new) node, the Doctor selector
+    switches to it so Check/Upload target what was just configured."""
+    import picasso_workflow as pw
+    from picasso_workflow.doctor_tab import DoctorTab
+
+    monkeypatch.setitem(
+        pw.CONFIG,
+        "SlurmLoginNodes",
+        {"clusterA": "login01", "clusterB": "login02"},
+    )
+
+    class FakeMW:
+        def on_configure_ssh(self, default_host=None):
+            return "clusterB"  # user configured/saved clusterB in the dialog
+
+    tab = DoctorTab(main_window=FakeMW())
+    tab._cluster_combo.setCurrentIndex(tab._cluster_combo.findText("clusterA"))
+    tab._setup_cluster_ssh()
+    assert tab._cluster_host() == "clusterB"
+    tab.deleteLater()

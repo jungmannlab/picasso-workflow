@@ -871,7 +871,7 @@ class DoctorTab(QtWidgets.QWidget):
         return self._run_tab_host()
 
     def _sync_cluster_combo(self, select=None) -> None:
-        """(Re)populate the cluster selector from ``CONFIG["SlurmLoginNodes"]``.
+        """(Re)populate the cluster selector from ``SlurmLoginNodes``.
 
         Preserves the current selection, or selects ``select`` when given and
         present. Signals are blocked so this doesn't trigger a refresh.
@@ -900,9 +900,11 @@ class DoctorTab(QtWidgets.QWidget):
 
         host = self._cluster_host()
         login_node = (CONFIG.get("SlurmLoginNodes") or {}).get(host, host)
-        mw.on_configure_ssh(default_host=login_node)
-        # A node may have been added/renamed in the dialog; re-sync + refresh.
-        self._sync_cluster_combo()
+        saved = mw.on_configure_ssh(default_host=login_node)
+        # The dialog may have added/selected a (possibly new) node; re-sync and
+        # select whatever was saved so Check/Upload target it, else keep the
+        # current selection.
+        self._sync_cluster_combo(select=saved or None)
         self._refresh_cluster_secrets_ui()
 
     def _refresh_cluster_secrets_ui(self) -> None:

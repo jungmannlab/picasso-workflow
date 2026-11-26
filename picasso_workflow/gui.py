@@ -9827,7 +9827,10 @@ class GettingStartedDialog(QtWidgets.QDialog):
         layout.addLayout(btns)
 
     def _setup_cluster_ssh(self):
-        """Open the main window's SSH-setup dialog (optional onboarding step)."""
+        """Open the main window's SSH-setup dialog.
+
+        An optional onboarding step; delegates to ``Window.on_configure_ssh``.
+        """
         window = self.parent()
         if window is not None and hasattr(window, "on_configure_ssh"):
             window.on_configure_ssh()
@@ -17463,7 +17466,8 @@ class Window(QtWidgets.QMainWindow):
         ``config.yaml`` and reloaded ``CONFIG``; mirror that into the host
         combo (add/select the saved label) and the username field.
         ``default_host`` pre-fills the dialog's login-node field (e.g. when
-        opened from the Doctor tab for a specific cluster).
+        opened from the Doctor tab for a specific cluster). Returns the saved
+        cluster label, or ``None`` if the dialog was cancelled / saved nothing.
         """
         default_username = self.cluster_username_edit.text().strip() or None
         dialog = SshSetupDialog(
@@ -17472,10 +17476,10 @@ class Window(QtWidgets.QMainWindow):
             default_host=default_host,
         )
         if dialog.exec() != QtWidgets.QDialog.DialogCode.Accepted:
-            return
+            return None
         label = getattr(dialog, "saved_label", None)
         if not label:
-            return
+            return None
         # Rebuild the host combo from the reloaded CONFIG and select the saved
         # node. The combo is editable, so an addItem is safe even if present.
         existing = {
@@ -17498,6 +17502,7 @@ class Window(QtWidgets.QMainWindow):
         # Drop any cached communicator so the next op uses the new settings.
         self.slurm_communicator = None
         self._slurm_comm_host = None
+        return label
 
     def _ensure_slurm_communicator(self, host_cluster):
         """Return a :class:`SlurmCommunicator` for ``host_cluster``.
