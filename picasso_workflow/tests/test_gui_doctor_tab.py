@@ -52,11 +52,41 @@ def test_collect_diagnostics_shape():
         "confluence",
     }
     assert diag["versions"]["picasso_workflow"]
-    # both Confluence profiles summarised, with presence-only token flag
-    assert set(diag["confluence"]) == {"Confluence", "ConfluenceTest"}
+    # operational Confluence is always summarised (presence-only token flag); a
+    # test profile appears only when configured (see the dedicated tests below)
+    assert "Confluence" in diag["confluence"]
     for s in diag["confluence"].values():
         assert "token_set" in s and isinstance(s["token_set"], bool)
         assert "token" not in s  # never the value
+
+
+def test_collect_diagnostics_hides_unconfigured_test_profile(monkeypatch):
+    import picasso_workflow.doctor_tab as dt
+
+    monkeypatch.setattr(
+        dt,
+        "_confluence_summary",
+        lambda p: (
+            {"base_url": "https://x", "token_set": True}
+            if p == "Confluence"
+            else {"base_url": None, "token_set": False}
+        ),
+    )
+    assert set(dt.collect_diagnostics()["confluence"]) == {"Confluence"}
+
+
+def test_collect_diagnostics_includes_configured_test_profile(monkeypatch):
+    import picasso_workflow.doctor_tab as dt
+
+    monkeypatch.setattr(
+        dt,
+        "_confluence_summary",
+        lambda p: {"base_url": "https://x", "token_set": True},
+    )
+    assert set(dt.collect_diagnostics()["confluence"]) == {
+        "Confluence",
+        "ConfluenceTest",
+    }
 
 
 def _patch_creds(monkeypatch, **over):

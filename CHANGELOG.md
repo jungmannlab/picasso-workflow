@@ -20,6 +20,11 @@ This file was started after v0.5.6; earlier history is in the git log.
   `type <pub> | ssh …` pipe on Windows (which has no `ssh-copy-id`).
   (`picasso_workflow/slurm_submit.py`, `picasso_workflow/ssh_setup.py`,
   `picasso_workflow/gui.py`)
+- **Doctor tab diagnostics hide an unconfigured test Confluence.** The read-only
+  "Confluence profiles" summary now lists a test profile (`ConfluenceTest`) only
+  when it's actually configured — matching the Connection-tests section — so a
+  typical user without a test Confluence isn't shown an irrelevant profile.
+  (`picasso_workflow/doctor_tab.py`)
 
 ## [0.8.7] - 2026-11-26
 

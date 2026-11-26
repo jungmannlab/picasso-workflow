@@ -160,7 +160,11 @@ def collect_diagnostics() -> dict:
         "user_env": diag.get("user_env", {}),
         "logging": diag.get("logging", {}),
         "env": {name: _env_status(name) for name in _ENV_VARS},
-        "confluence": {p: _confluence_summary(p) for p in _PROFILES},
+        # Only summarise a profile that's actually in play: the operational
+        # Confluence always, a test profile (ConfluenceTest) only when it's
+        # configured -- so a typical user's diagnostics aren't cluttered with an
+        # unconfigured test Confluence (matches the Connection-tests section).
+        "confluence": {p: _confluence_summary(p) for p in _test_profiles()},
     }
 
 
