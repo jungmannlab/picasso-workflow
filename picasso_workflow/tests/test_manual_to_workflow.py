@@ -723,7 +723,7 @@ def test_retro_calc_find_similar_spans_distribution():
     params = m.retro_calc_find_similar(
         locs, centers, diameter_nm=800.0, pixelsize=px, n_frames=100
     )
-    assert params["diameter"] == 800.0
+    assert params["diameter"] == 800.0 / px
     # 1 loc and 3 locs over 100 frames -> fractions 0.01 and 0.03.
     assert params["min_n_locs_per_frame"] <= 0.01
     assert params["max_n_locs_per_frame"] >= 0.03
@@ -744,7 +744,7 @@ def test_retro_calc_from_picked_grouped():
     grp = np.array([0, 0, 1, 1, 1, 1])
     picked = np.rec.fromarrays([x, y, grp], names="x,y,group")
     params = m.retro_calc_from_picked(picked, 800.0, px, 100)
-    assert params["diameter"] == 800.0
+    assert params["diameter"] == 800.0 / px
     # 2 and 4 locs over 100 frames.
     assert params["min_n_locs_per_frame"] <= 0.02
     assert params["max_n_locs_per_frame"] >= 0.04
@@ -780,7 +780,7 @@ def _bruteforce_find_similar(locs, centers, diameter_nm, px, n_frames, m=0.1):
         return {}
     fracs, rmsds = np.asarray(fracs), np.asarray(rmsds)
     return {
-        "diameter": float(diameter_nm),
+        "diameter": float(diameter_nm) / px,
         "min_n_locs_per_frame": float(fracs.min() * (1 - m)),
         "max_n_locs_per_frame": float(fracs.max() * (1 + m)),
         "min_rmsd": float(rmsds.min() * (1 - m)),
@@ -905,8 +905,9 @@ def test_apply_pick_similar_for_undrift_inserts_find_similar(monkeypatch):
         "undrift_from_picked",
     ]
     fs = [s for s in chain.steps if s.module_name == "find_similar"]
-    assert fs[0].params["diameter"] == 150.0  # origami pick
-    assert fs[1].params["diameter"] == 15.0  # single-site pick
+    # diameter is reported in camera pixels (nm / pixelsize) for find_similar
+    assert fs[0].params["diameter"] == 150.0 / 130.0  # origami pick
+    assert fs[1].params["diameter"] == 15.0 / 130.0  # single-site pick
     assert {"min_rmsd", "max_rmsd", "min_n_locs_per_frame"} <= set(
         fs[0].params
     )
@@ -972,7 +973,8 @@ def test_apply_pick_similar_retrocalc_notes(tmp_path, monkeypatch):
     m.apply_pick_similar_retrocalc(chain, str(tmp_path), pixelsize=130.0)
     note = " ".join(chain.steps[0].messages)
     assert "pick-similar parameters" in note
-    assert "diameter=800" in note and "find_similar" in note
+    # diameter is reported in px (800 nm / 130 nm) for find_similar
+    assert "diameter=6.15" in note and "find_similar" in note
 
 
 def test_apply_find_similar_retrocalc_monkeypatched(tmp_path, monkeypatch):

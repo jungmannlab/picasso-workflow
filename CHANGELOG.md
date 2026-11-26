@@ -11,6 +11,14 @@ This file was started after v0.5.6; earlier history is in the git log.
 ## [Unreleased]
 
 ### Fixed
+- **Wizard-reconstructed `find_similar` no longer finds 0 picks** (which
+  then failed `undrift_from_picked` with "no localizations in the picks").
+  The wizard set `find_similar`'s `diameter` from the manual pick diameter
+  in **nm**, but the module expects it in **camera pixels** (it multiplies
+  by the pixel size to get picasso's nm `pick_size`) — so the pick was
+  ~pixelsize× too large (~17 µm) and the nlocs window rejected everything.
+  The retro-calc now reports `diameter` in pixels (nm ÷ pixelsize).
+  (`picasso_workflow/manual_to_workflow.py`)
 - **Windows installer creates the Start Menu / Desktop shortcuts again.** The
   taskbar-icon tweak added a large inline C#/`IPropertyStore` `Add-Type` to
   `create_shortcuts.ps1`; because PowerShell parses the whole file before

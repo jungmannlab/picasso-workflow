@@ -1283,9 +1283,9 @@ def retro_calc_find_similar(
     Returns
     -------
     dict
-        ``diameter`` (nm) plus ``min_n_locs_per_frame`` /
-        ``max_n_locs_per_frame`` / ``min_rmsd`` / ``max_rmsd``. Empty when no
-        pick encloses any localization.
+        ``diameter`` (camera pixels -- see note below) plus
+        ``min_n_locs_per_frame`` / ``max_n_locs_per_frame`` / ``min_rmsd`` /
+        ``max_rmsd`` (nm). Empty when no pick encloses any localization.
     """
     from scipy.spatial import cKDTree
 
@@ -1326,7 +1326,10 @@ def retro_calc_find_similar(
     fracs = np.asarray(fracs)
     rmsds = np.asarray(rmsds)
     return {
-        "diameter": float(diameter_nm),
+        # find_similar's ``diameter`` is in camera PIXELS (its
+        # get_pick_similar_vals multiplies by pixelsize to get picasso's nm
+        # pick_size); the manual pick diameter is nm, so convert nm -> px.
+        "diameter": float(diameter_nm) / pixelsize,
         "min_n_locs_per_frame": float(fracs.min() * (1 - margin)),
         "max_n_locs_per_frame": float(fracs.max() * (1 + margin)),
         "min_rmsd": float(rmsds.min() * (1 - margin)),
@@ -1397,8 +1400,8 @@ def retro_calc_from_picked(
     Returns
     -------
     dict
-        ``diameter`` plus ``min/max_n_locs_per_frame`` / ``min/max_rmsd``.
-        Empty when there is no usable group column.
+        ``diameter`` (camera pixels) plus ``min/max_n_locs_per_frame`` /
+        ``min/max_rmsd`` (nm). Empty when there is no usable group column.
     """
     try:
         x = np.asarray(picked_locs["x"], dtype=float) * pixelsize
@@ -1426,7 +1429,10 @@ def retro_calc_from_picked(
     fracs = counts / n_frames
 
     return {
-        "diameter": float(diameter_nm),
+        # find_similar's ``diameter`` is in camera PIXELS (its
+        # get_pick_similar_vals multiplies by pixelsize to get picasso's nm
+        # pick_size); the manual pick diameter is nm, so convert nm -> px.
+        "diameter": float(diameter_nm) / pixelsize,
         "min_n_locs_per_frame": float(fracs.min() * (1 - margin)),
         "max_n_locs_per_frame": float(fracs.max() * (1 + margin)),
         "min_rmsd": float(rmsds.min() * (1 - margin)),
