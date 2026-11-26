@@ -10,6 +10,19 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ## [Unreleased]
 
+### Fixed
+- **Windows installer creates the shortcuts on managed/enterprise machines.**
+  The 0.8.9 fix removed the PowerShell parse error but shortcut creation still
+  ran via `powershell -File`, which many managed Windows setups (e.g. MPG lab
+  machines) block by Group Policy — and a machine-policy ExecutionPolicy
+  *overrides* our `-ExecutionPolicy Bypass`, so the script silently ran nothing
+  (no shortcut, no log). Shortcut creation now runs in **VBScript via `cscript`**
+  (`release/create_shortcuts.vbs`), which is not subject to the PowerShell
+  execution policy. `post_install.bat` also writes an unconditional
+  `post_install.log` (pip exit + cscript exit) so a failed install is
+  self-diagnosing. (`release/create_shortcuts.vbs`, `release/post_install.bat`,
+  `release/construct.yaml`; removed `release/create_shortcuts.ps1`)
+
 ## [0.8.9] - 2026-11-26
 
 ### Fixed
