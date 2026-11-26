@@ -10,6 +10,36 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ## [Unreleased]
 
+## [0.8.9] - 2026-11-26
+
+### Fixed
+- **Wizard-reconstructed `find_similar` no longer finds 0 picks** (which
+  then failed `undrift_from_picked` with "no localizations in the picks").
+  The wizard set `find_similar`'s `diameter` from the manual pick diameter
+  in **nm**, but the module expects it in **camera pixels** (it multiplies
+  by the pixel size to get picasso's nm `pick_size`) — so the pick was
+  ~pixelsize× too large (~17 µm) and the nlocs window rejected everything.
+  The retro-calc now reports `diameter` in pixels (nm ÷ pixelsize).
+  (`picasso_workflow/manual_to_workflow.py`)
+- **Windows installer creates the Start Menu / Desktop shortcuts again.** The
+  taskbar-icon tweak added a large inline C#/`IPropertyStore` `Add-Type` to
+  `create_shortcuts.ps1`; because PowerShell parses the whole file before
+  running, a parse error there made the **entire** script refuse to run — so no
+  shortcut was created and no log was written. Removed that block (shortcut
+  creation is minimal and robust again; the taskbar-icon AppUserModelID is a
+  separate, still-open item). (`release/create_shortcuts.ps1`)
+- **The Run-tab "Configure / Test connection…" button now uses the selected
+  login node.** It was wired straight to `clicked`, so Qt's `checked` bool went
+  in as the host and the SSH dialog pre-filled the *first* configured node
+  instead of the one selected in the Run tab. (`picasso_workflow/gui.py`)
+- **In-app self-update now works on bundled installs.** The 0.8.8 updater
+  ran `pip` while the GUI was open, which can never overwrite the Qt/numpy
+  DLLs the app has loaded — it failed with "some components are in use".
+  The update now runs in a **detached helper** that waits for the app to
+  close, then installs; you close picasso-workflow and reopen it when done
+  (no uninstall/reinstall). (`picasso_workflow/self_update.py`,
+  `picasso_workflow/gui.py`)
+
 ## [0.8.8] - 2026-11-26
 
 ### Fixed

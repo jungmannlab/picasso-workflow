@@ -10510,11 +10510,12 @@ class _ReleaseCheckWorker(QtCore.QObject):
 
 
 class _SelfUpdateWorker(QtCore.QObject):
-    """Fetch the latest release wheel and pip-upgrade this env, off-thread.
+    """Resolve the latest release's wheel URL (network), off the UI thread.
 
-    Emits ``finished(ok, message)`` where ``message`` is user-facing (incl. the
-    restart instruction on success). All logic is in
-    :mod:`picasso_workflow.self_update`; this is a thin thread wrapper.
+    Emits ``finished(ok, payload)``: ``payload`` is the wheel URL on success or
+    an error message on failure. The detached updater is launched by the GUI
+    only *after* the user confirms closing (so declining doesn't leave an armed
+    waiter) -- see :func:`self_update.spawn_detached_updater`.
     """
 
     finished = QtCore.pyqtSignal(bool, str)
@@ -10531,10 +10532,16 @@ class _SelfUpdateWorker(QtCore.QObject):
             url = self_update.wheel_asset_url(
                 release or {}, version=version or None
             )
-            ok, message = self_update.run_update(url)
+            if url:
+                ok, payload = True, url
+            else:
+                ok, payload = (
+                    False,
+                    "No update wheel was found in the latest release.",
+                )
         except Exception as e:  # pragma: no cover - defensive; must not raise
-            ok, message = False, f"Update failed: {e}"
-        self.finished.emit(ok, message)
+            ok, payload = False, f"Update failed: {e}"
+        self.finished.emit(ok, payload)
 
 
 class _ClusterImageListWorker(QtCore.QObject):
@@ -11082,7 +11089,9 @@ class Window(QtWidgets.QMainWindow):
             "Tests the connection before saving; guides you through "
             "ssh-copy-id if the key is not yet installed."
         )
-        self.cluster_ssh_setup_button.clicked.connect(self.on_configure_ssh)
+        self.cluster_ssh_setup_button.clicked.connect(
+            self._configure_ssh_from_run_tab
+        )
         cluster_settings_layout.addWidget(self.cluster_ssh_setup_button)
 
         self.slurm_email_edit = QtWidgets.QLineEdit()
@@ -13397,28 +13406,18 @@ class Window(QtWidgets.QMainWindow):
             logger.debug(f"Could not show the update result: {e}")
 
     def _start_self_update(self):
-        """Pip-upgrade this bundled install in place (off-thread).
+        """Prepare an in-place update of this bundled install (off-thread).
 
         Only reachable from the banner's "Update now" button, which is shown
-        only for a one-click-installer env. Reuses the update-thread slot /
-        shutdown-join lifecycle; no-ops if an update check is still running.
+        only for a one-click-installer env. Launches a detached updater that
+        installs the new version *after* this app closes (its loaded Qt/numpy
+        DLLs can't be overwritten while it runs). Reuses the update-thread slot
+        / shutdown-join lifecycle; no-ops if an update check is still running.
         """
         if getattr(self, "_update_thread", None) is not None:
             return
-        reply = QtWidgets.QMessageBox.question(
-            self,
-            "Update picasso-workflow",
-            "Download and install the latest version now?\n\nIt installs into "
-            "this app's environment. Keep picasso-workflow open until it "
-            "finishes (it may take a minute); then close and reopen it to "
-            "finish applying the update.",
-            QtWidgets.QMessageBox.StandardButton.Yes
-            | QtWidgets.QMessageBox.StandardButton.No,
-        )
-        if reply != QtWidgets.QMessageBox.StandardButton.Yes:
-            return
         self._update_now_button.setEnabled(False)
-        self._update_now_button.setText("Updating…")
+        self._update_now_button.setText("Checking…")
         try:
             worker = _SelfUpdateWorker()
             thread = QtCore.QThread(self)
@@ -13437,23 +13436,39 @@ class Window(QtWidgets.QMainWindow):
             self._update_now_button.setText("Update now")
             logger.debug(f"Could not start the self-update: {e}")
 
-    def _on_self_update_result(self, ok, message):
-        """Report the self-update outcome; the window carries the restart hint.
-
-        On success the app is NOT auto-restarted -- the message tells the user
-        to close and reopen (binary deps loaded now apply on the next launch).
+    def _on_self_update_result(self, ok, wheel_url):
+        """On success (``wheel_url``), confirm closing, then arm the detached
+        updater -- NOT before, so declining leaves nothing running. The app is
+        not auto-restarted; the updater waits for it to exit, installs, and the
+        user reopens manually.
         """
-        import html as _html
-
         self._update_now_button.setEnabled(True)
         self._update_now_button.setText("Update now")
-        self._update_message_box(
-            "Update" if ok else "Update failed",
-            _html.escape(message),
-            warning=not ok,
+        if not ok:
+            import html as _html
+
+            self._update_message_box(
+                "Update failed", _html.escape(wheel_url), warning=True
+            )
+            return
+        reply = QtWidgets.QMessageBox.question(
+            self,
+            "Update ready",
+            "A new version is ready. It installs in the background once you "
+            "close picasso-workflow (it can't replace files while the app is "
+            "running); reopen it when done.\n\nClose now to install?",
+            QtWidgets.QMessageBox.StandardButton.Yes
+            | QtWidgets.QMessageBox.StandardButton.No,
         )
-        if ok:
-            self.update_banner.setVisible(False)
+        if reply != QtWidgets.QMessageBox.StandardButton.Yes:
+            return  # nothing armed -- the user can click Update now again
+        import os
+
+        from picasso_workflow import self_update
+
+        self_update.spawn_detached_updater(wheel_url, parent_pid=os.getpid())
+        self.update_banner.setVisible(False)
+        self.close()
 
     def _update_message_box(self, title, html, warning=False):
         """A rich-text message box whose ``<a href>`` links open in a browser.
@@ -17564,6 +17579,19 @@ class Window(QtWidgets.QMainWindow):
     def _stop_monitor(self):
         """Stop the polling timer."""
         self.monitor_timer.stop()
+
+    def _configure_ssh_from_run_tab(self):
+        """Open the SSH-setup dialog targeted at the Run-tab's selected node.
+
+        The button's ``clicked`` signal would otherwise pass Qt's ``checked``
+        bool straight into ``on_configure_ssh(default_host=...)``, so the dialog
+        pre-filled the *first* configured host instead of the selected one.
+        """
+        host_cluster = str(self.cluster_host_combo.currentText()).strip()
+        login_node = (CONFIG.get("SlurmLoginNodes") or {}).get(
+            host_cluster, host_cluster
+        )
+        self.on_configure_ssh(default_host=login_node)
 
     def on_configure_ssh(self, default_host=None):
         """Open the SSH-setup dialog; refresh the Run-tab cluster fields.

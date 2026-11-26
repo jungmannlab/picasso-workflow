@@ -11,14 +11,16 @@ a display; the GUI drives it and shows the restart instruction.
 release **assets** -- the same release :mod:`picasso_workflow.update_check`
 already queries.
 
-The update is applied while the app runs and takes effect on the **next
-launch** (a restart instruction is surfaced by the caller); binary deps that are
-already loaded can't be overwritten mid-run, so ``--upgrade-strategy
-only-if-needed`` keeps dep churn to what the new wheel actually requires.
+pip cannot overwrite the Qt/numpy DLLs the running GUI has loaded (and the
+launcher imports them before any of our code runs, so "apply on next startup"
+is out too). So the update runs in a **detached helper process** that waits for
+the GUI to exit, then pip-installs -- see :func:`spawn_detached_updater`. The
+app is not auto-relaunched; the user reopens it once the update finishes.
 """
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -71,65 +73,93 @@ def wheel_asset_url(release: dict, version: str | None = None) -> str | None:
     return candidates[0][1]
 
 
-def pip_upgrade_command(wheel_url: str, python: str | None = None) -> list:
-    """argv to upgrade ``picasso_workflow`` from ``wheel_url`` in this env.
+def update_log_path(prefix=None):
+    """Where the detached updater writes its result (`<prefix>/update.log`)."""
+    base = Path(prefix) if prefix else Path(sys.prefix)
+    return str(base / "update.log")
 
-    ``--upgrade-strategy only-if-needed`` upgrades a dependency only when the
-    new wheel requires it, minimising overwrites of in-use binary deps while the
-    app runs (the update applies on restart). Uses this env's interpreter
-    (``sys.executable``) so pip targets the bundled env, not a system Python.
+
+# Self-contained helper run as a DETACHED process: it waits for the GUI (whose
+# loaded Qt/numpy DLLs would otherwise block pip from overwriting them) to exit,
+# then pip-installs the wheel. It imports NO picasso_workflow code, so its own
+# process never holds those DLLs. Kept as source so it runs under the env's
+# python via `-c` -- no extra file to ship.
+_UPDATER_SOURCE = r"""
+import os, sys, time, subprocess
+wheel, parent_pid, log = sys.argv[1], int(sys.argv[2]), sys.argv[3]
+
+
+def _alive(pid):
+    if os.name == "nt":
+        import ctypes
+        h = ctypes.windll.kernel32.OpenProcess(0x1000, False, pid)
+        if not h:
+            return False
+        code = ctypes.c_ulong()
+        ctypes.windll.kernel32.GetExitCodeProcess(h, ctypes.byref(code))
+        ctypes.windll.kernel32.CloseHandle(h)
+        return code.value == 259  # STILL_ACTIVE
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+
+still_running = True
+for _ in range(180):  # wait up to ~3 min for the GUI to close (DLLs unlock)
+    if not _alive(parent_pid):
+        still_running = False
+        break
+    time.sleep(1)
+if still_running:
+    # The app never closed -> its Qt/numpy DLLs are still locked, so pip would
+    # fail (the exact thing we must avoid). Skip the install rather than leave a
+    # half-updated env, and say so.
+    with open(log, "w", encoding="utf-8") as fh:
+        fh.write("SKIPPED\n")
+        fh.write("picasso-workflow was still running after the wait; the "
+                 "update was not applied. Fully close it, then click "
+                 "Update again.")
+    sys.exit(0)
+r = subprocess.run(
+    [sys.executable, "-m", "pip", "install", "--upgrade",
+     "--upgrade-strategy", "only-if-needed", "--no-input", wheel],
+    capture_output=True, text=True,
+)
+with open(log, "w", encoding="utf-8") as fh:
+    fh.write("OK\n" if r.returncode == 0 else "FAILED\n")
+    fh.write((r.stdout or "") + "\n" + (r.stderr or ""))
+"""
+
+
+def spawn_detached_updater(
+    wheel_url, parent_pid, python=None, log_path=None, *, popen=None
+):
+    """Launch the detached updater to pip-install ``wheel_url`` after the GUI
+    (``parent_pid``) exits.
+
+    The helper is fully detached (own process group / session, no console) so it
+    outlives the GUI closing; it waits for ``parent_pid`` to exit -- unlocking
+    the loaded Qt/numpy DLLs -- then runs pip. Returns the log path it writes.
+    ``popen`` is injectable for tests (defaults to :class:`subprocess.Popen`).
     """
-    return [
-        python or sys.executable,
-        "-m",
-        "pip",
-        "install",
-        "--upgrade",
-        "--upgrade-strategy",
-        "only-if-needed",
-        "--no-input",
+    popen = popen or subprocess.Popen
+    python = python or sys.executable
+    log_path = log_path or update_log_path()
+    cmd = [
+        python,
+        "-c",
+        _UPDATER_SOURCE,
         str(wheel_url),
+        str(parent_pid),
+        str(log_path),
     ]
-
-
-def _looks_locked(text: str) -> bool:
-    """Heuristic: did pip fail because a file is in use (app still running)?"""
-    t = (text or "").lower()
-    return (
-        "being used by another process" in t
-        or "access is denied" in t
-        or "permission denied" in t
-        or "winerror 32" in t
-    )
-
-
-def run_update(wheel_url, *, python=None, runner=None):
-    """Run the pip upgrade and return ``(ok, message)``.
-
-    ``message`` is user-facing: on success it tells the user to restart; on a
-    locked-file failure it says to close the app / re-run the installer.
-    ``runner`` is injectable for tests (defaults to :func:`subprocess.run`).
-    """
-    runner = runner or subprocess.run
-    if not wheel_url:
-        return False, "No update wheel was found in the latest release."
-    proc = runner(
-        pip_upgrade_command(wheel_url, python=python),
-        capture_output=True,
-        text=True,
-    )
-    if getattr(proc, "returncode", 1) == 0:
-        return True, (
-            "Update installed. Close and reopen picasso-workflow to finish "
-            "applying it."
-        )
-    err = (
-        getattr(proc, "stderr", "") or getattr(proc, "stdout", "") or ""
-    ).strip()
-    if _looks_locked(err):
-        return False, (
-            "Some components are in use and could not be updated while the app "
-            "is running. Close picasso-workflow, then re-run the installer for "
-            "this update."
-        )
-    return False, "Update failed: " + (err or "unknown error")
+    kwargs = {"close_fds": True}
+    if os.name == "nt":
+        # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW
+        kwargs["creationflags"] = 0x00000008 | 0x00000200 | 0x08000000
+    else:
+        kwargs["start_new_session"] = True
+    popen(cmd, **kwargs)
+    return log_path
