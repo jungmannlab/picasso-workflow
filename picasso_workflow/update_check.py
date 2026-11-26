@@ -36,9 +36,11 @@ def windows_upgrade_note(platform: str | None = None) -> str:
     constructor's NSIS installer aborts on a non-empty target directory and has
     no in-place-upgrade path, so a Windows user must uninstall the current
     version before installing the new one into the same folder. Returns an
-    empty string off Windows. ``platform`` overrides ``sys.platform`` (tests).
+    empty string off Windows. ``platform`` overrides ``sys.platform`` (tests);
+    pass it explicitly (incl. ``""``) to force the result regardless of host.
     """
-    if (platform or sys.platform) != "win32":
+    effective = sys.platform if platform is None else platform
+    if effective != "win32":
         return ""
     return (
         "On Windows, uninstall the current version first (Settings → "
