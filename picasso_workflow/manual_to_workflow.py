@@ -1294,10 +1294,16 @@ def retro_calc_find_similar(
         return {}
     centers = _subsample_rows(centers, _RETRO_MAX_PICKS)
 
+    # picasso 1.0 localizations are already in nm (same frame as ``centers_nm``
+    # and ``diameter_nm``), so do NOT scale by pixelsize. The RMSD must come out
+    # in nm to match the runtime window: ``find_similar`` ->
+    # picasso.pick_similar_candidates reports rmsd in nm. Scaling here would make
+    # min/max_rmsd ~pixelsize x too large, so the window rejects every candidate
+    # (0 picks -> undrift_from_picked fails).
     pts = np.column_stack(
         [
-            np.asarray(locs["x"], dtype=float) * pixelsize,
-            np.asarray(locs["y"], dtype=float) * pixelsize,
+            np.asarray(locs["x"], dtype=float),
+            np.asarray(locs["y"], dtype=float),
         ]
     )
     if len(pts) == 0:
@@ -1404,8 +1410,13 @@ def retro_calc_from_picked(
         ``min/max_rmsd`` (nm). Empty when there is no usable group column.
     """
     try:
-        x = np.asarray(picked_locs["x"], dtype=float) * pixelsize
-        y = np.asarray(picked_locs["y"], dtype=float) * pixelsize
+        # picasso 1.0 localizations are already in nm, so do NOT scale by
+        # pixelsize -- the RMSD must come out in nm to match the runtime window
+        # (find_similar -> picasso.pick_similar_candidates reports rmsd in nm).
+        # Scaling here made min/max_rmsd ~pixelsize x too large, so the window
+        # rejected every candidate (0 picks -> undrift_from_picked fails).
+        x = np.asarray(picked_locs["x"], dtype=float)
+        y = np.asarray(picked_locs["y"], dtype=float)
         groups = np.asarray(picked_locs["group"])
     except (KeyError, ValueError, TypeError, IndexError):
         return {}
