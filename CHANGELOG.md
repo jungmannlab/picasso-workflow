@@ -19,6 +19,12 @@ This file was started after v0.5.6; earlier history is in the git log.
   instructions. (`picasso_workflow/update_check.py`, `picasso_workflow/gui.py`,
   `.github/workflows/release.yml`)
 
+### Fixed
+- **The Doctor tab is now scrollable.** Its content is wrapped in a resizable
+  scroll area, so on a short window the lower sections (connection tests,
+  cluster secrets) are reachable by scrolling instead of being cut off.
+  (`picasso_workflow/doctor_tab.py`)
+
 ## [0.8.6] - 2026-11-25
 
 ### Added

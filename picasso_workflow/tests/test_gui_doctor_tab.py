@@ -237,3 +237,20 @@ def test_doctor_tab_connection_test_threaded(qapp, monkeypatch):
     tab._stop_threads()
     assert tab._threads == []
     tab.deleteLater()
+
+
+def test_doctor_tab_content_is_scrollable(qapp):
+    """The whole tab lives in a resizable scroll area so no section is cut
+    off on a short window."""
+    from picasso_workflow.doctor_tab import DoctorTab
+
+    tab = DoctorTab(main_window=None)
+    scrolls = tab.findChildren(QtWidgets.QScrollArea)
+    assert scrolls, "Doctor tab content should be wrapped in a QScrollArea"
+    scroll = scrolls[0]
+    assert scroll.widgetResizable()  # content wraps to width, no h-scroll
+    container = scroll.widget()
+    assert container is not None
+    # the section group boxes live inside the scrolled container
+    assert container.findChildren(QtWidgets.QGroupBox)
+    tab.deleteLater()
