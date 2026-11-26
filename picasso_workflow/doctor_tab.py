@@ -546,7 +546,12 @@ class DoctorTab(QtWidgets.QWidget):
     # -- UI construction ---------------------------------------------------
 
     def _build_ui(self) -> None:
-        layout = QtWidgets.QVBoxLayout(self)
+        # Build everything into a container, then drop that into a scroll area
+        # (see the end of this method) so the whole tab scrolls when the window
+        # is shorter than its content -- a small screen would otherwise cut off
+        # the lower sections with no way to reach them.
+        container = QtWidgets.QWidget()
+        layout = QtWidgets.QVBoxLayout(container)
 
         top = QtWidgets.QHBoxLayout()
         intro = QtWidgets.QLabel(
@@ -566,6 +571,10 @@ class DoctorTab(QtWidgets.QWidget):
 
         self.info_view = QtWidgets.QTextBrowser()
         self.info_view.setOpenExternalLinks(False)
+        # Keep the diagnostics box usefully tall even inside the outer scroll
+        # area (it scrolls its own long content); the outer area owns overflow
+        # of the sections below it.
+        self.info_view.setMinimumHeight(220)
         layout.addWidget(self.info_view, 1)
 
         # --- connections: per-profile test buttons ---
@@ -656,6 +665,18 @@ class DoctorTab(QtWidgets.QWidget):
         sec_layout.addWidget(self._cluster_status, 5, 0, 1, 3)
         sec_layout.setColumnStretch(2, 1)
         layout.addWidget(sec_group)
+
+        # Make the whole tab scrollable so no section is unreachable on a short
+        # window. widgetResizable keeps the container at the viewport width (so
+        # content wraps rather than scrolling horizontally); NoFrame avoids a
+        # double border inside the tab.
+        scroll = QtWidgets.QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
+        scroll.setWidget(container)
+        outer = QtWidgets.QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.addWidget(scroll)
 
     # -- passive diagnostics -----------------------------------------------
 
