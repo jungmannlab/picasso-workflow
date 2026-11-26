@@ -10,6 +10,15 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ## [Unreleased]
 
+### Changed
+- **Cluster SSH buttons no longer freeze the app.** Submitting a job, listing
+  jobs, querying queue/job status, cancelling, estimating start, and the submit
+  pre-flight each do a blocking `ssh` round-trip that previously ran on the GUI
+  thread — freezing the window for seconds with no feedback. These now run off
+  the GUI thread while the **status bar shows an animated message** (e.g.
+  "Connecting to login node…", "Submitting job to login node…") with a busy
+  cursor, so the app stays responsive. (`picasso_workflow/gui.py`)
+
 ### Fixed
 - **In-app self-update now works on an all-users install (asks for admin).** A
   one-click install "for all users" lives under `C:\ProgramData\…`, which is

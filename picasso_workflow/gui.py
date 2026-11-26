@@ -10076,6 +10076,28 @@ class _SshTestWorker(QtCore.QObject):
         self.finished.emit(verdict)
 
 
+class _SshCallWorker(QtCore.QObject):
+    """Run an arbitrary blocking callable off the GUI thread.
+
+    Emits ``finished(ok, payload)`` -- ``(True, return_value)`` on success or
+    ``(False, exception)`` on error. Used by ``Window._run_ssh`` to keep the UI
+    responsive (and the status-bar activity animating) while a synchronous SLURM
+    SSH round-trip runs.
+    """
+
+    finished = QtCore.pyqtSignal(bool, object)
+
+    def __init__(self, fn):
+        super().__init__()
+        self._fn = fn
+
+    def run(self):
+        try:
+            self.finished.emit(True, self._fn())
+        except Exception as e:
+            self.finished.emit(False, e)
+
+
 class SshSetupDialog(QtWidgets.QDialog):
     """Configure and test the SSH link to a SLURM login node.
 
@@ -17768,6 +17790,80 @@ class Window(QtWidgets.QMainWindow):
         self._slurm_comm_host = host_cluster
         return self.slurm_communicator
 
+    def _run_ssh(self, message, fn):
+        """Run a blocking SSH/SLURM call off the GUI thread, keeping the app
+        responsive with an animated status-bar message.
+
+        A synchronous ``ssh`` round-trip on the GUI thread freezes the window
+        (no repaint, no animation) for the seconds it takes to connect. This
+        runs ``fn`` in a worker thread and spins a nested event loop until it
+        finishes -- so the status bar shows ``message`` with moving dots and the
+        window stays responsive -- then returns ``fn()``'s value (re-raising its
+        exception). Reentry (e.g. the monitor timer firing mid-call) runs inline
+        to avoid stacking event loops / a double busy cursor.
+        """
+        if getattr(self, "_ssh_busy", False):
+            return fn()
+        self._ssh_busy = True
+        self._begin_ssh_busy(message)
+        self._ssh_holder = {}
+        self._ssh_loop = QtCore.QEventLoop()
+        worker = _SshCallWorker(fn)
+        thread = QtCore.QThread(self)
+        worker.moveToThread(thread)
+        thread._pw_worker = worker  # keep alive until the thread ends
+        thread.started.connect(worker.run)
+        # Bound-method slot on this (GUI-thread) QObject so the cross-thread
+        # signal is QUEUED to the GUI thread -- it is processed inside
+        # loop.exec() even if the worker finishes first, avoiding a quit-before-
+        # exec hang.
+        worker.finished.connect(self._on_ssh_call_done)
+        worker.finished.connect(thread.quit)
+        worker.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        try:
+            thread.start()
+            self._ssh_loop.exec()
+        finally:
+            self._end_ssh_busy()
+            self._ssh_busy = False
+        holder = self._ssh_holder
+        if not holder.get("ok"):
+            raise holder["payload"]
+        return holder["payload"]
+
+    def _on_ssh_call_done(self, ok, payload):
+        self._ssh_holder["ok"] = ok
+        self._ssh_holder["payload"] = payload
+        self._ssh_loop.quit()
+
+    def _begin_ssh_busy(self, message):
+        """Show ``message`` in the status bar with an animated trailing ellipsis
+        and a busy cursor (started by :meth:`_run_ssh`)."""
+        self._ssh_busy_message = message
+        self._ssh_busy_dots = 0
+        QtWidgets.QApplication.setOverrideCursor(Qt.CursorShape.BusyCursor)
+        timer = getattr(self, "_ssh_busy_timer", None)
+        if timer is None:
+            timer = QtCore.QTimer(self)
+            timer.timeout.connect(self._tick_ssh_busy)
+            self._ssh_busy_timer = timer
+        self._tick_ssh_busy()  # paint immediately, don't wait a tick
+        timer.start(400)
+
+    def _tick_ssh_busy(self):
+        self._ssh_busy_dots = (self._ssh_busy_dots + 1) % 4
+        self.statusBar().showMessage(
+            self._ssh_busy_message + "." * self._ssh_busy_dots
+        )
+
+    def _end_ssh_busy(self):
+        timer = getattr(self, "_ssh_busy_timer", None)
+        if timer is not None:
+            timer.stop()
+        self.statusBar().clearMessage()
+        QtWidgets.QApplication.restoreOverrideCursor()
+
     def _login_node_probe(self, comm):
         """Probe the login-node SSH connection; return ``(ok, detail)``.
 
@@ -18806,7 +18902,10 @@ class Window(QtWidgets.QMainWindow):
         # the user declines or it still does not work. The message names the
         # actual login node dialed (not the cluster key) and includes the ssh
         # error, so the user is not sent down the wrong path.
-        ok, detail = self._login_node_probe(self.slurm_communicator)
+        ok, detail = self._run_ssh(
+            f"Connecting to login node {login_node}",
+            lambda: self._login_node_probe(self.slurm_communicator),
+        )
         if not ok:
             msg = (
                 f"Could not connect to login node '{login_node}' "
@@ -18846,7 +18945,10 @@ class Window(QtWidgets.QMainWindow):
             self.slurm_communicator = self._ensure_slurm_communicator(
                 host_cluster
             )
-            ok, detail = self._login_node_probe(self.slurm_communicator)
+            ok, detail = self._run_ssh(
+                f"Connecting to login node {login_node}",
+                lambda: self._login_node_probe(self.slurm_communicator),
+            )
             if not ok:
                 msg = (
                     f"The SSH connection to login node '{login_node}' "
@@ -19088,8 +19190,11 @@ class Window(QtWidgets.QMainWindow):
             f"start_slurm: submitting job to {host_cluster} "
             f"using script {script_path}"
         )
-        result = self.slurm_communicator.submit_job(
-            script_path, host_cluster, additional_options=None
+        result = self._run_ssh(
+            "Submitting job to login node",
+            lambda: self.slurm_communicator.submit_job(
+                script_path, host_cluster, additional_options=None
+            ),
         )
         logger.info(
             f"start_slurm: submission result success={result['success']} "
@@ -19121,8 +19226,11 @@ class Window(QtWidgets.QMainWindow):
             # Script assembly was refused (validation / Investigation); the
             # user was already told. Nothing to estimate.
             return
-        result = self.slurm_communicator.submit_job(
-            script_path, host_cluster, additional_options=["--test-only"]
+        result = self._run_ssh(
+            "Estimating start time on login node",
+            lambda: self.slurm_communicator.submit_job(
+                script_path, host_cluster, additional_options=["--test-only"]
+            ),
         )
 
         self.job_info_display.append(
@@ -19329,7 +19437,10 @@ class Window(QtWidgets.QMainWindow):
 
         try:
             job_id_int = int(job_id)
-            result = self.slurm_communicator.cancel_job(job_id_int)
+            result = self._run_ssh(
+                "Cancelling job on login node",
+                lambda: self.slurm_communicator.cancel_job(job_id_int),
+            )
 
             if result["success"]:
                 self.job_info_display.append(
@@ -19364,7 +19475,10 @@ class Window(QtWidgets.QMainWindow):
 
         try:
             job_id_int = int(job_id)
-            result = self.slurm_communicator.get_job_status(job_id_int)
+            result = self._run_ssh(
+                "Querying job status",
+                lambda: self.slurm_communicator.get_job_status(job_id_int),
+            )
 
             if result["success"]:
                 self.job_info_display.append(f"\n=== Job {job_id} Status ===")
@@ -19394,7 +19508,10 @@ class Window(QtWidgets.QMainWindow):
             )
             return
 
-        result = self.slurm_communicator.list_jobs()
+        result = self._run_ssh(
+            "Listing jobs on login node",
+            self.slurm_communicator.list_jobs,
+        )
 
         if result["success"]:
             jobs = result.get("jobs", [])
@@ -19430,7 +19547,10 @@ class Window(QtWidgets.QMainWindow):
             )
             return
 
-        result = self.slurm_communicator.get_queue_info()
+        result = self._run_ssh(
+            "Querying queue information",
+            self.slurm_communicator.get_queue_info,
+        )
 
         if result["success"]:
             partitions = result.get("partitions", [])

@@ -30,6 +30,31 @@ def window(qapp):
     win.close()
 
 
+def test_run_ssh_returns_result_and_clears_busy(window):
+    # off-thread call returns the value; status bar + busy flag are cleared
+    assert window._run_ssh("Connecting to login node", lambda: 7) == 7
+    assert window._ssh_busy is False
+    assert window.statusBar().currentMessage() == ""
+
+
+def test_run_ssh_propagates_exception(window):
+    def boom():
+        raise RuntimeError("ssh blew up")
+
+    with pytest.raises(RuntimeError, match="ssh blew up"):
+        window._run_ssh("Connecting to login node", boom)
+    assert window._ssh_busy is False  # cleaned up even on error
+
+
+def test_run_ssh_reentry_runs_inline(window):
+    # already busy (e.g. monitor timer firing mid-call) -> run inline, no hang
+    window._ssh_busy = True
+    try:
+        assert window._run_ssh("x", lambda: 5) == 5
+    finally:
+        window._ssh_busy = False
+
+
 def test_login_node_probe_surfaces_ssh_error(window):
     """The pre-flight probe returns the real ssh stderr on failure, uses
     batch_mode (fail-fast, no password hang), and is clean on success."""
