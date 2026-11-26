@@ -226,7 +226,12 @@ def spawn_detached_updater(
     """
     python = python or sys.executable
     log_path = log_path or update_log_path()
-    if elevate and os.name == "nt":
+    if elevate:
+        if os.name != "nt":
+            # Elevation is implemented only via the Windows UAC prompt; don't
+            # silently fall through to an unelevated pip that would fail on a
+            # read-only prefix. The GUI catches this and tells the user.
+            raise OSError("elevated self-update is only supported on Windows")
         _spawn_elevated_updater(
             python, wheel_url, parent_pid, log_path, shell_execute
         )

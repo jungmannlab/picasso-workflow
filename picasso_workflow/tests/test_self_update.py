@@ -211,6 +211,20 @@ def test_spawn_elevated_updater_uses_runas(monkeypatch):
     )
 
 
+def test_spawn_elevated_updater_non_windows_raises(monkeypatch):
+    # elevate=True off Windows must raise (not silently run unelevated pip),
+    # so the GUI reports it instead of a silent no-op.
+    monkeypatch.setattr(self_update.os, "name", "posix")
+    with pytest.raises(OSError):
+        self_update.spawn_detached_updater(
+            "https://x/pw.whl",
+            1,
+            python="py",
+            log_path="L.log",
+            elevate=True,
+        )
+
+
 def test_spawn_elevated_updater_raises_when_uac_declined(monkeypatch):
     # ShellExecuteW returns <= 32 when the user cancels UAC -> OSError, so the
     # GUI can keep the app open instead of closing into a no-op.

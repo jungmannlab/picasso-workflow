@@ -327,13 +327,16 @@ def test_setup_cluster_ssh_targets_selected_login_node(qapp, monkeypatch):
     calls = {}
 
     class FakeMW:
-        def on_configure_ssh(self, default_host=None):
+        def on_configure_ssh(self, default_host=None, default_label=None):
             calls["host"] = default_host
+            calls["label"] = default_label
 
     tab = DoctorTab(main_window=FakeMW())
     tab._cluster_combo.setCurrentIndex(tab._cluster_combo.findText("clusterA"))
     tab._setup_cluster_ssh()
     assert calls["host"] == "login01"
+    # saves back to the cluster KEY, not a new hostname-keyed entry
+    assert calls["label"] == "clusterA"
     tab.deleteLater()
 
 
@@ -350,7 +353,7 @@ def test_setup_cluster_ssh_selects_newly_saved_node(qapp, monkeypatch):
     )
 
     class FakeMW:
-        def on_configure_ssh(self, default_host=None):
+        def on_configure_ssh(self, default_host=None, default_label=None):
             return "clusterB"  # user configured/saved clusterB in the dialog
 
     tab = DoctorTab(main_window=FakeMW())

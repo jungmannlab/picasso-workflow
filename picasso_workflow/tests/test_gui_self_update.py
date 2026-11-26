@@ -116,3 +116,16 @@ def test_prior_update_outcome_surfaced_and_consumed(window, monkeypatch):
     assert captured["title"] == "Update failed"
     assert captured["warning"] is True
     assert "Access is denied" in captured["html"]
+
+
+def test_prior_update_outcome_ignores_empty_log(window, monkeypatch):
+    # an empty/truncated log (status == "") must not show a spurious failure
+    monkeypatch.setattr(self_update, "read_update_outcome", lambda: ("", ""))
+    called = {}
+    monkeypatch.setattr(
+        window,
+        "_update_message_box",
+        lambda *a, **k: called.update(shown=True),
+    )
+    window._report_prior_update_outcome()
+    assert "shown" not in called

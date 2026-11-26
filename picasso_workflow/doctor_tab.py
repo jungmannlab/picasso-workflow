@@ -924,7 +924,11 @@ class DoctorTab(QtWidgets.QWidget):
 
         host = self._cluster_host()
         login_node = (CONFIG.get("SlurmLoginNodes") or {}).get(host, host)
-        saved = mw.on_configure_ssh(default_host=login_node)
+        # Pass the cluster KEY as the label so testing its login node updates
+        # that key instead of creating a spurious hostname-keyed entry.
+        saved = mw.on_configure_ssh(
+            default_host=login_node, default_label=host or None
+        )
         # The dialog may have added/selected a (possibly new) node; re-sync and
         # select whatever was saved so Check/Upload target it, else keep the
         # current selection.

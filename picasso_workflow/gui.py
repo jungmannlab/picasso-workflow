@@ -13336,6 +13336,10 @@ class Window(QtWidgets.QMainWindow):
         if not outcome:
             return
         status, detail = outcome
+        if not status:
+            # Empty/truncated log (updater killed before writing a status
+            # line) -- say nothing rather than a spurious "Update failed".
+            return
         if status == "OK":
             self._update_message_box(
                 "Update installed",
@@ -17828,7 +17832,12 @@ class Window(QtWidgets.QMainWindow):
             self._end_ssh_busy()
             self._ssh_busy = False
         holder = self._ssh_holder
-        if not holder.get("ok"):
+        if "ok" not in holder:
+            # The nested loop was quit by something other than the worker
+            # (e.g. the app closing mid-call) -- don't crash on a missing
+            # payload; surface a clear error instead.
+            raise RuntimeError("the SSH call did not complete")
+        if not holder["ok"]:
             raise holder["payload"]
         return holder["payload"]
 

@@ -35,14 +35,15 @@ This file was started after v0.5.6; earlier history is in the git log.
   reason instead of leaving a silent no-op.
   (`picasso_workflow/self_update.py`, `picasso_workflow/gui.py`)
 - **Testing a login node no longer adds a spurious cluster-host entry.** In the
-  Run tab, "Configure / Test connection…" for an existing cluster (e.g.
-  `hpcl8XXX`) pre-fills its login node (e.g. `hpcl8001`); on save it was
-  persisted under a **new** `SlurmLoginNodes` key named after the *hostname*,
-  so `hpcl8001` then appeared as its own entry in the Cluster Host dropdown.
-  The dialog now saves back to the **originating cluster key** (the label is
-  pre-filled with it), updating that cluster's login node instead of creating a
-  duplicate. Onboarding a brand-new node (no originating key) still defaults the
-  label to the hostname. (`picasso_workflow/gui.py`)
+  Run tab and the Doctor tab, "Configure / Test connection…" for an existing
+  cluster (e.g. `hpcl8XXX`) pre-fills its login node (e.g. `hpcl8001`); on save
+  it was persisted under a **new** `SlurmLoginNodes` key named after the
+  *hostname*, so `hpcl8001` then appeared as its own entry in the Cluster Host
+  dropdown. The dialog now saves back to the **originating cluster key** (the
+  label is pre-filled with it), updating that cluster's login node instead of
+  creating a duplicate. Onboarding a brand-new node (no originating key) still
+  defaults the label to the hostname.
+  (`picasso_workflow/gui.py`, `picasso_workflow/doctor_tab.py`)
 
 ## [0.8.11] - 2026-11-26
 
