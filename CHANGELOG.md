@@ -11,6 +11,17 @@ This file was started after v0.5.6; earlier history is in the git log.
 ## [Unreleased]
 
 ### Fixed
+- **Windows installer creates the Start Menu / Desktop shortcuts again.** The
+  taskbar-icon tweak added a large inline C#/`IPropertyStore` `Add-Type` to
+  `create_shortcuts.ps1`; because PowerShell parses the whole file before
+  running, a parse error there made the **entire** script refuse to run — so no
+  shortcut was created and no log was written. Removed that block (shortcut
+  creation is minimal and robust again; the taskbar-icon AppUserModelID is a
+  separate, still-open item). (`release/create_shortcuts.ps1`)
+- **The Run-tab "Configure / Test connection…" button now uses the selected
+  login node.** It was wired straight to `clicked`, so Qt's `checked` bool went
+  in as the host and the SSH dialog pre-filled the *first* configured node
+  instead of the one selected in the Run tab. (`picasso_workflow/gui.py`)
 - **In-app self-update now works on bundled installs.** The 0.8.8 updater
   ran `pip` while the GUI was open, which can never overwrite the Qt/numpy
   DLLs the app has loaded — it failed with "some components are in use".
