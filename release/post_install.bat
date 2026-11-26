@@ -37,5 +37,9 @@ rem hiccup never fails an otherwise-working install.
 powershell -NoProfile -ExecutionPolicy Bypass -File ^
   "%PREFIX%\create_shortcuts.ps1" -Prefix "%PREFIX%"
 
+rem Mark this as a one-click-installer (bundled) install, so the GUI offers
+rem in-app self-update (pip-upgrade in place) only here, never a dev env.
+> "%PREFIX%\.picasso-workflow-bundled" echo bundled
+
 endlocal
 exit /b 0

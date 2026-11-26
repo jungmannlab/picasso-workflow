@@ -10508,6 +10508,31 @@ class _ReleaseCheckWorker(QtCore.QObject):
         self.finished.emit(fetch_latest_release(self._current_version))
 
 
+class _SelfUpdateWorker(QtCore.QObject):
+    """Fetch the latest release wheel and pip-upgrade this env, off-thread.
+
+    Emits ``finished(ok, message)`` where ``message`` is user-facing (incl. the
+    restart instruction on success). All logic is in
+    :mod:`picasso_workflow.self_update`; this is a thin thread wrapper.
+    """
+
+    finished = QtCore.pyqtSignal(bool, str)
+
+    def run(self) -> None:
+        try:
+            from picasso_workflow import self_update
+            from picasso_workflow.update_check import (
+                fetch_latest_release_json,
+            )
+
+            release = fetch_latest_release_json(timeout=15)
+            url = self_update.wheel_asset_url(release or {})
+            ok, message = self_update.run_update(url)
+        except Exception as e:  # pragma: no cover - defensive; must not raise
+            ok, message = False, f"Update failed: {e}"
+        self.finished.emit(ok, message)
+
+
 class _ClusterImageListWorker(QtCore.QObject):
     """List a shared folder's ``.sif`` images over SSH, off the GUI thread.
 
@@ -13224,6 +13249,19 @@ class Window(QtWidgets.QMainWindow):
         self._update_banner_label.setStyleSheet("border: none;")
         row.addWidget(self._update_banner_label, 1)
 
+        # Shown only for a one-click-installer (bundled) install: pip-upgrade
+        # this env in place instead of re-downloading/uninstalling. Revealed in
+        # _on_update_check_result.
+        self._update_now_button = QtWidgets.QPushButton("Update now")
+        self._update_now_button.setToolTip(
+            "Download and install the latest version into this app's "
+            "environment. You'll be asked to restart to finish applying it."
+        )
+        self._update_now_button.setStyleSheet("border: none;")
+        self._update_now_button.setVisible(False)
+        self._update_now_button.clicked.connect(self._start_self_update)
+        row.addWidget(self._update_now_button, 0)
+
         dismiss = QtWidgets.QPushButton("Dismiss")
         dismiss.setStyleSheet("border: none;")
         dismiss.clicked.connect(lambda: banner.setVisible(False))
@@ -13274,6 +13312,11 @@ class Window(QtWidgets.QMainWindow):
                 f"A new version of picasso-workflow "
                 f"(<b>{info.latest}</b>) is available &mdash; "
                 f'<a href="{info.url}">download it here</a>.{hint}'
+            )
+            from picasso_workflow import self_update
+
+            self._update_now_button.setVisible(
+                self_update.is_bundled_install()
             )
             self.update_banner.setVisible(True)
         except Exception as e:  # pragma: no cover - defensive
@@ -13348,6 +13391,64 @@ class Window(QtWidgets.QMainWindow):
                 )
         except Exception as e:  # pragma: no cover - defensive
             logger.debug(f"Could not show the update result: {e}")
+
+    def _start_self_update(self):
+        """Pip-upgrade this bundled install in place (off-thread).
+
+        Only reachable from the banner's "Update now" button, which is shown
+        only for a one-click-installer env. Reuses the update-thread slot /
+        shutdown-join lifecycle; no-ops if an update check is still running.
+        """
+        if getattr(self, "_update_thread", None) is not None:
+            return
+        reply = QtWidgets.QMessageBox.question(
+            self,
+            "Update picasso-workflow",
+            "Download and install the latest version now?\n\nIt installs into "
+            "this app's environment; you'll need to close and reopen "
+            "picasso-workflow afterwards to finish applying it.",
+            QtWidgets.QMessageBox.StandardButton.Yes
+            | QtWidgets.QMessageBox.StandardButton.No,
+        )
+        if reply != QtWidgets.QMessageBox.StandardButton.Yes:
+            return
+        self._update_now_button.setEnabled(False)
+        self._update_now_button.setText("Updating…")
+        try:
+            worker = _SelfUpdateWorker()
+            thread = QtCore.QThread(self)
+            worker.moveToThread(thread)
+            thread._pw_worker = worker
+            thread.started.connect(worker.run)
+            worker.finished.connect(self._on_self_update_result)
+            worker.finished.connect(thread.quit)
+            worker.finished.connect(worker.deleteLater)
+            thread.finished.connect(thread.deleteLater)
+            thread.finished.connect(self._forget_update_thread)
+            self._update_thread = thread
+            thread.start()
+        except Exception as e:  # pragma: no cover - defensive
+            self._update_now_button.setEnabled(True)
+            self._update_now_button.setText("Update now")
+            logger.debug(f"Could not start the self-update: {e}")
+
+    def _on_self_update_result(self, ok, message):
+        """Report the self-update outcome; the window carries the restart hint.
+
+        On success the app is NOT auto-restarted -- the message tells the user
+        to close and reopen (binary deps loaded now apply on the next launch).
+        """
+        import html as _html
+
+        self._update_now_button.setEnabled(True)
+        self._update_now_button.setText("Update now")
+        self._update_message_box(
+            "Update" if ok else "Update failed",
+            _html.escape(message),
+            warning=not ok,
+        )
+        if ok:
+            self.update_banner.setVisible(False)
 
     def _update_message_box(self, title, html, warning=False):
         """A rich-text message box whose ``<a href>`` links open in a browser.
