@@ -10,6 +10,17 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ## [Unreleased]
 
+### Fixed
+- **SSH setup's "Test connection" no longer hangs/times out when the key
+  isn't installed yet.** The probe now runs non-interactively
+  (`BatchMode=yes`), so instead of silently falling back to a password
+  prompt it can't answer in the GUI (which looked like a timeout), it
+  fails fast with "key not accepted -> install it". The install command it
+  shows is now **platform-aware**: `ssh-copy-id` on macOS/Linux, and a
+  `type <pub> | ssh …` pipe on Windows (which has no `ssh-copy-id`).
+  (`picasso_workflow/slurm_submit.py`, `picasso_workflow/ssh_setup.py`,
+  `picasso_workflow/gui.py`)
+
 ## [0.8.7] - 2026-11-26
 
 ### Added
