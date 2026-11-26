@@ -10,6 +10,47 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ## [Unreleased]
 
+## [0.8.7] - 2026-11-26
+
+### Added
+- **In-app self-update for one-click-installer builds.** When a newer
+  release exists, the update banner now offers an **"Update now"** button
+  (bundled installs only) that pip-upgrades picasso_workflow in place from
+  the release's wheel asset -- no re-download of the whole installer and no
+  uninstall-first (constructor's NSIS installer can't upgrade in place).
+  The update applies on the next launch, so it asks you to close and reopen.
+  (`picasso_workflow/self_update.py`, `picasso_workflow/update_check.py`,
+  `picasso_workflow/gui.py`, `release/post_install.{bat,sh}`,
+  `.github/workflows/release.yml`)
+- **Set up cluster SSH from more places.** The Doctor tab's "Cluster secrets"
+  panel now has its own **login-node selector** (all `SlurmLoginNodes`, not just
+  the Run-tab choice) and a **"Set up SSH connection…"** button that opens the
+  SSH-setup dialog pre-targeted at the selected node (generate/select a key →
+  test → guided `ssh-copy-id`); a failed cluster check now points you at that
+  button. The **Getting Started** onboarding dialog also gets an optional
+  **"Set up cluster SSH…"** button, so new users find it during first-run setup.
+  (`picasso_workflow/doctor_tab.py`, `picasso_workflow/gui.py`)
+
+### Changed
+- **Clearer Windows upgrade guidance.** constructor's Windows installer (NSIS)
+  refuses a non-empty target folder and has no in-place upgrade, so upgrading
+  means uninstall-then-reinstall. The in-app "update available" banner and
+  dialog now spell that out on Windows (uninstall first, then install into the
+  same folder), and the GitHub Release notes carry the same install/upgrade
+  instructions. (`picasso_workflow/update_check.py`, `picasso_workflow/gui.py`,
+  `.github/workflows/release.yml`)
+
+### Fixed
+- **Doctor tab hides an unconfigured test Confluence.** The "Connection tests"
+  section always offered a *ConfluenceTest* button; it now shows it only when
+  that profile is actually configured (a resolved `base_url` or token), so a
+  typical user without a test Confluence no longer sees an irrelevant test
+  button. (`picasso_workflow/doctor_tab.py`)
+- **The Doctor tab is now scrollable.** Its content is wrapped in a resizable
+  scroll area, so on a short window the lower sections (connection tests,
+  cluster secrets) are reachable by scrolling instead of being cut off.
+  (`picasso_workflow/doctor_tab.py`)
+
 ## [0.8.6] - 2026-11-25
 
 ### Added

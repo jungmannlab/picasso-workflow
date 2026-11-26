@@ -166,11 +166,20 @@ def test_main_window_has_doctor_tab(qapp):
     win.close()
 
 
-def test_doctor_tab_builds_and_renders(qapp):
+def test_doctor_tab_builds_and_renders(qapp, monkeypatch):
+    import picasso_workflow.doctor_tab as dt
+
+    # Force both profiles "configured" so a connection row renders for each,
+    # independent of whether the env's config sets up a test Confluence.
+    monkeypatch.setattr(
+        dt,
+        "_confluence_summary",
+        lambda p: {"base_url": "https://x", "token_set": True},
+    )
     tab = DoctorTab()
     text = tab.info_view.toPlainText()
     assert "Versions" in text and "Confluence profiles" in text
-    # a connection row per profile
+    # a connection row per configured profile
     assert set(tab._conn_buttons) == {"Confluence", "ConfluenceTest"}
     assert tab._conn_results["Confluence"].text() == "not tested"
     tab.deleteLater()
@@ -236,4 +245,120 @@ def test_doctor_tab_connection_test_threaded(qapp, monkeypatch):
     qapp.processEvents()
     tab._stop_threads()
     assert tab._threads == []
+    tab.deleteLater()
+
+
+def test_doctor_tab_content_is_scrollable(qapp):
+    """The whole tab lives in a resizable scroll area so no section is cut
+    off on a short window."""
+    from picasso_workflow.doctor_tab import DoctorTab
+
+    tab = DoctorTab(main_window=None)
+    scrolls = tab.findChildren(QtWidgets.QScrollArea)
+    assert scrolls, "Doctor tab content should be wrapped in a QScrollArea"
+    scroll = scrolls[0]
+    assert scroll.widgetResizable()  # content wraps to width, no h-scroll
+    container = scroll.widget()
+    assert container is not None
+    # the section group boxes live inside the scrolled container
+    assert container.findChildren(QtWidgets.QGroupBox)
+    tab.deleteLater()
+
+
+def test_cluster_combo_lists_nodes_and_drives_host(qapp, monkeypatch):
+    """The Doctor tab's own cluster selector lists all configured login nodes
+    and drives which one Check/Upload target (independent of the Run tab)."""
+    import picasso_workflow as pw
+    from picasso_workflow.doctor_tab import DoctorTab
+
+    monkeypatch.setitem(
+        pw.CONFIG,
+        "SlurmLoginNodes",
+        {"clusterA": "login01", "clusterB": "login02"},
+    )
+    tab = DoctorTab(main_window=None)
+    items = [
+        tab._cluster_combo.itemText(i)
+        for i in range(tab._cluster_combo.count())
+    ]
+    assert "clusterA" in items and "clusterB" in items
+    tab._cluster_combo.setCurrentIndex(tab._cluster_combo.findText("clusterB"))
+    assert tab._cluster_host() == "clusterB"
+    tab.deleteLater()
+
+
+def test_setup_cluster_ssh_targets_selected_login_node(qapp, monkeypatch):
+    """'Set up SSH connection…' opens the dialog pre-targeted at the selected
+    cluster's login-node hostname (not the config key)."""
+    import picasso_workflow as pw
+    from picasso_workflow.doctor_tab import DoctorTab
+
+    monkeypatch.setitem(pw.CONFIG, "SlurmLoginNodes", {"clusterA": "login01"})
+    calls = {}
+
+    class FakeMW:
+        def on_configure_ssh(self, default_host=None):
+            calls["host"] = default_host
+
+    tab = DoctorTab(main_window=FakeMW())
+    tab._cluster_combo.setCurrentIndex(tab._cluster_combo.findText("clusterA"))
+    tab._setup_cluster_ssh()
+    assert calls["host"] == "login01"
+    tab.deleteLater()
+
+
+def test_setup_cluster_ssh_selects_newly_saved_node(qapp, monkeypatch):
+    """After the dialog saves a (possibly new) node, the Doctor selector
+    switches to it so Check/Upload target what was just configured."""
+    import picasso_workflow as pw
+    from picasso_workflow.doctor_tab import DoctorTab
+
+    monkeypatch.setitem(
+        pw.CONFIG,
+        "SlurmLoginNodes",
+        {"clusterA": "login01", "clusterB": "login02"},
+    )
+
+    class FakeMW:
+        def on_configure_ssh(self, default_host=None):
+            return "clusterB"  # user configured/saved clusterB in the dialog
+
+    tab = DoctorTab(main_window=FakeMW())
+    tab._cluster_combo.setCurrentIndex(tab._cluster_combo.findText("clusterA"))
+    tab._setup_cluster_ssh()
+    assert tab._cluster_host() == "clusterB"
+    tab.deleteLater()
+
+
+def test_connection_tests_hide_unconfigured_test_profile(qapp, monkeypatch):
+    """ConfluenceTest has no test button unless it's actually configured, so a
+    typical user (no test Confluence) doesn't see it."""
+    import picasso_workflow.doctor_tab as dt
+
+    monkeypatch.setattr(
+        dt,
+        "_confluence_summary",
+        lambda p: (
+            {"base_url": "https://x", "token_set": True}
+            if p == "Confluence"
+            else {"base_url": None, "token_set": False}
+        ),
+    )
+    tab = dt.DoctorTab(main_window=None)
+    assert set(tab._conn_buttons) == {"Confluence"}
+    tab.deleteLater()
+
+
+def test_connection_tests_show_configured_test_profile(qapp, monkeypatch):
+    """When ConfluenceTest is configured (base_url/token), its test button
+    appears alongside the operational one."""
+    import picasso_workflow.doctor_tab as dt
+
+    monkeypatch.setattr(
+        dt,
+        "_confluence_summary",
+        lambda p: {"base_url": "https://x", "token_set": True},
+    )
+    tab = dt.DoctorTab(main_window=None)
+    assert set(tab._conn_buttons) == {"Confluence", "ConfluenceTest"}
     tab.deleteLater()

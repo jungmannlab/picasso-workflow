@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 import urllib.request
 from typing import NamedTuple
 
@@ -27,6 +28,25 @@ RELEASES_PAGE_URL = f"https://github.com/{GITHUB_REPO}/releases"
 # Short timeout: a slow / unreachable API must not delay the check (it runs off
 # the GUI thread, but we still don't want it lingering).
 _TIMEOUT_S = 4.0
+
+
+def windows_upgrade_note(platform: str | None = None) -> str:
+    """Windows-only caveat on how to upgrade over an existing install.
+
+    constructor's NSIS installer aborts on a non-empty target directory and has
+    no in-place-upgrade path, so a Windows user must uninstall the current
+    version before installing the new one into the same folder. Returns an
+    empty string off Windows. ``platform`` overrides ``sys.platform`` (tests);
+    pass it explicitly (incl. ``""``) to force the result regardless of host.
+    """
+    effective = sys.platform if platform is None else platform
+    if effective != "win32":
+        return ""
+    return (
+        "On Windows, uninstall the current version first (Settings → "
+        "Apps, or run Uninstall-picasso-workflow.exe in the install folder), "
+        "then run the new installer into the same folder."
+    )
 
 
 class UpdateInfo(NamedTuple):
@@ -119,6 +139,29 @@ def fetch_latest_release(
         return CheckResult("current", current, tag, html_url, None)
     except Exception as exc:  # fails soft -- report, don't raise
         return CheckResult("error", current, None, None, str(exc))
+
+
+def fetch_latest_release_json(
+    url: str = RELEASES_API_URL, timeout: float = _TIMEOUT_S
+) -> dict | None:
+    """Return the parsed GitHub "latest release" JSON, or ``None`` on any error.
+
+    Unlike :func:`fetch_latest_release` (which distils a few fields), this hands
+    back the raw release object -- the ``assets`` list lets the in-app updater
+    find the downloadable wheel. Fails soft (never raises).
+    """
+    try:
+        req = urllib.request.Request(
+            url,
+            headers={
+                "Accept": "application/vnd.github+json",
+                "User-Agent": "picasso-workflow",
+            },
+        )
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except Exception:  # fails soft -- caller treats None as "no update"
+        return None
 
 
 def check_for_update(

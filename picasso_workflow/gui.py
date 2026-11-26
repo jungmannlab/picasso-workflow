@@ -9808,6 +9808,14 @@ class GettingStartedDialog(QtWidgets.QDialog):
         create_btn = QtWidgets.QPushButton("Create my settings file…")
         create_btn.clicked.connect(lambda: self.open_user_config(self))
         btns.addWidget(create_btn)
+        ssh_btn = QtWidgets.QPushButton("Set up cluster SSH…")
+        ssh_btn.setToolTip(
+            "Optional: set up key-based SSH to your SLURM login node so you "
+            "can run workflows on the cluster (generate a key, test the "
+            "connection, install it with ssh-copy-id)."
+        )
+        ssh_btn.clicked.connect(self._setup_cluster_ssh)
+        btns.addWidget(ssh_btn)
         btns.addStretch(1)
         self.dont_show = QtWidgets.QCheckBox("Don't show this again")
         self.dont_show.setChecked(True)
@@ -9817,6 +9825,23 @@ class GettingStartedDialog(QtWidgets.QDialog):
         close_btn.setDefault(True)
         btns.addWidget(close_btn)
         layout.addLayout(btns)
+
+    def _setup_cluster_ssh(self):
+        """Open the main window's SSH-setup dialog.
+
+        An optional onboarding step; delegates to ``Window.on_configure_ssh``.
+        """
+        window = self.parent()
+        if window is not None and hasattr(window, "on_configure_ssh"):
+            window.on_configure_ssh()
+        else:  # pragma: no cover - defensive (dialog without the main window)
+            QtWidgets.QMessageBox.information(
+                self,
+                "Set up cluster SSH",
+                "Open the main window, then use the Run tab's "
+                "'Configure / Test connection…' button to set up SSH to the "
+                "cluster.",
+            )
 
     def _build_confluence_group(self):
         """Optional Confluence token entry, persisted to the per-user .env."""
@@ -10061,7 +10086,7 @@ class SshSetupDialog(QtWidgets.QDialog):
     persist the node to the per-user ``config.yaml`` on accept.
     """
 
-    def __init__(self, parent=None, default_username=None):
+    def __init__(self, parent=None, default_username=None, default_host=None):
         super().__init__(parent)
         from picasso_workflow import ssh_setup
 
@@ -10103,7 +10128,7 @@ class SshSetupDialog(QtWidgets.QDialog):
 
         self.host_edit = QtWidgets.QLineEdit()
         self.host_edit.setPlaceholderText("e.g., login.cluster.institute.edu")
-        self.host_edit.setText(first_host)
+        self.host_edit.setText(default_host or first_host)
         form.addRow("Login node (hostname):", self.host_edit)
 
         self.username_edit = QtWidgets.QLineEdit()
@@ -10481,6 +10506,34 @@ class _ReleaseCheckWorker(QtCore.QObject):
 
         # fetch_latest_release never raises (it reports status="error").
         self.finished.emit(fetch_latest_release(self._current_version))
+
+
+class _SelfUpdateWorker(QtCore.QObject):
+    """Fetch the latest release wheel and pip-upgrade this env, off-thread.
+
+    Emits ``finished(ok, message)`` where ``message`` is user-facing (incl. the
+    restart instruction on success). All logic is in
+    :mod:`picasso_workflow.self_update`; this is a thin thread wrapper.
+    """
+
+    finished = QtCore.pyqtSignal(bool, str)
+
+    def run(self) -> None:
+        try:
+            from picasso_workflow import self_update
+            from picasso_workflow.update_check import (
+                fetch_latest_release_json,
+            )
+
+            release = fetch_latest_release_json(timeout=15)
+            version = str((release or {}).get("tag_name") or "").lstrip("v")
+            url = self_update.wheel_asset_url(
+                release or {}, version=version or None
+            )
+            ok, message = self_update.run_update(url)
+        except Exception as e:  # pragma: no cover - defensive; must not raise
+            ok, message = False, f"Update failed: {e}"
+        self.finished.emit(ok, message)
 
 
 class _ClusterImageListWorker(QtCore.QObject):
@@ -13199,6 +13252,19 @@ class Window(QtWidgets.QMainWindow):
         self._update_banner_label.setStyleSheet("border: none;")
         row.addWidget(self._update_banner_label, 1)
 
+        # Shown only for a one-click-installer (bundled) install: pip-upgrade
+        # this env in place instead of re-downloading/uninstalling. Revealed in
+        # _on_update_check_result.
+        self._update_now_button = QtWidgets.QPushButton("Update now")
+        self._update_now_button.setToolTip(
+            "Download and install the latest version into this app's "
+            "environment. You'll be asked to restart to finish applying it."
+        )
+        self._update_now_button.setStyleSheet("border: none;")
+        self._update_now_button.setVisible(False)
+        self._update_now_button.clicked.connect(self._start_self_update)
+        row.addWidget(self._update_now_button, 0)
+
         dismiss = QtWidgets.QPushButton("Dismiss")
         dismiss.setStyleSheet("border: none;")
         dismiss.clicked.connect(lambda: banner.setVisible(False))
@@ -13241,10 +13307,19 @@ class Window(QtWidgets.QMainWindow):
         if info is None:
             return
         try:
+            from picasso_workflow.update_check import windows_upgrade_note
+
+            note = windows_upgrade_note()
+            hint = f"<br><small>{note}</small>" if note else ""
             self._update_banner_label.setText(
                 f"A new version of picasso-workflow "
                 f"(<b>{info.latest}</b>) is available &mdash; "
-                f'<a href="{info.url}">download it here</a>.'
+                f'<a href="{info.url}">download it here</a>.{hint}'
+            )
+            from picasso_workflow import self_update
+
+            self._update_now_button.setVisible(
+                self_update.is_bundled_install()
             )
             self.update_banner.setVisible(True)
         except Exception as e:  # pragma: no cover - defensive
@@ -13282,6 +13357,7 @@ class Window(QtWidgets.QMainWindow):
         from picasso_workflow.update_check import (
             RELEASES_PAGE_URL,
             UpdateInfo,
+            windows_upgrade_note,
         )
 
         try:
@@ -13290,13 +13366,15 @@ class Window(QtWidgets.QMainWindow):
                 self._on_update_check_result(
                     UpdateInfo(result.latest, result.url)
                 )
+                note = windows_upgrade_note()
+                hint = f"<br><br>{note}" if note else ""
                 self._update_message_box(
                     "Update available",
                     "A newer version of picasso-workflow is available."
                     f"<br><br>Installed: <b>{result.current}</b><br>"
                     f"Latest: <b>{result.latest}</b><br><br>"
                     f'Download it from <a href="{result.url}">the releases '
-                    "page</a>.",
+                    f"page</a>.{hint}",
                 )
             elif result.status == "current":
                 QtWidgets.QMessageBox.information(
@@ -13316,6 +13394,65 @@ class Window(QtWidgets.QMainWindow):
                 )
         except Exception as e:  # pragma: no cover - defensive
             logger.debug(f"Could not show the update result: {e}")
+
+    def _start_self_update(self):
+        """Pip-upgrade this bundled install in place (off-thread).
+
+        Only reachable from the banner's "Update now" button, which is shown
+        only for a one-click-installer env. Reuses the update-thread slot /
+        shutdown-join lifecycle; no-ops if an update check is still running.
+        """
+        if getattr(self, "_update_thread", None) is not None:
+            return
+        reply = QtWidgets.QMessageBox.question(
+            self,
+            "Update picasso-workflow",
+            "Download and install the latest version now?\n\nIt installs into "
+            "this app's environment. Keep picasso-workflow open until it "
+            "finishes (it may take a minute); then close and reopen it to "
+            "finish applying the update.",
+            QtWidgets.QMessageBox.StandardButton.Yes
+            | QtWidgets.QMessageBox.StandardButton.No,
+        )
+        if reply != QtWidgets.QMessageBox.StandardButton.Yes:
+            return
+        self._update_now_button.setEnabled(False)
+        self._update_now_button.setText("Updating…")
+        try:
+            worker = _SelfUpdateWorker()
+            thread = QtCore.QThread(self)
+            worker.moveToThread(thread)
+            thread._pw_worker = worker
+            thread.started.connect(worker.run)
+            worker.finished.connect(self._on_self_update_result)
+            worker.finished.connect(thread.quit)
+            worker.finished.connect(worker.deleteLater)
+            thread.finished.connect(thread.deleteLater)
+            thread.finished.connect(self._forget_update_thread)
+            self._update_thread = thread
+            thread.start()
+        except Exception as e:  # pragma: no cover - defensive
+            self._update_now_button.setEnabled(True)
+            self._update_now_button.setText("Update now")
+            logger.debug(f"Could not start the self-update: {e}")
+
+    def _on_self_update_result(self, ok, message):
+        """Report the self-update outcome; the window carries the restart hint.
+
+        On success the app is NOT auto-restarted -- the message tells the user
+        to close and reopen (binary deps loaded now apply on the next launch).
+        """
+        import html as _html
+
+        self._update_now_button.setEnabled(True)
+        self._update_now_button.setText("Update now")
+        self._update_message_box(
+            "Update" if ok else "Update failed",
+            _html.escape(message),
+            warning=not ok,
+        )
+        if ok:
+            self.update_banner.setVisible(False)
 
     def _update_message_box(self, title, html, warning=False):
         """A rich-text message box whose ``<a href>`` links open in a browser.
@@ -17427,20 +17564,27 @@ class Window(QtWidgets.QMainWindow):
         """Stop the polling timer."""
         self.monitor_timer.stop()
 
-    def on_configure_ssh(self):
+    def on_configure_ssh(self, default_host=None):
         """Open the SSH-setup dialog; refresh the Run-tab cluster fields.
 
         On accept, the dialog has persisted the node to the per-user
         ``config.yaml`` and reloaded ``CONFIG``; mirror that into the host
         combo (add/select the saved label) and the username field.
+        ``default_host`` pre-fills the dialog's login-node field (e.g. when
+        opened from the Doctor tab for a specific cluster). Returns the saved
+        cluster label, or ``None`` if the dialog was cancelled / saved nothing.
         """
         default_username = self.cluster_username_edit.text().strip() or None
-        dialog = SshSetupDialog(self, default_username=default_username)
+        dialog = SshSetupDialog(
+            self,
+            default_username=default_username,
+            default_host=default_host,
+        )
         if dialog.exec() != QtWidgets.QDialog.DialogCode.Accepted:
-            return
+            return None
         label = getattr(dialog, "saved_label", None)
         if not label:
-            return
+            return None
         # Rebuild the host combo from the reloaded CONFIG and select the saved
         # node. The combo is editable, so an addItem is safe even if present.
         existing = {
@@ -17463,6 +17607,7 @@ class Window(QtWidgets.QMainWindow):
         # Drop any cached communicator so the next op uses the new settings.
         self.slurm_communicator = None
         self._slurm_comm_host = None
+        return label
 
     def _ensure_slurm_communicator(self, host_cluster):
         """Return a :class:`SlurmCommunicator` for ``host_cluster``.
