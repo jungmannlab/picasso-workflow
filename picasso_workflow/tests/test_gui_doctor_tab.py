@@ -319,3 +319,37 @@ def test_setup_cluster_ssh_selects_newly_saved_node(qapp, monkeypatch):
     tab._setup_cluster_ssh()
     assert tab._cluster_host() == "clusterB"
     tab.deleteLater()
+
+
+def test_connection_tests_hide_unconfigured_test_profile(qapp, monkeypatch):
+    """ConfluenceTest has no test button unless it's actually configured, so a
+    typical user (no test Confluence) doesn't see it."""
+    import picasso_workflow.doctor_tab as dt
+
+    monkeypatch.setattr(
+        dt,
+        "_confluence_summary",
+        lambda p: (
+            {"base_url": "https://x", "token_set": True}
+            if p == "Confluence"
+            else {"base_url": None, "token_set": False}
+        ),
+    )
+    tab = dt.DoctorTab(main_window=None)
+    assert set(tab._conn_buttons) == {"Confluence"}
+    tab.deleteLater()
+
+
+def test_connection_tests_show_configured_test_profile(qapp, monkeypatch):
+    """When ConfluenceTest is configured (base_url/token), its test button
+    appears alongside the operational one."""
+    import picasso_workflow.doctor_tab as dt
+
+    monkeypatch.setattr(
+        dt,
+        "_confluence_summary",
+        lambda p: {"base_url": "https://x", "token_set": True},
+    )
+    tab = dt.DoctorTab(main_window=None)
+    assert set(tab._conn_buttons) == {"Confluence", "ConfluenceTest"}
+    tab.deleteLater()

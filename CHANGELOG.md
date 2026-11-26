@@ -30,6 +30,11 @@ This file was started after v0.5.6; earlier history is in the git log.
   `.github/workflows/release.yml`)
 
 ### Fixed
+- **Doctor tab hides an unconfigured test Confluence.** The "Connection tests"
+  section always offered a *ConfluenceTest* button; it now shows it only when
+  that profile is actually configured (a resolved `base_url` or token), so a
+  typical user without a test Confluence no longer sees an irrelevant test
+  button. (`picasso_workflow/doctor_tab.py`)
 - **The Doctor tab is now scrollable.** Its content is wrapped in a resizable
   scroll area, so on a short window the lower sections (connection tests,
   cluster secrets) are reachable by scrolling instead of being cut off.
