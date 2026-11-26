@@ -160,7 +160,12 @@ jobs:
           # but the .sif build must then be kicked off manually (re-publish the
           # release, or run build-apptainer via workflow_dispatch with the tag).
           token: ${{ secrets.RELEASE_PAT || github.token }}
-          files: release/dist/*
+          # Attach the installers AND the built wheel: the in-app self-update
+          # (bundled installs) pip-installs this wheel asset in place, since
+          # picasso_workflow isn't published to PyPI.
+          files: |
+            release/dist/*
+            release/wheels/*.whl
           # Download-time install/upgrade guidance. The Windows installer
           # (constructor/NSIS) refuses a non-empty target folder and has no
           # in-place upgrade, so upgrading means uninstall-then-install.

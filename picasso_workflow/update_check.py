@@ -141,6 +141,29 @@ def fetch_latest_release(
         return CheckResult("error", current, None, None, str(exc))
 
 
+def fetch_latest_release_json(
+    url: str = RELEASES_API_URL, timeout: float = _TIMEOUT_S
+) -> dict | None:
+    """Return the parsed GitHub "latest release" JSON, or ``None`` on any error.
+
+    Unlike :func:`fetch_latest_release` (which distils a few fields), this hands
+    back the raw release object -- the ``assets`` list lets the in-app updater
+    find the downloadable wheel. Fails soft (never raises).
+    """
+    try:
+        req = urllib.request.Request(
+            url,
+            headers={
+                "Accept": "application/vnd.github+json",
+                "User-Agent": "picasso-workflow",
+            },
+        )
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except Exception:  # fails soft -- caller treats None as "no update"
+        return None
+
+
 def check_for_update(
     current_version: str,
     url: str = RELEASES_API_URL,

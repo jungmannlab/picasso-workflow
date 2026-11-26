@@ -15,6 +15,11 @@ PYTHON="$PREFIX/bin/python"
 PYTHONNOUSERSITE=1 "$PYTHON" -m pip install --no-input \
     --no-warn-script-location --find-links "$PREFIX" picasso_workflow
 
+# Mark this as a one-click-installer (bundled) install, so the GUI offers in-app
+# self-update (pip-upgrade in place) only here -- never a dev checkout / plain
+# conda env.
+printf 'bundled\n' > "$PREFIX/.picasso-workflow-bundled"
+
 # A clickable launcher in the install root. `picasso-workflow-gui` is the
 # console-script entry point created by the pip install above. The launcher
 # exports PYTHONNOUSERSITE=1 so the running GUI never picks up ~/.local

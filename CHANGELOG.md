@@ -11,6 +11,15 @@ This file was started after v0.5.6; earlier history is in the git log.
 ## [Unreleased]
 
 ### Added
+- **In-app self-update for one-click-installer builds.** When a newer
+  release exists, the update banner now offers an **"Update now"** button
+  (bundled installs only) that pip-upgrades picasso_workflow in place from
+  the release's wheel asset -- no re-download of the whole installer and no
+  uninstall-first (constructor's NSIS installer can't upgrade in place).
+  The update applies on the next launch, so it asks you to close and reopen.
+  (`picasso_workflow/self_update.py`, `picasso_workflow/update_check.py`,
+  `picasso_workflow/gui.py`, `release/post_install.{bat,sh}`,
+  `.github/workflows/release.yml`)
 - **Set up cluster SSH from more places.** The Doctor tab's "Cluster secrets"
   panel now has its own **login-node selector** (all `SlurmLoginNodes`, not just
   the Run-tab choice) and a **"Set up SSH connection…"** button that opens the
