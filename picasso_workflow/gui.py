@@ -13241,10 +13241,14 @@ class Window(QtWidgets.QMainWindow):
         if info is None:
             return
         try:
+            from picasso_workflow.update_check import windows_upgrade_note
+
+            note = windows_upgrade_note()
+            hint = f"<br><small>{note}</small>" if note else ""
             self._update_banner_label.setText(
                 f"A new version of picasso-workflow "
                 f"(<b>{info.latest}</b>) is available &mdash; "
-                f'<a href="{info.url}">download it here</a>.'
+                f'<a href="{info.url}">download it here</a>.{hint}'
             )
             self.update_banner.setVisible(True)
         except Exception as e:  # pragma: no cover - defensive
@@ -13282,6 +13286,7 @@ class Window(QtWidgets.QMainWindow):
         from picasso_workflow.update_check import (
             RELEASES_PAGE_URL,
             UpdateInfo,
+            windows_upgrade_note,
         )
 
         try:
@@ -13290,13 +13295,15 @@ class Window(QtWidgets.QMainWindow):
                 self._on_update_check_result(
                     UpdateInfo(result.latest, result.url)
                 )
+                note = windows_upgrade_note()
+                hint = f"<br><br>{note}" if note else ""
                 self._update_message_box(
                     "Update available",
                     "A newer version of picasso-workflow is available."
                     f"<br><br>Installed: <b>{result.current}</b><br>"
                     f"Latest: <b>{result.latest}</b><br><br>"
                     f'Download it from <a href="{result.url}">the releases '
-                    "page</a>.",
+                    f"page</a>.{hint}",
                 )
             elif result.status == "current":
                 QtWidgets.QMessageBox.information(

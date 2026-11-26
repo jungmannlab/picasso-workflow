@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 import urllib.request
 from typing import NamedTuple
 
@@ -27,6 +28,23 @@ RELEASES_PAGE_URL = f"https://github.com/{GITHUB_REPO}/releases"
 # Short timeout: a slow / unreachable API must not delay the check (it runs off
 # the GUI thread, but we still don't want it lingering).
 _TIMEOUT_S = 4.0
+
+
+def windows_upgrade_note(platform: str | None = None) -> str:
+    """Windows-only caveat on how to upgrade over an existing install.
+
+    constructor's NSIS installer aborts on a non-empty target directory and has
+    no in-place-upgrade path, so a Windows user must uninstall the current
+    version before installing the new one into the same folder. Returns an
+    empty string off Windows. ``platform`` overrides ``sys.platform`` (tests).
+    """
+    if (platform or sys.platform) != "win32":
+        return ""
+    return (
+        "On Windows, uninstall the current version first (Settings → "
+        "Apps, or run Uninstall-picasso-workflow.exe in the install folder), "
+        "then run the new installer into the same folder."
+    )
 
 
 class UpdateInfo(NamedTuple):
