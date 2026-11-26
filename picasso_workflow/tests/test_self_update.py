@@ -1,6 +1,10 @@
 """Unit tests for the headless in-app self-update engine (no network/pip)."""
 
+import base64
+import re
 import sys
+
+import pytest
 
 from picasso_workflow import self_update
 
@@ -173,6 +177,53 @@ def test_spawn_detached_updater_builds_detached_pip_command():
     assert "creationflags" in captured["kw"] or captured["kw"].get(
         "start_new_session"
     )
+
+
+def test_spawn_elevated_updater_uses_runas(monkeypatch):
+    # On Windows + elevate, the updater goes through ShellExecuteW 'runas' (the
+    # UAC prompt), carrying the source base64-encoded + the three args.
+    monkeypatch.setattr(self_update.os, "name", "nt")
+    calls = {}
+
+    def fake_shell(hwnd, verb, file, params, cwd, show):
+        calls.update(verb=verb, file=file, params=params, show=show)
+        return 42  # > 32 == success
+
+    log = self_update.spawn_detached_updater(
+        "https://x/pw.whl",
+        4321,
+        python="py.exe",
+        log_path="L.log",
+        elevate=True,
+        shell_execute=fake_shell,
+    )
+    assert log == "L.log"
+    assert calls["verb"] == "runas"  # elevation, not a plain launch
+    assert calls["file"] == "py.exe"
+    # the three args are threaded through in order
+    assert '"https://x/pw.whl"' in calls["params"]
+    assert '"4321"' in calls["params"]
+    assert '"L.log"' in calls["params"]
+    # the real updater source is carried and reconstructs exactly
+    blob = re.search(r"b64decode\('([^']+)'\)", calls["params"]).group(1)
+    assert (
+        base64.b64decode(blob).decode("utf-8") == self_update._UPDATER_SOURCE
+    )
+
+
+def test_spawn_elevated_updater_raises_when_uac_declined(monkeypatch):
+    # ShellExecuteW returns <= 32 when the user cancels UAC -> OSError, so the
+    # GUI can keep the app open instead of closing into a no-op.
+    monkeypatch.setattr(self_update.os, "name", "nt")
+    with pytest.raises(OSError):
+        self_update.spawn_detached_updater(
+            "https://x/pw.whl",
+            1,
+            python="py.exe",
+            log_path="L.log",
+            elevate=True,
+            shell_execute=lambda *a: 5,  # SE_ERR_ACCESSDENIED
+        )
 
 
 def test_updater_source_waits_for_parent_then_pips():

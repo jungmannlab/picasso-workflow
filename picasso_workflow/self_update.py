@@ -74,8 +74,24 @@ def wheel_asset_url(release: dict, version: str | None = None) -> str | None:
 
 
 def update_log_path(prefix=None):
-    """Where the detached updater writes its result (`<prefix>/update.log`)."""
-    base = Path(prefix) if prefix else Path(sys.prefix)
+    """Where the detached updater writes its result.
+
+    Defaults to a **per-user** dir, not the install prefix: an all-users install
+    elevates the updater, which would then write the log into the read-only
+    ``C:\\ProgramData`` prefix where the (unelevated) GUI could read but not
+    delete it -- so the result would re-show every launch. A per-user path is
+    writable and deletable by this user whether or not the updater ran elevated.
+    ``prefix`` overrides (tests / explicit callers).
+    """
+    if prefix:
+        return str(Path(prefix) / "update.log")
+    try:
+        from picasso_workflow import _user_config_dir
+
+        base = Path(_user_config_dir())
+        base.mkdir(parents=True, exist_ok=True)
+    except Exception:  # pragma: no cover - fall back to the env root
+        base = Path(sys.prefix)
     return str(base / "update.log")
 
 
@@ -185,7 +201,14 @@ with open(log, "w", encoding="utf-8") as fh:
 
 
 def spawn_detached_updater(
-    wheel_url, parent_pid, python=None, log_path=None, *, popen=None
+    wheel_url,
+    parent_pid,
+    python=None,
+    log_path=None,
+    *,
+    popen=None,
+    elevate=False,
+    shell_execute=None,
 ):
     """Launch the detached updater to pip-install ``wheel_url`` after the GUI
     (``parent_pid``) exits.
@@ -193,11 +216,22 @@ def spawn_detached_updater(
     The helper is fully detached (own process group / session, no console) so it
     outlives the GUI closing; it waits for ``parent_pid`` to exit -- unlocking
     the loaded Qt/numpy DLLs -- then runs pip. Returns the log path it writes.
-    ``popen`` is injectable for tests (defaults to :class:`subprocess.Popen`).
+
+    ``elevate`` runs the helper with a Windows UAC prompt (``ShellExecute``
+    ``runas``) -- required for an **all-users** install, whose program files
+    under ``C:\\ProgramData`` are read-only to the user's default token (even an
+    admin runs unelevated under UAC), so an unelevated pip can't overwrite them.
+    Raises ``OSError`` if elevation is declined/fails. ``popen`` /
+    ``shell_execute`` are injectable for tests.
     """
-    popen = popen or subprocess.Popen
     python = python or sys.executable
     log_path = log_path or update_log_path()
+    if elevate and os.name == "nt":
+        _spawn_elevated_updater(
+            python, wheel_url, parent_pid, log_path, shell_execute
+        )
+        return log_path
+    popen = popen or subprocess.Popen
     cmd = [
         python,
         "-c",
@@ -214,3 +248,40 @@ def spawn_detached_updater(
         kwargs["start_new_session"] = True
     popen(cmd, **kwargs)
     return log_path
+
+
+def _spawn_elevated_updater(
+    python, wheel_url, parent_pid, log_path, shell_execute=None
+):
+    """Start the updater elevated via ``ShellExecuteW`` ``runas`` (UAC prompt).
+
+    The script source is passed base64-encoded inside a ``python -c`` decoder so
+    there is no temp file and no quoting of the multi-line source through the
+    shell's parameter string. Raises ``OSError`` when the user declines UAC or
+    elevation otherwise fails (``ShellExecuteW`` returns <= 32).
+    """
+    import base64
+
+    blob = base64.b64encode(_UPDATER_SOURCE.encode("utf-8")).decode("ascii")
+    # No spaces inside the quoted decoder except after `import`; the base64 blob
+    # contains only [A-Za-z0-9+/=], so the single quotes around it are safe.
+    decoder = (
+        "import base64;" "exec(base64.b64decode('%s').decode('utf-8'))" % blob
+    )
+    params = '-c "%s" "%s" "%s" "%s"' % (
+        decoder,
+        wheel_url,
+        parent_pid,
+        log_path,
+    )
+    if shell_execute is None:
+        import ctypes
+
+        shell_execute = ctypes.windll.shell32.ShellExecuteW
+    SW_HIDE = 0
+    rc = shell_execute(None, "runas", python, params, None, SW_HIDE)
+    if rc is not None and int(rc) <= 32:
+        raise OSError(
+            "Administrator elevation was declined or failed "
+            f"(ShellExecute code {int(rc)})."
+        )

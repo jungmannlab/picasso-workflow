@@ -1,5 +1,5 @@
-"""The bundled self-update: a read-only (all-users) install is refused with a
-clear message instead of a silent no-op, and the detached updater's outcome is
+"""The bundled self-update: an all-users (read-only) install updates ELEVATED
+(UAC) rather than failing silently, and the detached updater's outcome is
 surfaced on the next launch."""
 
 import os
@@ -31,28 +31,71 @@ def window(qapp):
     win.close()
 
 
-def test_self_update_refused_when_install_dir_readonly(window, monkeypatch):
-    # all-users / read-only install: pip can't overwrite site-packages
-    monkeypatch.setattr(self_update, "install_dir_writable", lambda: False)
-    captured = {}
+def _confirm_yes(monkeypatch):
     monkeypatch.setattr(
-        window,
-        "_update_message_box",
-        lambda title, html, warning=False: captured.update(
-            title=title, html=html, warning=warning
-        ),
+        QtWidgets.QMessageBox,
+        "question",
+        staticmethod(lambda *a, **k: QtWidgets.QMessageBox.StandardButton.Yes),
     )
-    # must NOT spawn a worker/updater
+
+
+def test_self_update_elevates_on_readonly_install(window, monkeypatch):
+    # read-only (all-users) install -> update must request elevation (UAC)
+    monkeypatch.setattr(self_update, "install_dir_writable", lambda: False)
+    _confirm_yes(monkeypatch)
+    captured = {}
     monkeypatch.setattr(
         self_update,
         "spawn_detached_updater",
-        lambda *a, **k: pytest.fail("updater spawned on read-only install"),
+        lambda url, parent_pid, elevate=False: captured.update(
+            url=url, elevate=elevate
+        ),
     )
-    window._update_thread = None
-    window._start_self_update()
-    assert "all users" in captured["html"].lower()
-    assert captured["warning"] is True
-    assert window._update_thread is None  # no background work started
+    monkeypatch.setattr(window, "close", lambda: None)
+    window._on_self_update_result(True, "https://x/pw.whl")
+    assert captured["elevate"] is True
+    assert captured["url"] == "https://x/pw.whl"
+
+
+def test_self_update_no_elevation_when_writable(window, monkeypatch):
+    # Just-Me install (user owns the files) -> no UAC, plain detached updater
+    monkeypatch.setattr(self_update, "install_dir_writable", lambda: True)
+    _confirm_yes(monkeypatch)
+    captured = {}
+    monkeypatch.setattr(
+        self_update,
+        "spawn_detached_updater",
+        lambda url, parent_pid, elevate=False: captured.update(
+            elevate=elevate
+        ),
+    )
+    monkeypatch.setattr(window, "close", lambda: None)
+    window._on_self_update_result(True, "https://x/pw.whl")
+    assert captured["elevate"] is False
+
+
+def test_self_update_declined_elevation_keeps_app_open(window, monkeypatch):
+    # UAC cancelled -> spawn raises -> app stays open, user is told
+    monkeypatch.setattr(self_update, "install_dir_writable", lambda: False)
+    _confirm_yes(monkeypatch)
+
+    def _raise(*a, **k):
+        raise OSError("declined")
+
+    monkeypatch.setattr(self_update, "spawn_detached_updater", _raise)
+    closed = {"v": False}
+    monkeypatch.setattr(window, "close", lambda: closed.update(v=True))
+    box = {}
+    monkeypatch.setattr(
+        window,
+        "_update_message_box",
+        lambda title, html, warning=False: box.update(
+            title=title, warning=warning
+        ),
+    )
+    window._on_self_update_result(True, "https://x/pw.whl")
+    assert closed["v"] is False  # not closed into a no-op
+    assert box["warning"] is True
 
 
 def test_prior_update_outcome_surfaced_and_consumed(window, monkeypatch):

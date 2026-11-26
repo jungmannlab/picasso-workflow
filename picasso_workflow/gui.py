@@ -10086,7 +10086,13 @@ class SshSetupDialog(QtWidgets.QDialog):
     persist the node to the per-user ``config.yaml`` on accept.
     """
 
-    def __init__(self, parent=None, default_username=None, default_host=None):
+    def __init__(
+        self,
+        parent=None,
+        default_username=None,
+        default_host=None,
+        default_label=None,
+    ):
         super().__init__(parent)
         from picasso_workflow import ssh_setup
 
@@ -10155,6 +10161,12 @@ class SshSetupDialog(QtWidgets.QDialog):
         form.addRow("SSH key:", key_widget)
 
         self.label_edit = QtWidgets.QLineEdit()
+        # Pre-filled with the originating cluster key when opened for an
+        # EXISTING cluster (Run tab / submit pre-flight), so saving updates that
+        # key's login node instead of creating a spurious new host entry keyed
+        # by the hostname. Blank (onboarding) still defaults to the hostname.
+        if default_label:
+            self.label_edit.setText(default_label)
         self.label_edit.setPlaceholderText(
             "label for this node (defaults to the hostname)"
         )
@@ -13458,26 +13470,6 @@ class Window(QtWidgets.QMainWindow):
         """
         if getattr(self, "_update_thread", None) is not None:
             return
-        from picasso_workflow import self_update
-        from picasso_workflow.update_check import RELEASES_PAGE_URL
-
-        # An all-users install lives in a read-only location for a non-elevated
-        # user (e.g. C:\ProgramData), so an in-place pip upgrade can't overwrite
-        # its files -- it would fail silently and leave the version unchanged.
-        # Detect that up front and send the user to the installer instead of
-        # spawning a futile updater.
-        if not self_update.install_dir_writable():
-            self._update_message_box(
-                "Can't update in place",
-                "This copy of picasso-workflow is installed for <b>all "
-                "users</b>, so its program files are read-only for your "
-                "account and it can't update itself in place. Download the "
-                "latest installer and run it (uninstall the current version "
-                f'first):<br><a href="{RELEASES_PAGE_URL}">'
-                f"{RELEASES_PAGE_URL}</a>",
-                warning=True,
-            )
-            return
         self._update_now_button.setEnabled(False)
         self._update_now_button.setText("Checking…")
         try:
@@ -13513,22 +13505,48 @@ class Window(QtWidgets.QMainWindow):
                 "Update failed", _html.escape(wheel_url), warning=True
             )
             return
+        import os
+
+        from picasso_workflow import self_update
+
+        # An all-users install (program files under C:\ProgramData) is read-only
+        # for the user's default token -- even an admin runs unelevated under
+        # UAC -- so the in-place pip upgrade must run ELEVATED or it silently
+        # fails. Decide here so the confirm dialog can warn about the UAC prompt.
+        elevate = not self_update.install_dir_writable()
+        extra = (
+            " Windows will ask for administrator permission to update (this "
+            "copy is installed for all users)."
+            if elevate
+            else ""
+        )
         reply = QtWidgets.QMessageBox.question(
             self,
             "Update ready",
             "A new version is ready. It installs in the background once you "
             "close picasso-workflow (it can't replace files while the app is "
-            "running); reopen it when done.\n\nClose now to install?",
+            "running); reopen it when done." + extra + "\n\nClose now to "
+            "install?",
             QtWidgets.QMessageBox.StandardButton.Yes
             | QtWidgets.QMessageBox.StandardButton.No,
         )
         if reply != QtWidgets.QMessageBox.StandardButton.Yes:
             return  # nothing armed -- the user can click Update now again
-        import os
-
-        from picasso_workflow import self_update
-
-        self_update.spawn_detached_updater(wheel_url, parent_pid=os.getpid())
+        try:
+            self_update.spawn_detached_updater(
+                wheel_url, parent_pid=os.getpid(), elevate=elevate
+            )
+        except Exception as e:
+            # Elevation declined/failed (UAC cancelled): keep the app open and
+            # say so, rather than closing into a no-op.
+            logger.debug(f"Could not start the updater: {e}")
+            self._update_message_box(
+                "Update not started",
+                "The update needs administrator permission, which was "
+                "declined or unavailable, so nothing was changed.",
+                warning=True,
+            )
+            return
         self.update_banner.setVisible(False)
         self.close()
 
@@ -17653,9 +17671,14 @@ class Window(QtWidgets.QMainWindow):
         login_node = (CONFIG.get("SlurmLoginNodes") or {}).get(
             host_cluster, host_cluster
         )
-        self.on_configure_ssh(default_host=login_node)
+        # Pass the cluster KEY as the label so a successful test saves back to
+        # that key (SlurmLoginNodes[host_cluster] = login_node) instead of
+        # adding a new host entry keyed by the hostname.
+        self.on_configure_ssh(
+            default_host=login_node, default_label=host_cluster or None
+        )
 
-    def on_configure_ssh(self, default_host=None):
+    def on_configure_ssh(self, default_host=None, default_label=None):
         """Open the SSH-setup dialog; refresh the Run-tab cluster fields.
 
         On accept, the dialog has persisted the node to the per-user
@@ -17670,6 +17693,7 @@ class Window(QtWidgets.QMainWindow):
             self,
             default_username=default_username,
             default_host=default_host,
+            default_label=default_label,
         )
         if dialog.exec() != QtWidgets.QDialog.DialogCode.Accepted:
             return None
@@ -18804,8 +18828,11 @@ class Window(QtWidgets.QMainWindow):
             if reply != QtWidgets.QMessageBox.StandardButton.Yes:
                 return None, None  # declined -- abort without re-probing
             # Pre-fill the dialog with the login node for the SELECTED cluster
-            # (not the config's first/placeholder node).
-            self.on_configure_ssh(default_host=login_node)
+            # (not the config's first/placeholder node), and save back to that
+            # cluster KEY rather than creating a hostname-keyed entry.
+            self.on_configure_ssh(
+                default_host=login_node, default_label=host_cluster or None
+            )
             host_cluster = str(self.cluster_host_combo.currentText())
             if host_cluster not in CONFIG.get("SlurmLoginNodes", {}):
                 QtWidgets.QMessageBox.warning(

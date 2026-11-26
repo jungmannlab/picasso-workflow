@@ -72,8 +72,28 @@ def test_run_tab_ssh_targets_selected_login_node(window, monkeypatch):
     monkeypatch.setattr(
         window,
         "on_configure_ssh",
-        lambda default_host=None: captured.update(host=default_host),
+        lambda default_host=None, default_label=None: captured.update(
+            host=default_host, label=default_label
+        ),
     )
     window._configure_ssh_from_run_tab()
     # the dialog is opened for clusterB's login-node hostname, not clusterA's
     assert captured["host"] == "login02"
+    # ...and saves back to the cluster KEY (clusterB), so testing login02 does
+    # NOT create a spurious "login02" host entry in the dropdown.
+    assert captured["label"] == "clusterB"
+
+
+def test_ssh_dialog_saves_under_cluster_key_not_hostname(qapp):
+    # Given an existing cluster key as the label, the dialog saves under that
+    # key (updates its login node) rather than under the hostname.
+    dialog = gui.SshSetupDialog(
+        default_host="login02", default_label="clusterB"
+    )
+    try:
+        assert dialog.label_edit.text() == "clusterB"
+        assert dialog.host_edit.text() == "login02"
+        # the persisted label is the cluster key, not the hostname
+        assert dialog._current_label() == "clusterB"
+    finally:
+        dialog.close()

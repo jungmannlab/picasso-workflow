@@ -11,18 +11,29 @@ This file was started after v0.5.6; earlier history is in the git log.
 ## [Unreleased]
 
 ### Fixed
-- **In-app self-update no longer fails silently on an all-users install.** A
+- **In-app self-update now works on an all-users install (asks for admin).** A
   one-click install "for all users" lives under `C:\ProgramData\…`, which is
-  read-only for a non-elevated account — so the detached updater's `pip`
-  upgrade could not overwrite the program files and the version silently stayed
-  put (the app closed, a console flashed, nothing changed). "Update now" now
-  **checks writability first** and, on a read-only install, explains it was
-  installed for all users and points to the installer download instead of
-  spawning a futile updater. Independently, the updater's result (written to
-  `update.log` after the app exits) is now **surfaced on the next launch** —
-  success is a quiet confirmation; a failure/skip shows the actual reason
-  (permission or network error) instead of leaving a silent no-op.
+  read-only for a non-elevated account — and even an administrator runs
+  unelevated under UAC — so the detached updater's `pip` upgrade could not
+  overwrite the program files and the version silently stayed put (the app
+  closed, a console flashed, nothing changed). "Update now" now detects a
+  read-only install and runs the updater **elevated** via a Windows UAC prompt
+  (`ShellExecute runas`); if elevation is declined the app stays open and says
+  so. A Just-Me (`%LOCALAPPDATA%`) install still updates with no prompt.
+  Independently, the updater's result (written to `update.log` after the app
+  exits — now in a per-user, deletable location) is **surfaced on the next
+  launch**: success is a quiet confirmation; a failure/skip shows the actual
+  reason instead of leaving a silent no-op.
   (`picasso_workflow/self_update.py`, `picasso_workflow/gui.py`)
+- **Testing a login node no longer adds a spurious cluster-host entry.** In the
+  Run tab, "Configure / Test connection…" for an existing cluster (e.g.
+  `hpcl8XXX`) pre-fills its login node (e.g. `hpcl8001`); on save it was
+  persisted under a **new** `SlurmLoginNodes` key named after the *hostname*,
+  so `hpcl8001` then appeared as its own entry in the Cluster Host dropdown.
+  The dialog now saves back to the **originating cluster key** (the label is
+  pre-filled with it), updating that cluster's login node instead of creating a
+  duplicate. Onboarding a brand-new node (no originating key) still defaults the
+  label to the hostname. (`picasso_workflow/gui.py`)
 
 ## [0.8.11] - 2026-11-26
 
