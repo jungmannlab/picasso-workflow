@@ -228,7 +228,9 @@ class SlurmCommunicator:
             f"Initialized SlurmCommunicator for {username}@{hostname}:{port}"
         )
 
-    def execute_ssh_command(self, command, working_directory=None):
+    def execute_ssh_command(
+        self, command, working_directory=None, batch_mode=False
+    ):
         """Execute a command via SSH on the remote host.
 
         Parameters
@@ -237,6 +239,12 @@ class SlurmCommunicator:
             Shell command to execute
         working_directory : str, optional
             Directory to execute command in
+        batch_mode : bool, optional
+            Add ``-o BatchMode=yes`` so ssh never falls back to an interactive
+            password/keyboard prompt. Essential for the pre-flight connection
+            test: without a TTY (the GUI), a password fallback would hang until
+            timeout instead of failing fast with "publickey denied". Defaults
+            to False so the submission path is unchanged.
 
         Returns
         -------
@@ -260,6 +268,9 @@ class SlurmCommunicator:
             "-o",
             "StrictHostKeyChecking=no",
         ]
+
+        if batch_mode:
+            ssh_cmd.extend(["-o", "BatchMode=yes"])
 
         if self.ssh_key_path:
             ssh_cmd.extend(["-i", self.ssh_key_path])
