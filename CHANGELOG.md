@@ -10,7 +10,14 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ## [Unreleased]
 
+## [0.8.8] - 2026-11-26
+
 ### Fixed
+- **The macOS installer builds again.** GitHub retired the `macos-14` runner
+  (job-failing brownouts from 2026-10-05, retirement 2026-11-02), so the macOS
+  installer job was cancelled at dispatch and **no macOS installer attached to
+  0.8.4–0.8.7**. Moved to `macos-15` (still Apple Silicon).
+  (`.github/workflows/release.yml`)
 - **SSH setup's "Test connection" no longer hangs/times out when the key
   isn't installed yet.** The probe now runs non-interactively
   (`BatchMode=yes`), so instead of silently falling back to a password
