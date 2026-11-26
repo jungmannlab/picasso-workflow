@@ -10,6 +10,20 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ## [Unreleased]
 
+### Fixed
+- **In-app self-update no longer fails silently on an all-users install.** A
+  one-click install "for all users" lives under `C:\ProgramData\…`, which is
+  read-only for a non-elevated account — so the detached updater's `pip`
+  upgrade could not overwrite the program files and the version silently stayed
+  put (the app closed, a console flashed, nothing changed). "Update now" now
+  **checks writability first** and, on a read-only install, explains it was
+  installed for all users and points to the installer download instead of
+  spawning a futile updater. Independently, the updater's result (written to
+  `update.log` after the app exits) is now **surfaced on the next launch** —
+  success is a quiet confirmation; a failure/skip shows the actual reason
+  (permission or network error) instead of leaving a silent no-op.
+  (`picasso_workflow/self_update.py`, `picasso_workflow/gui.py`)
+
 ## [0.8.11] - 2026-11-26
 
 ### Fixed

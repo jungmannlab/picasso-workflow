@@ -73,6 +73,46 @@ def test_update_log_path():
     assert self_update.update_log_path(prefix="/opt/pw").endswith("update.log")
 
 
+def test_install_dir_writable(tmp_path):
+    import os
+
+    # a writable dir probes True
+    assert self_update.install_dir_writable(target=str(tmp_path)) is True
+    # a non-existent dir probes False (mkstemp raises)
+    assert (
+        self_update.install_dir_writable(target=str(tmp_path / "nope"))
+        is False
+    )
+    # a read-only dir probes False (the all-users / ProgramData case). Skip
+    # when running as root, where mode bits don't block writes.
+    if hasattr(os, "geteuid") and os.geteuid() == 0:
+        return
+    ro = tmp_path / "ro"
+    ro.mkdir()
+    os.chmod(ro, 0o500)
+    try:
+        assert self_update.install_dir_writable(target=str(ro)) is False
+    finally:
+        os.chmod(ro, 0o700)  # let pytest clean up
+
+
+def test_read_update_outcome(tmp_path):
+    # no log -> None
+    assert self_update.read_update_outcome(prefix=str(tmp_path)) is None
+    # OK log -> ("OK", detail) and the log is consumed (shown once)
+    log = tmp_path / "update.log"
+    log.write_text("OK\nSuccessfully installed picasso_workflow-0.8.11\n")
+    status, detail = self_update.read_update_outcome(prefix=str(tmp_path))
+    assert status == "OK"
+    assert "0.8.11" in detail
+    assert not log.exists()  # deleted after reading
+    # FAILED log -> status + reason surfaced
+    log.write_text("FAILED\nERROR: Access is denied: ...site-packages\n")
+    status, detail = self_update.read_update_outcome(prefix=str(tmp_path))
+    assert status == "FAILED"
+    assert "Access is denied" in detail
+
+
 def test_updater_source_runs_argv_wait_and_logs(tmp_path):
     # Actually EXECUTE the detached-updater source as a subprocess, with a
     # definitely-dead parent pid (so the wait exits at once) and a bogus local

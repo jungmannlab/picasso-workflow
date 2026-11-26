@@ -79,6 +79,57 @@ def update_log_path(prefix=None):
     return str(base / "update.log")
 
 
+def install_dir_writable(target=None):
+    """True if the dir pip installs into is writable by the current user now.
+
+    A one-click **all-users** install lands under ``%ALLUSERSPROFILE%``
+    (``C:\\ProgramData``), where a non-elevated user has read-only access -- so
+    an in-place ``pip`` upgrade silently fails (Access Denied overwriting
+    site-packages) and the version never changes. Probe by creating + removing a
+    temp file in the install dir (``os.access`` is unreliable on Windows ACLs).
+    ``target`` defaults to the env's ``purelib`` (where the wheel installs).
+    """
+    import sysconfig
+    import tempfile
+
+    target = target or sysconfig.get_paths().get("purelib") or sys.prefix
+    try:
+        fd, probe = tempfile.mkstemp(prefix=".pw-write-test-", dir=target)
+    except OSError:
+        return False
+    os.close(fd)
+    try:
+        os.remove(probe)
+    except OSError:  # pragma: no cover - best-effort cleanup
+        pass
+    return True
+
+
+def read_update_outcome(prefix=None):
+    """Read + consume the detached updater's result log, if present.
+
+    Returns ``(status, detail)`` -- ``status`` is the first line
+    (``OK`` / ``FAILED`` / ``SKIPPED``) and ``detail`` the rest (pip output or
+    the skip reason) -- or ``None`` when no log exists. The log is removed after
+    reading so the outcome is reported exactly once (on the next launch).
+    """
+    path = Path(update_log_path(prefix))
+    if not path.exists():
+        return None
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:  # pragma: no cover - defensive against a locked file
+        return None
+    lines = text.splitlines()
+    status = lines[0].strip() if lines else ""
+    detail = "\n".join(lines[1:]).strip()
+    try:
+        path.unlink()
+    except OSError:  # pragma: no cover - best-effort
+        pass
+    return status, detail
+
+
 # Self-contained helper run as a DETACHED process: it waits for the GUI (whose
 # loaded Qt/numpy DLLs would otherwise block pip from overwriting them) to exit,
 # then pip-installs the wheel. It imports NO picasso_workflow code, so its own

@@ -11294,6 +11294,7 @@ class Window(QtWidgets.QMainWindow):
         if app is not None:
             app.aboutToQuit.connect(self._stop_update_thread)
             app.aboutToQuit.connect(self._stop_cluster_image_thread)
+        self._report_prior_update_outcome()
         self._start_update_check()
 
         # Tools menu: the cluster admin console (shared-mount Apptainer images,
@@ -13281,6 +13282,47 @@ class Window(QtWidgets.QMainWindow):
         row.addWidget(dismiss, 0)
         return banner
 
+    def _report_prior_update_outcome(self):
+        """Surface the detached self-updater's result from the last run, once.
+
+        The updater (spawned when the app closed for an in-place update) writes
+        its outcome to ``update.log`` *after* this app has exited, so there is
+        no in-session feedback -- report it on the next launch. ``OK`` is a
+        quiet info; ``FAILED`` / ``SKIPPED`` show the reason (e.g. a permission
+        or network error) so a silent no-op becomes a diagnosable message. The
+        log is consumed (deleted) so it is shown exactly once.
+        """
+        try:
+            from picasso_workflow import self_update
+
+            outcome = self_update.read_update_outcome()
+        except Exception as e:  # pragma: no cover - defensive
+            logger.debug(f"Could not read the update outcome: {e}")
+            return
+        if not outcome:
+            return
+        status, detail = outcome
+        if status == "OK":
+            self._update_message_box(
+                "Update installed",
+                "picasso-workflow was updated successfully.",
+            )
+            return
+        import html as _html
+
+        reason = (
+            _html.escape(detail) if detail else "No details were recorded."
+        )
+        title = (
+            "Update not applied" if status == "SKIPPED" else "Update failed"
+        )
+        self._update_message_box(
+            title,
+            "The last in-app update did not complete:<br><br>"
+            f"<pre>{reason}</pre>",
+            warning=True,
+        )
+
     def _start_update_check(self):
         """Kick off the GitHub release check on a background thread.
 
@@ -13415,6 +13457,26 @@ class Window(QtWidgets.QMainWindow):
         / shutdown-join lifecycle; no-ops if an update check is still running.
         """
         if getattr(self, "_update_thread", None) is not None:
+            return
+        from picasso_workflow import self_update
+        from picasso_workflow.update_check import RELEASES_PAGE_URL
+
+        # An all-users install lives in a read-only location for a non-elevated
+        # user (e.g. C:\ProgramData), so an in-place pip upgrade can't overwrite
+        # its files -- it would fail silently and leave the version unchanged.
+        # Detect that up front and send the user to the installer instead of
+        # spawning a futile updater.
+        if not self_update.install_dir_writable():
+            self._update_message_box(
+                "Can't update in place",
+                "This copy of picasso-workflow is installed for <b>all "
+                "users</b>, so its program files are read-only for your "
+                "account and it can't update itself in place. Download the "
+                "latest installer and run it (uninstall the current version "
+                f'first):<br><a href="{RELEASES_PAGE_URL}">'
+                f"{RELEASES_PAGE_URL}</a>",
+                warning=True,
+            )
             return
         self._update_now_button.setEnabled(False)
         self._update_now_button.setText("Checking…")
