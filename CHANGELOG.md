@@ -10,6 +10,22 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ## [Unreleased]
 
+## [0.8.11] - 2026-11-26
+
+### Fixed
+- **Cluster submission: clearer SSH pre-flight that names the real login node
+  and surfaces the ssh error.** When submitting to a cluster from the Run tab,
+  a failed pre-flight connection (a) named the *cluster key* (e.g. `hpcl8XXX`)
+  instead of the login node actually dialed, and (b) opened the SSH setup dialog
+  on the config's *first* login node (the `clusterXXX → cluster001` template
+  placeholder) rather than the selected cluster's node. The failure dialog now
+  names the resolved login node **and** the cluster, pre-fills the SSH dialog
+  with the selected cluster's node, and includes the **actual ssh error**
+  (e.g. "Permission denied (publickey)", "Could not resolve hostname",
+  "Connection timed out") instead of a bare "could not connect" — so a failure
+  is self-diagnosing. The probe runs with `BatchMode` so a missing/unauthorised
+  key fails fast rather than hanging on a password prompt. (`picasso_workflow/gui.py`)
+
 ## [0.8.10] - 2026-11-26
 
 ### Fixed

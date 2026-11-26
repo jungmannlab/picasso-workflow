@@ -17682,6 +17682,25 @@ class Window(QtWidgets.QMainWindow):
         self._slurm_comm_host = host_cluster
         return self.slurm_communicator
 
+    def _login_node_probe(self, comm):
+        """Probe the login-node SSH connection; return ``(ok, detail)``.
+
+        ``batch_mode=True`` so a missing / unauthorised key fails fast with a
+        real ssh error instead of hanging on an interactive password prompt
+        (the GUI has no TTY). ``detail`` is the ssh stderr, surfaced to the
+        user so a failure is self-diagnosing (publickey denied vs name
+        resolution vs timeout) rather than a bare "could not connect".
+        """
+        try:
+            result = comm.execute_ssh_command(
+                'echo "Connection test successful"', batch_mode=True
+            )
+        except Exception as e:  # pragma: no cover - defensive
+            return False, str(e)
+        if result.get("success"):
+            return True, ""
+        return False, (result.get("stderr") or "").strip()
+
     def _resolve_monitor_target(self):
         """Point the monitor at a run, deriving from the Run-tab fields.
 
@@ -18698,19 +18717,33 @@ class Window(QtWidgets.QMainWindow):
         # Pre-flight: verify SSH works before assembling/submitting, so a
         # bad connection fails here with guidance rather than cryptically
         # later. On failure, offer the SSH-setup dialog and re-test; abort if
-        # the user declines or it still does not work.
-        if not self.slurm_communicator.test_connection():
+        # the user declines or it still does not work. The message names the
+        # actual login node dialed (not the cluster key) and includes the ssh
+        # error, so the user is not sent down the wrong path.
+        ok, detail = self._login_node_probe(self.slurm_communicator)
+        if not ok:
+            msg = (
+                f"Could not connect to login node '{login_node}' "
+                f"(cluster '{host_cluster}') over SSH."
+            )
+            if detail:
+                msg += f"\n\nSSH said:\n{detail}"
+            msg += (
+                "\n\nOpen the SSH setup dialog to configure and test the "
+                "connection?"
+            )
             reply = QtWidgets.QMessageBox.question(
                 self,
                 "Cannot reach the login node",
-                f"Could not connect to '{host_cluster}' over SSH. Open the "
-                "SSH setup dialog to configure and test the connection?",
+                msg,
                 QtWidgets.QMessageBox.StandardButton.Yes
                 | QtWidgets.QMessageBox.StandardButton.No,
             )
             if reply != QtWidgets.QMessageBox.StandardButton.Yes:
                 return None, None  # declined -- abort without re-probing
-            self.on_configure_ssh()
+            # Pre-fill the dialog with the login node for the SELECTED cluster
+            # (not the config's first/placeholder node).
+            self.on_configure_ssh(default_host=login_node)
             host_cluster = str(self.cluster_host_combo.currentText())
             if host_cluster not in CONFIG.get("SlurmLoginNodes", {}):
                 QtWidgets.QMessageBox.warning(
@@ -18724,12 +18757,17 @@ class Window(QtWidgets.QMainWindow):
             self.slurm_communicator = self._ensure_slurm_communicator(
                 host_cluster
             )
-            if not self.slurm_communicator.test_connection():
+            ok, detail = self._login_node_probe(self.slurm_communicator)
+            if not ok:
+                msg = (
+                    f"The SSH connection to login node '{login_node}' "
+                    f"(cluster '{host_cluster}') still fails."
+                )
+                if detail:
+                    msg += f"\n\nSSH said:\n{detail}"
+                msg += "\n\nSubmission aborted."
                 QtWidgets.QMessageBox.warning(
-                    self,
-                    "SSH connection failed",
-                    "The SSH connection to the login node still fails. "
-                    "Submission aborted.",
+                    self, "SSH connection failed", msg
                 )
                 return None, None
         # Host-dependent remote paths: computed AFTER the pre-flight, which may
