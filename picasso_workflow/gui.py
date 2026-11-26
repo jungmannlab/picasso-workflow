@@ -10076,6 +10076,28 @@ class _SshTestWorker(QtCore.QObject):
         self.finished.emit(verdict)
 
 
+class _SshCallWorker(QtCore.QObject):
+    """Run an arbitrary blocking callable off the GUI thread.
+
+    Emits ``finished(ok, payload)`` -- ``(True, return_value)`` on success or
+    ``(False, exception)`` on error. Used by ``Window._run_ssh`` to keep the UI
+    responsive (and the status-bar activity animating) while a synchronous SLURM
+    SSH round-trip runs.
+    """
+
+    finished = QtCore.pyqtSignal(bool, object)
+
+    def __init__(self, fn):
+        super().__init__()
+        self._fn = fn
+
+    def run(self):
+        try:
+            self.finished.emit(True, self._fn())
+        except Exception as e:
+            self.finished.emit(False, e)
+
+
 class SshSetupDialog(QtWidgets.QDialog):
     """Configure and test the SSH link to a SLURM login node.
 
@@ -10086,7 +10108,13 @@ class SshSetupDialog(QtWidgets.QDialog):
     persist the node to the per-user ``config.yaml`` on accept.
     """
 
-    def __init__(self, parent=None, default_username=None, default_host=None):
+    def __init__(
+        self,
+        parent=None,
+        default_username=None,
+        default_host=None,
+        default_label=None,
+    ):
         super().__init__(parent)
         from picasso_workflow import ssh_setup
 
@@ -10155,6 +10183,12 @@ class SshSetupDialog(QtWidgets.QDialog):
         form.addRow("SSH key:", key_widget)
 
         self.label_edit = QtWidgets.QLineEdit()
+        # Pre-filled with the originating cluster key when opened for an
+        # EXISTING cluster (Run tab / submit pre-flight), so saving updates that
+        # key's login node instead of creating a spurious new host entry keyed
+        # by the hostname. Blank (onboarding) still defaults to the hostname.
+        if default_label:
+            self.label_edit.setText(default_label)
         self.label_edit.setPlaceholderText(
             "label for this node (defaults to the hostname)"
         )
@@ -11294,6 +11328,7 @@ class Window(QtWidgets.QMainWindow):
         if app is not None:
             app.aboutToQuit.connect(self._stop_update_thread)
             app.aboutToQuit.connect(self._stop_cluster_image_thread)
+        self._report_prior_update_outcome()
         self._start_update_check()
 
         # Tools menu: the cluster admin console (shared-mount Apptainer images,
@@ -13281,6 +13316,51 @@ class Window(QtWidgets.QMainWindow):
         row.addWidget(dismiss, 0)
         return banner
 
+    def _report_prior_update_outcome(self):
+        """Surface the detached self-updater's result from the last run, once.
+
+        The updater (spawned when the app closed for an in-place update) writes
+        its outcome to ``update.log`` *after* this app has exited, so there is
+        no in-session feedback -- report it on the next launch. ``OK`` is a
+        quiet info; ``FAILED`` / ``SKIPPED`` show the reason (e.g. a permission
+        or network error) so a silent no-op becomes a diagnosable message. The
+        log is consumed (deleted) so it is shown exactly once.
+        """
+        try:
+            from picasso_workflow import self_update
+
+            outcome = self_update.read_update_outcome()
+        except Exception as e:  # pragma: no cover - defensive
+            logger.debug(f"Could not read the update outcome: {e}")
+            return
+        if not outcome:
+            return
+        status, detail = outcome
+        if not status:
+            # Empty/truncated log (updater killed before writing a status
+            # line) -- say nothing rather than a spurious "Update failed".
+            return
+        if status == "OK":
+            self._update_message_box(
+                "Update installed",
+                "picasso-workflow was updated successfully.",
+            )
+            return
+        import html as _html
+
+        reason = (
+            _html.escape(detail) if detail else "No details were recorded."
+        )
+        title = (
+            "Update not applied" if status == "SKIPPED" else "Update failed"
+        )
+        self._update_message_box(
+            title,
+            "The last in-app update did not complete:<br><br>"
+            f"<pre>{reason}</pre>",
+            warning=True,
+        )
+
     def _start_update_check(self):
         """Kick off the GitHub release check on a background thread.
 
@@ -13451,22 +13531,48 @@ class Window(QtWidgets.QMainWindow):
                 "Update failed", _html.escape(wheel_url), warning=True
             )
             return
+        import os
+
+        from picasso_workflow import self_update
+
+        # An all-users install (program files under C:\ProgramData) is read-only
+        # for the user's default token -- even an admin runs unelevated under
+        # UAC -- so the in-place pip upgrade must run ELEVATED or it silently
+        # fails. Decide here so the confirm dialog can warn about the UAC prompt.
+        elevate = not self_update.install_dir_writable()
+        extra = (
+            " Windows will ask for administrator permission to update (this "
+            "copy is installed for all users)."
+            if elevate
+            else ""
+        )
         reply = QtWidgets.QMessageBox.question(
             self,
             "Update ready",
             "A new version is ready. It installs in the background once you "
             "close picasso-workflow (it can't replace files while the app is "
-            "running); reopen it when done.\n\nClose now to install?",
+            "running); reopen it when done." + extra + "\n\nClose now to "
+            "install?",
             QtWidgets.QMessageBox.StandardButton.Yes
             | QtWidgets.QMessageBox.StandardButton.No,
         )
         if reply != QtWidgets.QMessageBox.StandardButton.Yes:
             return  # nothing armed -- the user can click Update now again
-        import os
-
-        from picasso_workflow import self_update
-
-        self_update.spawn_detached_updater(wheel_url, parent_pid=os.getpid())
+        try:
+            self_update.spawn_detached_updater(
+                wheel_url, parent_pid=os.getpid(), elevate=elevate
+            )
+        except Exception as e:
+            # Elevation declined/failed (UAC cancelled): keep the app open and
+            # say so, rather than closing into a no-op.
+            logger.debug(f"Could not start the updater: {e}")
+            self._update_message_box(
+                "Update not started",
+                "The update needs administrator permission, which was "
+                "declined or unavailable, so nothing was changed.",
+                warning=True,
+            )
+            return
         self.update_banner.setVisible(False)
         self.close()
 
@@ -17591,9 +17697,14 @@ class Window(QtWidgets.QMainWindow):
         login_node = (CONFIG.get("SlurmLoginNodes") or {}).get(
             host_cluster, host_cluster
         )
-        self.on_configure_ssh(default_host=login_node)
+        # Pass the cluster KEY as the label so a successful test saves back to
+        # that key (SlurmLoginNodes[host_cluster] = login_node) instead of
+        # adding a new host entry keyed by the hostname.
+        self.on_configure_ssh(
+            default_host=login_node, default_label=host_cluster or None
+        )
 
-    def on_configure_ssh(self, default_host=None):
+    def on_configure_ssh(self, default_host=None, default_label=None):
         """Open the SSH-setup dialog; refresh the Run-tab cluster fields.
 
         On accept, the dialog has persisted the node to the per-user
@@ -17608,6 +17719,7 @@ class Window(QtWidgets.QMainWindow):
             self,
             default_username=default_username,
             default_host=default_host,
+            default_label=default_label,
         )
         if dialog.exec() != QtWidgets.QDialog.DialogCode.Accepted:
             return None
@@ -17681,6 +17793,85 @@ class Window(QtWidgets.QMainWindow):
         )
         self._slurm_comm_host = host_cluster
         return self.slurm_communicator
+
+    def _run_ssh(self, message, fn):
+        """Run a blocking SSH/SLURM call off the GUI thread, keeping the app
+        responsive with an animated status-bar message.
+
+        A synchronous ``ssh`` round-trip on the GUI thread freezes the window
+        (no repaint, no animation) for the seconds it takes to connect. This
+        runs ``fn`` in a worker thread and spins a nested event loop until it
+        finishes -- so the status bar shows ``message`` with moving dots and the
+        window stays responsive -- then returns ``fn()``'s value (re-raising its
+        exception). Reentry (e.g. the monitor timer firing mid-call) runs inline
+        to avoid stacking event loops / a double busy cursor.
+        """
+        if getattr(self, "_ssh_busy", False):
+            return fn()
+        self._ssh_busy = True
+        self._begin_ssh_busy(message)
+        self._ssh_holder = {}
+        self._ssh_loop = QtCore.QEventLoop()
+        worker = _SshCallWorker(fn)
+        thread = QtCore.QThread(self)
+        worker.moveToThread(thread)
+        thread._pw_worker = worker  # keep alive until the thread ends
+        thread.started.connect(worker.run)
+        # Bound-method slot on this (GUI-thread) QObject so the cross-thread
+        # signal is QUEUED to the GUI thread -- it is processed inside
+        # loop.exec() even if the worker finishes first, avoiding a quit-before-
+        # exec hang.
+        worker.finished.connect(self._on_ssh_call_done)
+        worker.finished.connect(thread.quit)
+        worker.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        try:
+            thread.start()
+            self._ssh_loop.exec()
+        finally:
+            self._end_ssh_busy()
+            self._ssh_busy = False
+        holder = self._ssh_holder
+        if "ok" not in holder:
+            # The nested loop was quit by something other than the worker
+            # (e.g. the app closing mid-call) -- don't crash on a missing
+            # payload; surface a clear error instead.
+            raise RuntimeError("the SSH call did not complete")
+        if not holder["ok"]:
+            raise holder["payload"]
+        return holder["payload"]
+
+    def _on_ssh_call_done(self, ok, payload):
+        self._ssh_holder["ok"] = ok
+        self._ssh_holder["payload"] = payload
+        self._ssh_loop.quit()
+
+    def _begin_ssh_busy(self, message):
+        """Show ``message`` in the status bar with an animated trailing ellipsis
+        and a busy cursor (started by :meth:`_run_ssh`)."""
+        self._ssh_busy_message = message
+        self._ssh_busy_dots = 0
+        QtWidgets.QApplication.setOverrideCursor(Qt.CursorShape.BusyCursor)
+        timer = getattr(self, "_ssh_busy_timer", None)
+        if timer is None:
+            timer = QtCore.QTimer(self)
+            timer.timeout.connect(self._tick_ssh_busy)
+            self._ssh_busy_timer = timer
+        self._tick_ssh_busy()  # paint immediately, don't wait a tick
+        timer.start(400)
+
+    def _tick_ssh_busy(self):
+        self._ssh_busy_dots = (self._ssh_busy_dots + 1) % 4
+        self.statusBar().showMessage(
+            self._ssh_busy_message + "." * self._ssh_busy_dots
+        )
+
+    def _end_ssh_busy(self):
+        timer = getattr(self, "_ssh_busy_timer", None)
+        if timer is not None:
+            timer.stop()
+        self.statusBar().clearMessage()
+        QtWidgets.QApplication.restoreOverrideCursor()
 
     def _login_node_probe(self, comm):
         """Probe the login-node SSH connection; return ``(ok, detail)``.
@@ -18720,7 +18911,10 @@ class Window(QtWidgets.QMainWindow):
         # the user declines or it still does not work. The message names the
         # actual login node dialed (not the cluster key) and includes the ssh
         # error, so the user is not sent down the wrong path.
-        ok, detail = self._login_node_probe(self.slurm_communicator)
+        ok, detail = self._run_ssh(
+            f"Connecting to login node {login_node}",
+            lambda: self._login_node_probe(self.slurm_communicator),
+        )
         if not ok:
             msg = (
                 f"Could not connect to login node '{login_node}' "
@@ -18742,8 +18936,11 @@ class Window(QtWidgets.QMainWindow):
             if reply != QtWidgets.QMessageBox.StandardButton.Yes:
                 return None, None  # declined -- abort without re-probing
             # Pre-fill the dialog with the login node for the SELECTED cluster
-            # (not the config's first/placeholder node).
-            self.on_configure_ssh(default_host=login_node)
+            # (not the config's first/placeholder node), and save back to that
+            # cluster KEY rather than creating a hostname-keyed entry.
+            self.on_configure_ssh(
+                default_host=login_node, default_label=host_cluster or None
+            )
             host_cluster = str(self.cluster_host_combo.currentText())
             if host_cluster not in CONFIG.get("SlurmLoginNodes", {}):
                 QtWidgets.QMessageBox.warning(
@@ -18757,7 +18954,10 @@ class Window(QtWidgets.QMainWindow):
             self.slurm_communicator = self._ensure_slurm_communicator(
                 host_cluster
             )
-            ok, detail = self._login_node_probe(self.slurm_communicator)
+            ok, detail = self._run_ssh(
+                f"Connecting to login node {login_node}",
+                lambda: self._login_node_probe(self.slurm_communicator),
+            )
             if not ok:
                 msg = (
                     f"The SSH connection to login node '{login_node}' "
@@ -18999,8 +19199,11 @@ class Window(QtWidgets.QMainWindow):
             f"start_slurm: submitting job to {host_cluster} "
             f"using script {script_path}"
         )
-        result = self.slurm_communicator.submit_job(
-            script_path, host_cluster, additional_options=None
+        result = self._run_ssh(
+            "Submitting job to login node",
+            lambda: self.slurm_communicator.submit_job(
+                script_path, host_cluster, additional_options=None
+            ),
         )
         logger.info(
             f"start_slurm: submission result success={result['success']} "
@@ -19032,8 +19235,11 @@ class Window(QtWidgets.QMainWindow):
             # Script assembly was refused (validation / Investigation); the
             # user was already told. Nothing to estimate.
             return
-        result = self.slurm_communicator.submit_job(
-            script_path, host_cluster, additional_options=["--test-only"]
+        result = self._run_ssh(
+            "Estimating start time on login node",
+            lambda: self.slurm_communicator.submit_job(
+                script_path, host_cluster, additional_options=["--test-only"]
+            ),
         )
 
         self.job_info_display.append(
@@ -19240,7 +19446,10 @@ class Window(QtWidgets.QMainWindow):
 
         try:
             job_id_int = int(job_id)
-            result = self.slurm_communicator.cancel_job(job_id_int)
+            result = self._run_ssh(
+                "Cancelling job on login node",
+                lambda: self.slurm_communicator.cancel_job(job_id_int),
+            )
 
             if result["success"]:
                 self.job_info_display.append(
@@ -19275,7 +19484,10 @@ class Window(QtWidgets.QMainWindow):
 
         try:
             job_id_int = int(job_id)
-            result = self.slurm_communicator.get_job_status(job_id_int)
+            result = self._run_ssh(
+                "Querying job status",
+                lambda: self.slurm_communicator.get_job_status(job_id_int),
+            )
 
             if result["success"]:
                 self.job_info_display.append(f"\n=== Job {job_id} Status ===")
@@ -19305,7 +19517,10 @@ class Window(QtWidgets.QMainWindow):
             )
             return
 
-        result = self.slurm_communicator.list_jobs()
+        result = self._run_ssh(
+            "Listing jobs on login node",
+            self.slurm_communicator.list_jobs,
+        )
 
         if result["success"]:
             jobs = result.get("jobs", [])
@@ -19341,7 +19556,10 @@ class Window(QtWidgets.QMainWindow):
             )
             return
 
-        result = self.slurm_communicator.get_queue_info()
+        result = self._run_ssh(
+            "Querying queue information",
+            self.slurm_communicator.get_queue_info,
+        )
 
         if result["success"]:
             partitions = result.get("partitions", [])

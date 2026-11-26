@@ -1,6 +1,10 @@
 """Unit tests for the headless in-app self-update engine (no network/pip)."""
 
+import base64
+import re
 import sys
+
+import pytest
 
 from picasso_workflow import self_update
 
@@ -73,6 +77,46 @@ def test_update_log_path():
     assert self_update.update_log_path(prefix="/opt/pw").endswith("update.log")
 
 
+def test_install_dir_writable(tmp_path):
+    import os
+
+    # a writable dir probes True
+    assert self_update.install_dir_writable(target=str(tmp_path)) is True
+    # a non-existent dir probes False (mkstemp raises)
+    assert (
+        self_update.install_dir_writable(target=str(tmp_path / "nope"))
+        is False
+    )
+    # a read-only dir probes False (the all-users / ProgramData case). Skip
+    # when running as root, where mode bits don't block writes.
+    if hasattr(os, "geteuid") and os.geteuid() == 0:
+        return
+    ro = tmp_path / "ro"
+    ro.mkdir()
+    os.chmod(ro, 0o500)
+    try:
+        assert self_update.install_dir_writable(target=str(ro)) is False
+    finally:
+        os.chmod(ro, 0o700)  # let pytest clean up
+
+
+def test_read_update_outcome(tmp_path):
+    # no log -> None
+    assert self_update.read_update_outcome(prefix=str(tmp_path)) is None
+    # OK log -> ("OK", detail) and the log is consumed (shown once)
+    log = tmp_path / "update.log"
+    log.write_text("OK\nSuccessfully installed picasso_workflow-0.8.11\n")
+    status, detail = self_update.read_update_outcome(prefix=str(tmp_path))
+    assert status == "OK"
+    assert "0.8.11" in detail
+    assert not log.exists()  # deleted after reading
+    # FAILED log -> status + reason surfaced
+    log.write_text("FAILED\nERROR: Access is denied: ...site-packages\n")
+    status, detail = self_update.read_update_outcome(prefix=str(tmp_path))
+    assert status == "FAILED"
+    assert "Access is denied" in detail
+
+
 def test_updater_source_runs_argv_wait_and_logs(tmp_path):
     # Actually EXECUTE the detached-updater source as a subprocess, with a
     # definitely-dead parent pid (so the wait exits at once) and a bogus local
@@ -133,6 +177,67 @@ def test_spawn_detached_updater_builds_detached_pip_command():
     assert "creationflags" in captured["kw"] or captured["kw"].get(
         "start_new_session"
     )
+
+
+def test_spawn_elevated_updater_uses_runas(monkeypatch):
+    # On Windows + elevate, the updater goes through ShellExecuteW 'runas' (the
+    # UAC prompt), carrying the source base64-encoded + the three args.
+    monkeypatch.setattr(self_update.os, "name", "nt")
+    calls = {}
+
+    def fake_shell(hwnd, verb, file, params, cwd, show):
+        calls.update(verb=verb, file=file, params=params, show=show)
+        return 42  # > 32 == success
+
+    log = self_update.spawn_detached_updater(
+        "https://x/pw.whl",
+        4321,
+        python="py.exe",
+        log_path="L.log",
+        elevate=True,
+        shell_execute=fake_shell,
+    )
+    assert log == "L.log"
+    assert calls["verb"] == "runas"  # elevation, not a plain launch
+    assert calls["file"] == "py.exe"
+    # the three args are threaded through in order
+    assert '"https://x/pw.whl"' in calls["params"]
+    assert '"4321"' in calls["params"]
+    assert '"L.log"' in calls["params"]
+    # the real updater source is carried and reconstructs exactly
+    blob = re.search(r"b64decode\('([^']+)'\)", calls["params"]).group(1)
+    assert (
+        base64.b64decode(blob).decode("utf-8") == self_update._UPDATER_SOURCE
+    )
+
+
+def test_spawn_elevated_updater_non_windows_raises(monkeypatch):
+    # elevate=True off Windows must raise (not silently run unelevated pip),
+    # so the GUI reports it instead of a silent no-op.
+    monkeypatch.setattr(self_update.os, "name", "posix")
+    with pytest.raises(OSError):
+        self_update.spawn_detached_updater(
+            "https://x/pw.whl",
+            1,
+            python="py",
+            log_path="L.log",
+            elevate=True,
+        )
+
+
+def test_spawn_elevated_updater_raises_when_uac_declined(monkeypatch):
+    # ShellExecuteW returns <= 32 when the user cancels UAC -> OSError, so the
+    # GUI can keep the app open instead of closing into a no-op.
+    monkeypatch.setattr(self_update.os, "name", "nt")
+    with pytest.raises(OSError):
+        self_update.spawn_detached_updater(
+            "https://x/pw.whl",
+            1,
+            python="py.exe",
+            log_path="L.log",
+            elevate=True,
+            shell_execute=lambda *a: 5,  # SE_ERR_ACCESSDENIED
+        )
 
 
 def test_updater_source_waits_for_parent_then_pips():
