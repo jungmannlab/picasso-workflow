@@ -73,27 +73,6 @@ def wheel_asset_url(release: dict, version: str | None = None) -> str | None:
     return candidates[0][1]
 
 
-def pip_upgrade_command(wheel_url: str, python: str | None = None) -> list:
-    """argv to upgrade ``picasso_workflow`` from ``wheel_url`` in this env.
-
-    ``--upgrade-strategy only-if-needed`` upgrades a dependency only when the
-    new wheel requires it (keeps the update small). Uses the given interpreter
-    (the bundled env's python), not a system Python. Shared by the detached
-    updater's pip invocation.
-    """
-    return [
-        python or sys.executable,
-        "-m",
-        "pip",
-        "install",
-        "--upgrade",
-        "--upgrade-strategy",
-        "only-if-needed",
-        "--no-input",
-        str(wheel_url),
-    ]
-
-
 def update_log_path(prefix=None):
     """Where the detached updater writes its result (`<prefix>/update.log`)."""
     base = Path(prefix) if prefix else Path(sys.prefix)
@@ -127,10 +106,22 @@ def _alive(pid):
         return False
 
 
+still_running = True
 for _ in range(180):  # wait up to ~3 min for the GUI to close (DLLs unlock)
     if not _alive(parent_pid):
+        still_running = False
         break
     time.sleep(1)
+if still_running:
+    # The app never closed -> its Qt/numpy DLLs are still locked, so pip would
+    # fail (the exact thing we must avoid). Skip the install rather than leave a
+    # half-updated env, and say so.
+    with open(log, "w", encoding="utf-8") as fh:
+        fh.write("SKIPPED\n")
+        fh.write("picasso-workflow was still running after the wait; the "
+                 "update was not applied. Fully close it, then click "
+                 "Update again.")
+    sys.exit(0)
 r = subprocess.run(
     [sys.executable, "-m", "pip", "install", "--upgrade",
      "--upgrade-strategy", "only-if-needed", "--no-input", wheel],
