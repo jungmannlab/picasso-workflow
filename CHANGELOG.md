@@ -10,6 +10,15 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ## [Unreleased]
 
+### Changed
+- **Clearer Windows upgrade guidance.** constructor's Windows installer (NSIS)
+  refuses a non-empty target folder and has no in-place upgrade, so upgrading
+  means uninstall-then-reinstall. The in-app "update available" banner and
+  dialog now spell that out on Windows (uninstall first, then install into the
+  same folder), and the GitHub Release notes carry the same install/upgrade
+  instructions. (`picasso_workflow/update_check.py`, `picasso_workflow/gui.py`,
+  `.github/workflows/release.yml`)
+
 ## [0.8.6] - 2026-11-25
 
 ### Added

@@ -157,3 +157,15 @@ def test_fetch_latest_release_error_on_network(monkeypatch):
     r = fetch_latest_release("0.5.6")
     assert r.status == "error"
     assert "network down" in (r.error or "")
+
+
+def test_windows_upgrade_note_on_windows():
+    note = update_check.windows_upgrade_note(platform="win32")
+    assert note
+    assert "uninstall" in note.lower()
+    assert "same folder" in note.lower()
+
+
+def test_windows_upgrade_note_empty_off_windows():
+    assert update_check.windows_upgrade_note(platform="linux") == ""
+    assert update_check.windows_upgrade_note(platform="darwin") == ""

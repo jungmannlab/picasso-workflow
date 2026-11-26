@@ -161,6 +161,20 @@ jobs:
           # release, or run build-apptainer via workflow_dispatch with the tag).
           token: ${{ secrets.RELEASE_PAT || github.token }}
           files: release/dist/*
+          # Download-time install/upgrade guidance. The Windows installer
+          # (constructor/NSIS) refuses a non-empty target folder and has no
+          # in-place upgrade, so upgrading means uninstall-then-install.
+          body: |
+            Download the installer for your OS from the **Assets** below.
+
+            **Upgrading on Windows:** the installer cannot write into a
+            non-empty folder, so **uninstall the current version first**
+            (Settings → Apps, or `Uninstall-picasso-workflow.exe` in the
+            install folder), then run this installer into the **same** folder
+            (nothing accumulates — it's an unversioned path).
+
+            See the [CHANGELOG](https://github.com/jungmannlab/picasso-workflow/blob/master/CHANGELOG.md)
+            for what changed.
           # Mark pre-release tags (alpha/beta/rc, e.g. v0.7.0a1) as GitHub
           # pre-releases so they do not read as the latest stable release.
           prerelease: >-
