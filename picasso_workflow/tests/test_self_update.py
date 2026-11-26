@@ -69,18 +69,40 @@ def test_wheel_asset_url_filters_to_package_and_pins_version():
     assert self_update.wheel_asset_url(release, version="0.9.0") is None
 
 
-def test_pip_upgrade_command_uses_this_env_and_only_if_needed():
-    cmd = self_update.pip_upgrade_command("https://x/pw.whl")
-    assert cmd[0] == sys.executable
-    assert cmd[1:4] == ["-m", "pip", "install"]
-    assert "--upgrade" in cmd
-    i = cmd.index("--upgrade-strategy")
-    assert cmd[i + 1] == "only-if-needed"
-    assert cmd[-1] == "https://x/pw.whl"
-
-
 def test_update_log_path():
     assert self_update.update_log_path(prefix="/opt/pw").endswith("update.log")
+
+
+def test_updater_source_runs_argv_wait_and_logs(tmp_path):
+    # Actually EXECUTE the detached-updater source as a subprocess, with a
+    # definitely-dead parent pid (so the wait exits at once) and a bogus local
+    # wheel (so pip fails fast, no network). Exercises the argv indexing under
+    # `python -c`, _alive(), the wait->install path, and the log write -- a
+    # reorder of sys.argv[1..3] or a broken _alive would be caught here.
+    import subprocess
+
+    log = tmp_path / "update.log"
+    dead_pid = "2147483647"  # not a live pid -> _alive() False immediately
+    bogus_wheel = str(tmp_path / "no_such_package.whl")  # local -> pip, no net
+    r = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            self_update._UPDATER_SOURCE,
+            bogus_wheel,
+            dead_pid,
+            str(log),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert r.returncode == 0  # the helper never raises; it logs the outcome
+    assert log.exists()
+    # dead parent -> it did NOT skip; it ran pip (which failed on the bogus
+    # wheel), so the log records FAILED (never SKIPPED here).
+    head = log.read_text().splitlines()[0]
+    assert head == "FAILED"
 
 
 def test_spawn_detached_updater_builds_detached_pip_command():

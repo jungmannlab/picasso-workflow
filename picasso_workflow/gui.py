@@ -10510,20 +10510,18 @@ class _ReleaseCheckWorker(QtCore.QObject):
 
 
 class _SelfUpdateWorker(QtCore.QObject):
-    """Resolve the latest release wheel and launch the detached updater.
+    """Resolve the latest release's wheel URL (network), off the UI thread.
 
-    Emits ``finished(ok, message)``. The actual pip install runs in a separate
-    detached process that waits for this GUI to exit first (so the loaded Qt /
-    numpy DLLs unlock) -- see :func:`self_update.spawn_detached_updater`. This
-    worker only does the network fetch + spawn, off the UI thread.
+    Emits ``finished(ok, payload)``: ``payload`` is the wheel URL on success or
+    an error message on failure. The detached updater is launched by the GUI
+    only *after* the user confirms closing (so declining doesn't leave an armed
+    waiter) -- see :func:`self_update.spawn_detached_updater`.
     """
 
     finished = QtCore.pyqtSignal(bool, str)
 
     def run(self) -> None:
         try:
-            import os
-
             from picasso_workflow import self_update
             from picasso_workflow.update_check import (
                 fetch_latest_release_json,
@@ -10534,22 +10532,16 @@ class _SelfUpdateWorker(QtCore.QObject):
             url = self_update.wheel_asset_url(
                 release or {}, version=version or None
             )
-            if not url:
-                ok, message = (
+            if url:
+                ok, payload = True, url
+            else:
+                ok, payload = (
                     False,
                     "No update wheel was found in the latest release.",
                 )
-            else:
-                self_update.spawn_detached_updater(url, parent_pid=os.getpid())
-                ok, message = (
-                    True,
-                    "Update ready. It will install in the background once you "
-                    "close picasso-workflow; reopen it when done (give it a "
-                    "moment).",
-                )
         except Exception as e:  # pragma: no cover - defensive; must not raise
-            ok, message = False, f"Update failed: {e}"
-        self.finished.emit(ok, message)
+            ok, payload = False, f"Update failed: {e}"
+        self.finished.emit(ok, payload)
 
 
 class _ClusterImageListWorker(QtCore.QObject):
@@ -13424,20 +13416,8 @@ class Window(QtWidgets.QMainWindow):
         """
         if getattr(self, "_update_thread", None) is not None:
             return
-        reply = QtWidgets.QMessageBox.question(
-            self,
-            "Update picasso-workflow",
-            "Update to the latest version?\n\nThe update installs in the "
-            "background after you close picasso-workflow (it can't replace "
-            "files while the app is running). You'll be asked to close it; "
-            "reopen it once the update finishes.",
-            QtWidgets.QMessageBox.StandardButton.Yes
-            | QtWidgets.QMessageBox.StandardButton.No,
-        )
-        if reply != QtWidgets.QMessageBox.StandardButton.Yes:
-            return
         self._update_now_button.setEnabled(False)
-        self._update_now_button.setText("Updating…")
+        self._update_now_button.setText("Checking…")
         try:
             worker = _SelfUpdateWorker()
             thread = QtCore.QThread(self)
@@ -13456,11 +13436,11 @@ class Window(QtWidgets.QMainWindow):
             self._update_now_button.setText("Update now")
             logger.debug(f"Could not start the self-update: {e}")
 
-    def _on_self_update_result(self, ok, message):
-        """Report the outcome; on success offer to close so the updater runs.
-
-        The app is NOT auto-restarted -- the detached updater waits for this
-        process to exit, installs, then the user reopens manually.
+    def _on_self_update_result(self, ok, wheel_url):
+        """On success (``wheel_url``), confirm closing, then arm the detached
+        updater -- NOT before, so declining leaves nothing running. The app is
+        not auto-restarted; the updater waits for it to exit, installs, and the
+        user reopens manually.
         """
         self._update_now_button.setEnabled(True)
         self._update_now_button.setText("Update now")
@@ -13468,19 +13448,27 @@ class Window(QtWidgets.QMainWindow):
             import html as _html
 
             self._update_message_box(
-                "Update failed", _html.escape(message), warning=True
+                "Update failed", _html.escape(wheel_url), warning=True
             )
             return
-        self.update_banner.setVisible(False)
         reply = QtWidgets.QMessageBox.question(
             self,
             "Update ready",
-            message + "\n\nClose picasso-workflow now to install it?",
+            "A new version is ready. It installs in the background once you "
+            "close picasso-workflow (it can't replace files while the app is "
+            "running); reopen it when done.\n\nClose now to install?",
             QtWidgets.QMessageBox.StandardButton.Yes
             | QtWidgets.QMessageBox.StandardButton.No,
         )
-        if reply == QtWidgets.QMessageBox.StandardButton.Yes:
-            self.close()
+        if reply != QtWidgets.QMessageBox.StandardButton.Yes:
+            return  # nothing armed -- the user can click Update now again
+        import os
+
+        from picasso_workflow import self_update
+
+        self_update.spawn_detached_updater(wheel_url, parent_pid=os.getpid())
+        self.update_banner.setVisible(False)
+        self.close()
 
     def _update_message_box(self, title, html, warning=False):
         """A rich-text message box whose ``<a href>`` links open in a browser.
