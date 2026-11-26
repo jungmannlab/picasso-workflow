@@ -9808,6 +9808,14 @@ class GettingStartedDialog(QtWidgets.QDialog):
         create_btn = QtWidgets.QPushButton("Create my settings file…")
         create_btn.clicked.connect(lambda: self.open_user_config(self))
         btns.addWidget(create_btn)
+        ssh_btn = QtWidgets.QPushButton("Set up cluster SSH…")
+        ssh_btn.setToolTip(
+            "Optional: set up key-based SSH to your SLURM login node so you "
+            "can run workflows on the cluster (generate a key, test the "
+            "connection, install it with ssh-copy-id)."
+        )
+        ssh_btn.clicked.connect(self._setup_cluster_ssh)
+        btns.addWidget(ssh_btn)
         btns.addStretch(1)
         self.dont_show = QtWidgets.QCheckBox("Don't show this again")
         self.dont_show.setChecked(True)
@@ -9817,6 +9825,23 @@ class GettingStartedDialog(QtWidgets.QDialog):
         close_btn.setDefault(True)
         btns.addWidget(close_btn)
         layout.addLayout(btns)
+
+    def _setup_cluster_ssh(self):
+        """Open the main window's SSH-setup dialog.
+
+        An optional onboarding step; delegates to ``Window.on_configure_ssh``.
+        """
+        window = self.parent()
+        if window is not None and hasattr(window, "on_configure_ssh"):
+            window.on_configure_ssh()
+        else:  # pragma: no cover - defensive (dialog without the main window)
+            QtWidgets.QMessageBox.information(
+                self,
+                "Set up cluster SSH",
+                "Open the main window, then use the Run tab's "
+                "'Configure / Test connection…' button to set up SSH to the "
+                "cluster.",
+            )
 
     def _build_confluence_group(self):
         """Optional Confluence token entry, persisted to the per-user .env."""
@@ -10061,7 +10086,7 @@ class SshSetupDialog(QtWidgets.QDialog):
     persist the node to the per-user ``config.yaml`` on accept.
     """
 
-    def __init__(self, parent=None, default_username=None):
+    def __init__(self, parent=None, default_username=None, default_host=None):
         super().__init__(parent)
         from picasso_workflow import ssh_setup
 
@@ -10103,7 +10128,7 @@ class SshSetupDialog(QtWidgets.QDialog):
 
         self.host_edit = QtWidgets.QLineEdit()
         self.host_edit.setPlaceholderText("e.g., login.cluster.institute.edu")
-        self.host_edit.setText(first_host)
+        self.host_edit.setText(default_host or first_host)
         form.addRow("Login node (hostname):", self.host_edit)
 
         self.username_edit = QtWidgets.QLineEdit()
@@ -17434,20 +17459,27 @@ class Window(QtWidgets.QMainWindow):
         """Stop the polling timer."""
         self.monitor_timer.stop()
 
-    def on_configure_ssh(self):
+    def on_configure_ssh(self, default_host=None):
         """Open the SSH-setup dialog; refresh the Run-tab cluster fields.
 
         On accept, the dialog has persisted the node to the per-user
         ``config.yaml`` and reloaded ``CONFIG``; mirror that into the host
         combo (add/select the saved label) and the username field.
+        ``default_host`` pre-fills the dialog's login-node field (e.g. when
+        opened from the Doctor tab for a specific cluster). Returns the saved
+        cluster label, or ``None`` if the dialog was cancelled / saved nothing.
         """
         default_username = self.cluster_username_edit.text().strip() or None
-        dialog = SshSetupDialog(self, default_username=default_username)
+        dialog = SshSetupDialog(
+            self,
+            default_username=default_username,
+            default_host=default_host,
+        )
         if dialog.exec() != QtWidgets.QDialog.DialogCode.Accepted:
-            return
+            return None
         label = getattr(dialog, "saved_label", None)
         if not label:
-            return
+            return None
         # Rebuild the host combo from the reloaded CONFIG and select the saved
         # node. The combo is editable, so an addItem is safe even if present.
         existing = {
@@ -17470,6 +17502,7 @@ class Window(QtWidgets.QMainWindow):
         # Drop any cached communicator so the next op uses the new settings.
         self.slurm_communicator = None
         self._slurm_comm_host = None
+        return label
 
     def _ensure_slurm_communicator(self, host_cluster):
         """Return a :class:`SlurmCommunicator` for ``host_cluster``.

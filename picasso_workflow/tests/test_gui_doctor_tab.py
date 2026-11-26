@@ -254,3 +254,68 @@ def test_doctor_tab_content_is_scrollable(qapp):
     # the section group boxes live inside the scrolled container
     assert container.findChildren(QtWidgets.QGroupBox)
     tab.deleteLater()
+
+
+def test_cluster_combo_lists_nodes_and_drives_host(qapp, monkeypatch):
+    """The Doctor tab's own cluster selector lists all configured login nodes
+    and drives which one Check/Upload target (independent of the Run tab)."""
+    import picasso_workflow as pw
+    from picasso_workflow.doctor_tab import DoctorTab
+
+    monkeypatch.setitem(
+        pw.CONFIG,
+        "SlurmLoginNodes",
+        {"clusterA": "login01", "clusterB": "login02"},
+    )
+    tab = DoctorTab(main_window=None)
+    items = [
+        tab._cluster_combo.itemText(i)
+        for i in range(tab._cluster_combo.count())
+    ]
+    assert "clusterA" in items and "clusterB" in items
+    tab._cluster_combo.setCurrentIndex(tab._cluster_combo.findText("clusterB"))
+    assert tab._cluster_host() == "clusterB"
+    tab.deleteLater()
+
+
+def test_setup_cluster_ssh_targets_selected_login_node(qapp, monkeypatch):
+    """'Set up SSH connection…' opens the dialog pre-targeted at the selected
+    cluster's login-node hostname (not the config key)."""
+    import picasso_workflow as pw
+    from picasso_workflow.doctor_tab import DoctorTab
+
+    monkeypatch.setitem(pw.CONFIG, "SlurmLoginNodes", {"clusterA": "login01"})
+    calls = {}
+
+    class FakeMW:
+        def on_configure_ssh(self, default_host=None):
+            calls["host"] = default_host
+
+    tab = DoctorTab(main_window=FakeMW())
+    tab._cluster_combo.setCurrentIndex(tab._cluster_combo.findText("clusterA"))
+    tab._setup_cluster_ssh()
+    assert calls["host"] == "login01"
+    tab.deleteLater()
+
+
+def test_setup_cluster_ssh_selects_newly_saved_node(qapp, monkeypatch):
+    """After the dialog saves a (possibly new) node, the Doctor selector
+    switches to it so Check/Upload target what was just configured."""
+    import picasso_workflow as pw
+    from picasso_workflow.doctor_tab import DoctorTab
+
+    monkeypatch.setitem(
+        pw.CONFIG,
+        "SlurmLoginNodes",
+        {"clusterA": "login01", "clusterB": "login02"},
+    )
+
+    class FakeMW:
+        def on_configure_ssh(self, default_host=None):
+            return "clusterB"  # user configured/saved clusterB in the dialog
+
+    tab = DoctorTab(main_window=FakeMW())
+    tab._cluster_combo.setCurrentIndex(tab._cluster_combo.findText("clusterA"))
+    tab._setup_cluster_ssh()
+    assert tab._cluster_host() == "clusterB"
+    tab.deleteLater()
