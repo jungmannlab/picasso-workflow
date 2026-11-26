@@ -30,6 +30,32 @@ def window(qapp):
     win.close()
 
 
+def test_login_node_probe_surfaces_ssh_error(window):
+    """The pre-flight probe returns the real ssh stderr on failure, uses
+    batch_mode (fail-fast, no password hang), and is clean on success."""
+
+    class _Comm:
+        def __init__(self, result):
+            self._result = result
+            self.calls = []
+
+        def execute_ssh_command(self, command, batch_mode=False):
+            self.calls.append((command, batch_mode))
+            return self._result
+
+    ok_comm = _Comm({"success": True, "stderr": ""})
+    assert window._login_node_probe(ok_comm) == (True, "")
+    # batch_mode must be set so a bad key fails fast instead of hanging
+    assert ok_comm.calls[0][1] is True
+
+    fail_comm = _Comm(
+        {"success": False, "stderr": "Permission denied (publickey).\n"}
+    )
+    ok, detail = window._login_node_probe(fail_comm)
+    assert ok is False
+    assert detail == "Permission denied (publickey)."
+
+
 def test_run_tab_ssh_targets_selected_login_node(window, monkeypatch):
     monkeypatch.setitem(
         gui.CONFIG,
