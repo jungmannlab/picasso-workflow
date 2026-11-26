@@ -10,6 +10,8 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ## [Unreleased]
 
+## [0.8.10] - 2026-11-26
+
 ### Fixed
 - **Windows installer creates the shortcuts on managed/enterprise machines.**
   The 0.8.9 fix removed the PowerShell parse error but shortcut creation still
