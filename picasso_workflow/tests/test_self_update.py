@@ -79,46 +79,44 @@ def test_pip_upgrade_command_uses_this_env_and_only_if_needed():
     assert cmd[-1] == "https://x/pw.whl"
 
 
-def _proc(returncode=0, stderr="", stdout=""):
-    return type(
-        "P", (), {"returncode": returncode, "stderr": stderr, "stdout": stdout}
-    )()
+def test_update_log_path():
+    assert self_update.update_log_path(prefix="/opt/pw").endswith("update.log")
 
 
-def test_run_update_success_tells_user_to_restart():
-    calls = {}
+def test_spawn_detached_updater_builds_detached_pip_command():
+    captured = {}
 
-    def runner(cmd, **kw):
-        calls["cmd"] = cmd
-        return _proc(0)
+    def fake_popen(cmd, **kw):
+        captured["cmd"] = cmd
+        captured["kw"] = kw
+        return object()
 
-    ok, msg = self_update.run_update("https://x/pw.whl", runner=runner)
-    assert ok
-    assert "reopen" in msg.lower() or "restart" in msg.lower()
-    assert calls["cmd"][-1] == "https://x/pw.whl"
+    log = self_update.spawn_detached_updater(
+        "https://x/pw.whl",
+        parent_pid=4321,
+        python="/env/python",
+        log_path="/p/update.log",
+        popen=fake_popen,
+    )
+    cmd = captured["cmd"]
+    assert log == "/p/update.log"
+    assert cmd[0] == "/env/python" and cmd[1] == "-c"
+    # the helper source + its three args (wheel, parent pid, log path)
+    assert "pip" in cmd[2] and "_alive" in cmd[2]
+    assert cmd[3] == "https://x/pw.whl"
+    assert cmd[4] == "4321"
+    assert cmd[5] == "/p/update.log"
+    # detached: own session/process-group, never a child that dies with the GUI
+    assert captured["kw"].get("close_fds") is True
+    assert "creationflags" in captured["kw"] or captured["kw"].get(
+        "start_new_session"
+    )
 
 
-def test_run_update_no_wheel():
-    ok, msg = self_update.run_update(None, runner=lambda *a, **k: _proc(0))
-    assert not ok and "no update wheel" in msg.lower()
-
-
-def test_run_update_locked_file_message():
-    def runner(cmd, **kw):
-        return _proc(
-            1,
-            stderr="ERROR: [WinError 32] being used by another "
-            "process: 'Qt6Core.dll'",
-        )
-
-    ok, msg = self_update.run_update("https://x/pw.whl", runner=runner)
-    assert not ok
-    assert "in use" in msg.lower() and "close" in msg.lower()
-
-
-def test_run_update_generic_failure_surfaces_error():
-    def runner(cmd, **kw):
-        return _proc(1, stderr="ERROR: Could not find a version")
-
-    ok, msg = self_update.run_update("https://x/pw.whl", runner=runner)
-    assert not ok and "could not find a version" in msg.lower()
+def test_updater_source_waits_for_parent_then_pips():
+    src = self_update._UPDATER_SOURCE
+    # waits on the parent pid, then runs pip upgrade of the wheel
+    assert "_alive(parent_pid)" in src
+    assert "pip" in src and "install" in src and "--upgrade" in src
+    # imports no picasso_workflow (so it never holds the DLLs it must replace)
+    assert "picasso_workflow" not in src
