@@ -609,14 +609,25 @@ class DoctorTab(QtWidgets.QWidget):
             "Set up and check the Confluence token files on the cluster so "
             "containerized runs can report to Confluence -- no terminal "
             "needed. The token is written only into the files (chmod 600), "
-            "never shown here or logged. Targets the cluster selected in the "
-            "Run tab."
+            "never shown here or logged. Targets the login node selected "
+            "below."
         )
         blurb.setWordWrap(True)
         sec_layout.addWidget(blurb, 0, 0, 1, 3)
 
-        self._cluster_host_label = QtWidgets.QLabel("Host: (none)")
-        sec_layout.addWidget(self._cluster_host_label, 1, 0, 1, 3)
+        sec_layout.addWidget(QtWidgets.QLabel("Cluster:"), 1, 0)
+        self._cluster_combo = QtWidgets.QComboBox()
+        self._cluster_combo.setToolTip(
+            "Which configured SLURM login node to target (independent of the "
+            "Run tab)."
+        )
+        self._sync_cluster_combo(select=self._run_tab_host())
+        self._cluster_combo.currentTextChanged.connect(
+            lambda _=None: self._refresh_cluster_secrets_ui()
+        )
+        sec_layout.addWidget(self._cluster_combo, 1, 1)
+        self._cluster_host_label = QtWidgets.QLabel("")
+        sec_layout.addWidget(self._cluster_host_label, 1, 2)
 
         sec_layout.addWidget(
             QtWidgets.QLabel("Confluence token (operational):"), 2, 0
@@ -655,6 +666,16 @@ class DoctorTab(QtWidgets.QWidget):
             self._upload_cluster_secrets
         )
         sec_layout.addWidget(self._cluster_upload_button, 4, 1)
+
+        self._cluster_ssh_button = QtWidgets.QPushButton(
+            "Set up SSH connection…"
+        )
+        self._cluster_ssh_button.setToolTip(
+            "Generate/select an SSH key and install it on the selected login "
+            "node (opens the SSH setup dialog), so Check/Upload can connect."
+        )
+        self._cluster_ssh_button.clicked.connect(self._setup_cluster_ssh)
+        sec_layout.addWidget(self._cluster_ssh_button, 4, 2)
 
         self._cluster_status = QtWidgets.QLabel("not checked")
         self._cluster_status.setWordWrap(True)
@@ -829,7 +850,7 @@ class DoctorTab(QtWidgets.QWidget):
 
     # -- cluster secrets (check / provision, background) -------------------
 
-    def _cluster_host(self) -> str:
+    def _run_tab_host(self) -> str:
         """The cluster host selected in the Run tab (``""`` if unavailable)."""
         combo = getattr(self.main_window, "cluster_host_combo", None)
         if combo is None:
@@ -839,11 +860,59 @@ class DoctorTab(QtWidgets.QWidget):
         except Exception:  # pragma: no cover - defensive
             return ""
 
+    def _cluster_host(self) -> str:
+        """The login node this tab targets: the Doctor-tab selector, falling
+        back to the Run tab's selection."""
+        combo = getattr(self, "_cluster_combo", None)
+        if combo is not None:
+            text = str(combo.currentText()).strip()
+            if text:
+                return text
+        return self._run_tab_host()
+
+    def _sync_cluster_combo(self, select=None) -> None:
+        """(Re)populate the cluster selector from ``CONFIG["SlurmLoginNodes"]``.
+
+        Preserves the current selection, or selects ``select`` when given and
+        present. Signals are blocked so this doesn't trigger a refresh.
+        """
+        combo = getattr(self, "_cluster_combo", None)
+        if combo is None:
+            return
+        from picasso_workflow import CONFIG
+
+        want = select or str(combo.currentText()).strip()
+        combo.blockSignals(True)
+        combo.clear()
+        for host in CONFIG.get("SlurmLoginNodes") or {}:
+            combo.addItem(host)
+        idx = combo.findText(want) if want else -1
+        if idx >= 0:
+            combo.setCurrentIndex(idx)
+        combo.blockSignals(False)
+
+    def _setup_cluster_ssh(self) -> None:
+        """Open the SSH-setup dialog targeted at the selected login node."""
+        mw = self.main_window
+        if mw is None or not hasattr(mw, "on_configure_ssh"):
+            return
+        from picasso_workflow import CONFIG
+
+        host = self._cluster_host()
+        login_node = (CONFIG.get("SlurmLoginNodes") or {}).get(host, host)
+        mw.on_configure_ssh(default_host=login_node)
+        # A node may have been added/renamed in the dialog; re-sync + refresh.
+        self._sync_cluster_combo()
+        self._refresh_cluster_secrets_ui()
+
     def _refresh_cluster_secrets_ui(self) -> None:
         """Update the host label / placeholders / button-enabled state."""
         host = self._cluster_host()
+        from picasso_workflow import CONFIG
+
+        login_node = (CONFIG.get("SlurmLoginNodes") or {}).get(host, "")
         self._cluster_host_label.setText(
-            f"Host: {host or '(select one in the Run tab)'}"
+            f"→ {login_node}" if login_node else ""
         )
         can_ssh = bool(host) and hasattr(
             self.main_window, "_ensure_slurm_communicator"
@@ -852,6 +921,12 @@ class DoctorTab(QtWidgets.QWidget):
         enabled = can_ssh and not self._cluster_busy
         self._cluster_check_button.setEnabled(enabled)
         self._cluster_upload_button.setEnabled(enabled)
+        # The SSH-setup button is usable even when SSH isn't working yet --
+        # that's its whole point -- so it only needs a host + the main window.
+        if hasattr(self, "_cluster_ssh_button"):
+            self._cluster_ssh_button.setEnabled(
+                bool(host) and hasattr(self.main_window, "on_configure_ssh")
+            )
         op_local, test_local = _local_tokens()
         self._op_token_edit.setPlaceholderText(
             "leave blank to reuse the token configured locally"
@@ -913,9 +988,13 @@ class DoctorTab(QtWidgets.QWidget):
     def _on_cluster_check_result(self, ok, message, parsed) -> None:
         self._set_cluster_busy(False)
         if not ok:
+            hint = (
+                " &mdash; if the SSH key or host isn't set up yet, use "
+                "<b>Set up SSH connection…</b> above."
+            )
             self._cluster_status.setText(
                 f"<span style='color:#c62828'>Check failed: "
-                f"{html.escape(message)}</span>"
+                f"{html.escape(message)}</span>{hint}"
             )
             return
         self._cluster_status.setText(_format_cluster_check(parsed or {}))

@@ -10061,7 +10061,7 @@ class SshSetupDialog(QtWidgets.QDialog):
     persist the node to the per-user ``config.yaml`` on accept.
     """
 
-    def __init__(self, parent=None, default_username=None):
+    def __init__(self, parent=None, default_username=None, default_host=None):
         super().__init__(parent)
         from picasso_workflow import ssh_setup
 
@@ -10103,7 +10103,7 @@ class SshSetupDialog(QtWidgets.QDialog):
 
         self.host_edit = QtWidgets.QLineEdit()
         self.host_edit.setPlaceholderText("e.g., login.cluster.institute.edu")
-        self.host_edit.setText(first_host)
+        self.host_edit.setText(default_host or first_host)
         form.addRow("Login node (hostname):", self.host_edit)
 
         self.username_edit = QtWidgets.QLineEdit()
@@ -17434,15 +17434,21 @@ class Window(QtWidgets.QMainWindow):
         """Stop the polling timer."""
         self.monitor_timer.stop()
 
-    def on_configure_ssh(self):
+    def on_configure_ssh(self, default_host=None):
         """Open the SSH-setup dialog; refresh the Run-tab cluster fields.
 
         On accept, the dialog has persisted the node to the per-user
         ``config.yaml`` and reloaded ``CONFIG``; mirror that into the host
         combo (add/select the saved label) and the username field.
+        ``default_host`` pre-fills the dialog's login-node field (e.g. when
+        opened from the Doctor tab for a specific cluster).
         """
         default_username = self.cluster_username_edit.text().strip() or None
-        dialog = SshSetupDialog(self, default_username=default_username)
+        dialog = SshSetupDialog(
+            self,
+            default_username=default_username,
+            default_host=default_host,
+        )
         if dialog.exec() != QtWidgets.QDialog.DialogCode.Accepted:
             return
         label = getattr(dialog, "saved_label", None)

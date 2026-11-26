@@ -10,6 +10,14 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ## [Unreleased]
 
+### Added
+- **Pick the cluster and set up SSH from the Doctor tab.** The "Cluster secrets"
+  panel now has its own **login-node selector** (all `SlurmLoginNodes`, not just
+  the Run-tab choice) and a **"Set up SSH connection…"** button that opens the
+  SSH-setup dialog pre-targeted at the selected node (generate/select a key →
+  test → guided `ssh-copy-id`). A failed cluster check now points you at that
+  button. (`picasso_workflow/doctor_tab.py`, `picasso_workflow/gui.py`)
+
 ### Changed
 - **Clearer Windows upgrade guidance.** constructor's Windows installer (NSIS)
   refuses a non-empty target folder and has no in-place upgrade, so upgrading
