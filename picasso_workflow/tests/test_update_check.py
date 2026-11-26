@@ -169,3 +169,6 @@ def test_windows_upgrade_note_on_windows():
 def test_windows_upgrade_note_empty_off_windows():
     assert update_check.windows_upgrade_note(platform="linux") == ""
     assert update_check.windows_upgrade_note(platform="darwin") == ""
+    # An explicit "" must be honoured as an override (not fall back to the
+    # host's sys.platform), so it forces the off-Windows empty result.
+    assert update_check.windows_upgrade_note(platform="") == ""
