@@ -10,6 +10,20 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ## [Unreleased]
 
+### Fixed
+- **Wizard-reconstructed `find_similar` no longer rejects every pick on RMSD.**
+  The retro-calc that recovers `find_similar`'s nlocs/RMSD window from a manual
+  pick multiplied the localizations' x/y by the pixel size — the pre-picasso-1.0
+  convention where locs were in camera pixels. In picasso 1.0 locs are already
+  in **nm**, so this inflated the computed RMSD by ~pixelsize (≈130×), making
+  `min/max_rmsd` far larger than anything the runtime picker produces (its
+  `pick_similar_candidates` reports RMSD in nm) — so **every** candidate fell
+  below `min_rmsd` and `find_similar` returned 0 picks, failing the downstream
+  `undrift_from_picked` with "no localizations in the picks". The retro-calc now
+  treats locs as nm (no pixelsize scaling), so the RMSD window matches the
+  runtime. This is the remaining half of the 0.8.9 pick-size (diameter) fix.
+  (`picasso_workflow/manual_to_workflow.py`)
+
 ## [0.8.11] - 2026-11-26
 
 ### Fixed

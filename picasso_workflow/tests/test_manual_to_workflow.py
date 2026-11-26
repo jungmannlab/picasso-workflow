@@ -710,16 +710,17 @@ def test_cross_channel_flag():
 # find_similar retro-calc.
 # ---------------------------------------------------------------------------
 def test_retro_calc_find_similar_spans_distribution():
-    # Two picks: ~1 and ~3 locs; distinct rmsd. Pixelsize 130 nm.
+    # Two picks: ~1 and ~3 locs; distinct rmsd. Locs are in nm (picasso 1.0),
+    # same frame as the centers.
     px = 130.0
     locs = np.rec.fromarrays(
         [
-            np.array([10.0, 50.0, 50.1, 49.9]),
-            np.array([10.0, 50.0, 50.1, 49.9]),
+            np.array([1300.0, 6500.0, 6513.0, 6487.0]),
+            np.array([1300.0, 6500.0, 6513.0, 6487.0]),
         ],
         names="x,y",
     )
-    centers = [(10 * px, 10 * px), (50 * px, 50 * px)]
+    centers = [(1300.0, 1300.0), (6500.0, 6500.0)]
     params = m.retro_calc_find_similar(
         locs, centers, diameter_nm=800.0, pixelsize=px, n_frames=100
     )
@@ -759,9 +760,12 @@ def test_retro_calc_from_picked_grouped():
 
 
 def _bruteforce_find_similar(locs, centers, diameter_nm, px, n_frames, m=0.1):
-    """Reference O(picks x locs) implementation to check the KDTree path."""
-    x = np.asarray(locs["x"], float) * px
-    y = np.asarray(locs["y"], float) * px
+    """Reference O(picks x locs) implementation to check the KDTree path.
+
+    Locs are in nm (picasso 1.0) -- no pixelsize scaling.
+    """
+    x = np.asarray(locs["x"], float)
+    y = np.asarray(locs["y"], float)
     r = diameter_nm / 2.0
     nf = max(int(n_frames or 1), 1)
     fracs, rmsds = [], []
@@ -796,9 +800,8 @@ def test_retro_calc_find_similar_matches_bruteforce():
     locs = np.rec.fromarrays(
         [rng.uniform(0, 500, 4000), rng.uniform(0, 500, 4000)], names="x,y"
     )
-    centers = list(
-        zip(rng.uniform(0, 500 * px, 300), rng.uniform(0, 500 * px, 300))
-    )
+    # locs and centers share one nm frame (picasso 1.0; no pixelsize scaling)
+    centers = list(zip(rng.uniform(0, 500, 300), rng.uniform(0, 500, 300)))
     got = m.retro_calc_find_similar(locs, centers, 600.0, px, 2000)
     ref = _bruteforce_find_similar(locs, centers, 600.0, px, 2000)
     assert got.keys() == ref.keys()
@@ -815,9 +818,8 @@ def test_retro_calc_find_similar_subsamples_many_picks(monkeypatch):
     locs = np.rec.fromarrays(
         [rng.uniform(0, 500, 3000), rng.uniform(0, 500, 3000)], names="x,y"
     )
-    centers = list(
-        zip(rng.uniform(0, 500 * px, 2000), rng.uniform(0, 500 * px, 2000))
-    )
+    # locs and centers share one nm frame (picasso 1.0; no pixelsize scaling)
+    centers = list(zip(rng.uniform(0, 500, 2000), rng.uniform(0, 500, 2000)))
     got = m.retro_calc_find_similar(locs, centers, 800.0, px, 1000)
     full = _bruteforce_find_similar(locs, centers, 800.0, px, 1000)
     # Sample-based extremes sit inside the full-population extremes (margin aside).
@@ -837,8 +839,9 @@ def test_retro_calc_from_picked_matches_reference():
     grp = rng.integers(0, 400, n)
     picked = np.rec.fromarrays([x, y, grp], names="x,y,group")
     got = m.retro_calc_from_picked(picked, 700.0, px, 1500)
-    # reference: explicit per-group loop
-    xn, yn = x * px, y * px
+    # reference: explicit per-group loop. Locs are in nm (picasso 1.0) -- no
+    # pixelsize scaling.
+    xn, yn = x, y
     fracs, rmsds = [], []
     for g in np.unique(grp):
         mask = grp == g
@@ -1003,8 +1006,9 @@ def test_apply_find_similar_retrocalc_monkeypatched(tmp_path, monkeypatch):
             m.MappedStep(source="pick_similar", module_name="find_similar")
         ],
     )
+    # locs in nm (picasso 1.0), inside the 1300 nm pick center
     locs = np.rec.fromarrays(
-        [np.array([10.0, 10.0]), np.array([10.0, 10.0])], names="x,y"
+        [np.array([1300.0, 1300.0]), np.array([1300.0, 1300.0])], names="x,y"
     )
     monkeypatch.setattr(m, "_load_locs", lambda p: (locs, [{"Frames": 100}]))
     m.apply_find_similar_retrocalc(chain, pixelsize=130.0)
