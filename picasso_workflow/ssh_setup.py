@@ -287,17 +287,6 @@ def ssh_copy_id_command(hostname, username, port=22, key_path=None):
     return " ".join(parts)
 
 
-def manual_install_command(hostname, username, port=22, key_path=None):
-    """POSIX fallback when ``ssh-copy-id`` is unavailable (pipes the .pub)."""
-    pub = public_key_path(key_path) if key_path else "<your-key>.pub"
-    p = f" -p {_as_port(port)}" if _as_port(port) != 22 else ""
-    return (
-        f'cat "{pub}" | ssh{p} {username}@{hostname} '
-        '"mkdir -p ~/.ssh && chmod 700 ~/.ssh && '
-        'cat >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys"'
-    )
-
-
 def install_key_command(
     hostname, username, port=22, key_path=None, platform=None
 ):
