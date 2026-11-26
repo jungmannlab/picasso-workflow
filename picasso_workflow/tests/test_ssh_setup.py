@@ -31,7 +31,10 @@ class _FakeComm:
         self.timeout = timeout
         return self
 
-    def execute_ssh_command(self, command, working_directory=None):
+    def execute_ssh_command(
+        self, command, working_directory=None, batch_mode=False
+    ):
+        self.batch_mode = batch_mode
         if self.raises is not None:
             raise self.raises
         return self.result
@@ -64,6 +67,8 @@ def test_ssh_success():
     assert v.ok and v.category == ssh_setup.CAT_OK
     # ctor received the connection params
     assert comm.hostname == "login01" and comm.username == "alice"
+    # the probe must be non-interactive so it never hangs on a password prompt
+    assert comm.batch_mode is True
 
 
 def test_ssh_requires_host_and_user():
@@ -180,12 +185,29 @@ def test_ssh_copy_id_command():
     )
 
 
-def test_manual_install_command_pipes_pub():
-    cmd = ssh_setup.manual_install_command(
-        "login01", "alice", key_path="/h/.ssh/id_ed25519"
-    )
-    assert cmd.startswith('cat "/h/.ssh/id_ed25519.pub" | ssh alice@login01')
-    assert "authorized_keys" in cmd
+def test_execute_ssh_command_batch_mode_injects_flag(monkeypatch):
+    # Guard the real SlurmCommunicator argv (the probe relies on BatchMode=yes
+    # to fail fast instead of hanging on a password prompt).
+    from picasso_workflow import slurm_submit
+
+    captured = {}
+
+    def fake_run(cmd, **kw):
+        captured["cmd"] = cmd
+        return type("P", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+    monkeypatch.setattr(slurm_submit.subprocess, "run", fake_run)
+    comm = slurm_submit.SlurmCommunicator("login01", "alice")
+
+    comm.execute_ssh_command("echo x", batch_mode=True)
+    cmd = captured["cmd"]
+    i = cmd.index("BatchMode=yes")
+    assert cmd[i - 1] == "-o"  # a proper -o option
+    assert i < cmd.index("login01" if "login01" in cmd else cmd[-1])
+
+    captured.clear()
+    comm.execute_ssh_command("echo x", batch_mode=False)
+    assert "BatchMode=yes" not in captured["cmd"]
 
 
 def test_resolve_username_expands_dollar_user(monkeypatch):
@@ -303,3 +325,35 @@ def test_write_user_config_atomic_no_tmp_left(tmp_path):
         {"SlurmLoginNodes": {"a": "b"}}, config_path=str(cfg)
     )
     assert not os.path.exists(str(cfg) + ".tmp")
+
+
+def test_install_key_command_posix_uses_ssh_copy_id():
+    cmd = ssh_setup.install_key_command(
+        "login01", "alice", key_path="/h/.ssh/id_ed25519", platform="linux"
+    )
+    assert cmd.startswith("ssh-copy-id")
+    assert "/h/.ssh/id_ed25519.pub" in cmd and "alice@login01" in cmd
+
+
+def test_install_key_command_windows_uses_type_pipe():
+    # ssh-copy-id isn't on Windows -> a `type <pub> | ssh ...` pipe instead.
+    cmd = ssh_setup.install_key_command(
+        "login01",
+        "alice",
+        key_path="C:\\Users\\miblab\\.ssh\\id_ed25519",
+        platform="win32",
+    )
+    assert cmd.startswith('type "C:\\Users\\miblab\\.ssh\\id_ed25519.pub"')
+    assert "ssh-copy-id" not in cmd
+    assert "authorized_keys" in cmd and "alice@login01" in cmd
+
+
+def test_install_key_command_windows_default_key_and_port():
+    # No key path -> %USERPROFILE% default; non-22 port -> `-p N `.
+    cmd = ssh_setup.install_key_command(
+        "login01", "alice", port=2222, key_path=None, platform="win32"
+    )
+    assert cmd.startswith(
+        'type "%USERPROFILE%\\.ssh\\id_ed25519.pub" | '
+        "ssh -p 2222 alice@login01"
+    )

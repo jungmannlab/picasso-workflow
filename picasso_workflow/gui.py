@@ -10115,9 +10115,10 @@ class SshSetupDialog(QtWidgets.QDialog):
         layout = QtWidgets.QVBoxLayout(self)
         intro = QtWidgets.QLabel(
             "<p>Set up key-based SSH to your SLURM login node. The connection "
-            "is <b>tested before it is saved</b>; your public key is installed "
-            "on the node once with <code>ssh-copy-id</code> (a password prompt "
-            "your terminal handles — this app never sees it).</p>"
+            "is <b>tested before it is saved</b>. If your key isn't on the "
+            "node yet, the test shows a one-time command to install it — run "
+            "that once in a terminal (it asks for your cluster password; this "
+            "app never sees it), then test again.</p>"
         )
         intro.setTextFormat(Qt.TextFormat.RichText)
         intro.setWordWrap(True)
@@ -10343,7 +10344,7 @@ class SshSetupDialog(QtWidgets.QDialog):
         self._set_status(verdict.message, ok=verdict.ok)
         cats = self._ssh_setup
         if verdict.category in (cats.CAT_AUTH, cats.CAT_NO_KEY):
-            cmd = cats.ssh_copy_id_command(
+            cmd = cats.install_key_command(
                 hostname, username, key_path=key_path
             )
             self.copyid_edit.setText(cmd)

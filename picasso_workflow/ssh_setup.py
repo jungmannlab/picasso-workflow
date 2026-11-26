@@ -19,6 +19,7 @@ import getpass
 import os
 import shutil
 import subprocess
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -116,7 +117,9 @@ def test_ssh(
         timeout=timeout,
     )
     try:
-        result = comm.execute_ssh_command("echo picasso-ssh-ok")
+        result = comm.execute_ssh_command(
+            "echo picasso-ssh-ok", batch_mode=True
+        )
     except FileNotFoundError:
         return SshVerdict(
             False,
@@ -284,14 +287,31 @@ def ssh_copy_id_command(hostname, username, port=22, key_path=None):
     return " ".join(parts)
 
 
-def manual_install_command(hostname, username, port=22, key_path=None):
-    """POSIX fallback when ``ssh-copy-id`` is unavailable (pipes the .pub)."""
-    pub = public_key_path(key_path) if key_path else "<your-key>.pub"
-    p = f" -p {_as_port(port)}" if _as_port(port) != 22 else ""
-    return (
-        f'cat "{pub}" | ssh{p} {username}@{hostname} '
-        '"mkdir -p ~/.ssh && chmod 700 ~/.ssh && '
-        'cat >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys"'
+def install_key_command(
+    hostname, username, port=22, key_path=None, platform=None
+):
+    """The one-time command to install the public key on the login node.
+
+    POSIX uses ``ssh-copy-id``; **Windows** uses a ``type <pub> | ssh …`` pipe
+    instead, because ``ssh-copy-id`` is not part of the Windows OpenSSH client.
+    Either way the user runs it once in a terminal (which handles the password
+    prompt). ``platform`` overrides ``sys.platform`` for tests.
+    """
+    plat = sys.platform if platform is None else platform
+    if plat == "win32":
+        pub = (
+            public_key_path(key_path)
+            if key_path
+            else "%USERPROFILE%\\.ssh\\id_ed25519.pub"
+        )
+        p = f"-p {_as_port(port)} " if _as_port(port) != 22 else ""
+        return (
+            f'type "{pub}" | ssh {p}{username}@{hostname} '
+            '"mkdir -p ~/.ssh && chmod 700 ~/.ssh && '
+            'cat >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys"'
+        )
+    return ssh_copy_id_command(
+        hostname, username, port=port, key_path=key_path
     )
 
 
