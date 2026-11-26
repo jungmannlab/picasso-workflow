@@ -127,6 +127,26 @@ def _confluence_summary(profile: str) -> dict:
     }
 
 
+def _test_profiles() -> list:
+    """Profiles to offer a *connection test* for.
+
+    The operational ``Confluence`` is always offered; a non-operational profile
+    (``ConfluenceTest``, the pytest-suite target) only when it is actually
+    configured -- it has a resolved ``base_url`` or a token. A typical user who
+    never set up a test Confluence therefore doesn't see an irrelevant test
+    button (the config/env templates no longer ship a ``ConfluenceTest``
+    section, so it resolves to nothing for them).
+    """
+    profiles = ["Confluence"]
+    for profile in _PROFILES:
+        if profile == "Confluence":
+            continue
+        summary = _confluence_summary(profile)
+        if summary.get("base_url") or summary.get("token_set"):
+            profiles.append(profile)
+    return profiles
+
+
 def collect_diagnostics() -> dict:
     """Gather the read-only diagnostics shown by the tab (no secrets)."""
     import picasso_workflow as pw
@@ -580,7 +600,7 @@ class DoctorTab(QtWidgets.QWidget):
         # --- connections: per-profile test buttons ---
         conn_group = QtWidgets.QGroupBox("Connection tests")
         conn_layout = QtWidgets.QGridLayout(conn_group)
-        for row, profile in enumerate(_PROFILES):
+        for row, profile in enumerate(_test_profiles()):
             conn_layout.addWidget(QtWidgets.QLabel(profile), row, 0)
             button = QtWidgets.QPushButton("Test connection")
             button.setToolTip(

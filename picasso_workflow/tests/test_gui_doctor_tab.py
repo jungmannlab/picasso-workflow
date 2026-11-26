@@ -166,11 +166,20 @@ def test_main_window_has_doctor_tab(qapp):
     win.close()
 
 
-def test_doctor_tab_builds_and_renders(qapp):
+def test_doctor_tab_builds_and_renders(qapp, monkeypatch):
+    import picasso_workflow.doctor_tab as dt
+
+    # Force both profiles "configured" so a connection row renders for each,
+    # independent of whether the env's config sets up a test Confluence.
+    monkeypatch.setattr(
+        dt,
+        "_confluence_summary",
+        lambda p: {"base_url": "https://x", "token_set": True},
+    )
     tab = DoctorTab()
     text = tab.info_view.toPlainText()
     assert "Versions" in text and "Confluence profiles" in text
-    # a connection row per profile
+    # a connection row per configured profile
     assert set(tab._conn_buttons) == {"Confluence", "ConfluenceTest"}
     assert tab._conn_results["Confluence"].text() == "not tested"
     tab.deleteLater()
@@ -318,4 +327,38 @@ def test_setup_cluster_ssh_selects_newly_saved_node(qapp, monkeypatch):
     tab._cluster_combo.setCurrentIndex(tab._cluster_combo.findText("clusterA"))
     tab._setup_cluster_ssh()
     assert tab._cluster_host() == "clusterB"
+    tab.deleteLater()
+
+
+def test_connection_tests_hide_unconfigured_test_profile(qapp, monkeypatch):
+    """ConfluenceTest has no test button unless it's actually configured, so a
+    typical user (no test Confluence) doesn't see it."""
+    import picasso_workflow.doctor_tab as dt
+
+    monkeypatch.setattr(
+        dt,
+        "_confluence_summary",
+        lambda p: (
+            {"base_url": "https://x", "token_set": True}
+            if p == "Confluence"
+            else {"base_url": None, "token_set": False}
+        ),
+    )
+    tab = dt.DoctorTab(main_window=None)
+    assert set(tab._conn_buttons) == {"Confluence"}
+    tab.deleteLater()
+
+
+def test_connection_tests_show_configured_test_profile(qapp, monkeypatch):
+    """When ConfluenceTest is configured (base_url/token), its test button
+    appears alongside the operational one."""
+    import picasso_workflow.doctor_tab as dt
+
+    monkeypatch.setattr(
+        dt,
+        "_confluence_summary",
+        lambda p: {"base_url": "https://x", "token_set": True},
+    )
+    tab = dt.DoctorTab(main_window=None)
+    assert set(tab._conn_buttons) == {"Confluence", "ConfluenceTest"}
     tab.deleteLater()
