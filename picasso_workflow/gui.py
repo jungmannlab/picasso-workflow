@@ -10510,17 +10510,20 @@ class _ReleaseCheckWorker(QtCore.QObject):
 
 
 class _SelfUpdateWorker(QtCore.QObject):
-    """Fetch the latest release wheel and pip-upgrade this env, off-thread.
+    """Resolve the latest release wheel and launch the detached updater.
 
-    Emits ``finished(ok, message)`` where ``message`` is user-facing (incl. the
-    restart instruction on success). All logic is in
-    :mod:`picasso_workflow.self_update`; this is a thin thread wrapper.
+    Emits ``finished(ok, message)``. The actual pip install runs in a separate
+    detached process that waits for this GUI to exit first (so the loaded Qt /
+    numpy DLLs unlock) -- see :func:`self_update.spawn_detached_updater`. This
+    worker only does the network fetch + spawn, off the UI thread.
     """
 
     finished = QtCore.pyqtSignal(bool, str)
 
     def run(self) -> None:
         try:
+            import os
+
             from picasso_workflow import self_update
             from picasso_workflow.update_check import (
                 fetch_latest_release_json,
@@ -10531,7 +10534,19 @@ class _SelfUpdateWorker(QtCore.QObject):
             url = self_update.wheel_asset_url(
                 release or {}, version=version or None
             )
-            ok, message = self_update.run_update(url)
+            if not url:
+                ok, message = (
+                    False,
+                    "No update wheel was found in the latest release.",
+                )
+            else:
+                self_update.spawn_detached_updater(url, parent_pid=os.getpid())
+                ok, message = (
+                    True,
+                    "Update ready. It will install in the background once you "
+                    "close picasso-workflow; reopen it when done (give it a "
+                    "moment).",
+                )
         except Exception as e:  # pragma: no cover - defensive; must not raise
             ok, message = False, f"Update failed: {e}"
         self.finished.emit(ok, message)
@@ -13397,21 +13412,23 @@ class Window(QtWidgets.QMainWindow):
             logger.debug(f"Could not show the update result: {e}")
 
     def _start_self_update(self):
-        """Pip-upgrade this bundled install in place (off-thread).
+        """Prepare an in-place update of this bundled install (off-thread).
 
         Only reachable from the banner's "Update now" button, which is shown
-        only for a one-click-installer env. Reuses the update-thread slot /
-        shutdown-join lifecycle; no-ops if an update check is still running.
+        only for a one-click-installer env. Launches a detached updater that
+        installs the new version *after* this app closes (its loaded Qt/numpy
+        DLLs can't be overwritten while it runs). Reuses the update-thread slot
+        / shutdown-join lifecycle; no-ops if an update check is still running.
         """
         if getattr(self, "_update_thread", None) is not None:
             return
         reply = QtWidgets.QMessageBox.question(
             self,
             "Update picasso-workflow",
-            "Download and install the latest version now?\n\nIt installs into "
-            "this app's environment. Keep picasso-workflow open until it "
-            "finishes (it may take a minute); then close and reopen it to "
-            "finish applying the update.",
+            "Update to the latest version?\n\nThe update installs in the "
+            "background after you close picasso-workflow (it can't replace "
+            "files while the app is running). You'll be asked to close it; "
+            "reopen it once the update finishes.",
             QtWidgets.QMessageBox.StandardButton.Yes
             | QtWidgets.QMessageBox.StandardButton.No,
         )
@@ -13438,22 +13455,30 @@ class Window(QtWidgets.QMainWindow):
             logger.debug(f"Could not start the self-update: {e}")
 
     def _on_self_update_result(self, ok, message):
-        """Report the self-update outcome; the window carries the restart hint.
+        """Report the outcome; on success offer to close so the updater runs.
 
-        On success the app is NOT auto-restarted -- the message tells the user
-        to close and reopen (binary deps loaded now apply on the next launch).
+        The app is NOT auto-restarted -- the detached updater waits for this
+        process to exit, installs, then the user reopens manually.
         """
-        import html as _html
-
         self._update_now_button.setEnabled(True)
         self._update_now_button.setText("Update now")
-        self._update_message_box(
-            "Update" if ok else "Update failed",
-            _html.escape(message),
-            warning=not ok,
+        if not ok:
+            import html as _html
+
+            self._update_message_box(
+                "Update failed", _html.escape(message), warning=True
+            )
+            return
+        self.update_banner.setVisible(False)
+        reply = QtWidgets.QMessageBox.question(
+            self,
+            "Update ready",
+            message + "\n\nClose picasso-workflow now to install it?",
+            QtWidgets.QMessageBox.StandardButton.Yes
+            | QtWidgets.QMessageBox.StandardButton.No,
         )
-        if ok:
-            self.update_banner.setVisible(False)
+        if reply == QtWidgets.QMessageBox.StandardButton.Yes:
+            self.close()
 
     def _update_message_box(self, title, html, warning=False):
         """A rich-text message box whose ``<a href>`` links open in a browser.

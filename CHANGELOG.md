@@ -10,6 +10,15 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ## [Unreleased]
 
+### Fixed
+- **In-app self-update now works on bundled installs.** The 0.8.8 updater
+  ran `pip` while the GUI was open, which can never overwrite the Qt/numpy
+  DLLs the app has loaded — it failed with "some components are in use".
+  The update now runs in a **detached helper** that waits for the app to
+  close, then installs; you close picasso-workflow and reopen it when done
+  (no uninstall/reinstall). (`picasso_workflow/self_update.py`,
+  `picasso_workflow/gui.py`)
+
 ## [0.8.8] - 2026-11-26
 
 ### Fixed
