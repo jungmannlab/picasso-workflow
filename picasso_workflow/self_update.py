@@ -39,18 +39,36 @@ def is_bundled_install(prefix: str | None = None) -> bool:
     return (base / BUNDLED_MARKER).exists()
 
 
-def wheel_asset_url(release: dict) -> str | None:
-    """Return the ``.whl`` asset download URL from a GitHub release, or None.
+def wheel_asset_url(release: dict, version: str | None = None) -> str | None:
+    """Return the ``picasso_workflow`` ``.whl`` asset URL from a release.
 
-    ``release`` is the parsed GitHub "latest release" JSON (it carries an
-    ``assets`` list with ``name`` + ``browser_download_url``).
+    ``release`` is the parsed GitHub "latest release" JSON (an ``assets`` list
+    with ``name`` + ``browser_download_url``). Only a wheel whose (normalised)
+    name is for ``picasso_workflow`` is considered, so a stray non-package wheel
+    can't be picked. When ``version`` is given, **only** a wheel carrying that
+    version is returned (else ``None``) -- so a botched release whose wheel
+    doesn't match the advertised tag is refused rather than silently installed.
     """
+    candidates = []
     for asset in (release or {}).get("assets", []) or []:
-        if str(asset.get("name") or "").endswith(".whl"):
-            url = asset.get("browser_download_url")
-            if url:
-                return str(url)
-    return None
+        name = str(asset.get("name") or "")
+        if not name.endswith(".whl"):
+            continue
+        if not name.replace("-", "_").lower().startswith("picasso_workflow"):
+            continue
+        url = asset.get("browser_download_url")
+        if url:
+            candidates.append((name, str(url)))
+    if not candidates:
+        return None
+    if version:
+        # Wheel name is e.g. picasso_workflow-0.8.7-py3-none-any.whl; the
+        # version is the 2nd '-'-delimited field -> exact token match.
+        for name, url in candidates:
+            if version in name.split("-"):
+                return url
+        return None
+    return candidates[0][1]
 
 
 def pip_upgrade_command(wheel_url: str, python: str | None = None) -> list:

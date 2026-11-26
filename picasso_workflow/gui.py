@@ -10526,7 +10526,10 @@ class _SelfUpdateWorker(QtCore.QObject):
             )
 
             release = fetch_latest_release_json(timeout=15)
-            url = self_update.wheel_asset_url(release or {})
+            version = str((release or {}).get("tag_name") or "").lstrip("v")
+            url = self_update.wheel_asset_url(
+                release or {}, version=version or None
+            )
             ok, message = self_update.run_update(url)
         except Exception as e:  # pragma: no cover - defensive; must not raise
             ok, message = False, f"Update failed: {e}"
@@ -13405,8 +13408,9 @@ class Window(QtWidgets.QMainWindow):
             self,
             "Update picasso-workflow",
             "Download and install the latest version now?\n\nIt installs into "
-            "this app's environment; you'll need to close and reopen "
-            "picasso-workflow afterwards to finish applying it.",
+            "this app's environment. Keep picasso-workflow open until it "
+            "finishes (it may take a minute); then close and reopen it to "
+            "finish applying the update.",
             QtWidgets.QMessageBox.StandardButton.Yes
             | QtWidgets.QMessageBox.StandardButton.No,
         )

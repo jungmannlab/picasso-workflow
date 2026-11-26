@@ -45,6 +45,30 @@ def test_wheel_asset_url_absent():
     )
 
 
+def test_wheel_asset_url_filters_to_package_and_pins_version():
+    release = {
+        "assets": [
+            {
+                "name": "someother-1.0-py3-none-any.whl",
+                "browser_download_url": "https://x/other.whl",
+            },
+            {
+                "name": "picasso_workflow-0.8.7-py3-none-any.whl",
+                "browser_download_url": "https://x/pw87.whl",
+            },
+        ]
+    }
+    # skips the non-package wheel
+    assert self_update.wheel_asset_url(release) == "https://x/pw87.whl"
+    # version pin: matching version returned
+    assert (
+        self_update.wheel_asset_url(release, version="0.8.7")
+        == "https://x/pw87.whl"
+    )
+    # version pin: a mismatched version is refused (don't install a stale wheel)
+    assert self_update.wheel_asset_url(release, version="0.9.0") is None
+
+
 def test_pip_upgrade_command_uses_this_env_and_only_if_needed():
     cmd = self_update.pip_upgrade_command("https://x/pw.whl")
     assert cmd[0] == sys.executable
