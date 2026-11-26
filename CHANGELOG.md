@@ -10,6 +10,8 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ## [Unreleased]
 
+## [0.8.11] - 2026-11-26
+
 ### Fixed
 - **Cluster submission: clearer SSH pre-flight that names the real login node
   and surfaces the ssh error.** When submitting to a cluster from the Run tab,
