@@ -31,7 +31,10 @@ class _FakeComm:
         self.timeout = timeout
         return self
 
-    def execute_ssh_command(self, command, working_directory=None):
+    def execute_ssh_command(
+        self, command, working_directory=None, batch_mode=False
+    ):
+        self.batch_mode = batch_mode
         if self.raises is not None:
             raise self.raises
         return self.result
@@ -64,6 +67,8 @@ def test_ssh_success():
     assert v.ok and v.category == ssh_setup.CAT_OK
     # ctor received the connection params
     assert comm.hostname == "login01" and comm.username == "alice"
+    # the probe must be non-interactive so it never hangs on a password prompt
+    assert comm.batch_mode is True
 
 
 def test_ssh_requires_host_and_user():
@@ -303,3 +308,24 @@ def test_write_user_config_atomic_no_tmp_left(tmp_path):
         {"SlurmLoginNodes": {"a": "b"}}, config_path=str(cfg)
     )
     assert not os.path.exists(str(cfg) + ".tmp")
+
+
+def test_install_key_command_posix_uses_ssh_copy_id():
+    cmd = ssh_setup.install_key_command(
+        "login01", "alice", key_path="/h/.ssh/id_ed25519", platform="linux"
+    )
+    assert cmd.startswith("ssh-copy-id")
+    assert "/h/.ssh/id_ed25519.pub" in cmd and "alice@login01" in cmd
+
+
+def test_install_key_command_windows_uses_type_pipe():
+    # ssh-copy-id isn't on Windows -> a `type <pub> | ssh ...` pipe instead.
+    cmd = ssh_setup.install_key_command(
+        "login01",
+        "alice",
+        key_path="C:\\Users\\miblab\\.ssh\\id_ed25519",
+        platform="win32",
+    )
+    assert cmd.startswith('type "C:\\Users\\miblab\\.ssh\\id_ed25519.pub"')
+    assert "ssh-copy-id" not in cmd
+    assert "authorized_keys" in cmd and "alice@login01" in cmd
