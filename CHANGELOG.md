@@ -10,6 +10,8 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ## [Unreleased]
 
+## [0.8.12] - 2026-11-26
+
 ### Changed
 - **Cluster SSH buttons no longer freeze the app.** Submitting a job, listing
   jobs, querying queue/job status, cancelling, estimating start, and the submit
