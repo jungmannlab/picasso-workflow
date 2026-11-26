@@ -9808,6 +9808,14 @@ class GettingStartedDialog(QtWidgets.QDialog):
         create_btn = QtWidgets.QPushButton("Create my settings file…")
         create_btn.clicked.connect(lambda: self.open_user_config(self))
         btns.addWidget(create_btn)
+        ssh_btn = QtWidgets.QPushButton("Set up cluster SSH…")
+        ssh_btn.setToolTip(
+            "Optional: set up key-based SSH to your SLURM login node so you "
+            "can run workflows on the cluster (generate a key, test the "
+            "connection, install it with ssh-copy-id)."
+        )
+        ssh_btn.clicked.connect(self._setup_cluster_ssh)
+        btns.addWidget(ssh_btn)
         btns.addStretch(1)
         self.dont_show = QtWidgets.QCheckBox("Don't show this again")
         self.dont_show.setChecked(True)
@@ -9817,6 +9825,20 @@ class GettingStartedDialog(QtWidgets.QDialog):
         close_btn.setDefault(True)
         btns.addWidget(close_btn)
         layout.addLayout(btns)
+
+    def _setup_cluster_ssh(self):
+        """Open the main window's SSH-setup dialog (optional onboarding step)."""
+        window = self.parent()
+        if window is not None and hasattr(window, "on_configure_ssh"):
+            window.on_configure_ssh()
+        else:  # pragma: no cover - defensive (dialog without the main window)
+            QtWidgets.QMessageBox.information(
+                self,
+                "Set up cluster SSH",
+                "Open the main window, then use the Run tab's "
+                "'Configure / Test connection…' button to set up SSH to the "
+                "cluster.",
+            )
 
     def _build_confluence_group(self):
         """Optional Confluence token entry, persisted to the per-user .env."""

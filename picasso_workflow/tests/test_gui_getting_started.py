@@ -146,3 +146,20 @@ def test_token_status_reflects_environment(qapp, fake_home, monkeypatch):
     monkeypatch.delenv("CONFLUENCE_TOKEN", raising=False)
     d2 = GettingStartedDialog()
     assert "No Confluence token" in d2._token_status.text()
+
+
+def test_getting_started_ssh_button_opens_main_window_dialog(qapp):
+    """The optional 'Set up cluster SSH…' button delegates to the main
+    window's SSH-setup entry point."""
+    called = {}
+
+    class FakeWindow(QtWidgets.QWidget):
+        def on_configure_ssh(self, default_host=None):
+            called["host"] = default_host
+
+    window = FakeWindow()
+    dlg = GettingStartedDialog(window)
+    dlg._setup_cluster_ssh()
+    assert "host" in called  # delegated to the main window
+    dlg.deleteLater()
+    window.deleteLater()
