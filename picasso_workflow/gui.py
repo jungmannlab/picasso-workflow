@@ -11097,7 +11097,9 @@ class Window(QtWidgets.QMainWindow):
             "Tests the connection before saving; guides you through "
             "ssh-copy-id if the key is not yet installed."
         )
-        self.cluster_ssh_setup_button.clicked.connect(self.on_configure_ssh)
+        self.cluster_ssh_setup_button.clicked.connect(
+            self._configure_ssh_from_run_tab
+        )
         cluster_settings_layout.addWidget(self.cluster_ssh_setup_button)
 
         self.slurm_email_edit = QtWidgets.QLineEdit()
@@ -17589,6 +17591,19 @@ class Window(QtWidgets.QMainWindow):
     def _stop_monitor(self):
         """Stop the polling timer."""
         self.monitor_timer.stop()
+
+    def _configure_ssh_from_run_tab(self):
+        """Open the SSH-setup dialog targeted at the Run-tab's selected node.
+
+        The button's ``clicked`` signal would otherwise pass Qt's ``checked``
+        bool straight into ``on_configure_ssh(default_host=...)``, so the dialog
+        pre-filled the *first* configured host instead of the selected one.
+        """
+        host_cluster = str(self.cluster_host_combo.currentText()).strip()
+        login_node = (CONFIG.get("SlurmLoginNodes") or {}).get(
+            host_cluster, host_cluster
+        )
+        self.on_configure_ssh(default_host=login_node)
 
     def on_configure_ssh(self, default_host=None):
         """Open the SSH-setup dialog; refresh the Run-tab cluster fields.
