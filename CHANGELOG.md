@@ -10,6 +10,8 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ## [Unreleased]
 
+## [0.8.7] - 2026-11-26
+
 ### Added
 - **In-app self-update for one-click-installer builds.** When a newer
   release exists, the update banner now offers an **"Update now"** button
