@@ -10,6 +10,8 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ## [Unreleased]
 
+## [0.8.14] - 2026-11-27
+
 ### Fixed
 - **Removing a step in the Manual → Workflow wizard no longer breaks the
   aggregation stage.** Deleting a single-dataset module renumbers the modules
