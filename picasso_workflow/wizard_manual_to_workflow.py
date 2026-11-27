@@ -193,6 +193,11 @@ def apply_result_to_window(window, result):
         window.aggregation_workflow_modules,
     )
     window._refresh_module_palette()
+    # Prefill the SLURM memory field with the estimated minimum (the user can
+    # still raise it); surfaced as an info line in the wizard's findings too.
+    gb = getattr(result, "recommended_ram_gb", None)
+    if gb and hasattr(window, "cluster_memory_edit"):
+        window.cluster_memory_edit.setText(f"{gb}GB")
     window.tabs.setCurrentIndex(_WORKFLOW_CONFIG_TAB)
 
 

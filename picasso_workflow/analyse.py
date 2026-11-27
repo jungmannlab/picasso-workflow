@@ -12996,9 +12996,12 @@ class AutoPicasso(
                 pick_diameter=pick_diameter,
                 add_group=True,
             )
-            groups = np.unique(picked_df["group"])
+            # One pass group-by (sort=False keeps first-seen order). The old
+            # ``[df[df.group == g] for g in unique(group)]`` rescanned every row
+            # once per group -- O(groups x rows), ~5e11 ops for ~100k picks over
+            # ~5M locs (a big part of why such runs crawled for hours).
             picked_locs = [
-                picked_df[picked_df["group"] == group] for group in groups
+                g for _, g in picked_df.groupby("group", sort=False)
             ]
         else:
             picked_locs, info = io.load_locs(fp_picked)
@@ -13021,10 +13024,10 @@ class AutoPicasso(
                         "no gold beads in this dataset). Remove this undrift "
                         "step or point it at a dataset with fiducials."
                     )
-                groups = np.unique(picked_locs["group"])
+                # one pass group-by (picasso 1.0 load_locs returns a
+                # DataFrame); avoids the O(groups x rows) per-group rescan.
                 picked_locs = [
-                    picked_locs[picked_locs["group"] == group]
-                    for group in groups
+                    g for _, g in picked_locs.groupby("group", sort=False)
                 ]
         # Drift can only be estimated if the picks actually contain
         # localizations. An empty/degenerate pick set (e.g. the upstream

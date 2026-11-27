@@ -160,99 +160,39 @@ def picked_locs(
         return all_picked_locs
 
 
-def _undrift_from_picked_coordinate(info, picked_locs, coordinate):
-    """
-    Calculates drift in a given coordinate.
+def _undrift_from_picked(locs, info, picked_locs):
+    """Undrift ``locs`` in x/y (and z) from the drift across ``picked_locs``.
+
+    The drift *estimation* is delegated to
+    :func:`picasso.postprocess.undrift_from_picked` -- the same routine the
+    picasso GUI uses, so the result matches a manual "undrift from picked". It
+    works on flat per-localization arrays (``O(total picked locs)`` memory)
+    rather than a dense ``n_picks x n_frames`` matrix: the old local
+    implementation allocated that matrix (x3 copies), which OOM-killed runs with
+    many picks -- e.g. ~100k DNA-PAINT single-site picks x 20k frames is ~50 GB
+    of ~99%-empty arrays. The estimated drift is then applied here and returned
+    in the wrapper's historical ``(locs, info, drift)`` shape.
 
     Parameters
     ----------
-    channel : int
-        Channel where locs are being undrifted
-    picked_locs : list
-        List of pd.DataFrames with locs for each pick
-    coordinate : str
-        Spatial coordinate where drift is to be found
+    locs : pd.DataFrame
+        Localizations to undrift (modified in place and returned).
+    info : list of dict
+        Localization metadata (``info[0]["Frames"]`` gives the frame count).
+    picked_locs : list of pd.DataFrame
+        Per-pick localizations the drift is estimated from.
 
     Returns
     -------
-    np.array
-        Contains average drift across picks for all frames
+    (locs, info, drift) : tuple
+        ``drift`` is a dict of per-frame drift arrays keyed by coordinate.
     """
-
-    n_picks = len(picked_locs)
-    n_frames = info[0]["Frames"]
-
-    # Drift per pick per frame
-    drift = np.empty((n_picks, n_frames))
-    drift.fill(np.nan)
-
-    # Remove center of mass offset
-    for i, locs in enumerate(picked_locs):
-        coordinates = locs[coordinate]
-        drift[i, locs["frame"]] = coordinates - np.mean(coordinates)
-
-    # Mean drift over picks
-    drift_mean = np.nanmean(drift, 0)
-    # Square deviation of each pick's drift to mean drift along frames
-    sd = (drift - drift_mean) ** 2
-    # Mean of square deviation for each pick
-    msd = np.nanmean(sd, 1)
-    # New mean drift over picks, each weighted by 1/msd. A pick that spans
-    # (essentially) a single frame has msd 0 -> an infinite weight that
-    # poisons np.ma.average into NaN everywhere; exclude such degenerate
-    # picks (weight 0) instead. This is exactly the case that arises when
-    # many spurious single-loc picks are fed in.
-    with np.errstate(divide="ignore", invalid="ignore"):
-        weights = 1.0 / msd
-    weights[~np.isfinite(weights)] = 0.0
-    nan_mask = np.isnan(drift)
-    drift = np.ma.MaskedArray(drift, mask=nan_mask)
-    if not np.any(weights > 0):
-        raise ValueError(
-            "undrift_from_picked: cannot estimate drift - no pick spans "
-            "more than one frame (all picks are degenerate). The picks are "
-            "too sparse; use more/denser fiducial picks."
-        )
-    drift_mean = np.ma.average(drift, axis=0, weights=weights)
-    drift_mean = drift_mean.filled(np.nan)
-
-    # Linear interpolation for frames without localizations
-    def nan_helper(y):
-        return np.isnan(y), lambda z: z.nonzero()[0]
-
-    nans, nonzero = nan_helper(drift_mean)
-    if not np.any(~nans):
-        raise ValueError(
-            "undrift_from_picked: cannot estimate drift - the picks cover "
-            "no frames with a usable localization. The picks are empty or "
-            "too sparse to undrift from."
-        )
-    drift_mean[nans] = np.interp(
-        nonzero(nans), nonzero(~nans), drift_mean[~nans]
-    )
-
-    return drift_mean
-
-
-def _undrift_from_picked(locs, info, picked_locs):
-    """
-    Undrifts in x and y based on picked locs in a given channel.
-    Parameters
-    ----------
-    channel : int
-        Channel to be undrifted
-    """
-    drift_x = _undrift_from_picked_coordinate(info, picked_locs, "x")
-    drift_y = _undrift_from_picked_coordinate(info, picked_locs, "y")
-    locs["x"] -= drift_x[locs["frame"]]
-    locs["y"] -= drift_y[locs["frame"]]
-
-    drift = {"x": drift_x, "y": drift_y}
-    if "z" in locs.columns:
-        drift_z = _undrift_from_picked_coordinate(info, picked_locs, "z")
-        locs["z"] -= drift_z[locs["frame"]]
-        drift["z"] = drift_z
-    # drift = np.array(drift).T
+    drift_df = postprocess.undrift_from_picked(picked_locs, info)
+    drift = {c: np.asarray(drift_df[c]) for c in drift_df.columns}
+    locs["x"] -= drift["x"][locs["frame"]]
+    locs["y"] -= drift["y"][locs["frame"]]
+    if "z" in locs.columns and "z" in drift:
+        locs["z"] -= drift["z"][locs["frame"]]
     return locs, info, drift
 
 
