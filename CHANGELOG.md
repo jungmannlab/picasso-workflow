@@ -10,6 +10,8 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ## [Unreleased]
 
+## [0.8.13] - 2026-11-27
+
 ### Fixed
 - **`undrift_from_picked` no longer runs out of memory with many picks.** The
   workflow's own drift estimator built a dense `n_picks × n_frames` float64
