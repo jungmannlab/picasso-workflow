@@ -102,3 +102,58 @@ def test_delegate_preserves_confidence_foreground_color(qapp):
     opt.font = table.font()
     delegate.paint(painter, opt, table.model().index(0, 0))
     painter.end()  # no exception == the paint path is sound
+
+
+def test_delete_single_module_remaps_aggregation_reference(qapp):
+    # Removing a single-dataset module must renumber the aggregation's
+    # $$get_prior_result cross-reference to save_single_dataset (the main GUI
+    # does this; the wizard previously did not -> stale index -> runtime
+    # PriorResultError).
+    from picasso_workflow.wizard_manual_to_workflow import _ReviewPage
+
+    wiz = _ReviewPage(parent=None)
+    try:
+        wiz._single = [
+            ("load_dataset_localizations", {}),
+            ("picasso_undrift_aim", {}),
+            ("find_similar", {}),
+            ("undrift_from_picked", {}),
+            ("render", {}),  # index 4 -- the removable module
+            ("save_single_dataset", {"filename": ("$$map", "#tags")}),  # idx 5
+        ]
+        wiz._single_meta = [{} for _ in wiz._single]
+        wiz._agg = [
+            ("analysis_documentation", {}),
+            (
+                "load_datasets_to_aggregate",
+                {
+                    "filepaths": (
+                        "$$get_prior_result",
+                        "all_results, single_dataset, $$all, "
+                        "05_save_single_dataset, filepath",
+                    ),
+                    "tags": ("$$map", "#tags"),
+                },
+            ),
+            ("save_datasets_aggregated", {}),
+        ]
+        wiz._agg_meta = [{} for _ in wiz._agg]
+        # avoid touching the Qt table / validation plumbing
+        wiz._rebuild_table = lambda: None
+        wiz._revalidate = lambda: None
+
+        assert wiz._delete_row("single", 4) is True
+        # save_single_dataset shifted 05 -> 04; the aggregation ref must follow
+        ref = wiz._agg[1][1]["filepaths"][1]
+        assert "04_save_single_dataset" in ref
+        assert "05_save_single_dataset" not in ref
+        # and the single list lost exactly the render module
+        assert [m[0] for m in wiz._single] == [
+            "load_dataset_localizations",
+            "picasso_undrift_aim",
+            "find_similar",
+            "undrift_from_picked",
+            "save_single_dataset",
+        ]
+    finally:
+        wiz.deleteLater()
