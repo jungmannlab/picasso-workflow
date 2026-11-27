@@ -190,6 +190,9 @@ class ReconstructionResult:
     # single_modules / agg_modules, for the editable review table.
     single_meta: list = field(default_factory=list)
     agg_meta: list = field(default_factory=list)
+    # Suggested minimum SLURM --mem (GB), estimated from the largest channel's
+    # localization count; None when it could not be estimated.
+    recommended_ram_gb: int | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -253,6 +256,48 @@ def _load_locs(hdf5_path):
     from picasso_workflow import _picasso_api
 
     return _picasso_api.io.load_locs(hdf5_path)
+
+
+def _count_locs(hdf5_path):
+    """Number of localizations in a picasso ``.hdf5`` (dataset length only).
+
+    Reads just the dataset shape, not the table, so it is cheap enough to call
+    only to size a RAM recommendation. Returns 0 when the file can't be read.
+    """
+    try:
+        import h5py
+
+        with h5py.File(hdf5_path, "r") as f:
+            key = "locs" if "locs" in f else next(iter(f.keys()))
+            return int(f[key].shape[0])
+    except Exception:
+        return 0
+
+
+# --- RAM recommendation ---------------------------------------------------- #
+# Peak memory for a reconstructed workflow is dominated by the per-channel
+# single-dataset stage (loading the localizations, then the clustering / render
+# working arrays and the per-pick copies for undrift-from-picked). Channels run
+# sequentially within a SLURM task and ``--mem`` is per task, so we size on the
+# LARGEST single channel. Each localization costs several transient copies
+# across those steps; ``_RAM_BYTES_PER_LOC`` bundles that with headroom. This is
+# a conservative lower-bound estimate for guidance -- not a guarantee.
+_RAM_BASE_GB = 4
+_RAM_BYTES_PER_LOC = 900
+_RAM_MIN_GB = 8
+_RAM_ROUND_GB = 8
+
+
+def recommend_ram_gb(max_channel_locs):
+    """Recommend a minimum SLURM ``--mem`` (GB) from the largest channel's
+    localization count, rounded up. ``None`` when the count is unknown (0)."""
+    if not max_channel_locs:
+        return None
+    import math
+
+    gb = _RAM_BASE_GB + _RAM_BYTES_PER_LOC * max_channel_locs / 1e9
+    gb = max(_RAM_MIN_GB, gb)
+    return int(math.ceil(gb / _RAM_ROUND_GB) * _RAM_ROUND_GB)
 
 
 def _report(progress, message, fraction):
@@ -1916,6 +1961,21 @@ def reconstruct_workflow(
             "fit-method name is normalized for re-localization."
         )
 
+    # Recommend a minimum SLURM --mem from the largest channel's localization
+    # count (the single-dataset stage is the memory peak; see recommend_ram_gb).
+    max_channel_locs = max(
+        (_count_locs(c.base_hdf5 or c.deepest_hdf5) for c in chains),
+        default=0,
+    )
+    recommended_ram_gb = recommend_ram_gb(max_channel_locs)
+    if recommended_ram_gb:
+        errors.append(
+            f"info: the largest channel has ~{max_channel_locs / 1e6:.1f}M "
+            f"localizations; request at least ~{recommended_ram_gb} GB RAM per "
+            "task (SLURM --mem) to avoid out-of-memory. Prefilled in the Run "
+            "tab; increase it if later clustering/aggregation needs more."
+        )
+
     _report(progress, "Done.", 1.0)
     return ReconstructionResult(
         tree_data=tree_data,
@@ -1927,6 +1987,7 @@ def reconstruct_workflow(
         raw_root=effective_raw_root,
         single_meta=single_meta,
         agg_meta=agg_meta,
+        recommended_ram_gb=recommended_ram_gb,
     )
 
 

@@ -10,6 +10,30 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ## [Unreleased]
 
+## [0.8.13] - 2026-11-27
+
+### Fixed
+- **`undrift_from_picked` no longer runs out of memory with many picks.** The
+  workflow's own drift estimator built a dense `n_picks × n_frames` float64
+  matrix (×3 working copies) — e.g. ~104k DNA-PAINT single-site picks × 20k
+  frames is ~50 GB of ~99%-empty arrays, which OOM-killed aggregation runs on a
+  50 GB node (while the manual GUI, with more RAM, survived). It now delegates
+  drift estimation to **picasso's own `postprocess.undrift_from_picked`** — the
+  same routine the picasso GUI uses — which works on flat per-localization
+  arrays (O(total picked locs) memory). The result matches a manual "undrift
+  from picked", and the step now needs a few GB instead of tens. The per-pick
+  grouping in `analyse.py` was also switched from an O(groups × locs) rescan to
+  a single `groupby`, so runs with ~100k picks no longer crawl for hours.
+  (`picasso_workflow/outpost/picks/picks.py`, `picasso_workflow/analyse.py`)
+
+### Added
+- **The Manual → Workflow wizard suggests a minimum RAM to request.** From the
+  largest channel's localization count it estimates a SLURM `--mem` floor,
+  surfaces it in the wizard's findings, and prefills the Run-tab memory field
+  (you can still raise it). Helps avoid under-requesting memory on the cluster.
+  (`picasso_workflow/manual_to_workflow.py`,
+  `picasso_workflow/wizard_manual_to_workflow.py`)
+
 ## [0.8.12] - 2026-11-26
 
 ### Changed
