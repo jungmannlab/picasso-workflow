@@ -1477,3 +1477,32 @@ def test_scan_picks_deepest_by_info_count_not_name(tmp_path):
     # Deepest is chosen by info-step count, so undrift_from_picked is recovered.
     modules = [s.module_name for s in m.map_chain(chains[0])]
     assert "undrift_from_picked" in modules
+
+
+# ---------------------------------------------------------------------------
+# RAM recommendation.
+# ---------------------------------------------------------------------------
+def test_recommend_ram_gb_scales_and_floors():
+    # unknown count -> no recommendation
+    assert m.recommend_ram_gb(0) is None
+    # tiny dataset -> the 8 GB floor
+    assert m.recommend_ram_gb(100_000) == 8
+    # ~5.2M locs (the ibidi case): 4 + 900*5.2e6/1e9 = 8.68 -> round up to 16
+    assert m.recommend_ram_gb(5_200_000) == 16
+    # large dataset scales and rounds up to the 8 GB grid
+    assert m.recommend_ram_gb(50_000_000) == 56
+    # monotonic non-decreasing in the loc count
+    vals = [m.recommend_ram_gb(n) for n in (1e6, 1e7, 3e7, 6e7)]
+    assert vals == sorted(vals)
+
+
+def test_count_locs_reads_dataset_length(tmp_path):
+    h5py = pytest.importorskip("h5py")
+    import numpy as np
+
+    p = tmp_path / "locs.hdf5"
+    with h5py.File(p, "w") as f:
+        f.create_dataset("locs", data=np.zeros(1234, dtype=[("x", "f4")]))
+    assert m._count_locs(str(p)) == 1234
+    # unreadable path -> 0, never raises
+    assert m._count_locs(str(tmp_path / "nope.hdf5")) == 0
