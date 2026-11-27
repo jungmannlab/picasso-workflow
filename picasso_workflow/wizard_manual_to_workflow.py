@@ -25,6 +25,7 @@ from PyQt6.QtCore import Qt, QThread, pyqtSignal
 
 from picasso_workflow import manual_to_workflow as mtw
 from picasso_workflow import modulespec
+from picasso_workflow import workflow_references as wfref
 
 # Review-table colours per confidence level.
 _CONF_COLOR = {
@@ -856,8 +857,21 @@ class _ReviewPage(QtWidgets.QWizardPage):
             )
             return False
         modules, meta = self._buffers(list_name)
+        index_map = wfref.deletion_index_map(idx, len(modules))
         del modules[idx]
         del meta[idx]
+        # Deleting a module renumbers the ones after it, so remap every
+        # ``$get_prior_result`` back-reference -- exactly as the main GUI's
+        # remove path does. A single-stage deletion also fixes the
+        # aggregation's ``$$`` cross-references into the single stage (e.g.
+        # ``NN_save_single_dataset``); without this the aggregation pointed at a
+        # stale index and failed at runtime with a PriorResultError.
+        scope = wfref.SINGLE if list_name == "single" else wfref.AGGREGATION
+        new_single, new_agg, _changes = wfref.update_after_index_change(
+            self._single, self._agg, scope, index_map
+        )
+        self._single[:] = new_single
+        self._agg[:] = new_agg
         self._rebuild_table()
         self._revalidate()
         return True

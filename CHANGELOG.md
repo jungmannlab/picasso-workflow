@@ -10,7 +10,18 @@ This file was started after v0.5.6; earlier history is in the git log.
 
 ## [Unreleased]
 
-## [0.8.13] - 2026-11-27
+### Fixed
+- **Removing a step in the Manual → Workflow wizard no longer breaks the
+  aggregation stage.** Deleting a single-dataset module renumbers the modules
+  after it, but the wizard's review table did not update the
+  `$get_prior_result` back-references (the main GUI's remove path does). So the
+  aggregation's cross-reference to the single-dataset save
+  (`$$get_prior_result … NN_save_single_dataset`) pointed at a stale index and
+  the run failed at the aggregation stage with a `PriorResultError`
+  ("`07_save_single_dataset` … not present"). The wizard now remaps all
+  references on delete — including the aggregation's `$$` cross-references into
+  the single stage — exactly as the main GUI does.
+  (`picasso_workflow/wizard_manual_to_workflow.py`)
 
 ### Fixed
 - **`undrift_from_picked` no longer runs out of memory with many picks.** The
